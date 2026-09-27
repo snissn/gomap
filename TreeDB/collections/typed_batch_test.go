@@ -567,7 +567,8 @@ func TestTypedMinimaGenericMutations(t *testing.T) {
 				}
 				fetched, err := view.FetchDocumentsByID([][]byte{[]byte("a")}, DocumentFetchOptions{IncludePaths: []string{"embedding"}})
 				closeErr := view.Close()
-				if err != nil || closeErr != nil || len(fetched.Results) != 1 || fetched.Stats.TypedColumnRows != 1 {
+				if err != nil || closeErr != nil || len(fetched.Results) != 1 || fetched.Stats.TypedColumnRows != 1 ||
+					fetched.Stats.EmbeddingVectorReads != 1 || fetched.Stats.EmbeddingVectorBytes != 8*4 || fetched.Stats.EmbeddingOutputBytes == 0 {
 					t.Fatalf("typed vector readback=%+v err=%v close=%v", fetched, err, closeErr)
 				}
 				assertJSONEqualM13C(t, fetched.Results[0].Document, []byte(`{"embedding":[0,1,0,0,0,0,0,0]}`))

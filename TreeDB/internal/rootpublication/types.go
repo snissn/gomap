@@ -275,7 +275,11 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandi
 		}
 	}
 	var err error
-	coalesced.extensions.resourceSet, err = unionResourceExtensions(resourceExtensions)
+	if len(coalesced.durableRootGroup().members) != 0 {
+		coalesced.extensions.resourceSet, err = physicalDurabilityUnion(candidates)
+	} else {
+		coalesced.extensions.resourceSet, err = unionResourceExtensions(resourceExtensions)
+	}
 	if err != nil {
 		return nil, err
 	}

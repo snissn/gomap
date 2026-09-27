@@ -2,7 +2,9 @@ package stress
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,7 +48,7 @@ func TestChaos(t *testing.T) {
 	defer os.RemoveAll(dbDir)
 
 	// 2. Start Server
-	serverCmd := startServer(t, serverBin, dbDir, addr)
+	serverCmd, serverExited := startServer(t, serverBin, dbDir, addr)
 
 	// 3. Write Data
 	ackedKeys := make(map[string]string)
@@ -88,17 +91,17 @@ func TestChaos(t *testing.T) {
 	if err := serverCmd.Process.Kill(); err != nil {
 		t.Logf("Failed to kill server: %v", err)
 	}
-	serverCmd.Wait() // cleanup
+	<-serverExited // cleanup
 
 	<-done // Wait for client to stop
 
 	t.Logf("Wrote %d keys before crash", len(ackedKeys))
 
 	// 5. Restart Server
-	serverCmd = startServer(t, serverBin, dbDir, addr)
+	serverCmd, serverExited = startServer(t, serverBin, dbDir, addr)
 	defer func() {
 		serverCmd.Process.Kill()
-		serverCmd.Wait()
+		<-serverExited
 	}()
 
 	// 6. Verify
@@ -151,11 +154,35 @@ func pickFreeTCPAddr(t *testing.T) string {
 	return addr
 }
 
-func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
+// lockedBuffer serializes exec's stdout/stderr copy goroutines so the
+// bind-failure path can snapshot the captured output without racing them.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) snapshot() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// startServer returns the command and a channel that carries its Wait result.
+// Receive from the channel instead of calling cmd.Wait() — exec.Cmd.Wait must
+// not be invoked from multiple goroutines.
+func startServer(t *testing.T, bin string, dbDir, addr string) (*exec.Cmd, <-chan error) {
+	t.Helper()
 	cmd := exec.Command(bin, "hashdb", dbDir, addr)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	output := &lockedBuffer{}
+	cmd.Stdout = io.MultiWriter(os.Stdout, output)
+	cmd.Stderr = io.MultiWriter(os.Stderr, output)
 	cmd.Env = append(os.Environ(),
 		"HASHDB_SHARDS="+strconv.Itoa(serverShards),
 		"GOMAP_SHARDS="+strconv.Itoa(serverShards),
@@ -164,18 +191,29 @@ func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
-	// Wait for port
-	// Simple retry loop
-	for i := 0; i < 400; i++ {
+	// Single owner of cmd.Wait(): the bind loop fails fast on early exit and
+	// callers drain serverExited after killing instead of racing on Wait.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	// Give the server up to 2 minutes to bind: Windows CI startup (binary
+	// load plus shard init) can exceed the old 20s budget on loaded runners.
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-exited:
+			t.Fatalf("Server exited before binding %s: %v\n%s", addr, err, output.snapshot())
+		default:
+		}
 		conn, err := net.Dial("tcp", addr)
 		if err == nil {
 			conn.Close()
-			return cmd
+			return cmd, exited
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-	t.Fatal("Server failed to bind port")
-	return nil
+	<-exited
+	t.Fatalf("Server failed to bind port %s", addr)
+	return nil, nil
 }

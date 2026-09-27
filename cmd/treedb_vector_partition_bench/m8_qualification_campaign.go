@@ -265,7 +265,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := json.Unmarshal(raw, &matrix); err != nil {
 			return summary, fmt.Errorf("decode qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.SchemaVersion != 5 || matrix.ResultKind != "m8_production_multi_variant_matrix_v5" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
+		if matrix.SchemaVersion != 7 || matrix.ResultKind != "m8_production_multi_variant_matrix_v7" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
 			return summary, fmt.Errorf("qualification matrix %s has invalid schema/provenance/status", cleanPath)
 		}
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
@@ -286,6 +286,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
+			if report.MeasurementTranscript.Bytes > m8QualificationTranscriptMaxBytesV1 {
+				return summary, fmt.Errorf("qualification child %s exceeds historical transcript byte cap", cleanPath)
+			}
 			if err := validateM8ProductionReportWithProfilesV1(*report, m8QualificationResourceCapsV1(), profileVerifier); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
@@ -310,7 +313,8 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 					return summary, fmt.Errorf("qualification matrix %s has unreadable measurement transcript: %w", cleanPath, err)
 				}
 			}
-			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
+			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) ||
+				!m8QualificationExactFlagV1(report.Command[1:], "-source-checkout", filepath.Join(resolvedRoot, "source")) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 			}
 			if executableSHA256 != "" && executableSHA256 != report.ExecutableSHA256 {
@@ -405,7 +409,8 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				selected = report
 			}
 		}
-		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), matrix, commandExecutable) {
+		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), matrix, commandExecutable) ||
+			!m8QualificationExactFlagV1(matrix.Command[1:], "-source-checkout", filepath.Join(resolvedRoot, "source")) {
 			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
@@ -485,7 +490,12 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	// This frozen campaign has three independent runs, not repeated child
+	// windows. Its row selector must never silently choose one repetition.
+	if cfg.MeasuredRepetitions > 1 {
+		return false
+	}
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.LocalScoreBudget == nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
@@ -600,7 +610,11 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 		return err
 	}
 	defer func() { err = errors.Join(err, assets.Close()) }()
-	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, assets.status.Manifest, report.Dataset, fixtureVectors(report.Dataset)); err != nil {
+	vectors, err := loadFixtureVectorsV1(datasetDirectory, report.Dataset)
+	if err != nil {
+		return err
+	}
+	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, assets.status.Manifest, report.Dataset, vectors); err != nil {
 		return fmt.Errorf("verify retained M3 source rows: %w", err)
 	}
 	if err := m8BindRetainedM3DescriptorV1(assets, report.Dataset); err != nil {
@@ -647,26 +661,101 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		return err
 	}
 	defer func() { err = errors.Join(err, harness.Close()) }()
-	_, queries := fixtureData(report.Dataset)
+	datasetDirectory := report.DatasetDirectory
+	if report.Dataset.Generator == externalFixtureGeneratorV1 {
+		datasetDirectory, err = m8QualificationContainedPathV1(root, datasetDirectory, "fixture dataset")
+		if err != nil {
+			return err
+		}
+	}
+	queries, err := loadFixtureQueriesV1(datasetDirectory, report.Dataset)
+	if err != nil {
+		return err
+	}
 	if len(queries) != len(truth) {
 		return errors.New("retained attribution query shape mismatch")
 	}
-	approximateCandidates := min(report.Config.RouterCandidates, int(assets.status.Representatives))
+	if report.RouterRepresentatives != assets.status.Representatives {
+		return errors.New("retained attribution router model size mismatch")
+	}
+	approximateCandidates := report.Config.RouterScoreBudget
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
 	}
+	if report.Config.QualityDiagnostics {
+		if err := harness.enableQualityV1(context.Background(), queries, truth, primaryHomes, finalMemberships, report.Config.QualityTraceQueries, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
+			return err
+		}
+	}
+	if report.Config.RouterPolicyDiagnostics {
+		if err := harness.enableRouterPoliciesV1(report.Config.RouterPolicyWidth, approximateCandidates); err != nil {
+			return err
+		}
+	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
+	cachedCells := make(map[string]m8AttributionCellV1)
 	for rowIndex, row := range report.Rows {
-		if row.Status != "pass" && row.Status != "fail" {
+		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
+			return err
+		}
+		if err := m8RouterPolicyEvidenceSelectionV1(report.Config, int(report.RouterRepresentatives), row); err != nil {
+			return err
+		}
+		if row.Attribution.RouterPolicies != nil {
+			replayed, err := harness.routerPolicyEvidenceV1(context.Background(), queries, truth, row.Probes, approximateCandidates)
+			if err != nil {
+				return err
+			}
+			if !m8RouterPolicyReplayEqualV1(replayed, row.Attribution.RouterPolicies) {
+				return errors.New("retained router policy candidates/results do not reproduce report")
+			}
+		}
+		qualityRefusal := report.Config.QualityDiagnostics && m8ProductionRouterRefusalStatusV1(row.Status)
+		if row.Accounting == nil && row.Status != "pass" && row.Status != "fail" && !qualityRefusal {
 			continue
 		}
-		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, row.Probes)
-		if err != nil {
-			return err
+		key := m8AttributionKeyV1(row.Probes, row.EfSearch)
+		cell, cached := cachedCells[key]
+		if !cached {
+			membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
+			if err != nil {
+				return err
+			}
+			cell, err = m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
+			if err != nil {
+				return err
+			}
+			cachedCells[key] = cell
 		}
-		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
-		if err != nil {
-			return err
+		if row.Accounting != nil {
+			outcome := transcript.Outcomes[rowIndex]
+			results := make([][]m8CanonicalResultV1, len(queries))
+			for q, ids := range outcome.TopKIDs {
+				for j, id := range ids {
+					results[q] = append(results[q], m8CanonicalResultV1{ID: id, Score: math.Float32frombits(outcome.TopKScoreBits[q][j])})
+				}
+			}
+			replayed := row
+			if err := m8AttachAttributionV1(&replayed, cell, results); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
+				return errors.New("complete M8 attribution does not reproduce retained report")
+			}
+			continue
+		}
+		if qualityRefusal {
+			// Failed serving does not make static source/model/coverage claims
+			// self-authenticating. Replay them, then apply exactly the producer's
+			// suppression of unavailable local/coordinator observations.
+			replayed := row
+			if err := m8AttachAttributionV1(&replayed, cell, make([][]m8CanonicalResultV1, len(queries))); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
+				return errors.New("retained router-refusal attribution does not reproduce report")
+			}
+			continue
 		}
 		idParity, scoreParity := true, true
 		for query, local := range cell.Local {
@@ -684,6 +773,18 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			}
 		}
 		want := cell.Evidence
+		if want.Quality != nil {
+			measured := make([][]m8CanonicalResultV1, len(truth))
+			for q, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+				for _, id := range ids {
+					measured[q] = append(measured[q], m8CanonicalResultV1{ID: id})
+				}
+			}
+			want.Quality, err = m8QualityAttachCoordinatorV1(want.Quality, truth, measured)
+			if err != nil {
+				return err
+			}
+		}
 		want.EndToEndRecallAtK = row.Attribution.EndToEndRecallAtK
 		want.CoordinatorMergeIDParity = idParity
 		want.CoordinatorMergeScoreParity = scoreParity
@@ -770,6 +871,23 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 		return false
 	}
 	cfg.m8OracleDomainCounts = []int{domainCount}
+	if report.Config.RouterPolicyDiagnostics {
+		if report.RouterRepresentatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) || report.RouterRepresentatives < uint64(domainCount) {
+			return false
+		}
+		cfg.m8RouterPolicyRepresentativeCounts = []int{int(report.RouterRepresentatives)}
+	}
+	if cfg.m8MembershipProbes != 0 {
+		if report.MembershipFeasibility == nil || report.MembershipFeasibility.Result.Status != "sufficient" {
+			return false
+		}
+		path, err := m8CanonicalPathV1(report.MembershipFeasibility.Path)
+		if err != nil || filepath.Dir(path) != matrixDirectory || m8ReplayMembershipFeasibilityV1(cfg, report.Dataset, existingDB, *report.Variant, *report.MembershipFeasibility) != nil {
+			return false
+		}
+	} else if report.MembershipFeasibility != nil {
+		return false
+	}
 	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), m8CommandBoundProductionConfigV1(report.Config)) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
 		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
@@ -779,17 +897,23 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 	warmup, _ := m8WarmupCountAndConcurrencyV1(cfg)
 	return m8ProductionConfigEvidenceV1{
-		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
+		MeasuredRepetitions: max(1, cfg.m8MeasuredRepetitions),
+		RaftGroups:          cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
-		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
+		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls,
+		RouterSemantics:     m8RouterSemanticsV4,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, MembershipProbes: cfg.m8MembershipProbes, MembershipPackLimit: cfg.m8MembershipPackLimit, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }
 
 func m8CommandBoundProductionConfigV1(cfg m8ProductionConfigEvidenceV1) m8ProductionConfigEvidenceV1 {
+	// Accounting is fixed by the retained producer identity, not a CLI choice.
+	cfg.MeasurementAccounting = ""
+	cfg.MeasuredRepetitions = max(1, cfg.MeasuredRepetitions)
 	cfg.DomainCount = 0
 	cfg.PacksPerDomain = nil
+	cfg.GraphVariant = ""
 	return cfg
 }
 
@@ -832,6 +956,8 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 	}
 	commandConfig := m8QualificationCommandConfigV1(cfg)
 	commandConfig.Overlap = nil
+	commandConfig.MembershipProbes = 0
+	commandConfig.MembershipPackLimit = 0
 	profileRoot := ""
 	oracleDomainCounts := make([]int, 0, len(m8RequiredVariantIDsV1))
 	variantDBs := make(map[string]bool, len(cfg.m8VariantDBs))
@@ -870,20 +996,43 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 			return false
 		}
 		oracleDomainCounts = append(oracleDomainCounts, domainCount)
+		if report.Config.RouterPolicyDiagnostics {
+			if report.RouterRepresentatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) || report.RouterRepresentatives < uint64(domainCount) {
+				return false
+			}
+			cfg.m8RouterPolicyRepresentativeCounts = append(cfg.m8RouterPolicyRepresentativeCounts, int(report.RouterRepresentatives))
+		}
 	}
 	cfg.m8OracleDomainCounts = oracleDomainCounts
+	if cfg.m8MembershipProbes != 0 {
+		if len(matrix.MembershipFeasibility) != len(m8RequiredVariantIDsV1) {
+			return false
+		}
+		seen := make(map[string]bool, len(matrix.MembershipFeasibility))
+		for _, artifact := range matrix.MembershipFeasibility {
+			report := byID[artifact.Result.VariantID]
+			path, pathErr := m8CanonicalPathV1(artifact.Path)
+			if report == nil || report.Variant == nil || seen[artifact.Result.VariantID] || artifact.Result.Status != "sufficient" || pathErr != nil || filepath.Dir(path) != matrixDirectory || m8ReplayMembershipFeasibilityV1(cfg, matrix.Dataset, report.Variant.DatabaseDirectory, *report.Variant, artifact) != nil {
+				return false
+			}
+			seen[artifact.Result.VariantID] = true
+		}
+		if candidate := byID["graph-overlap-020-v1"]; candidate == nil || !seen[candidate.Variant.VariantID] {
+			return false
+		}
+	} else if len(matrix.MembershipFeasibility) != 0 {
+		return false
+	}
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
 	return err == nil && profiles == profileRoot &&
 		m8QualificationCommandAdmissionV1(matrix.Command[1:], cfg, base.Dataset)
 }
 
 func m8QualificationSourceCheckoutV1(root string, args []string, cfg config) bool {
-	want, err := m8QualificationContainedPathV1(root, filepath.Join(root, "source"), "source checkout")
-	if err != nil {
-		return false
-	}
-	got, err := m8CanonicalPathV1(cfg.sourceCheckout)
-	if err != nil || got != want || !m8QualificationExactFlagV1(args, "-source-checkout", want) {
+	// Retained replay may share sibling inputs across nested completion runs.
+	// The historical campaign enforces ROOT/source at its own boundary above.
+	want, err := m8QualificationContainedPathV1(root, cfg.sourceCheckout, "source checkout")
+	if err != nil || cfg.sourceCheckout != want || !m8QualificationExactFlagV1(args, "-source-checkout", want) {
 		return false
 	}
 	checkout, err := m8SourceCheckoutV1(want, cfg.headSHA)
@@ -1018,16 +1167,21 @@ func m8QualificationRouterMaxVectorsV1(source int) (int, bool) {
 	return source + overlap, true
 }
 
-func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+func m8QualificationM3SharedBuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
 	partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
 	if !ok || variant.PartitionMaxDistanceWork != partitionConfig.MaxDistanceWork || variant.RouterMaxScalarWork != routerConfig.MaxScalarWork || variant.M3MaxBenchmarkVisits != visits || variant.PartitionConfig != partitionConfig || variant.RouterConfig != routerConfig {
 		return false
 	}
-	if _, err := m3PartitionLocalGraphVariantV1(variant.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(variant)); err != nil {
-		return false
-	}
 	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, partitionHNSWDegree).VectorIndexes[0]
 	return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
+}
+
+func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	if !m8QualificationM3SharedBuildCapsV1(variant, fixture) {
+		return false
+	}
+	_, err := m3PartitionLocalGraphVariantV1(variant.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(variant))
+	return err == nil
 }
 
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
@@ -1178,6 +1332,15 @@ func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8Produc
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("measurement transcript outcome/truth shape mismatch")
 	}
 	for rowIndex, row := range report.Rows {
+		if row.Accounting != nil {
+			for query, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+				hits := m8IDHitCountV1(m8CanonicalIDsV1(truth[query]), ids)
+				if hits != row.Accounting.Attempts[query].TruthHits {
+					return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 per-attempt truth hits do not match anchored truth")
+				}
+			}
+			continue
+		}
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
 		}
@@ -1238,7 +1401,7 @@ func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 }
 
 func m8QualificationQualifiedRowV1(row m8ProductionRowV1) bool {
-	return row.Status == "pass" && row.EfSearch == 128 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
+	return row.Status == "pass" && row.EfSearch == 128 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterScoreBudget == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
 }
 
 func m8QualificationSHA256V1(value string) bool {

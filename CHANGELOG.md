@@ -5,7 +5,14 @@ See `docs/API_STABILITY.md` for what is intended to be stable for downstream use
 
 ## Unreleased
 
-- (Add notable changes here.)
+- TreeDB partition routing v3 now treats domains as virtual containers and
+  emits genuine top-level bucket centroids under one global all-level spherical
+  kRt budget, with fanout 64 and minimum cluster size 250 defaults. Search still
+  separates returned width, beam and all-level score-call budget, with no
+  partial fallback. This pre-alpha change requires rebuilding router assets and
+  records; manifest v5, READY payload v3, coordinator protocol v2 and
+  system-node config v2 keep their unchanged mappings. Old retained benchmark
+  receipts remain historical evidence.
 
 ## v0.5.0 - 2026-04-17
 

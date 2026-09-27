@@ -371,7 +371,7 @@ func (c *Collection) planColumnAssetReachabilityOnce(ctx context.Context, opts c
 	if err := ctx.Err(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, columnManifestScanAllSidecars(), opts.MaxManifestRecords, opts.MaxManifestBytes)
+	view, closeView, err := c.prepareColumnAssetReachabilitySnapshotV2(ctx, opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if closeView != nil {
 		defer closeView()
 	}
@@ -766,7 +766,7 @@ type columnAssetReachabilityInput struct {
 	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts       ColumnAssetReachabilitySourceStats
 	mappedResources    ColumnAssetReachabilityMappedResourceStats
-	ownedSegments      map[uint32]rootpublication.StableResourceDescriptor
+	ownedSegments      map[uint32]rootpublication.StableResourcePhysicalDescriptor
 	quarantineSegments map[uint32]int64
 	pinStateIncomplete bool
 }

@@ -35,13 +35,16 @@ import (
 )
 
 const (
-	schemaVersion                           = 1
-	maxVectors                              = 1_000_000
-	maxDimensions                           = 4_096
-	maxPartitions                           = 16_384
-	kahipMaxDirectedEdges             int64 = 16_000_000
-	kahipAdapterMaxBytes                    = 64 << 10
-	kahipAdapterSHA256                      = "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825"
+	schemaVersion               = 1
+	maxVectors                  = 1_000_000
+	maxDimensions               = 4_096
+	maxPartitions               = 16_384
+	kahipMaxDirectedEdges int64 = 16_000_000
+	kahipAdapterMaxBytes        = 64 << 10
+	kahipAdapterSHA256          = "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825"
+	// Historical qualification pins above remain unchanged. New construction
+	// additionally performs within-domain graph-aware home packing.
+	kahipHomePackingAdapterSHA256           = "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e"
 	kahipDefaultTimeout                     = 5 * time.Minute
 	kahipMinSeed                      int64 = -1 << 31
 	kahipMaxSeed                      int64 = 1<<31 - 1
@@ -54,7 +57,7 @@ const (
 	maxSourceHNSWDegree                     = partitionHNSWDegree
 	maxPartitionLocalHNSWM                  = 32
 	partitionHNSWDefaultEfC                 = 128
-	partitionLocalHNSWDefaultM              = 18
+	partitionLocalHNSWDefaultM              = 32
 	partitionLocalHNSWDefaultEfC            = 256
 	maxPartitionHNSWEfC                     = 4_096
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
@@ -67,90 +70,110 @@ const (
 	hnswDecodedDimensionBytes               = 32
 	memoryMapEntryBytes                     = 64
 	vectorPartitionInsertBatchRows          = 8_192
-	memorySlackNumerator                    = 5
-	memorySlackDenominator                  = 4
-	memoryBudgetScope                       = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
-	benchmarkWorkScope                      = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
-	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
-	partitionAssignmentGraphV1              = "graph"
-	partitionAssignmentStableIDHashV1       = "stable_id_hash"
+	// Bound full JSON command-WAL rows, not just their count. Leave ample
+	// header/envelope headroom below the default 64 MiB frame limit.
+	vectorPartitionInsertBatchBytes   = 32 << 20
+	memorySlackNumerator              = 5
+	memorySlackDenominator            = 4
+	memoryBudgetScope                 = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope                = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope              = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	partitionAssignmentGraphV1        = "graph"
+	partitionAssignmentStableIDHashV1 = "stable_id_hash"
 	// shardPlanModeOffV1 keeps the operator-declared partition count
 	// authoritative and persists no shard plan. shardPlanModeByteBoundedV1
-	// makes the explicit hot-byte budget authoritative: the partition count and
-	// per-pack capacity are derived before any artifact is built.
+	// makes the explicit hot-byte budget authoritative: an explicit -partitions
+	// count remains the logical graph-domain count while physical packs and their
+	// capacities are derived before any artifact is built.
 	shardPlanModeOffV1         = "off"
 	shardPlanModeByteBoundedV1 = "byte_bounded"
 	// The canonical M8 corpus permits up to maxVectors primary memberships and
 	// up to one full duplicate membership per source row. At 64 conservative
 	// candidate bytes per membership, 128 MiB keeps that complete comparison
 	// bounded while allowing the required 1M + 20% overlap preflight to run.
-	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
+	m8ProductionCandidateBudgetBytesV1   uint64 = 128 << 20
+	defaultRouterScoreBudgetV3                  = 1024
+	defaultRouterPolicyDiagnosticWidthV1        = 64
+	defaultRouterPolicyDiagnosticBeamV1         = 96
 )
 
 const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
 
 type config struct {
-	dataset               string
-	partitions            int
-	probes                []int
-	overlaps              []float64
-	topK                  int
-	recallTarget          float64
-	seed                  int64
-	format                string
-	out                   string
-	stages                map[string]bool
-	command               []string
-	maxVectors            int
-	maxBytes              int64
-	baseSHA               string
-	headSHA               string
-	sourceCheckout        string
-	m3BuildDirty          bool
-	hnsw                  *treeDBPartitionHNSW
-	memory                benchmarkMemoryPlan
-	stage                 string
-	m3PersistDir          string
-	m8ExistingDB          string
-	m8VariantDBs          []string
-	m8OracleDomainCounts  []int
-	partitionAssignment   string
-	partitionTruthOracle  bool
-	shardPlanMode         string
-	shardPlanTargetBytes  uint64
-	shardPlanRatio        float64
-	shardPlan             vectorpartition.ShardPlanV1
-	kahipPython           string
-	kahipPythonSHA256     string
-	kahipScript           string
-	kahipAdapterSHA256    string
-	kahipSource           string
-	kahipTimeout          time.Duration
-	partition             vectorpartition.Config
-	partitionHNSWM        int
-	partitionHNSWEfC      int
-	router                *treeDBRepresentativeRouter
-	coordinator           *m6CoordinatorHarnessV1
-	routerConfig          vectorpartition.RouterConfigV1
-	routerCandidates      int
-	sourceHNSWDegree      int
-	mode                  string
-	raftGroups            int
-	raftNodes             int
-	concurrency           []int
-	warmup                int
-	profiles              string
-	m8MatrixOut           string
-	m8MatrixProfiles      string
-	efSearch              []int
-	m8MaxRSSBytes         uint64
-	m8MaxAssetBytes       uint64
-	m8MaxExactTruthVisits int64
-	m8TruthCache          string
-	m8TruthCacheSHA256    string
-	m3MaxBenchmarkVisits  int64
-	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
-	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
+	dataset                   string
+	partitions                int
+	probes                    []int
+	overlaps                  []float64
+	topK                      int
+	recallTarget              float64
+	seed                      int64
+	format                    string
+	out                       string
+	stages                    map[string]bool
+	command                   []string
+	maxVectors                int
+	maxBytes                  int64
+	baseSHA                   string
+	headSHA                   string
+	sourceCheckout            string
+	m3BuildDirty              bool
+	hnsw                      *treeDBPartitionHNSW
+	memory                    benchmarkMemoryPlan
+	stage                     string
+	m3PersistDir              string
+	m3FinalOfflineGraph       bool
+	m8ExistingDB              string
+	m8VariantDBs              []string
+	m8OracleDomainCounts      []int
+	partitionAssignment       string
+	partitionTruthOracle      bool
+	shardPlanMode             string
+	shardPlanTargetBytes      uint64
+	shardPlanRatio            float64
+	shardPlan                 vectorpartition.ShardPlanV1
+	homePacking               *vectorpartition.HomePackingReceiptV1
+	kahipPython               string
+	kahipPythonSHA256         string
+	kahipScript               string
+	kahipAdapterSHA256        string
+	kahipSource               string
+	kahipTimeout              time.Duration
+	partition                 vectorpartition.Config
+	partitionHNSWM            int
+	partitionHNSWEfC          int
+	router                    *treeDBRepresentativeRouter
+	coordinator               *m6CoordinatorHarnessV1
+	routerConfig              vectorpartition.RouterConfigV1
+	routerCandidates          int
+	sourceHNSWDegree          int
+	mode                      string
+	raftGroups                int
+	raftNodes                 int
+	concurrency               []int
+	warmup                    int
+	m8MeasuredRepetitions     int
+	profiles                  string
+	m8MatrixOut               string
+	m8MatrixProfiles          string
+	efSearch                  []int
+	m8MaxRSSBytes             uint64
+	m8MaxAssetBytes           uint64
+	m8MaxExactTruthVisits     int64
+	m8QualityDiagnostics      bool
+	m8QualityTraceQueries     int
+	m8RouterPolicyDiagnostics bool
+	m8RouterPolicyWidth       int
+	// Runtime work-planner inputs from the actual retained router models.
+	m8RouterPolicyRepresentativeCounts []int
+	m8TruthCache                       string
+	m8TruthCacheSHA256                 string
+	m8MembershipProbes                 int
+	m8MembershipPackLimit              int
+	m3MaxBenchmarkVisits               int64
+	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
+	// The final qualifier and its exact child replay admit the offline M16 control.
+	m8FinalOfflineGraph bool
 }
 
 type kahipRequestPartitioner struct{}
@@ -222,16 +245,18 @@ type partitionGraphDiagnosticsV1 struct {
 }
 
 type fixtureManifest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Fixture       string `json:"fixture"`
-	Generator     string `json:"generator"`
-	Arithmetic    string `json:"arithmetic"`
-	Vectors       int    `json:"vectors"`
-	Queries       int    `json:"queries"`
-	Dimensions    int    `json:"dimensions"`
-	Metric        string `json:"metric"`
-	Seed          int64  `json:"seed"`
-	Checksum      string `json:"checksum"`
+	SchemaVersion      int                     `json:"schema_version"`
+	Fixture            string                  `json:"fixture"`
+	Generator          string                  `json:"generator"`
+	Arithmetic         string                  `json:"arithmetic"`
+	Vectors            int                     `json:"vectors"`
+	Queries            int                     `json:"queries"`
+	QueryOrdinalOffset int64                   `json:"query_ordinal_offset,omitempty"`
+	Dimensions         int                     `json:"dimensions"`
+	Metric             string                  `json:"metric"`
+	Seed               int64                   `json:"seed"`
+	Checksum           string                  `json:"checksum"`
+	External           externalFixtureSourceV1 `json:"external,omitzero"`
 }
 
 type neighbor struct {
@@ -258,6 +283,8 @@ type stageResult struct {
 	HNSWSearchPackFallbacks   uint64  `json:"hnsw_search_pack_fallbacks"`
 	RepresentativeCount       uint64  `json:"representative_count,omitempty"`
 	CandidateBudget           uint64  `json:"candidate_budget,omitempty"`
+	RouterSemantics           string  `json:"router_semantics,omitempty"`
+	ScoreCalls                uint64  `json:"score_calls,omitempty"`
 	Candidates                uint64  `json:"candidates,omitempty"`
 	Edges                     uint64  `json:"edges,omitempty"`
 	SearchNanos               uint64  `json:"search_nanos,omitempty"`
@@ -432,6 +459,7 @@ type treeDBRepresentativeRouter struct {
 type routerSearchEvidence struct {
 	Searches    uint64
 	Candidates  uint64
+	ScoreCalls  uint64
 	Edges       uint64
 	SearchNanos uint64
 	AllocBytes  uint64
@@ -536,8 +564,26 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "generate-fixture" {
 		return runGenerateFixture(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "import-fixture" {
+		return runImportFixtureV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "validate-qualification" {
 		return runValidateQualification(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "replay-m8-report" {
+		return runReplayM8ReportV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "whole-collection-reference" {
+		return runM8WholeCollectionReferenceV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "physical-resources" {
+		return runM8PhysicalResourcesV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "serving-resources" {
+		return runM8ServingResourcesV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "compare-m8-scaling" {
+		return runM8ScalingComparisonV1(args[1:], stdout)
 	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
 }
@@ -577,10 +623,21 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 		return errors.New("truth-cache seed/top-k does not match the bounded fixture")
 	}
 	visits, err := memoryMul(int64(fixture.Vectors), int64(fixture.Queries))
+	if err == nil && fixture.Generator == externalFixtureGeneratorV1 {
+		// One binary64 checksum pass and one canonical FP32 truth pass. These
+		// score contracts are distinct; both scans must be admitted explicitly.
+		visits, err = memoryMul(visits, 2)
+	}
 	if err != nil || visits > capVisits {
 		return fmt.Errorf("canonical exact truth visits exceed cap: visits=%d cap=%d", visits, capVisits)
 	}
-	corpus, queries := fixtureData(fixture)
+	corpus, queries, err := loadFixtureDataV1(dataset, fixture)
+	if err != nil {
+		return err
+	}
+	if fixture.Generator == externalFixtureGeneratorV1 && fixtureChecksumFromData(corpus, queries) != fixture.Checksum {
+		return errors.New("external fixture checksum does not match loaded vector/query/truth stream")
+	}
 	truth, err := m8ExactTruthFixtureV1(corpus, queries, topK)
 	if err != nil {
 		return err
@@ -615,13 +672,14 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
 	var (
-		out               string
-		vectors           int
-		queries           int
-		dimensions        int
-		seed              int64
-		generator         string
-		maxChecksumVisits int64
+		out                string
+		vectors            int
+		queries            int
+		dimensions         int
+		seed               int64
+		queryOrdinalOffset int64
+		generator          string
+		maxChecksumVisits  int64
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -630,6 +688,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	fs.Int64Var(&queryOrdinalOffset, "query-ordinal-offset", 0, "first qualification query ordinal (corpus unchanged; legacy generator requires zero)")
 	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
 	fs.Int64Var(&maxChecksumVisits, "max-checksum-visits", maxBenchmarkWorkUnits, "explicit exact checksum visit bound for fixture generation")
 	if err := fs.Parse(args); err != nil {
@@ -649,15 +708,19 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
 	}
 	manifest := fixtureManifest{
-		SchemaVersion: schemaVersion,
-		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
-		Generator:     generator,
-		Arithmetic:    fixtureArithmetic,
-		Vectors:       vectors,
-		Queries:       queries,
-		Dimensions:    dimensions,
-		Metric:        "cosine",
-		Seed:          seed,
+		SchemaVersion:      schemaVersion,
+		Fixture:            fmt.Sprintf("deterministic_%d", vectors),
+		Generator:          generator,
+		Arithmetic:         fixtureArithmetic,
+		Vectors:            vectors,
+		Queries:            queries,
+		QueryOrdinalOffset: queryOrdinalOffset,
+		Dimensions:         dimensions,
+		Metric:             "cosine",
+		Seed:               seed,
+	}
+	if err := validateFixtureQueryOrdinalsV1(manifest); err != nil {
+		return err
 	}
 	corpus, querySet := fixtureData(manifest)
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
@@ -765,7 +828,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		cfg.m8OracleDomainCounts, err = m8RetainedOracleDomainCountsV1(cfg)
+		cfg.m8OracleDomainCounts, cfg.m8RouterPolicyRepresentativeCounts, err = m8RetainedOracleShapesV1(cfg)
 		if err != nil {
 			return err
 		}
@@ -800,12 +863,19 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
 		if cfg.stage == "partition" {
-			vectors := fixtureVectors(fixture)
-			var queries [][]float64
+			var vectors, queries [][]float64
 			if cfg.partitionTruthOracle {
-				vectors, queries = fixtureData(fixture)
+				vectors, queries, err = loadFixtureDataV1(cfg.dataset, fixture)
+				if err != nil {
+					return err
+				}
 				if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 					return errors.New("fixture checksum does not match generated vector/query/truth stream")
+				}
+			} else {
+				vectors, err = loadFixtureVectorsV1(cfg.dataset, fixture)
+				if err != nil {
+					return err
 				}
 			}
 			return runPartitionStage(cfg, fixture, vectors, queries, stdout)
@@ -816,7 +886,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if _, err := validateM3BenchmarkWork(cfg, fixture, cfg.m3MaxBenchmarkVisits); err != nil {
 			return err
 		}
-		vectors, queries := fixtureData(fixture)
+		vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+		if err != nil {
+			return err
+		}
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
 		}
@@ -835,7 +908,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.memory.ModeledPeakBytes > cfg.maxBytes {
 		return fmt.Errorf("modeled peak benchmark-owned memory %d exceeds -max-fixture-bytes %d", cfg.memory.ModeledPeakBytes, cfg.maxBytes)
 	}
-	vectors, queries := fixtureData(fixture)
+	vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+	if err != nil {
+		return err
+	}
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -910,7 +986,10 @@ func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64
 	if len(cfg.m8VariantDBs) > 0 {
 		return nil, nil, nil
 	}
-	vectors, queries := fixtureData(fixture)
+	vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+	if err != nil {
+		return nil, nil, err
+	}
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -925,7 +1004,7 @@ func parseConfig(args []string) (config, error) {
 		shardPlanMode:       shardPlanModeOffV1, shardPlanRatio: -1,
 		kahipTimeout: kahipDefaultTimeout,
 		partition:    vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
+		routerCandidates: defaultRouterScoreBudgetV3, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
@@ -954,20 +1033,29 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
 	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
 	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 minimum untimed topology warmup requests before the measured sweep (0 disables approximate warmup)")
+	fs.IntVar(&cfg.m8MeasuredRepetitions, "m8-measured-repetitions", 1, "M8 measured windows per coordinate (1..10); alternate coordinate order, share untimed attribution")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
 	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
+	fs.BoolVar(&cfg.m3FinalOfflineGraph, "m3-final-offline-graph", false, "materialize the final qualifier's retained M16/eFC128 offline graph control")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
+	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
+	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
+	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
+	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
+	fs.IntVar(&cfg.m8MembershipProbes, "m8-membership-probes", 0, "read-only retained membership feasibility gate logical-domain limit; 1..2 with pack limit")
+	fs.IntVar(&cfg.m8MembershipPackLimit, "m8-membership-pack-limit", 0, "read-only retained membership feasibility gate expanded physical-pack limit")
+	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
-	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
+	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions as both logical and physical; byte_bounded treats it as the graph-domain count and derives physical packs from the hot-byte budget")
 	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
 	fs.Float64Var(&cfg.shardPlanRatio, "shard-plan-overlap-ratio", -1, "overlap ratio the byte-bounded plan provisions for; negative derives it from the largest -overlap value. Comparison variants that materialize different ratios share one geometry by planning for the same envelope")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
@@ -981,18 +1069,18 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
-	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits 18")
-	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "persistent partition-local HNSW efConstruction for M3; zero inherits 256")
+	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "partition-local graph compatibility M for M3; zero inherits 32 (Vamana R=64)")
+	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "partition-local graph compatibility construction width for M3; zero inherits 256 (Vamana L=256)")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
 	fs.IntVar(&cfg.routerConfig.LeafSize, "router-leaf-size", cfg.routerConfig.LeafSize, "router leaf stop size")
-	fs.IntVar(&cfg.routerConfig.RepresentativesPerPartition, "router-representatives", cfg.routerConfig.RepresentativesPerPartition, "router representative budget per partition")
+	fs.IntVar(&cfg.routerConfig.RepresentativeBudget, "router-global-budget", cfg.routerConfig.RepresentativeBudget, "global all-level representative budget across logical domains")
 	fs.IntVar(&cfg.routerConfig.MaxDepth, "router-max-depth", cfg.routerConfig.MaxDepth, "router hierarchy depth bound")
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
 	fs.IntVar(&routerMaxVectors, "router-max-vectors", 0, "router final-membership cap; zero inherits -max-vectors")
-	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router scalar-work cap (1..50000000000)")
+	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router distance-coordinate-work cap (1..100000000000; default 20000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
-	fs.IntVar(&cfg.routerCandidates, "router-candidates", cfg.routerCandidates, "explicit approximate representative candidate budget")
+	fs.IntVar(&cfg.routerCandidates, "router-score-budget", cfg.routerCandidates, "actual hierarchical representative score-call ceiling")
 	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
@@ -1003,7 +1091,7 @@ func parseConfig(args []string) (config, error) {
 	routerCandidatesSet, routerMaxVectorsSet := false, false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "router-candidates":
+		case "router-score-budget":
 			routerCandidatesSet = true
 		case "router-max-vectors":
 			routerMaxVectorsSet = true
@@ -1026,6 +1114,9 @@ func parseConfig(args []string) (config, error) {
 			return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
 		}
 	}
+	if (cfg.m8MembershipProbes == 0) != (cfg.m8MembershipPackLimit == 0) {
+		return config{}, errors.New("-m8-membership-probes and -m8-membership-pack-limit must be supplied together")
+	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
 			return config{}, errors.New("-mode supports only production_multi_group and cannot be combined with -stage")
@@ -1046,12 +1137,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, fmt.Errorf("probes: %w", err)
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 && !routerCandidatesSet {
-		cfg.routerCandidates = 64
-		for _, probes := range cfg.probes {
-			if probes > cfg.routerCandidates {
-				cfg.routerCandidates = probes
-			}
-		}
+		cfg.routerCandidates = defaultRouterScoreBudgetV3
 	}
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
@@ -1073,10 +1159,10 @@ func parseConfig(args []string) (config, error) {
 			cfg.m8VariantDBs = append(cfg.m8VariantDBs, item)
 		}
 	}
-	// The byte-bounded planner owns the partition count. It needs the
+	// The byte-bounded planner owns the physical pack count. It needs the
 	// authoritative fixture row count and dimensions, which are only loaded
-	// after parsing, so leaving -partitions unset defers both the count and
-	// every partition-relative bound to applyByteBoundedShardPlanV1.
+	// after parsing, so leaving -partitions unset defers both logical domains
+	// and physical packs to applyByteBoundedShardPlanV1.
 	if cfg.shardPlanMode != shardPlanModeOffV1 && cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
 		return config{}, fmt.Errorf("-shard-plan must be %q or %q", shardPlanModeOffV1, shardPlanModeByteBoundedV1)
 	}
@@ -1125,8 +1211,8 @@ func parseConfig(args []string) (config, error) {
 		if cfg.partitions > coordinatorLimits.MaxSelectedPartitions {
 			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
 		}
-		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 {
-			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
+		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 || cfg.m8MeasuredRepetitions < 1 || cfg.m8MeasuredRepetitions > 10 {
+			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps, warmup in [0,10000], and measured repetitions in [1,10]")
 		}
 		for _, value := range cfg.concurrency {
 			if value < 1 || value > 256 {
@@ -1139,11 +1225,6 @@ func parseConfig(args []string) (config, error) {
 				return config{}, fmt.Errorf("each ef-search must be in [%d,%d]", cfg.topK, shardLimits.MaxEfSearch)
 			}
 		}
-		for _, probes := range cfg.probes {
-			if probes > cfg.routerCandidates {
-				return config{}, errors.New("production_multi_group requires router-candidates >= every probe count")
-			}
-		}
 		if !allUnique(cfg.probes) || !allUnique(cfg.efSearch) || !allUnique(cfg.concurrency) || !allUnique(cfg.overlaps) {
 			return config{}, errors.New("production_multi_group requires distinct probes, ef-search, concurrency, and overlap values")
 		}
@@ -1151,8 +1232,26 @@ func parseConfig(args []string) (config, error) {
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
 	}
+	if cfg.m3FinalOfflineGraph && (cfg.stage != "overlap,partition_index" || cfg.m3PersistDir == "" || cfg.partitionAssignment != partitionAssignmentGraphV1 || cfg.partitionHNSWM != 16 || cfg.partitionHNSWEfC != 128) {
+		return config{}, errors.New("-m3-final-offline-graph requires retained graph-assignment M3 with explicit M16/efConstruction128")
+	}
+	if cfg.routerCandidates < 1 || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV3 {
+		return config{}, errors.New("router score budget must be in [1,1000000]")
+	}
+	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > defaultRouterPolicyDiagnosticBeamV1 || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
+		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in the diagnostic beam bound")
+	}
+	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
+		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
+	}
+	if cfg.m8MembershipProbes != 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8MembershipProbes < 1 || cfg.m8MembershipProbes > 2 || cfg.m8MembershipPackLimit < 1 || cfg.m8MembershipPackLimit > cfg.partitions || cfg.topK > 10 || cfg.m8TruthCache == "" || cfg.m8TruthCacheSHA256 == "" || cfg.m8ExistingDB == "" && len(cfg.m8VariantDBs) == 0) {
+		return config{}, errors.New("membership feasibility requires retained production_multi_group assets, trusted truth cache, top-k <= 10, P in [1,2], and a bounded physical-pack limit")
+	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
+	}
+	if cfg.m8FinalOfflineGraph && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB == "" || len(cfg.m8VariantDBs) != 0) {
+		return config{}, errors.New("-m8-final-offline-graph requires production_multi_group with one existing database")
 	}
 	if len(cfg.m8VariantDBs) > 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) != 3) {
 		return config{}, errors.New("-m8-variant-dbs requires production_multi_group, exactly three directories, and no -m8-existing-db")
@@ -1215,8 +1314,8 @@ func parseConfig(args []string) (config, error) {
 		}
 		sum := sha256.Sum256(scriptBytes)
 		cfg.kahipAdapterSHA256 = hex.EncodeToString(sum[:])
-		if cfg.kahipAdapterSHA256 != kahipAdapterSHA256 {
-			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
+		if _, err := kahipAdapterHomePackingV1(cfg.kahipAdapterSHA256); err != nil {
+			return config{}, err
 		}
 		cfg.kahipScript = script
 		cfg.kahipSource = string(scriptBytes)
@@ -1320,6 +1419,7 @@ func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, e
 		return config{}, fmt.Errorf("-shard-plan-overlap-ratio %.4f is below the largest requested overlap %.4f", planningRatio, requested)
 	}
 	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
+	in.LogicalDomains = cfg.partitions
 	in.OverlapRatio = planningRatio
 	in.Imbalance = cfg.partition.Imbalance
 	if cfg.shardPlanTargetBytes != 0 {
@@ -1329,14 +1429,11 @@ func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, e
 	if err != nil {
 		return config{}, fmt.Errorf("plan byte-bounded shards: %w", err)
 	}
-	if cfg.partitions != 0 && cfg.partitions != plan.Partitions {
-		return config{}, fmt.Errorf("-partitions %d contradicts the byte-bounded plan: %d rows at %d target hot bytes require %d partitions", cfg.partitions, fixture.Vectors, plan.TargetHotBytes, plan.Partitions)
-	}
-	if err := validateProbesWithinPartitionsV1(cfg.probes, plan.Partitions); err != nil {
+	if err := validateProbesWithinPartitionsV1(cfg.probes, plan.LogicalDomains); err != nil {
 		return config{}, err
 	}
 	cfg.partitions = plan.Partitions
-	cfg.partition.Partitions = plan.Partitions
+	cfg.partition.Partitions = plan.LogicalDomains
 	cfg.shardPlan = plan
 	return cfg, nil
 }
@@ -1360,16 +1457,10 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 }
 
 func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
-	switch {
-	case m == 16 && efConstruction == 128:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
-	case m == 18 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, nil
-	case m == 20 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
-	default:
-		return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
+	if m == 32 && efConstruction == 256 {
+		return collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1, nil
 	}
+	return "", fmt.Errorf("unsupported production partition-local graph compatibility M/L=%d/%d", m, efConstruction)
 }
 
 func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
@@ -1377,16 +1468,20 @@ func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.V
 		return variant, nil
 	}
 	switch {
+	case m == 18 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, nil
+	case m == 16 && efConstruction == 128:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
 	case m == 16 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, nil
 	case m == 16 && efConstruction == 512:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, nil
+	case m == 20 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
 	case m == 22 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, nil
 	case m == 24 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, nil
-	case m == 32 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, nil
 	default:
 		return "", fmt.Errorf("unsupported offline partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
 	}
@@ -1455,7 +1550,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
 	if len(queries) != 0 {
-		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, artifact.Graph.Neighbors, cfg.partitions, cfg.topK)
+		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, artifact.Graph.Neighbors, artifact.Config.Partitions, cfg.topK)
 		if err != nil {
 			return err
 		}
@@ -1501,6 +1596,20 @@ func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
 
 func kahipAdapterCommand(cfg config) []string {
 	return []string{cfg.kahipPython, "-c", cfg.kahipSource}
+}
+
+// The explicitly supplied legacy adapter is the striped construction control.
+// Both arms can therefore be built by one exact benchmark executable without
+// relaxing retained-builder/serving provenance or falling back after a failure.
+func kahipAdapterHomePackingV1(digest string) (bool, error) {
+	switch digest {
+	case kahipAdapterSHA256:
+		return false, nil
+	case kahipHomePackingAdapterSHA256:
+		return true, nil
+	default:
+		return false, errors.New("-partition-kahip-script does not match a pinned adapter")
+	}
 }
 
 func validateKaHIPFinalGraphEnvelopeV1(vectors, degree int) error {
@@ -1938,7 +2047,7 @@ func loadFixture(dir string) (fixtureManifest, error) {
 	if err = d.Decode(&extra); err != io.EOF {
 		return m, errors.New("fixture manifest has trailing JSON")
 	}
-	return m, nil
+	return m, validateFixtureQueryOrdinalsV1(m)
 }
 func decodeResult(raw []byte) (runResult, error) {
 	var r runResult
@@ -2115,11 +2224,29 @@ func validateM3FixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64
 }
 
 func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || (!supportedFixtureGeneratorV1(m.Generator) && m.Generator != externalFixtureGeneratorV1) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
+	}
+	if err := validateExternalFixtureV1(m); err != nil {
+		return err
+	}
+	if err := validateFixtureQueryOrdinalsV1(m); err != nil {
+		return err
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+// Keep the half-open query ordinal range representable before allocating any
+// fixture data. Corpus ordinals and legacy query selection remain unchanged.
+func validateFixtureQueryOrdinalsV1(m fixtureManifest) error {
+	if m.QueryOrdinalOffset < 0 || m.Queries < 1 || m.QueryOrdinalOffset > math.MaxInt64-int64(m.Queries) {
+		return errors.New("invalid fixture query ordinal range")
+	}
+	if m.Generator == fixtureGenerator && m.QueryOrdinalOffset != 0 {
+		return errors.New("legacy fixture generator requires zero query ordinal offset")
+	}
+	return nil
 }
 
 func supportedFixtureGeneratorV1(generator string) bool {
@@ -2142,45 +2269,144 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
-	FixtureChecksumVectorVisits       int64
-	ExactTruthVectorVisits            int64
-	ExactWorkVectorVisits             int64
-	MeasuredQueryRequests             int64
-	WarmupAndPreflightQueryRequests   int64
-	AttributionQueryPasses            int64
-	MaxMembershipOracleSubsets        int64
-	MembershipOracleSubsetEvaluations int64
-	MembershipOracleWorkUnits         int64
-	SelectedPartitionSetupWorkUnits   int64
-	AttributionLinearWorkUnits        int64
-	FinalMembershipLinearScans        int64
-	FinalMembershipPairComparisons    int64
-	AttributionDiagnosticWorkUnits    int64
-	QueryRequests                     int64
-	RetainedCoordinatorCells          int64
-	RetainedCoordinatorResults        int64
-	PreflightResponseBytes            int64
-	PreflightQueryConversionBytes     int64
-	CurrentCellOutcomes               int64
-	CurrentCellOutcomeBytes           int64
-	CurrentQueryConversionBytes       int64
-	FixtureResidentBytes              int64
-	SourceSnapshotBytes               int64
-	ExactTruthBytes                   int64
-	RetainedCoordinatorBytes          int64
-	RetainedAttributionMatrices       int64
-	RetainedAttributionResults        int64
-	RetainedAttributionBytes          int64
-	AttributionMergeScratchResults    int64
-	AttributionMergeScratchBytes      int64
-	AttributionLiveResultSets         int64
-	AttributionLiveResultBytes        int64
-	AttributionApproximateRouteBytes  int64
-	AttributionQueryConversionBytes   int64
-	AttributionPrimaryHomeMapBytes    int64
-	AttributionFinalMembershipBytes   int64
-	AttributionHomeBuildScratchBytes  int64
-	ModeledPeakBytes                  int64
+	QualityDiagnosticWorkUnits           int64
+	QualityDiagnosticBytes               int64
+	RouterPolicyDiagnosticWorkUnits      int64
+	RouterPolicyDiagnosticBytes          int64
+	FixtureChecksumVectorVisits          int64
+	ExactTruthVectorVisits               int64
+	ExactWorkVectorVisits                int64
+	MeasuredQueryRequests                int64
+	WarmupAndPreflightQueryRequests      int64
+	AttributionQueryPasses               int64
+	MaxMembershipOracleSubsets           int64
+	MembershipOracleSubsetEvaluations    int64
+	MembershipOracleWorkUnits            int64
+	MembershipFeasibilityWorkUnits       int64
+	MembershipFeasibilityScratchBytes    int64
+	MembershipFeasibilityPopulationBytes int64
+	MembershipFeasibilityRetainedBytes   int64
+	SelectedPartitionSetupWorkUnits      int64
+	AttributionLinearWorkUnits           int64
+	FinalMembershipLinearScans           int64
+	FinalMembershipPairComparisons       int64
+	AttributionDiagnosticWorkUnits       int64
+	QueryRequests                        int64
+	RetainedCoordinatorCells             int64
+	RetainedCoordinatorResults           int64
+	PreflightResponseBytes               int64
+	PreflightQueryConversionBytes        int64
+	CurrentCellOutcomes                  int64
+	CurrentCellOutcomeBytes              int64
+	CurrentQueryConversionBytes          int64
+	FixtureResidentBytes                 int64
+	SourceSnapshotBytes                  int64
+	ExactTruthBytes                      int64
+	RetainedCoordinatorBytes             int64
+	CompleteAttemptReceiptBytes          int64
+	QualityDiagnosticReceiptBytes        int64
+	RouterPolicyDiagnosticReceiptBytes   int64
+	MeasurementReceiptBytes              int64
+	RetainedAttributionMatrices          int64
+	RetainedAttributionResults           int64
+	RetainedAttributionBytes             int64
+	AttributionMergeScratchResults       int64
+	AttributionMergeScratchBytes         int64
+	AttributionLiveResultSets            int64
+	AttributionLiveResultBytes           int64
+	AttributionApproximateRouteBytes     int64
+	AttributionQueryConversionBytes      int64
+	AttributionPrimaryHomeMapBytes       int64
+	AttributionFinalMembershipBytes      int64
+	AttributionHomeBuildScratchBytes     int64
+	ModeledPeakBytes                     int64
+}
+
+// m8MembershipFeasibilityPopulationBytesV1 separates the construction peak
+// from the immutable query/pack receipt retained after publication.
+func m8MembershipFeasibilityPopulationBytesV1(m fixtureManifest, cfg config, domains int) (population, retained int64, err error) {
+	if m.Vectors < 1 || m.Queries < 1 || cfg.topK < 1 || cfg.partitions < 1 || domains < 1 || domains > cfg.partitions || cfg.m8MembershipProbes < 1 || cfg.m8MembershipPackLimit < 1 || cfg.m8MembershipPackLimit > cfg.partitions {
+		return 0, 0, errors.New("cannot plan M8 membership feasibility population")
+	}
+	truthWidth := int64(min(cfg.topK, m.Vectors))
+	truthIDs, err := memoryMul(int64(m.Queries), truthWidth)
+	if err != nil {
+		return 0, 0, err
+	}
+	truthIDs = min(truthIDs, int64(m.Vectors))
+	maxPackMemberships := min(cfg.partitions, collections.DefaultVectorPartitionManifestLimits().MaxMembershipsPerVector+1)
+	maxDomainMemberships := min(domains, maxPackMemberships)
+
+	mapEntries, err := memoryMul(truthIDs, 6*memoryMapEntryBytes+2*int64(unsafe.Sizeof([]uint32{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	membershipValues, err := memoryMul(2, truthIDs, int64(maxPackMemberships+maxDomainMemberships), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	queryEvidence, err := memoryMul(int64(m.Queries), int64(unsafe.Sizeof(m8MembershipFeasibilityQueryV1{}))+sha256.Size*2)
+	if err != nil {
+		return 0, 0, err
+	}
+	selectedDomains, err := memoryMul(2, int64(m.Queries), int64(cfg.m8MembershipProbes), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	expandedPacks, err := memoryMul(2, int64(m.Queries), int64(cfg.m8MembershipPackLimit), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	packEvidence, err := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof(m8MembershipFeasibilityPackV1{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	domainGraphEvidence, err := memoryMul(int64(domains), int64(unsafe.Sizeof(m8MembershipFeasibilityDomainGraphV1{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	retained, err = memoryAdd(queryEvidence, selectedDomains, expandedPacks, packEvidence, domainGraphEvidence)
+	if err != nil {
+		return 0, 0, err
+	}
+	domainHeaders, err := memoryMul(int64(domains), int64(unsafe.Sizeof([]uint32{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	domainPackValues, err := memoryMul(2, int64(cfg.partitions), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	packOwnersAndCosts, err := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(int64(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	domainPackLayout, err := memoryAdd(domainHeaders, domainPackValues, packOwnersAndCosts)
+	if err != nil {
+		return 0, 0, err
+	}
+	queryIDs, err := memoryMul(truthWidth, int64(unsafe.Sizeof("")))
+	if err != nil {
+		return 0, 0, err
+	}
+	coverageMasks, err := memoryMul(int64(domains), int64(unsafe.Sizeof(uint16(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	seenMemberships, err := memoryMul(int64(maxPackMemberships), memoryMapEntryBytes)
+	if err != nil {
+		return 0, 0, err
+	}
+	seenTruthIDs, err := memoryMul(truthWidth, memoryMapEntryBytes)
+	if err != nil {
+		return 0, 0, err
+	}
+	perQueryScratch, err := memoryAdd(queryIDs, coverageMasks, seenMemberships, seenTruthIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	population, err = memoryAdd(mapEntries, membershipValues, retained, domainPackLayout, perQueryScratch)
+	return population, retained, err
 }
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
@@ -2222,6 +2448,58 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	} else if int64(len(oracleDomainCounts)) != oracleRuns {
 		return plan, errors.New("cannot plan M8 membership-oracle work without one logical-domain count per run")
 	}
+	plan.QualityDiagnosticWorkUnits, plan.QualityDiagnosticBytes, err = m8PlanQualityDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
+	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
+	qualityCells, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+	if err != nil {
+		return plan, err
+	}
+	for _, domains := range oracleDomainCounts {
+		qualityRows, err := m8QualityDiagnosticRowBytesV1(cfg, m, domains, qualityCells)
+		if err != nil {
+			return plan, err
+		}
+		plan.QualityDiagnosticReceiptBytes = max(plan.QualityDiagnosticReceiptBytes, qualityRows)
+		policyRows, err := m8RouterPolicyDiagnosticReceiptBytesV1(cfg, m, domains)
+		if err != nil {
+			return plan, err
+		}
+		plan.RouterPolicyDiagnosticReceiptBytes = max(plan.RouterPolicyDiagnosticReceiptBytes, policyRows)
+	}
+	if cfg.m8MembershipProbes != 0 {
+		for _, domains := range oracleDomainCounts {
+			work, scratch, err := m8MembershipFeasibilityPlanV1(m.Queries, min(cfg.topK, m.Vectors), domains, cfg.m8MembershipProbes)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityWorkUnits, err = memoryAdd(plan.MembershipFeasibilityWorkUnits, work)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityScratchBytes = max(plan.MembershipFeasibilityScratchBytes, scratch)
+			population, retained, err := m8MembershipFeasibilityPopulationBytesV1(m, cfg, domains)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityPopulationBytes, err = memoryAdd(plan.MembershipFeasibilityPopulationBytes, population)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityRetainedBytes, err = memoryAdd(plan.MembershipFeasibilityRetainedBytes, retained)
+			if err != nil {
+				return plan, err
+			}
+		}
+		if plan.MembershipFeasibilityWorkUnits > capUnits || plan.MembershipFeasibilityScratchBytes > capBytes || plan.MembershipFeasibilityPopulationBytes > capBytes {
+			return plan, fmt.Errorf("modeled M8 membership feasibility exceeds resource caps: work=%d scratch_bytes=%d population_bytes=%d", plan.MembershipFeasibilityWorkUnits, plan.MembershipFeasibilityScratchBytes, plan.MembershipFeasibilityPopulationBytes)
+		}
+	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
 	var probeSum int64
@@ -2241,6 +2519,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		for _, domainCount := range oracleDomainCounts {
 			if domainCount < 1 || domainCount > cfg.partitions || probes > domainCount {
 				return plan, errors.New("cannot plan M8 benchmark work with an invalid logical-domain probe count")
+			}
+			if cfg.m8QualityDiagnostics {
+				// The new cache computes both cost curves once per query; its
+				// bounded DP work replaces this legacy subset/probe coordinate.
+				continue
 			}
 			combinations, err := m8MembershipOracleCombinationCountV1(domainCount, probes, maxBenchmarkWorkUnits)
 			if err != nil {
@@ -2343,7 +2626,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	coordinatorParityWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	coordinatorParityWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return plan, err
 	}
@@ -2364,6 +2647,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.AttributionDiagnosticWorkUnits, err = memoryAdd(plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
 	if err != nil {
 		return plan, err
+	}
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits, plan.MembershipFeasibilityWorkUnits)
+	if err != nil {
+		return plan, err
+	}
+	if (cfg.m8QualityDiagnostics || cfg.m8MembershipProbes != 0) && totalDiagnosticWork > capUnits {
+		return plan, fmt.Errorf("M8 combined attribution/diagnostic work %d exceeds %d", totalDiagnosticWork, capUnits)
 	}
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
@@ -2397,7 +2687,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if exactWorkVisits > truthCap {
 		return m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits}, fmt.Errorf("modeled M8 exact source-query work exceeds %d-visit cap: fixture_checksum_vector_visits=%d exact_truth_vector_visits=%d exact_work_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, fixtureChecksumVisits, canonicalTruthVisits, exactWorkVisits)
 	}
-	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
@@ -2500,7 +2790,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 
-	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return plan, err
 	}
@@ -2516,9 +2806,52 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	attemptBytes, err := memoryMul(int64(m.Queries), int64(unsafe.Sizeof(m8MeasuredAttemptV1{}))+8)
+	if err != nil {
+		return plan, err
+	}
+	perCellResults, err = memoryAdd(perCellResults, attemptBytes, int64(unsafe.Sizeof(m8MeasurementAccountingV1{})))
+	if err != nil {
+		return plan, err
+	}
 	plan.RetainedCoordinatorBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellResults)
 	if err != nil {
 		return plan, err
+	}
+	// Bound complete terminal records for every success, refusal, timeout,
+	// cancellation and invalid response, plus canonical IDs/scores/durations and
+	// ordinary row metadata before any measured work.
+	perQueryJSON, err := memoryMul(int64(cfg.topK), documentIDStorageBytes+16)
+	if err != nil {
+		return plan, err
+	}
+	perQueryJSON, err = memoryAdd(perQueryJSON, m8AttemptJSONMaxBytesV1, 128)
+	if err != nil {
+		return plan, err
+	}
+	perCellJSON, err := memoryMul(int64(m.Queries), perQueryJSON)
+	if err != nil {
+		return plan, err
+	}
+	perCellJSON, err = memoryAdd(perCellJSON, 64<<10)
+	if err != nil {
+		return plan, err
+	}
+	plan.CompleteAttemptReceiptBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellJSON)
+	if err != nil {
+		return plan, err
+	}
+	// Quality and router-policy evidence is copied into every repeated row and
+	// those rows are copied into the measurement transcript. Reuse the quality
+	// planner's row estimator and the router receipt's probe-width bound so the
+	// file cap cannot pass on the smaller ordinary-row model and fail only after
+	// collection.
+	plan.MeasurementReceiptBytes, err = memoryAdd(plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
+	if err != nil {
+		return plan, err
+	}
+	if plan.MeasurementReceiptBytes > m8CompleteMeasurementMaxBytesV1 {
+		return plan, fmt.Errorf("complete M8 measurement receipt bound %d exceeds %d bytes (attempts=%d quality_diagnostics=%d router_policy_diagnostics=%d); reduce the declared matrix", plan.MeasurementReceiptBytes, m8CompleteMeasurementMaxBytesV1, plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
 	}
 	maxMeasuredProbes, maxEFSearch, maxConcurrency := 0, 0, 0
 	for _, probes := range cfg.probes {
@@ -2701,7 +3034,9 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	// The immutable feasibility receipt is attached to the report before warmup
+	// and remains live through measurement and attribution.
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityRetainedBytes, plan.RetainedCoordinatorBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2709,7 +3044,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
+	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityRetainedBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
+	membershipFeasibilityPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityPopulationBytes, plan.MembershipFeasibilityScratchBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2721,13 +3060,28 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, preflightPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
+	attributionPeak, err = memoryAdd(attributionPeak, plan.QualityDiagnosticBytes, plan.RouterPolicyDiagnosticBytes)
+	if err != nil {
+		return plan, err
+	}
+	// Transcript/report encoding and validation can coexist with retained rows.
+	// Charge encoder growth, copied output and decoded receipt independently of
+	// the existing diagnostic cache/serialization envelope.
+	serializationScratch, err := memoryMul(plan.MeasurementReceiptBytes, 4)
+	if err != nil {
+		return plan, err
+	}
+	serializationPeak, err := memoryAdd(attributionPeak, serializationScratch)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, preflightPeak, membershipFeasibilityPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak, serializationPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d membership_feasibility_population_bytes=%d membership_feasibility_retained_bytes=%d membership_feasibility_scratch_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityPopulationBytes, plan.MembershipFeasibilityRetainedBytes, plan.MembershipFeasibilityScratchBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }
@@ -2923,13 +3277,7 @@ func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, er
 	if needsRepresentatives {
 		representativeCount := int64(cfg.partitions)
 		if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
-			representativeCount, err = memoryMul(representativeCount, int64(cfg.routerConfig.RepresentativesPerPartition))
-			if err != nil {
-				return benchmarkMemoryPlan{}, err
-			}
-			if representativeCount > int64(m.Vectors) {
-				representativeCount = int64(m.Vectors)
-			}
+			representativeCount = min(int64(cfg.routerConfig.RepresentativeBudget), 2*int64(m.Vectors)-int64(cfg.partitions))
 		}
 		representativeValues, mulErr := memoryMul(representativeCount, int64(m.Dimensions), 8)
 		if mulErr != nil {
@@ -3186,7 +3534,7 @@ func qualificationVectorsV1(m fixtureManifest, domain uint64) [][]float64 {
 func qualificationQueriesV1(m fixtureManifest) [][]float64 {
 	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
-		qualificationVectorV1(q[i], m, uint64(i), 0xd1b54a32d192ed03)
+		qualificationVectorV1(q[i], m, uint64(m.QueryOrdinalOffset)+uint64(i), 0xd1b54a32d192ed03)
 	}
 	return q
 }
@@ -3378,8 +3726,8 @@ func validateSourceHNSWDegree(degree int) error {
 	return nil
 }
 
-func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, candidateBudget, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
-	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || candidateBudget < 1 {
+func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, scoreBudget, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
+	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || scoreBudget < 1 {
 		return nil, errors.New("invalid vector/partition/candidate count for TreeDB router stage")
 	}
 	if err := validateSourceHNSWDegree(sourceHNSWDegree); err != nil {
@@ -3542,10 +3890,7 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	h.candidates = min(candidateBudget, int(h.open.Representatives))
-	if h.candidates < 1 {
-		return nil, errors.New("router benchmark produced no representatives")
-	}
+	h.candidates = scoreBudget
 	return h, nil
 }
 
@@ -3563,8 +3908,8 @@ func (h *treeDBRepresentativeRouter) search(query []float64, probes int, approxi
 		mode = collections.VectorPartitionRouterModeApproxV1
 		candidates = h.candidates
 	}
-	result, err := h.router.Search(query32, collections.VectorPartitionRouterSearchOptionsV1{
-		Mode: mode, CandidateBudget: candidates, PartitionProbes: probes,
+	result, err := h.router.Search(query32, collections.VectorPartitionRouterSearchOptionsV3{
+		Mode: mode, ScoreBudget: candidates, PartitionProbes: probes,
 	})
 	if err != nil {
 		return nil, result.Status, err
@@ -3705,46 +4050,53 @@ func partitionCollectionMetaWithDegree(name string, dims, degree int) *collectio
 
 func insertPartitionRows(col *collections.Collection, vectors [][]float64, partition, partitions int) error {
 	rowCount := moduloPartitionSize(len(vectors), partitions, partition)
-	inserted := 0
-	for next := partition; next < len(vectors); {
-		batchRows := min(vectorPartitionInsertBatchRows, rowCount-inserted)
-		ids := make([][]byte, 0, batchRows)
-		documents := make([][]byte, 0, batchRows)
-		for len(ids) < batchRows && next < len(vectors) {
-			vector := make([]float32, len(vectors[next]))
-			for dimension, value := range vectors[next] {
-				if math.IsNaN(value) || math.IsInf(value, 0) {
-					return fmt.Errorf("vector %d dimension %d is non-finite", next, dimension)
-				}
-				vector[dimension] = float32(value)
-			}
-			id := fmt.Sprintf("doc-%06d", next)
-			raw, err := json.Marshal(struct {
-				TimeUS    int64     `json:"time_us"`
-				Embedding []float32 `json:"embedding"`
-			}{
-				TimeUS:    int64(next + 1),
-				Embedding: vector,
-			})
-			if err != nil {
-				return err
-			}
-			ids = append(ids, []byte(id))
-			documents = append(documents, raw)
-			next += partitions
-		}
+	batchRows := min(vectorPartitionInsertBatchRows, rowCount)
+	ids := make([][]byte, 0, batchRows)
+	documents := make([][]byte, 0, batchRows)
+	batchBytes := 0
+	flush := func() error {
 		if len(ids) == 0 {
-			return fmt.Errorf("partition %d produced an empty insert batch", partition)
+			return nil
 		}
 		if _, err := col.InsertBatch(ids, documents); err != nil {
+			return fmt.Errorf("insert partition %d batch starting %s: %w", partition, ids[0], err)
+		}
+		clear(ids)
+		clear(documents)
+		ids, documents = ids[:0], documents[:0]
+		batchBytes = 0
+		return nil
+	}
+	for next := partition; next < len(vectors); next += partitions {
+		vector := make([]float32, len(vectors[next]))
+		for dimension, value := range vectors[next] {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("vector %d dimension %d is non-finite", next, dimension)
+			}
+			vector[dimension] = float32(value)
+		}
+		id := fmt.Sprintf("doc-%06d", next)
+		raw, err := json.Marshal(struct {
+			TimeUS    int64     `json:"time_us"`
+			Embedding []float32 `json:"embedding"`
+		}{TimeUS: int64(next + 1), Embedding: vector})
+		if err != nil {
 			return err
 		}
-		inserted += len(ids)
+		rowBytes := len(id) + len(raw) + 8 // command-WAL ID/document length fields
+		if rowBytes > vectorPartitionInsertBatchBytes {
+			return fmt.Errorf("vector %d encoded row bytes=%d exceeds insert batch cap=%d", next, rowBytes, vectorPartitionInsertBatchBytes)
+		}
+		if len(ids) == batchRows || batchBytes+rowBytes > vectorPartitionInsertBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		ids = append(ids, []byte(id))
+		documents = append(documents, raw)
+		batchBytes += rowBytes
 	}
-	if inserted != rowCount {
-		return fmt.Errorf("partition %d rows=%d want %d", partition, inserted, rowCount)
-	}
-	return nil
+	return flush()
 }
 
 func moduloPartitionSize(vectors, partitions, partition int) int {
@@ -3977,6 +4329,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 			totals["exact_representative_routing"] += recall(truth, got)
 			exactRouterEvidence.Searches++
 			exactRouterEvidence.Candidates += routeStatus.Candidates
+			exactRouterEvidence.ScoreCalls += routeStatus.ScoreCalls
 			exactRouterEvidence.Edges += routeStatus.Edges
 			exactRouterEvidence.SearchNanos += routeStatus.SearchNanos
 			exactRouterEvidence.AllocBytes += allocBytes
@@ -3992,6 +4345,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 			totals["approximate_representative_routing"] += recall(truth, got)
 			approximateRouterEvidence.Searches++
 			approximateRouterEvidence.Candidates += routeStatus.Candidates
+			approximateRouterEvidence.ScoreCalls += routeStatus.ScoreCalls
 			approximateRouterEvidence.Edges += routeStatus.Edges
 			approximateRouterEvidence.SearchNanos += routeStatus.SearchNanos
 			approximateRouterEvidence.AllocBytes += allocBytes
@@ -4050,8 +4404,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	exactMethod := "centroid_representative_routing"
 	approximateMethod := "deterministic_last_representative_perturbation"
 	if cfg.router != nil {
-		exactMethod = "persisted_krt_exact_representative_oracle_v1"
-		approximateMethod = "persisted_krt_native_hnsw_search_pack_v1"
+		exactMethod = "persisted_krt_exact_representative_oracle_v3"
+		approximateMethod = "persisted_krt_hierarchical_search_v3"
 	}
 	exactRouterStage := stage("exact_representative_routing", exactMethod, probes < cfg.partitions, totals["exact_representative_routing"]/n, probes)
 	approximateRouterStage := stage("approximate_representative_routing", approximateMethod, probes < cfg.partitions, totals["approximate_representative_routing"]/n, probes)
@@ -4059,6 +4413,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		exactRouterStage.Searches = exactRouterEvidence.Searches
 		exactRouterStage.RepresentativeCount = cfg.router.open.Representatives
 		exactRouterStage.CandidateBudget = cfg.router.open.Representatives
+		exactRouterStage.RouterSemantics = m8RouterSemanticsV4
+		exactRouterStage.ScoreCalls = exactRouterEvidence.ScoreCalls
 		exactRouterStage.Candidates = exactRouterEvidence.Candidates
 		exactRouterStage.Edges = exactRouterEvidence.Edges
 		exactRouterStage.SearchNanos = exactRouterEvidence.SearchNanos
@@ -4072,6 +4428,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		approximateRouterStage.Searches = approximateRouterEvidence.Searches
 		approximateRouterStage.RepresentativeCount = cfg.router.open.Representatives
 		approximateRouterStage.CandidateBudget = uint64(cfg.router.candidates)
+		approximateRouterStage.RouterSemantics = exactRouterStage.RouterSemantics
+		approximateRouterStage.ScoreCalls = approximateRouterEvidence.ScoreCalls
 		approximateRouterStage.Candidates = approximateRouterEvidence.Candidates
 		approximateRouterStage.Edges = approximateRouterEvidence.Edges
 		approximateRouterStage.SearchNanos = approximateRouterEvidence.SearchNanos
@@ -4204,8 +4562,8 @@ func validateResult(r runResult) error {
 		if (r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1) &&
 			(s.Name == "exact_representative_routing" || s.Name == "approximate_representative_routing") {
 			if s.Searches != uint64(s.Queries) || s.RepresentativeCount == 0 ||
-				s.CandidateBudget == 0 || s.CandidateBudget > s.RepresentativeCount ||
-				s.Candidates > s.Searches*s.CandidateBudget ||
+				s.CandidateBudget == 0 || s.RouterSemantics != m8RouterSemanticsV4 ||
+				s.ScoreCalls < s.Candidates || s.ScoreCalls > s.Searches*s.CandidateBudget ||
 				s.P50Nanos == 0 || s.P50Nanos > s.P95Nanos || s.P95Nanos > s.P99Nanos {
 				return fmt.Errorf("router stage lacks bounded timing/search evidence: %+v", s)
 			}

@@ -89,6 +89,8 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 		"Collection.InsertTypedBatchWithStats",
 		"Collection.ReplaceTypedBatch",
 		"Collection.UpsertTypedBatch",
+		"Collection.ImportVectorPartitionSourceChunkV2",
+		"Collection.ImportVectorPartitionSourceChunkWithStatsV2",
 		"Collection.InsertBatchWithTemplateV1Encoder",
 		"Collection.InsertBatchValidatedBSON",
 		"Collection.Delete",
@@ -381,6 +383,10 @@ func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
 		return "CommandTypedDocumentUpsert"
 	case iwire.CommandVectorInsert:
 		return "CommandVectorInsert"
+	case iwire.CommandTypedSourceReplace:
+		return "CommandTypedSourceReplace"
+	case iwire.CommandTypedMetadataUpdate:
+		return "CommandTypedMetadataUpdate"
 	case iwire.CommandDeleteBatch:
 		return "CommandDeleteBatch"
 	case iwire.CommandFlushCollection:

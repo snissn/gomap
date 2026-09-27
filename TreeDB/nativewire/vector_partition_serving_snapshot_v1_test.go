@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,84 @@ func TestVectorPartitionProductionAssetBindingsAllowSingleOwnerV1(t *testing.T) 
 	}
 	if _, err := vectorPartitionM8ValidateAssetsV1(manifest, digests); err == nil {
 		t.Fatal("M8 accepted a single owner")
+	}
+
+	manifest.Assets = append(manifest.Assets, collections.VectorPartitionAssetV1{
+		ID: "unused-partition-0", Checksum: strings.Repeat("3", 64), PartitionID: 0, Bytes: 1,
+		Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: 3, FileID: 3, Length: 1},
+	})
+	manifest.Canonicalize()
+	if err := manifest.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatalf("duplicate-partition fixture must remain manifest-valid: %v", err)
+	}
+	digests["group-a"] = vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest)
+	if _, err := vectorPartitionValidateAssetBindingsV1(manifest, digests); err == nil {
+		t.Fatal("production asset bindings accepted an unused descriptor for an unsplit partition")
+	}
+}
+
+func TestVectorPartitionProductionAssetBindingsAllowCoLocatedDomainChunksV1(t *testing.T) {
+	membershipDigest := strings.Repeat("c", 64)
+	asset := func(id string, partition uint32, file uint64, root bool) collections.VectorPartitionAssetV1 {
+		out := collections.VectorPartitionAssetV1{
+			ID: id, PartitionID: partition, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, Bytes: 12,
+			Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: file, FileID: uint32(file), Length: 12},
+		}
+		if root {
+			out.GraphVariant = string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+		}
+		return out
+	}
+	manifest := collections.VectorPartitionManifestV1{
+		Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, Generation: 4, RouterGeneration: 4, PartitionCount: 4, DomainCount: 2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3}},
+		Placements:  []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}, {PartitionID: 3, GroupID: "group-b"}},
+		Memberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}, {VectorOrdinal: 2, PartitionID: 2}, {VectorOrdinal: 3, PartitionID: 3}},
+		Assets: []collections.VectorPartitionAssetV1{
+			asset("hnsw_search_pack_v1/partition/0", 0, 1, true),
+			asset("hnsw_search_pack_v1/partition/0/section/01/00000/chunk/00000000", 0, 2, false),
+			asset("hnsw_search_pack_v1/partition/2", 2, 3, true),
+			asset("hnsw_search_pack_v1/partition/2/section/01/00000/chunk/00000000", 2, 4, false),
+		},
+		RouterAsset: collections.VectorPartitionAssetV1{ID: "router", Checksum: strings.Repeat("d", 64), Bytes: 12, Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: 5, FileID: 5, Length: 12}},
+	}
+	manifest.Canonicalize()
+	digests := map[string]string{
+		"group-a": vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest),
+		"group-b": vectorPartitionM8GroupAssetSetDigestV1("group-b", manifest),
+	}
+	groups, err := vectorPartitionM8ValidateAssetsV1(manifest, digests)
+	if err != nil || len(groups) != 2 || groups[0] != "group-a" || groups[1] != "group-b" {
+		t.Fatalf("chunked production asset bindings groups=%v err=%v", groups, err)
+	}
+
+	unsplit := manifest
+	unsplit.Assets = make([]collections.VectorPartitionAssetV1, unsplit.PartitionCount)
+	for partition := range unsplit.Assets {
+		unsplit.Assets[partition] = asset(fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition), uint32(partition), uint64(10+partition), true)
+		unsplit.Assets[partition].GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	}
+	unsplit.Canonicalize()
+	unsplitDigests := map[string]string{
+		"group-a": vectorPartitionM8GroupAssetSetDigestV1("group-a", unsplit),
+		"group-b": vectorPartitionM8GroupAssetSetDigestV1("group-b", unsplit),
+	}
+	if _, err := vectorPartitionM8ValidateAssetsV1(unsplit, unsplitDigests); err != nil {
+		t.Fatalf("multi-pack unsplit asset bindings: %v", err)
+	}
+	unsplit.Assets = append(unsplit.Assets, asset("unused-partition-0", 0, 20, false))
+	unsplit.Canonicalize()
+	unsplitDigests["group-a"] = vectorPartitionM8GroupAssetSetDigestV1("group-a", unsplit)
+	unsplitDigests["group-b"] = vectorPartitionM8GroupAssetSetDigestV1("group-b", unsplit)
+	if _, err := vectorPartitionValidateAssetBindingsV1(unsplit, unsplitDigests); err == nil {
+		t.Fatal("production asset bindings accepted an unused descriptor for a multi-pack unsplit layout")
+	}
+
+	manifest.Placements[1].GroupID = "group-b"
+	manifest.Canonicalize()
+	if _, err := vectorPartitionValidateAssetBindingsV1(manifest, digests); err == nil {
+		t.Fatal("production asset bindings accepted split domain ownership")
 	}
 }
 
@@ -211,6 +290,16 @@ func TestVectorPartitionServingSnapshotPublicationRejectsAssetSetMismatchV1(t *t
 	fixture.router.status.Manifest.Assets[0].Checksum = strings.Repeat("8", 64)
 	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
 		t.Fatalf("asset-set mismatch publication error=%v", err)
+	}
+}
+
+func TestVectorPartitionServingSnapshotPublicationRejectsSplitDomainOwnershipV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.router.status.Manifest.DomainCount = 1
+	fixture.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	fixture.router.status.Partitions = 1
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch) {
+		t.Fatalf("split domain publication error=%v", err)
 	}
 }
 

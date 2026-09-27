@@ -32,6 +32,7 @@ type HashSortedIndexer struct {
 	workers  int
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+	worker   func()
 }
 
 func NewHashSortedIndexer() *HashSortedIndexer {
@@ -39,11 +40,16 @@ func NewHashSortedIndexer() *HashSortedIndexer {
 		ch:      make(chan hashSortedIndexWork, hashSortedIndexerQueueSize),
 		workers: hashSortedIndexerWorkerCount(),
 	}
+	x.worker = x.loop
+	x.start()
+	return x
+}
+
+func (x *HashSortedIndexer) start() {
 	x.wg.Add(x.workers)
 	for i := 0; i < x.workers; i++ {
-		go x.loop()
+		go x.worker()
 	}
-	return x
 }
 
 func hashSortedIndexerWorkerCount() int {
@@ -60,6 +66,8 @@ func hashSortedIndexerWorkerCount() int {
 	}
 	return workers
 }
+
+func (x *HashSortedIndexer) sharedLoop() { x.loop() }
 
 func (x *HashSortedIndexer) loop() {
 	defer x.wg.Done()
@@ -89,4 +97,27 @@ func (x *HashSortedIndexer) Close() {
 	})
 }
 
-var globalHashSortedIndexer = NewHashSortedIndexer()
+var (
+	globalHashSortedIndexerOnce sync.Once
+	globalHashSortedIndexer     *HashSortedIndexer
+)
+
+// sharedHashSortedIndexer returns the process-global fallback indexer used by
+// HashSorted memtables created without an explicit indexer. It starts on first
+// use and intentionally runs for the lifetime of the process; callers that own
+// a memtable lifecycle should construct and close their own indexer instead.
+func sharedHashSortedIndexer() *HashSortedIndexer {
+	globalHashSortedIndexerOnce.Do(func() {
+		x := &HashSortedIndexer{
+			ch:      make(chan hashSortedIndexWork, hashSortedIndexerQueueSize),
+			workers: hashSortedIndexerWorkerCount(),
+		}
+		// sharedLoop gives the process-global workers a distinct stack top so
+		// goroutine-leak checks can ignore the intentional global without
+		// masking owned indexers that were never closed.
+		x.worker = x.sharedLoop
+		x.start()
+		globalHashSortedIndexer = x
+	})
+	return globalHashSortedIndexer
+}

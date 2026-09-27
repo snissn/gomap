@@ -119,34 +119,110 @@ profile paths, limitations, and an explicit gate ledger. CPU, allocation
 baseline/final, heap, block, mutex, and execution trace profiles cover the
 measured query cells plus the unavailable-endpoint fault.
 
-The checked-in 10k path materializes persistent HNSW packs for CI. The retained
-1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
+The checked-in 10k path materializes persistent production graph packs for CI.
+The retained 1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
 distinct immutable descriptors and executes them sequentially, one fresh OS
-process per variant so process peak RSS is attributable to that variant. The
-blocked matrix parent validates only the manifest and descriptors and does not
-materialize a second fixture corpus. Preflight planning applies the memory cap
-to one child's complete peak and multiplies the complete measured,
-warmup/preflight, and attribution work by the number of children:
+process per variant so process peak RSS is attributable to that variant.
+Preflight planning applies the memory cap to one child's complete peak and
+multiplies the complete measured, warmup/preflight, and attribution work by the
+number of children:
 
 1. graph assignment with disjoint memberships;
 2. graph assignment with bounded overlap `0.20`;
 3. stable-ID hash assignment with disjoint memberships as an attribution
    baseline.
 
-The matrix rejects missing, duplicated, mutable, or identity-mismatched
-variants rather than silently substituting a disjoint row. A declared overlap
-variant is incomplete unless its realized extra-membership count equals
-`floor(overlap_ratio * source_rows)`; incomplete materialization fails both the
-required-variant and overlap-storage gates even when its raw byte ratio is
-below the threshold. Exact correctness is owned by canonical source truth
+With `-m8-membership-probes P -m8-membership-pack-limit B`, the matrix parent
+first opens every retained source read-only, reuses the trusted exact-truth
+cache and final shard-generation memberships, and computes the joint logical
+domain/expanded-physical-pack recall ceiling for every query. The existing
+bounded joint mask DP is checked against an independent exhaustive singles/pairs
+enumerator for the admitted `P<=2` range. All physical packs owned by a selected
+logical domain are charged. The immutable result binds the fixture, truth
+artifact, build/manifest/ready-set/shard-generation identities, actual pack
+bytes, limits, per-query witness, and aggregate ceiling. Any insufficient
+variant stops the matrix before timed child processes; replay recomputes the
+result from the retained assets. This is a necessary membership-feasibility
+gate, not a serving recall or throughput claim.
+
+Materialized pack bytes are checked after encoding and before manifest/router
+publication against the byte-bounded plan's conservative per-pack envelope;
+retained admission checks the same invariant again. The matrix rejects missing,
+duplicated, mutable, or identity-mismatched variants rather than silently
+substituting a disjoint row. Useful-only overlap may leave requested capacity
+unused, but every realized extra membership must have positive cut reduction,
+no filler is accepted, and storage remains gated. Exact correctness is owned by canonical source truth
 versus the exhaustive exact partition union;
-the router, partition-local HNSW, transport, and coordinator merge retain
-separate recall/parity attribution. Approximate HNSW recall is judged by the
+the router, partition-local graph search, transport, and coordinator merge retain
+separate recall/parity attribution. Approximate local graph recall is judged by the
 declared recall gate and is never described as exact exhaustive parity.
 The matrix may pass its coupled graph-acceptance gate only when one graph
 variant at one `(probes, ef_search, concurrency)` operating point passes recall,
 probe reduction, matched-recall QPS, and matched-recall tail together; those
 gates cannot be assembled from different variants or different cells.
+
+### Complete measured windows
+
+New schema-7 producers declare `measurement_accounting=complete_attempts_v1`.
+Every declared query retains exactly one indexed terminal record: success,
+router refusal, timeout, cancellation, ordinary error, or invalid response.
+Dispatch status distinguishes canceled/unstarted work from dispatched requests.
+Successful siblings are retained when another request fails. Typed coordinator
+errors retain their observed counters and timing; unavailable work is marked
+unobserved, not inferred from a later offline traversal. A failure returning any
+neighbors or routing payload sets `partial_response` and fails all-or-error
+honesty. Invalid response payloads never contribute returned truth hits.
+
+Integer counts define separate denominators:
+
+- successful recall: returned truth hits / (successful requests * top-k);
+- service recall (the row's `recall_at_k`): returned truth hits /
+  (all declared requests * top-k), charging failures/unstarted work zero hits;
+- completion: successes / dispatched requests, or zero if none dispatched;
+- attempt rate: dispatched requests / measured cell elapsed seconds;
+- goodput (the row's `qps`): valid successes / that same elapsed window.
+
+Successful p50/p95/p99 use only coordinator latency for valid successes.
+Observed terminal durations include failed requests but are not fabricated
+successful latencies. No-success rows retain zero conditional statistics and
+fail. Every required query must succeed for a coordinate to pass, regardless
+of conditional recall or completion among a smaller dispatched subset. Aggregate
+resource work includes observed failure work; per-request maxima remain maxima.
+Measured coordinator/local parity covers successful requests only. Offline
+attribution remains separately labelled; failed requests do not prove a local
+navigation or merge-loss cause.
+If offline approximate coverage is incomplete, successful measured truth masks
+and service recall remain available, but local/coordinator parity is unclaimed.
+The final stage is `offline_local_comparison_unavailable` (inactive, zero delta),
+not a comparison against an invented zero-recall offline traversal.
+
+`-m8-measured-repetitions N` admits 1..10 windows per coordinate (default1).
+Repetition is part of row/transcript identity. Even-numbered blocks use the
+declared coordinate order; odd-numbered blocks reverse it. Query identity/order,
+topology, warmup and assets remain fixed. All windows precede one untimed
+attribution pass, cached per probe/EF point; retained replay shares that static
+work and independently checks each window's results. Selectors require every
+window at the chosen coordinate to complete and meet quality. Paired QPS/tail
+gates must pass for every same-repetition candidate/reference pair; neither a
+failed window nor a slower repetition can be discarded.
+The frozen historical qualification campaign rejects repeated child windows;
+its three independent runs retain their original meaning.
+
+Admission charges repeated requests, retained attempts/results, row copies and
+JSON encoding memory before topology execution. Complete reports/transcripts
+have a128MiB file cap; diagnostics keep their own work/memory limits. Production
+reports use compact JSON. If a later diagnostic or validation step fails, the
+runner attempts to preserve completed rows and their hashed transcript under
+`OUT/incomplete_EXECUTION_ID/report.json`, status`incomplete_after_measurement`,
+with no gate ledger. This requires writable storage and is not crash recovery.
+The command still fails; strict replay refuses incomplete evidence. It never
+turns a partial run into qualification or invents remaining windows.
+
+Legacy schema-7 reports omit both the accounting contract and repetition count.
+They retain their old interpretation and bounds; discarded legacy refusal
+populations cannot be reconstructed or upgraded. Changed producer identities
+still require correctly built/pinned retained assets. Accounting does not waive
+source, executable, command, truth, profile, or descriptor provenance.
 
 The schema-5 retained descriptor records the full assignment artifact, its
 pre-assignment artifact provenance, and a graph-build digest over the source,

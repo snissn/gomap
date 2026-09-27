@@ -350,6 +350,10 @@ func vectorPartitionLifecycleManifestWithContextV1(ctx context.Context, state ve
 		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
 	manifest := *entry.Manifest
+	if manifest.PagedRootV2 != nil {
+		manifest.PagedRootV2 = cloneVectorPartitionPagedRootV2(manifest.PagedRootV2)
+		return manifest, ctx.Err()
+	}
 	copyChunked := func(length int, copyRange func(int, int)) error {
 		for offset := 0; offset < length; offset += 1024 {
 			if err := ctx.Err(); err != nil {
@@ -389,7 +393,7 @@ func vectorPartitionLifecycleManifestWithContextV1(ctx context.Context, state ve
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
-	manifest.Representatives = make([]VectorPartitionMembershipV1, len(entry.Manifest.Representatives))
+	manifest.Representatives = make([]VectorPartitionRepresentativeV2, len(entry.Manifest.Representatives))
 	if err := copyChunked(len(manifest.Representatives), func(start, end int) {
 		copy(manifest.Representatives[start:end], entry.Manifest.Representatives[start:end])
 	}); err != nil {
@@ -443,6 +447,19 @@ func (s *VectorPartitionStoreV1) stageVectorPartitionManifestLifecycleV1(m Vecto
 }
 
 func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleModeV1(m VectorPartitionManifestV1, activate bool) error {
+	if err := m.requireInlineRuntimeV1(); err != nil {
+		return err
+	}
+	return s.persistVerifiedVectorPartitionManifestLifecycleModeV1(m, activate)
+}
+
+// persistVerifiedVectorPartitionManifestLifecycleModeV1 is private to producers
+// that verified source authority and the complete physical closure while holding
+// the storage and collection mutation barriers. Public raw Stage remains gated.
+func (s *VectorPartitionStoreV1) persistVerifiedVectorPartitionManifestLifecycleModeV1(m VectorPartitionManifestV1, activate bool) error {
+	if m.isPagedRootV2() && activate {
+		return ErrVectorPartitionPagedRuntimeUnsupportedV2
+	}
 	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(m.Collection, m.IndexName)
 	if err != nil {
 		return err
@@ -755,10 +772,26 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				}
 				continue
 			}
-			refs := vectorPartitionLifecycleManifestRefsV1(*state.Manifest)
-			prepared = append(prepared, refs...)
-			if loaded.state.ActiveGeneration == generation {
-				pinned = append(pinned, refs...)
+			if state.Manifest.isPagedRootV2() {
+				namespace := ""
+				if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+					namespace = cfg.AssetManager.Namespace
+				}
+				if err := walkVectorPartitionManifestAssetsV2(context.Background(), c.db.ColumnAssetRootDir(), namespace, *state.Manifest, func(a VectorPartitionAssetV1) error {
+					prepared = append(prepared, a.Ref)
+					if loaded.state.ActiveGeneration == generation {
+						pinned = append(pinned, a.Ref)
+					}
+					return nil
+				}); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				refs := vectorPartitionLifecycleManifestRefsV1(*state.Manifest)
+				prepared = append(prepared, refs...)
+				if loaded.state.ActiveGeneration == generation {
+					pinned = append(pinned, refs...)
+				}
 			}
 		}
 	}
@@ -818,6 +851,9 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	if err != nil {
 		return VectorPartitionStatusV1{}, err
 	}
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return VectorPartitionStatusV1{}, err
+	}
 	groups := make(map[string]struct{}, len(manifest.Placements))
 	var assetBytes uint64
 	for _, placement := range manifest.Placements {
@@ -860,6 +896,13 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	}
 	var missingAssets, corruptAssets, staleAssets uint64
 	statusAssets := append([]VectorPartitionAssetV1(nil), manifest.Assets...)
+	chunkedDomains := false
+	for _, asset := range manifest.Assets {
+		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			chunkedDomains = true
+			break
+		}
+	}
 	if manifest.State == "ready" {
 		statusAssets = append(statusAssets, manifest.RouterAsset)
 	}
@@ -883,12 +926,17 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			}
 			continue
 		}
-		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+		if !chunkedDomains && asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
 			singleAssetManifest := manifest
 			singleAssetManifest.Assets = []VectorPartitionAssetV1{asset}
 			if err := c.validateVectorPartitionAssetMembershipBindingsV1(singleAssetManifest); err != nil {
 				staleAssets++
 			}
+		}
+	}
+	if chunkedDomains && missingAssets == 0 && corruptAssets == 0 {
+		if err := c.validateVectorPartitionAssetMembershipBindingsV1(manifest); err != nil {
+			staleAssets++
 		}
 	}
 	return VectorPartitionStatusV1{

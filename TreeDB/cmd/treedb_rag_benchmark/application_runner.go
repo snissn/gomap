@@ -1465,7 +1465,7 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 	hybridEndpoint := cell.Route == "text_only" || cell.Route == "hybrid" || filteredVectorEndpoint
 	if hybridEndpoint {
 		hybrid := documentservice.HybridSearchRequest{
-			TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch,
+			TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit,
 			MaxChunksPerParent: applicationMaxChunksPerParent(cell), Filter: applicationServiceFilter(cell),
 		}
 		if cell.Route == "text_only" || cell.Route == "hybrid" {
@@ -1473,6 +1473,7 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 		}
 		if cell.Route == "vector_only" || cell.Route == "hybrid" {
 			hybrid.QueryEmbedding = vector
+			hybrid.EfSearch = cfg.EfSearch
 		}
 		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
 		request = hybrid

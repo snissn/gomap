@@ -360,8 +360,8 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	frontiers := make(map[uint32]uint64, len(want))
 	var namespaceSyncs uint64
 	var namespaceObligations uint64
-	for _, descriptor := range authority.resources.Descriptors() {
-		if descriptor.Kind() != rootpublication.ResourceOuterLeafPack {
+	for _, descriptor := range authority.resources.PhysicalDescriptors() {
+		if descriptor.Kind != rootpublication.ResourceOuterLeafPack {
 			continue
 		}
 		if fields := descriptor.ReachabilityFields(); len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafPackedPointer {
@@ -370,7 +370,7 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		identity := descriptor.Identity()
 		identity.Generation = 0
 		fileID, ok := want[identity]
-		if !ok || descriptor.Generation() != uint64(fileID) || descriptor.Frontier().Bytes == 0 {
+		if !ok || descriptor.Generation != uint64(fileID) || descriptor.Frontier().Bytes == 0 {
 			return fail(fmt.Errorf("%w: packed descriptor does not match promoted segment", rootpublication.ErrResourceConflict))
 		}
 		seen[identity] = struct{}{}

@@ -538,7 +538,7 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 			Type:   string(col.ValueType),
 		}
 	}
-	if version >= columnPhysicalAssetVersionV7 {
+	if version == columnPhysicalAssetVersionV7 || version == columnPhysicalAssetVersionV8 {
 		rowEncodingHeaderStart := cur.pos
 		rowEncoding := cur.string()
 		if header.ColumnCount != 0 {
@@ -616,6 +616,14 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 			}
 			out.RowDeletedFlagBytes = addColumnStorePhysicalAccountingBytes(out.RowDeletedFlagBytes, int64(cur.pos-deletedStart))
 		}
+		if version == columnPhysicalAssetVersionV9 {
+			start := cur.pos
+			_ = readColumnPreservedRow(&cur, id, header.Generation, header.AppliedCommandLSN, header.Operation, deleted)
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+			out.RowEncodingHeaderBytes = addColumnStorePhysicalAccountingBytes(out.RowEncodingHeaderBytes, int64(cur.pos-start))
+		}
 		if deleted {
 			if header.Operation != ColumnPublishOperationDelete {
 				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", header.Operation, rowIdx)
@@ -627,6 +635,9 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIdx)
 		}
 		for colIdx, col := range columns {
+			if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+				continue
+			}
 			valueHeaderStart := cur.pos
 			typeBytes := cur.stringBytes()
 			if cur.err != nil {

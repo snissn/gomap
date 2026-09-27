@@ -61,20 +61,30 @@ func deleteVectorPartitionStoreForTest(s *VectorPartitionStoreV1, collection, in
 
 func TestShouldRefreshVectorPartitionReclaimGCPlanV1(t *testing.T) {
 	stale := backenddb.ErrRecoverableRootSetStale
-	tests := []struct {
+	type retryCase struct {
 		name    string
 		err     error
 		stats   ColumnAssetGCStats
 		attempt int
 		want    bool
-	}{
+	}
+	tests := []retryCase{
 		{name: "fresh stale authority", err: stale, attempt: 0, want: true},
+		{name: "wrapped stale authority", err: errors.Join(ErrColumnAssetGCPlanStale, stale), attempt: 0, want: true},
 		{name: "stale authority after deletion", err: stale, stats: ColumnAssetGCStats{SegmentsDeleted: 1}, attempt: 0},
 		{name: "unrelated error", err: errors.New("injected"), attempt: 0},
 		{name: "attempt bound exhausted", err: stale, attempt: vectorPartitionReclaimRecoverableRootAttemptsV1 - 1},
 	}
+	// Literal boundaries protect the eight-attempt contract independently of
+	// the configured constant and nondeterministic post-plan hook observations.
+	for attempt := range 9 {
+		tests = append(tests, retryCase{name: fmt.Sprintf("attempt %d", attempt), err: stale, attempt: attempt, want: attempt < 7})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRetryColumnAssetGCFromFreshRecoverableRoots(tt.err, tt.stats, tt.attempt); got != tt.want {
+				t.Fatalf("shouldRetryColumnAssetGCFromFreshRecoverableRoots()=%v want %v", got, tt.want)
+			}
 			if got := shouldRefreshVectorPartitionReclaimGCPlanV1(tt.err, tt.stats, tt.attempt); got != tt.want {
 				t.Fatalf("shouldRefreshVectorPartitionReclaimGCPlanV1()=%v want %v", got, tt.want)
 			}
@@ -1384,11 +1394,14 @@ func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
 	requireTextContains(t, "vector partition storage format", doc,
 		"### Vector-partition manifests (`vector_partitions/`)",
 		"one (exactly one)\nrouter-asset frame",
-		"wire version `4`",
-		"Version 4 has this fixed,\nuntagged order",
+		"wire version `6`",
+		"Version 6 has this fixed,\nuntagged order",
 		"Every physical pack belongs to exactly one\nnonempty domain",
 		"added the membership-digest string between the\nasset checksum and byte length",
-		"decoder accepts only version 4",
+		"version 6 adds the graph-variant string to every asset\nframe",
+		"decoder accepts only version 6",
+		"Production partition-local `hnsw_search_pack_v1` assets use wire version 6",
+		"READY promotion payload, distinct from the VPR1 reclaim payload)\nuses ASCII magic `VRP1`, big-endian wire version `4`",
 		"The highest checkpoint epoch is the sole authority",
 		"VPR1 is the bounded, versioned, checksummed reclaim payload",
 		"Raft-snapshot-included namespace",
@@ -2848,7 +2861,7 @@ func TestVectorPartitionManifestV1IntegrityRejectsSemanticMutation(t *testing.T)
 			m.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
 		},
 		"representative": func(m *VectorPartitionManifestV1) {
-			m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 1, PartitionID: 1}}
+			m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 1, PartitionID: 1, NodeID: 1}}
 		},
 		"policy":     func(m *VectorPartitionManifestV1) { m.BalancePolicy = "other" },
 		"generation": func(m *VectorPartitionManifestV1) { m.Generation++ },
@@ -2944,7 +2957,7 @@ func TestVectorPartitionManifestV1DefaultLimitsSupportMillionRowsAndOverlap(t *t
 	for i := range m.OverlapMemberships {
 		m.OverlapMemberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 1}
 	}
-	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}}
 	m.Canonicalize()
 	raw, err := EncodeVectorPartitionManifestV1(m)
 	if err != nil {
@@ -3011,7 +3024,7 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	ref := func(partID uint64, fileID uint32, bytes int64) ColumnAssetRef {
 		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: partID, FileID: fileID, Length: bytes}
 	}
-	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
+	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionRepresentativeV2{{0, 0, 1}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
 	return m
 }
@@ -3057,13 +3070,107 @@ func TestVectorPartitionManifestV1BindsLogicalDomainsToPhysicalPacks(t *testing.
 		t.Run(name, func(t *testing.T) {
 			bad := m
 			bad.DomainPacks = append([]VectorPartitionDomainPackV1(nil), m.DomainPacks...)
-			bad.Representatives = append([]VectorPartitionMembershipV1(nil), m.Representatives...)
+			bad.Representatives = append([]VectorPartitionRepresentativeV2(nil), m.Representatives...)
 			mutate(&bad)
 			bad.Canonicalize()
 			if err := bad.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
 				t.Fatal("invalid domain-pack mapping accepted")
 			}
 		})
+	}
+}
+
+func TestVectorPartitionManifestV1AcceptsOnlyCoLocatedDomainChunks(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.DomainCount = 1
+	m.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"}}
+	membershipDigest := strings.Repeat("c", 64)
+	root := func(partition uint32, file uint32, variant VectorPartitionLocalGraphVariantV1) VectorPartitionAssetV1 {
+		return VectorPartitionAssetV1{
+			ID: vectorPartitionLocalAssetIDV1(partition), PartitionID: partition, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, GraphVariant: string(variant), Bytes: 12,
+			Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: uint64(file), FileID: file, Length: 12},
+		}
+	}
+	m.Assets = []VectorPartitionAssetV1{
+		root(0, 1, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
+		{ID: vectorPartitionLocalSectionChunkAssetIDV1(0, columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionNormalizedVectors}, 0), PartitionID: 0, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, Bytes: 13, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: 2, FileID: 2, Length: 13}},
+	}
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatalf("co-located domain chunks: %v", err)
+	}
+
+	split := m
+	split.Placements = append([]VectorPartitionPlacementV1(nil), m.Placements...)
+	split.Placements[1].GroupID = "raft-b"
+	split.Canonicalize()
+	if err := split.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted split domain chunk ownership")
+	}
+
+	missingRoot := m
+	missingRoot.Assets = append([]VectorPartitionAssetV1(nil), m.Assets[1:]...)
+	missingRoot.Canonicalize()
+	if err := missingRoot.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted chunked domain without root asset")
+	}
+
+	legacy := m
+	legacy.Assets = []VectorPartitionAssetV1{
+		root(0, 1, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
+		root(1, 2, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
+	}
+	legacy.Canonicalize()
+	if err := legacy.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted legacy per-pack assets for a multi-pack domain")
+	}
+
+	for _, variant := range []VectorPartitionLocalGraphVariantV1{
+		VectorPartitionLocalGraphVariantNativeV1,
+		VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationV1,
+	} {
+		unsplit := m
+		unsplit.Assets = []VectorPartitionAssetV1{root(0, 1, variant), root(1, 2, variant)}
+		unsplit.Canonicalize()
+		if err := unsplit.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+			t.Fatalf("multi-pack offline variant %q: %v", variant, err)
+		}
+	}
+
+	wrongVariant := m
+	wrongVariant.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
+	wrongVariant.Assets[0].GraphVariant = string(VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	wrongVariant.Canonicalize()
+	if err := wrongVariant.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted domain chunks for a non-Vamana variant")
+	}
+
+	missingChunk := m
+	missingChunk.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
+	missingChunk.Assets[1].ID = vectorPartitionLocalSectionChunkAssetIDV1(0, columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionNormalizedVectors}, 1)
+	missingChunk.Canonicalize()
+	if err := missingChunk.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted domain chunk sequence without chunk zero")
+	}
+
+	mixedCoverage := m
+	mixedCoverage.PartitionCount = 4
+	mixedCoverage.DomainCount = 2
+	mixedCoverage.DomainPacks = []VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		{DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3},
+	}
+	mixedCoverage.Placements = []VectorPartitionPlacementV1{
+		{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"},
+		{PartitionID: 2, GroupID: "raft-a"}, {PartitionID: 3, GroupID: "raft-a"},
+	}
+	mixedCoverage.Assets = append(append([]VectorPartitionAssetV1(nil), m.Assets...),
+		root(2, 3, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1))
+	mixedCoverage.Canonicalize()
+	if err := mixedCoverage.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted mixed chunked domains with a root-only anchor")
 	}
 }
 
@@ -3077,7 +3184,7 @@ func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
 	for i := range m.Memberships {
 		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
 	}
-	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}}
 	m.Assets = m.Assets[:1]
 	m.Canonicalize()
 	return m
@@ -3106,7 +3213,7 @@ func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
 			Placements:            nil,
 			Memberships:           []VectorPartitionMembershipV1{},
 			OverlapMemberships:    nil,
-			Representatives:       []VectorPartitionMembershipV1{},
+			Representatives:       []VectorPartitionRepresentativeV2{},
 			Assets:                nil,
 			RouterAsset:           VectorPartitionAssetV1{ID: "<router>&", Ref: ColumnAssetRef{Kind: ColumnAssetKind("<kind>"), Offset: -1}},
 			ReadySetDigest:        "",

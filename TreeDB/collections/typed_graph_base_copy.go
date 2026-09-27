@@ -33,7 +33,7 @@ func (b *typedGraphCaptureBudget) charge(records, bytes uint64) error {
 
 // Checks raw entries without resolving persistent value pointers. Both old and
 // new streams are charged because recapture must remove old-only keys.
-func scanTypedGraphCaptureRoot(snap *backenddb.Snapshot, root uint64, budget *typedGraphCaptureBudget) (payload uint64, err error) {
+func scanTypedGraphCaptureRoot(snap *backenddb.Snapshot, root uint64, budget *typedGraphCaptureBudget, metadataGeneration ...*uint64) (payload uint64, err error) {
 	if root == 0 {
 		return 0, nil
 	}
@@ -52,17 +52,36 @@ func scanTypedGraphCaptureRoot(snap *backenddb.Snapshot, root uint64, budget *ty
 			return 0, err
 		}
 		payload += n
+		if len(metadataGeneration) != 0 && metadataGeneration[0] != nil && !it.IsDeleted() {
+			if flags&node.FlagPointer != 0 {
+				value, err = snap.GetAppendAtRoot(root, it.UnsafeKey(), nil)
+				if err != nil {
+					return 0, err
+				}
+				if err := budget.charge(0, uint64(len(value))); err != nil {
+					return 0, err
+				}
+			}
+			ref, err := decodeColumnPrimaryRowLocatorBorrowedID(it.UnsafeKey(), value)
+			if err != nil {
+				return 0, err
+			}
+			if len(value) != columnPrimaryRowLocatorValueSize {
+				*metadataGeneration[0] = max(*metadataGeneration[0], ref.Generation)
+			}
+		}
 	}
 	return payload, it.Error()
 }
 
 type typedGraphBaseCopy struct {
-	snap          *backenddb.Snapshot // borrowed through synchronous publication
-	catalog       *collectionCatalog
-	names         []string
-	manifestBytes uint64
-	remaining     typedGraphCaptureBudget
-	manifestLimit uint64
+	lastMetadataGeneration uint64
+	snap                   *backenddb.Snapshot // borrowed through synchronous publication
+	catalog                *collectionCatalog
+	names                  []string
+	manifestBytes          uint64
+	remaining              typedGraphCaptureBudget
+	manifestLimit          uint64
 }
 
 func prepareTypedGraphBaseCopy(snap *backenddb.Snapshot, catalog *collectionCatalog, limits typedGraphCaptureBudget) (*typedGraphBaseCopy, error) {
@@ -72,7 +91,11 @@ func prepareTypedGraphBaseCopy(snap *backenddb.Snapshot, catalog *collectionCata
 	}
 	copy := &typedGraphBaseCopy{snap: snap, catalog: catalog, names: names}
 	for _, name := range names {
-		n, err := scanTypedGraphCaptureRoot(snap, catalog.rootID(name), &limits)
+		var metadataGeneration *uint64
+		if name == collectionColumnRowLocatorRootName(catalog.meta.Name) {
+			metadataGeneration = &copy.lastMetadataGeneration
+		}
+		n, err := scanTypedGraphCaptureRoot(snap, catalog.rootID(name), &limits, metadataGeneration)
 		if err != nil {
 			return nil, err
 		}

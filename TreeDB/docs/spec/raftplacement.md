@@ -332,3 +332,20 @@ production token/ring work needs shard-key rules, query routing contracts,
 unique-index semantics, rebalance execution, native-wire and Mongo gateway
 integration, and benchmark evidence before those fields can be used to route
 live requests.
+
+## Remote consumers without catalog voting
+
+The [fixed-peer TCP runtime](fixed-peer-tcp-runtime-v1.md) exposes bounded,
+request-scoped catalog route and complete-metadata validation to configured
+nodes outside the catalog voting set. The actual catalog leader obtains a fresh
+linearizable applied-index fence and checks its applied authority before each
+decision. Leader discovery is observational only. A consumer holds no installed
+catalog state, lease, watch cursor, snapshot or apply capability. Failure to
+reach fresh authority refuses the operation; previously observed epoch/digest
+metadata cannot authorize a new write without a new fence.
+
+Publication, epoch/digest validation and exact route comparison remain existing
+catalog-authority operations. Consumers cannot publish or serve authoritative
+catalog reads locally. Fixed membership validation and unsupported topology
+change refusals are unchanged. These RPCs assume the existing trusted private
+network; configuration digests are not cryptographic authentication.

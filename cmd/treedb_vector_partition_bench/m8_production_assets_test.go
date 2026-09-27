@@ -100,6 +100,47 @@ func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
 	}
 }
 
+func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
+	def := collections.VectorIndexDefinition{M: 16, EfConstruction: 128}
+	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 32, PartitionHNSWEfC: 256}
+	canonical := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {}, {GraphVariant: string(canonical)}}}
+	if got := m8ManifestGraphVariantV1(manifest); got != string(canonical) {
+		t.Fatalf("chunked manifest variant=%q want=%q", got, canonical)
+	}
+	got, offline, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false)
+	if err != nil || got != canonical || offline {
+		t.Fatalf("canonical variant=%q offline=%t err=%v", got, offline, err)
+	}
+	historical := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(historical), string(historical)
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false); err == nil {
+		t.Fatal("historical M18 graph admitted as production by matching M/efConstruction")
+	}
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("historical M18 graph admitted as the final offline control")
+	}
+	baseline := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(baseline), string(baseline)
+	descriptor.PartitionHNSWM, descriptor.PartitionHNSWEfC = 16, 128
+	got, offline, err = m8RetainedGraphVariantV1(manifest, def, descriptor, true)
+	if err != nil || got != baseline || !offline {
+		t.Fatalf("offline variant=%q offline=%t err=%v", got, offline, err)
+	}
+	manifest.Assets[1].GraphVariant = string(canonical)
+	if got := m8ManifestGraphVariantV1(manifest); got != "" {
+		t.Fatalf("mixed manifest variant=%q", got)
+	}
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("mixed graph variants admitted")
+	}
+	manifest.Assets = manifest.Assets[:1]
+	descriptor.PartitionHNSWM = 20
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("graph variant admitted under mismatched descriptor parameters")
+	}
+}
+
 func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
 	var active, peak int32
 	m8RunBoundedWorkV1(32, 3, func(int) {
@@ -135,10 +176,11 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 
 type m8CoverageShortfallRouterSourceV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterSourceV1
-	failed  int32
-	calls   int32
-	err     error
-	barrier *m8ApproximateSearchBarrierV1
+	failed   int32
+	calls    int32
+	firstErr error
+	err      error
+	barrier  *m8ApproximateSearchBarrierV1
 }
 
 func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (nativewire.VectorPartitionCoordinatorRouterV1, error) {
@@ -146,15 +188,16 @@ func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouter
 	if err != nil {
 		return nil, err
 	}
-	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed, calls: &s.calls, err: s.err, barrier: s.barrier}, nil
+	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed, calls: &s.calls, firstErr: s.firstErr, err: s.err, barrier: s.barrier}, nil
 }
 
 type m8CoverageShortfallRouterV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterV1
-	failed  *int32
-	calls   *int32
-	err     error
-	barrier *m8ApproximateSearchBarrierV1
+	failed   *int32
+	calls    *int32
+	firstErr error
+	err      error
+	barrier  *m8ApproximateSearchBarrierV1
 }
 
 type m8ApproximateSearchBarrierV1 struct {
@@ -184,13 +227,21 @@ func (b *m8ApproximateSearchBarrierV1) enter(ctx context.Context) func() {
 	return func() { atomic.AddInt32(&b.active, -1) }
 }
 
-func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
+func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts collections.VectorPartitionRouterSearchOptionsV3) (collections.VectorPartitionRouterSearchResultV1, error) {
 	if opts.Mode == collections.VectorPartitionRouterModeApproxV1 {
 		if r.barrier != nil {
 			defer r.barrier.enter(ctx)()
 		}
 		if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
-			return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
+			failure := r.firstErr
+			if failure == nil {
+				failure = collections.ErrVectorPartitionRouterCandidateCoverageV1
+			}
+			result := collections.VectorPartitionRouterSearchResultV1{}
+			if errors.Is(failure, collections.ErrVectorPartitionRouterScoreBudget) {
+				result.Status = collections.VectorPartitionRouterSearchStatusV1{ScoreBudget: uint64(opts.ScoreBudget), ScoreCalls: uint64(opts.ScoreBudget), Candidates: 1, Edges: 2}
+			}
+			return result, failure
 		}
 		if atomic.AddInt32(r.calls, 1) == 1 && r.err != nil {
 			return collections.VectorPartitionRouterSearchResultV1{}, r.err
@@ -224,19 +275,19 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		return out
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 4, ResultKind: "m8_production_multi_group_evidence_v4", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		SchemaVersion: 7, ResultKind: "m8_production_multi_group_evidence_v7", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), ExecutionID: strings.Repeat("e", 32), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		ExecutableSHA256: strings.Repeat("f", 64),
 		GoVersion:        "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterCandidates: 4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, GraphVariant: string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1), RouterSemantics: m8RouterSemanticsV4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
-		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: 4, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
+		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreCalls: uint64(fixture.Queries), MaxLocalScoreCalls: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
+			ApproximateRouterScoreBudget: defaultRouterScoreBudgetV3, ApproximateRouterPartitionCoverageComplete: true,
 			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
 			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
@@ -273,6 +324,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	report.Variant = &variant
 	report.RouterRepresentatives = variant.RouterRepresentatives
+	report.RouterGlobalBudget = uint64(variant.RouterConfig.RepresentativeBudget)
 	report.Rows[0].ElapsedNanos = uint64(report.Rows[0].Samples) * uint64(time.Second)
 	report.Config.Overlap = []float64{0}
 	report.Rows[0].VariantID = variant.VariantID
@@ -288,14 +340,62 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	multiPack.Config.DomainCount = 1
 	multiPack.Config.PacksPerDomain = []int{4}
 	multiPack.Config.Probes = []int{1}
+	multiPack.UntimedBoundary.SelectedPartitions = 1
+	multiPack.Failure.ResourceBoundary.SelectedPartitions = 1
+	domainRows := uint64(0)
+	for _, load := range loads {
+		domainRows += load
+	}
+	multiPack.PackDiagnostics = []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, domainRows)}
 	multiPack.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
 	multiPack.Rows[0].Probes = 1
+	multiPack.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries)
+	multiPack.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{1}, fixture.Queries)
+	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries)
+	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{1}, fixture.Queries)
 	multiPack.GateLedger = m8ProductionGateLedgerForReportV1(multiPack)
+	testM8CompleteResourceLimitsV1(t, &multiPack)
 	if multiPack.GateLedger.ExhaustiveParity != "pass" {
 		t.Fatalf("logical-domain exhaustive row ledger=%+v", multiPack.GateLedger)
 	}
 	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
 		t.Fatalf("one-domain/four-pack report rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"untimed_physical_pack_count": func(r *m8ProductionReportV1) { r.UntimedBoundary.SelectedPartitions = 4 },
+		"fault_physical_pack_count":   func(r *m8ProductionReportV1) { r.Failure.ResourceBoundary.SelectedPartitions = 4 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := multiPack
+			mutate(&invalid)
+			testM8CompleteResourceLimitsV1(t, &invalid)
+			if err := testM8ValidateProductionReportV1(invalid); err == nil {
+				t.Fatal("accepted physical pack count as selected logical domains")
+			}
+		})
+	}
+	offline := multiPack
+	offline.Variant = nil
+	offline.Config.GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	offline.UntimedBoundary.SelectedPartitions = 4
+	offline.Failure.ResourceBoundary.SelectedPartitions = 4
+	offline.PackDiagnostics = diagnostics(loads)
+	offline.Rows = append([]m8ProductionRowV1(nil), multiPack.Rows...)
+	offline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.GateLedger = m8ProductionGateLedgerForReportV1(offline)
+	testM8CompleteResourceLimitsV1(t, &offline)
+	if err := testM8ValidateProductionReportV1(offline); err != nil {
+		t.Fatalf("one-domain/four-pack offline report rejected: %v", err)
+	}
+	invalidOffline := offline
+	invalidOffline.Rows = append([]m8ProductionRowV1(nil), offline.Rows...)
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 3
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{3}, fixture.Queries)
+	if err := testM8ValidateProductionReportV1(invalidOffline); err == nil {
+		t.Fatal("accepted one-domain/four-pack offline report with impossible fanout")
 	}
 	multiPack.Rows[0].Attribution.LocalHNSWSearches--
 	if err := testM8ValidateProductionReportV1(multiPack); err == nil {
@@ -457,12 +557,24 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*m8ProductionRowV1){
+		"router_score_budget_exceeded": func(row *m8ProductionRowV1) {
+			row.RouterScoreCalls = uint64(row.Samples*row.RouterScoreBudget) + 1
+		},
+		"router_visits_exceed_scores": func(row *m8ProductionRowV1) {
+			row.RouterVisited = row.RouterScoreCalls + 1
+		},
 		"exact_router_mode": func(row *m8ProductionRowV1) {
 			row.RouterMode = collections.VectorPartitionRouterModeExactV1
 		},
 		"candidate_budget_above_config": func(row *m8ProductionRowV1) {
-			row.RouterCandidates = 5
-			row.Attribution.ApproximateRouterCandidateBudget = 5
+			row.RouterScoreBudget = report.Config.RouterScoreBudget + 1
+			row.Attribution.ApproximateRouterScoreBudget = report.Config.RouterScoreBudget + 1
+		},
+		"missing_local_score_calls": func(row *m8ProductionRowV1) {
+			row.LocalScoreCalls, row.MaxLocalScoreCalls = 0, 0
+		},
+		"local_score_max_exceeds_total": func(row *m8ProductionRowV1) {
+			row.MaxLocalScoreCalls = row.LocalScoreCalls + 1
 		},
 		"nonfinite_qps":     func(row *m8ProductionRowV1) { row.QPS = math.NaN() },
 		"unordered_latency": func(row *m8ProductionRowV1) { row.P95Nanos = row.P50Nanos - 1 },
@@ -503,13 +615,13 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	shortfall := report
 	shortfall.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
-	shortfall.Rows[0].Status = "candidate_coverage_shortfall"
-	shortfall.Rows[0].RouterCandidates = 4
-	shortfall.Rows[0].Attribution.ApproximateRouterCandidateBudget = 4
+	shortfall.Rows[0].Status = m8ProductionCandidateCoverageShortfallV1
+	shortfall.Rows[0].RouterScoreBudget = 4
+	shortfall.Rows[0].Attribution.ApproximateRouterScoreBudget = 4
 	shortfall.Rows[0].MaxTotalNanos = 1
 	shortfall.Rows[0].RecallAtK, shortfall.Rows[0].QPS = 0, 0
 	shortfall.Rows[0].P50Nanos, shortfall.Rows[0].P95Nanos, shortfall.Rows[0].P99Nanos = 0, 0, 0
-	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, false
+	shortfall.Rows[0].ExactParityChecked, shortfall.Rows[0].ExactParityPassed, shortfall.Rows[0].NoPartialResults = false, false, true
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearches = 0
@@ -526,6 +638,16 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := testM8ValidateProductionReportV1(shortfall); err != nil {
 		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
 	}
+	for _, status := range []string{m8ProductionRouterScoreBudgetExhaustedV1, m8ProductionMixedRouterRefusalV1} {
+		refusal := shortfall
+		refusal.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
+		refusal.Rows[0].Status = status
+		refusal.Rows[0].RouterScoreBudget = 1
+		refusal.Rows[0].Attribution.ApproximateRouterScoreBudget = 1
+		if err := testM8ValidateProductionReportV1(refusal); err != nil {
+			t.Fatalf("valid %s row with score budget below probes rejected: %v", status, err)
+		}
+	}
 	zeroTiming := shortfall
 	zeroTiming.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
 	zeroTiming.Rows[0].MaxTotalNanos = 0
@@ -537,9 +659,9 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		t.Fatal("accepted shortfall row with mismatched variant identity")
 	}
 	shortfall.Rows[0].VariantID = variant.VariantID
-	shortfall.Rows[0].NoPartialResults = true
+	shortfall.Rows[0].NoPartialResults = false
 	if err := testM8ValidateProductionReportV1(shortfall); err == nil {
-		t.Fatal("accepted candidate-coverage shortfall with a partial-result claim")
+		t.Fatal("accepted candidate-coverage shortfall without a no-partial-results guarantee")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
 		"missing":      report.PackDiagnostics[:3],
@@ -670,7 +792,7 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, RowsByLayer: []uint64{3}, EdgesByLayer: []uint64{6}, Layer0DegreeLimit: 2, Layer0SaturatedRows: 3, Layer0ReciprocalEdges: 4, Layer0ReciprocalRatio: 4.0 / 6.0, Layer0Distances: distance(6), CombinedReachableRows: 3},
 		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, EdgesByLayer: []uint64{2, 0}, Layer0DegreeLimit: 1, Layer0SaturatedRows: 2, Layer0ReciprocalEdges: 2, Layer0ReciprocalRatio: 1, Layer0Distances: distance(2), AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, AuxiliaryDistances: distance(2), CombinedReachableRows: 2},
 	}
-	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
+	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}, "", []int{1, 1}) {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
@@ -708,17 +830,39 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}, "", []int{1, 1}) {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
+	}
+	vamana := []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 3), testM8NativePackDiagnosticsV1(1, 2)}
+	graphVariant := string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
+		t.Fatal("rejected Vamana diagnostics with the declared R64 degree")
+	}
+	if !validM8PartitionPackDiagnosticsV1([]m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 5)}, 2, []uint64{3, 2}, graphVariant, []int{2}) {
+		t.Fatal("rejected one Vamana diagnostic spanning two physical packs")
+	}
+	vamanaWithAuxiliary := append([]m8PartitionPackDiagnosticsV1(nil), vamana...)
+	vamanaWithAuxiliary[1].ReachableRows = 1
+	vamanaWithAuxiliary[1].TraversalRoots = 2
+	vamanaWithAuxiliary[1].AuxiliaryEdges = 2
+	vamanaWithAuxiliary[1].AuxiliaryCSRBytes = 32
+	vamanaWithAuxiliary[1].AuxiliaryMaxDegree = 1
+	vamanaWithAuxiliary[1].AuxiliaryDistances = distance(2)
+	if validM8PartitionPackDiagnosticsV1(vamanaWithAuxiliary, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
+		t.Fatal("accepted Vamana diagnostics that rely on auxiliary reachability")
+	}
+	vamana[0].Layer0DegreeLimit = 16
+	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
+		t.Fatal("accepted stale M16 diagnostics for the declared R64 Vamana graph")
 	}
 }
 
 func testM8NativePackDiagnosticsV1(partition uint32, rows uint64) m8PartitionPackDiagnosticsV1 {
 	return m8PartitionPackDiagnosticsV1{
 		PartitionID: partition, Rows: rows, ReachableRows: rows, TraversalRoots: 1,
-		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 16,
+		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 64,
 		CombinedReachableRows: rows,
 	}
 }
@@ -939,7 +1083,7 @@ func TestRetainedLocalHNSWVariantHarnessV1(t *testing.T) {
 		}
 	}
 	query := []float32{1, 1, 1}
-	route, err := source.router.SearchWithContextV1(t.Context(), query, collections.VectorPartitionRouterSearchOptionsV1{Mode: "approximate", CandidateBudget: 4, PartitionProbes: 2})
+	route, err := source.router.SearchWithContextV1(t.Context(), query, collections.VectorPartitionRouterSearchOptionsV3{Mode: "approximate", ScoreBudget: defaultRouterScoreBudgetV3, PartitionProbes: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1016,7 +1160,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if len(lowProbe.ProbedGroups) != 1 {
 		t.Fatalf("low-probe response=%+v", lowProbe)
 	}
-	response, err := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-000017", CancellationID: "m8-e2e-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(20 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
+	response, err := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-e2e-000017", CancellationID: "m8-e2e-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(20 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1219,8 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer harness.Close()
-	candidates := int(assets.status.Representatives)
+	// C charges upper-layer navigation as well as distinct level-zero visits.
+	candidates := 1024
 	primaryHomes, finalMemberships, err := m8TruthPartitionMembershipsByDocumentIDV1(assets, truth)
 	if err != nil {
 		t.Fatal(err)
@@ -1088,15 +1233,15 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, coordinatorResults, durations, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, 64, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	row, coordinatorResults, durations, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, attributionQueries, truth, 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := m8AttachAttributionV1(&row, attribution, coordinatorResults); err != nil {
 		t.Fatal(err)
 	}
-	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates != candidates {
-		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterCandidates, candidates)
+	if row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterScoreBudget != candidates {
+		t.Fatalf("row router=%s/%d want approximate/%d", row.RouterMode, row.RouterScoreBudget, candidates)
 	}
 	if len(durations) != len(attributionQueries) {
 		t.Fatalf("timing samples=%d want %d", len(durations), len(attributionQueries))
@@ -1109,7 +1254,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer warmupTopology.Close()
-	_, err = m8WarmProductionTopologyV1(ctx, warmupTopology.Coordinator(), assets, [][]float64{vectors[0]}, config{topK: 10, efSearch: []int{4096}, probes: []int{4}, routerCandidates: 4, concurrency: []int{4}, warmup: 1})
+	_, err = m8WarmProductionTopologyV1(ctx, warmupTopology.Coordinator(), assets, [][]float64{vectors[0]}, config{topK: 10, efSearch: []int{4096}, probes: []int{4}, routerCandidates: candidates, concurrency: []int{4}, warmup: 1})
 	if !errors.Is(err, warmupErr) || atomic.LoadInt32(&warmupSource.failed) != 1 || atomic.LoadInt32(&warmupSource.calls) != 3 || atomic.LoadInt32(&warmupBarrier.peak) != 4 {
 		t.Fatalf("warmup error=%v typed=%d approximate calls=%d peak=%d", err, warmupSource.failed, warmupSource.calls, warmupBarrier.peak)
 	}
@@ -1120,24 +1265,45 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	}
 	defer shortfallTopology.Close()
 	shortfallQueries := [][]float64{vectors[0], vectors[1], vectors[2], vectors[3]}
-	shortfall, shortfallResults, shortfallDurations, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, 4, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	shortfall, shortfallResults, shortfallDurations, err := m8RunProductionCellV1(ctx, shortfallTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(shortfallQueries) {
+	if shortfall.Status != "measurement_failure" || len(shortfallResults) != len(shortfallQueries) {
 		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
 	}
-	if shortfallDurations != nil {
-		t.Fatalf("candidate-coverage shortfall retained timings=%v", shortfallDurations)
-	}
+	assertM8MixedMeasurementV1(t, shortfall, shortfallResults, shortfallDurations, 3, 1)
 	if shortfall.MaxTotalNanos == 0 || shortfall.RequestBytes == 0 || shortfall.RPCs == 0 || shortfall.MaxRequests == 0 || shortfall.MaxRPCs == 0 {
 		t.Fatalf("candidate-coverage shortfall discarded coordinator work=%+v", shortfall)
 	}
-	for _, results := range shortfallResults {
-		if results != nil {
-			t.Fatalf("candidate-coverage shortfall retained a partial result: %+v", results)
-		}
+	scoreSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget}
+	scoreTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: scoreSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer scoreTopology.Close()
+	scoreRefusal, scoreResults, scoreDurations, err := m8RunProductionCellV1(ctx, scoreTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoreRefusal.Status != "measurement_failure" || scoreRefusal.RouterScoreCalls < uint64(candidates) || len(scoreResults) != len(shortfallQueries) {
+		t.Fatalf("score-budget refusal=%+v results=%d timings=%v", scoreRefusal, len(scoreResults), scoreDurations)
+	}
+	assertM8MixedMeasurementV1(t, scoreRefusal, scoreResults, scoreDurations, 3, 1)
+	mixedSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget, err: collections.ErrVectorPartitionRouterCandidateCoverageV1, barrier: &m8ApproximateSearchBarrierV1{waitFor: 4, release: make(chan struct{})}}
+	mixedTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: mixedSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mixedTopology.Close()
+	mixedRefusal, mixedResults, mixedDurations, err := m8RunProductionCellV1(ctx, mixedTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixedRefusal.Status != "measurement_failure" || len(mixedResults) != len(shortfallQueries) {
+		t.Fatalf("mixed router refusal=%+v results=%d timings=%v", mixedRefusal, len(mixedResults), mixedDurations)
+	}
+	assertM8MixedMeasurementV1(t, mixedRefusal, mixedResults, mixedDurations, 2, 2)
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
 		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
 		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.ApproximateLocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||
@@ -1217,7 +1383,7 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 	for i, value := range vectors[17] {
 		query[i] = float32(value)
 	}
-	response, searchErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-existing-assets", CancellationID: "m8-existing-assets-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
+	response, searchErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-existing-assets", CancellationID: "m8-existing-assets-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
 	if searchErr != nil || len(response.Neighbors) != 10 || len(response.ProbedGroups) != 4 || response.LiveRevision != 0 || response.LiveCoverage != 0 {
 		t.Fatalf("relabelled topology response=%+v err=%v", response, searchErr)
 	}

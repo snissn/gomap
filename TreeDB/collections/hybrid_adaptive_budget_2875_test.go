@@ -239,6 +239,27 @@ func TestHybridAdaptiveTextBudgetPreservesRequestedScanGuardrail2875(t *testing.
 	}
 }
 
+func TestHybridAdaptiveCandidateBudgetAccumulatesPackedExactWork4767(t *testing.T) {
+	first := HybridSearchStats{
+		VectorPackedExactScoreCalls:      2,
+		VectorPackedExactScoreCandidates: 3,
+		VectorPackedExactVectorBytesRead: 4,
+	}
+	second := HybridSearchStats{
+		VectorPackedExactScoreCalls:      5,
+		VectorPackedExactScoreCandidates: 6,
+		VectorPackedExactVectorBytesRead: 7,
+	}
+	var work HybridSearchStats
+	hybridCandidateBudgetAccumulateAttemptWork(&work, first)
+	hybridCandidateBudgetAccumulateAttemptWork(&work, second)
+	var got HybridSearchStats
+	hybridCandidateBudgetApplyAccumulatedWork(&got, work)
+	if got.VectorPackedExactScoreCalls != 7 || got.VectorPackedExactScoreCandidates != 9 || got.VectorPackedExactVectorBytesRead != 11 {
+		t.Fatalf("packed exact accumulated work=%+v", got)
+	}
+}
+
 func assertHybridResponsesEqual2875(tb testing.TB, got, want HybridSearchResponse) {
 	tb.Helper()
 	if len(got.Results) != len(want.Results) {

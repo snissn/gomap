@@ -634,8 +634,11 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 
 	baseStats := response.Stats
 	fallbackToExactScan := func() (TextSearchResponse, error) {
+		postingsScanned := response.Stats.TextPostingsScanned
 		fallback := response
 		fallback.Stats = baseStats
+		fallback.Stats.TextPostingsScanned = postingsScanned
+		fallback.Stats.PostingsScanned = postingsScanned
 		fallback.Stats.TextBlockMaxFallbacks++
 		textSearchExplainAddFallback(fallback.Explain, "blockmax_single_unsealed_or_overlapping_block")
 		fallbackOpts := opts
@@ -885,8 +888,11 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 
 	baseStats := response.Stats
 	fallback := func() (TextSearchResponse, error) {
+		postingsScanned := response.Stats.TextPostingsScanned
 		fallbackResponse := response
 		fallbackResponse.Stats = baseStats
+		fallbackResponse.Stats.TextPostingsScanned = postingsScanned
+		fallbackResponse.Stats.PostingsScanned = postingsScanned
 		fallbackResponse.Stats.TextBlockMaxFallbacks++
 		textSearchExplainAddFallback(fallbackResponse.Explain, "blockmax_and_unsealed_stale_or_overlapping_block")
 		fallbackOpts := opts
@@ -1494,8 +1500,11 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 
 	baseStats := response.Stats
 	fallback := func() (TextSearchResponse, error) {
+		postingsScanned := response.Stats.TextPostingsScanned
 		fallbackResponse := response
 		fallbackResponse.Stats = baseStats
+		fallbackResponse.Stats.TextPostingsScanned = postingsScanned
+		fallbackResponse.Stats.PostingsScanned = postingsScanned
 		fallbackResponse.Stats.TextBlockMaxFallbacks++
 		textSearchExplainAddFallback(fallbackResponse.Explain, "blockmax_or_unsealed_or_overlapping_block")
 		fallbackOpts := opts
@@ -2060,16 +2069,17 @@ func buildTextV2SearchCandidateForTopTerms(snap *backenddb.Snapshot, catalog *co
 	candidate := &textV2SearchCandidate{ordinal: ordinal, generation: generation, documentID: append([]byte(nil), documentID...), score: score}
 	fieldCount := len(ctx.fieldNames)
 	for _, term := range terms {
-		posting, found, scanned, err := readTextV2PositionPostingAtRootCounted(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		remaining := textV2SearchRemainingPostingBudget(maxPostingsScanned, stats)
+		posting, found, scanned, truncated, err := readTextV2PositionPostingAtRootCountedBounded(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount, remaining)
 		if stats != nil && scanned > 0 {
 			stats.TextPostingsScanned += uint64(scanned)
 			stats.PostingsScanned = stats.TextPostingsScanned
 		}
-		if maxPostingsScanned > 0 && stats != nil && stats.TextPostingsScanned > uint64(maxPostingsScanned) {
-			return nil, true, nil
-		}
 		if err != nil {
 			return nil, false, err
+		}
+		if truncated {
+			return nil, true, nil
 		}
 		if !found {
 			return nil, false, errMalformedTextStorage("missing text-v2 scoring posting for final candidate ordinal %d generation %d term %q", ordinal, generation, term)
@@ -2085,16 +2095,17 @@ func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, cat
 	candidate := &textV2SearchCandidate{ordinal: ordinal, generation: generation, documentID: append([]byte(nil), documentID...), score: score}
 	fieldCount := len(ctx.fieldNames)
 	for _, term := range terms {
-		posting, found, scanned, err := readTextV2PositionPostingAtRootCounted(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		remaining := textV2SearchRemainingPostingBudget(maxPostingsScanned, stats)
+		posting, found, scanned, truncated, err := readTextV2PositionPostingAtRootCountedBounded(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount, remaining)
 		if stats != nil && scanned > 0 {
 			stats.TextPostingsScanned += uint64(scanned)
 			stats.PostingsScanned = stats.TextPostingsScanned
 		}
-		if maxPostingsScanned > 0 && stats != nil && stats.TextPostingsScanned > uint64(maxPostingsScanned) {
-			return nil, true, nil
-		}
 		if err != nil {
 			return nil, false, err
+		}
+		if truncated {
+			return nil, true, nil
 		}
 		if !found {
 			continue
@@ -2107,6 +2118,19 @@ func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, cat
 		return nil, false, errMalformedTextStorage("missing text-v2 scoring postings for final OR candidate ordinal %d generation %d", ordinal, generation)
 	}
 	return candidate, false, nil
+}
+
+func textV2SearchRemainingPostingBudget(maxPostingsScanned int, stats *TextSearchStats) int {
+	if maxPostingsScanned <= 0 {
+		return -1
+	}
+	if stats == nil || stats.TextPostingsScanned == 0 {
+		return maxPostingsScanned
+	}
+	if stats.TextPostingsScanned >= uint64(maxPostingsScanned) {
+		return 0
+	}
+	return maxPostingsScanned - int(stats.TextPostingsScanned)
 }
 
 func scanTextV2SearchPostingBlocksTerm(

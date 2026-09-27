@@ -385,7 +385,7 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		})
 	}
 
-	t.Run("public_minimal_proof_and_error_prefix", func(t *testing.T) {
+	t.Run("public_diagnostic_proof_and_error_prefix", func(t *testing.T) {
 		requireTypedGraphPublicServingTest(t)
 		opts := typedGraphPublicTestOptions()
 		opts.Filter = limits
@@ -396,7 +396,7 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		}
 		var buffer VectorIndexSearchBuffer
 		for _, count := range []int{0, 4096, 4097} {
-			q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, .5, 0, 0, 0, 0, 0, 0}, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal}
+			q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, .5, 0, 0, 0, 0, 0, 0}, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction}
 			if count != 0 {
 				f := rangeFilter("user", 0, count-1)
 				q.DeclaredScalarFilter = &f
@@ -427,12 +427,12 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 				t.Fatalf("public proof omitted upper scorer work: work=%+v scores=%d layer0=%d", work, response.Stats.PreparedScoreCalls, response.Stats.Candidates)
 			}
 			if count == 0 && (work.Route != "typed_hnsw" || work.BaseANNScored == 0 || work.BaseEdges == 0) || count == 4096 && (work.Route != "typed_exact" || work.ExactBaseScored != 4096 || work.BaseANNScored != 0) {
-				t.Fatalf("public Minimal proof=%+v", work)
+				t.Fatalf("public diagnostic proof=%+v", work)
 			}
 		}
 		// Reuse the existing counting context to cancel at the final post-search
 		// check. Capture the same warm path's actual check count, not a fixed number.
-		q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, .5, 0, 0, 0, 0, 0, 0}, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal}
+		q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, .5, 0, 0, 0, 0, 0, 0}, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction}
 		ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
 		q.Context = ctx
 		_, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)

@@ -44,6 +44,26 @@ commands instead use the active V2 `ExternalRefFenceV1` dependency closure.
 The typed external-ref prepare, protection, restore, and quarantine steps below
 describe a separate future activation, not authority accepted by current codecs.
 
+### Paged vector projection closure
+
+For schema7 local vector projections, the two directory roots are only the
+entry points of the retained asset closure. Snapshot validation and GC traverse
+every local directory child, source metadata reference and graph section with
+the same error-aware visitor. Missing, mixed or corrupt children fail validation;
+copying only the root assets is insufficient. Source-owner and ANN-owner scope
+lists describe local coverage and never filter physical references during this
+full traversal. Reader generation pins protect the transitive closure even when
+a prepared domain outlives its source session.
+
+The opt-in DPM2 dependency directory is also a COW root in `index.db`; preserve
+both recoverable root slots and the required-format marker. Snapshot namespace
+rebinding changes physical identity values in the staged private copy while
+preserving logical keys and validating each selected root's page extent.
+These local snapshot rules do not activate the dormant command-WAL external-ref
+backup contract above. Schema7 destructive generation retirement remains
+unsupported; pre-publication crash orphans use existing explicit maintenance GC.
+See [storage format](storage-format.md) and [recovery](recovery.md).
+
 ## 2. Live Backup Support
 
 A filesystem-level copy or snapshot of a live TreeDB root without a TreeDB

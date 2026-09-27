@@ -12768,6 +12768,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
 	warmupCap = mutableMemtableCapacityForMode(warmupCap, mode)
 	indexer := memtable.NewHashSortedIndexer()
+	indexerPendingOwnership := true
+	defer func() {
+		// Stop the indexer workers if Open returns before the constructed
+		// DB takes ownership; successful opens disarm this before returning.
+		if indexerPendingOwnership {
+			indexer.Close()
+		}
+	}()
 	mutableShards := make([]memShard, shardCount)
 	appendOnlyEstimate := appendOnlyEstimatedBytesPerEntryDefault
 	for i := range mutableShards {
@@ -13314,6 +13322,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.startVlogShapeLoop()
 	registerTreeDBExpvarStatsDB(db)
 
+	indexerPendingOwnership = false
 	return db, nil
 }
 

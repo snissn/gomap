@@ -13,8 +13,8 @@ The opt-in
 [`cosine_normalized_f32_v1`](../spec/cosine-normalized-f32-v1.md)
 representation stores one canonical normalized FP32 plane and uses scalar-u8
 candidates with packed FP32 rerank. It is enabled for Go collection and
-document-service typed input; native command and Python support remain gated on
-the next protocol stage. `return_embedding` defaults to false. When true it
+document-service typed input and exposed through negotiated native command64/v4,
+HTTP, and Python. `return_embedding` defaults to false. When true it
 returns the canonical normalized value, not the caller's original magnitude or
 bit pattern.
 
@@ -44,6 +44,29 @@ eligible sets up to 4,096; larger supported sets use bounded ANN, with exhaustio
 reported as an error. See the [admission and ownership contract](../spec/typed-column-graph-search-admission.md).
 
 ## Explicit mutable serving lifecycle
+
+### Immutable owner-local source V2 projections
+
+The separate source V2 path imports completed immutable shard snapshots with
+`ImportVectorPartitionSourceChunkV2`. Trusted native preparation derives source
+and ANN owner commitments for the catalog BUILD record; local completion hashes
+alone do not authorize a generation. `BuildAndStageVectorPartitionProjectionV2`
+builds one domain at a time and atomically stages the locally retained source
+and ANN directory roots. `OpenVectorPartitionPagedSourceSessionV2` verifies the
+complete local owner stream once per pinned session; `OpenDomainV2` and
+`SearchLocalV2` then retain only the selected domain and its provenance.
+
+Source ownership and ANN placement may differ. Required nonlocal source data
+must be available before graph work; this path does not fetch remote shards.
+Distributed V2 activation/search and schema7 destructive generation retirement
+remain refused. Normal failed builds clean their private output; crash orphans
+use explicit existing maintenance GC after reopen. See the
+[source and paged projection format](../spec/storage-format.md#draft-bounded-source-snapshot-v2-primitives),
+[catalog admission contract](../spec/vector-partition-raft-v1.md), and
+[verification matrix](../spec/verification.md) for current correctness and
+performance boundaries.
+
+### Mutable collection graph lifecycle
 
 Open native collection-root callers through the public TreeDB wrapper. Use
 `treedb.OptionsFor(treedb.ProfileCommandWALDurable, rootDir)` and
@@ -124,9 +147,11 @@ exception is intentionally narrow: the same selected
 `SearchVectorIndexWithBufferReadView` route also admits
 `VectorIndexQueryModeQuantizedRerank` for one explicitly named **legacy**
 `scalar_u8` v1 plane. It does not admit `quantized_only`, calibrated scalar-u8,
-RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The Q3 public typed
-dense route is the separate command-64/v3 contract and carries its own
-capability and sibling score-plane proof. Other unsupported controls are
+RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The canonical public
+typed dense route is command-64/v4: production carries compact route identity,
+while explicit diagnostics carries dense work and the sibling packed
+score-plane proof. Legacy command-64/v3 remains the noncanonical scalar-u8
+contract. Other unsupported controls are
 rejected rather than ignored. For full documents use the returned read view,
 fetch from that **same view**, and close it after fetching. Do not open a fresh
 view between search and fetch: publication can change the current collection in

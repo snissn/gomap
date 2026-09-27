@@ -58,8 +58,12 @@ depend on a scan-all-documents fallback.
   value.
 - `Text *HybridTextQuery`: lexical candidate source.
   - `IndexName`: text index name.
-  - `Query`: text-query string. Grammar/analyzer semantics are owned by #1764.
+  - `Query`: text-query string.
+  - `QueryMode`: omitted/`boolean` preserves Boolean connectives;
+    `literal` analyzes the whole input without query syntax.
+  - `Operator`: omitted/OR or explicit AND over analyzed terms.
   - `CandidateLimit`: lexical candidate budget before fusion.
+  - `MaxPostingsScanned`: optional cumulative posting-entry cap.
   - `IncludeTextMatches`: optional compact field/term attribution. The zero
     value keeps text candidate generation score-only.
 - `Vector *HybridVectorQuery`: vector candidate source.
@@ -95,6 +99,15 @@ Single-source text-only and vector-only user flows should continue to use their
 own APIs and benchmark rows. Candidate adapters from #2503 may still use
 `HybridSearchCandidate` as a shared internal shape.
 
+The vector mode defaults to `exact`. `quantized_rerank` is an explicit opt-in
+for an admitted typed cosine `column_graph` with a named legacy scalar-u8/v1
+plane; `QuantizedRerankCandidates` is checked against the effective vector
+candidate limit. Quantized fields with exact mode, `quantized_only`, missing or
+stale assets, unsupported codecs/calibration, and unsupported representations
+fail closed. A complete selective scalar allow-set may truthfully execute the
+existing `typed_exact` route after the selected asset is validated. Selected
+queries use fixed source budgets; adaptive RRF budgeting remains exact-only.
+
 ## Bounded budget defaults
 
 `HybridTextQuery.CandidateLimit` is the returned lexical source budget. The text
@@ -103,6 +116,9 @@ terms can still produce an exact top-N candidate list without fetching documents
 That internal guardrail remains finite and fail-closed: if postings or unique
 candidate work exceeds the implementation's safe budget, the query returns an
 unavailable/unsupported diagnostic rather than a partial ranking or primary scan.
+An explicit `MaxPostingsScanned` selects one fixed source attempt so adaptive
+candidate retries cannot reset it; lower-level scan, fallback, and final
+attribution share the same monotonic allowance.
 
 Scalar filters build finite indexed allow-sets. `HybridScalarFilter` preserves
 the original one-leaf `{IndexName, Value|Range}` shape and adds one flat ordered
@@ -118,7 +134,8 @@ index or truncation can never be hidden by an earlier empty predicate. Aggregate
 retained input is bounded by `lookup_limit * lookup_count`; complete sets are
 stable-sorted by cardinality and intersected smallest-first. Any incomplete
 lookup or snapshot/root change fails closed with no candidates. A complete empty
-intersection succeeds before text/vector work.
+intersection succeeds before text/vector work, but only after all source
+options—including lexical mode, operator, and budgets—are validated.
 
 v2 text search consumes the final allow-set during posting-block scans so
 scalar-filtered candidate generation can score only allowed documents while
@@ -270,6 +287,15 @@ legacy fallback, or primary-document scan as a substitute.
 `system_root_page_id`) and source epochs when the implementation can expose them.
 Zero epoch fields mean unavailable/not applicable, not proof of freshness.
 
+Selected `quantized_rerank` captures one typed read owner before scalar or text
+work. Scalar lookups, lexical postings, scalar-u8 traversal, canonical FP32
+rerank, fusion/collapse, and final document fetch all use that owner's snapshot
+and catalog. Concurrent publication may complete, but cannot mix old and new
+IDs, content, filters, scores, or fetched documents in one response. The
+production route receipt records only work that executed: a validated empty
+allow-set has no receipt and zero vector counters. Cancellation is propagated
+through owner acquisition and checked at source/fusion/fetch phase boundaries.
+
 ## Counters and fail-closed behavior
 
 `HybridSearchStats` is the common debug vocabulary for follow-on PRs. Required
@@ -279,6 +305,13 @@ counter families:
   `text_postings_scanned`, `text_candidates_scored`;
 - vector: `vector_candidates_requested`, `vector_candidates_returned`,
   `vector_candidates_examined`, `vector_edges_visited`;
+- selected vector: `vector_route`, `vector_quantized_score_calls`,
+  `vector_quantized_code_bytes_read`,
+  `vector_quantized_rerank_candidates`,
+  `vector_quantized_rerank_exact_score_calls`,
+  `vector_packed_exact_score_calls`,
+  `vector_packed_exact_score_candidates`, and
+  `vector_packed_exact_vector_bytes_read`;
 - scalar: `scalar_filter_lookups`, `scalar_filter_input_ids`,
   `scalar_filter_intersection_steps`, `scalar_filter_final_ids`,
   `scalar_prefilter_ids`, `scalar_postfilter_checks`,
@@ -306,6 +339,8 @@ source paths report fail-closed reasons such as `text_index_unavailable`,
 `vector_index_unavailable`, `text_index_stale`, `vector_index_stale`,
 `scalar_filter_unbounded`, `snapshot_mismatch`,
 `document_fetch_unavailable`, or `full_document_scan_forbidden`.
+`embedding_output_bytes` remains zero when the caller omits embeddings; FP32
+reads used for scoring are accounted separately from output materialization.
 
 ## Dependencies on #1764 text-search milestones
 
@@ -379,7 +414,11 @@ error and snapshot changes report `snapshot_mismatch`.
 planning/reporting labels unless a source API can accept an ID restriction; the
 executor still builds the scalar allow-set before source generation and applies
 it before fusion for non-`postfilter` strategies. Empty allow-sets short-circuit
-all strategies, including `postfilter`. `bound_snapshot` remains reserved for a
+all strategies, including `postfilter`. Only `prefilter` pushes the scalar
+restriction into source candidate generation, including vector-only native and
+selected typed serving. Explicit `text_first`, `vector_first`, and `union_fusion`
+retain the unfiltered source candidate limits and ranks before scalar filtering.
+`bound_snapshot` remains reserved for a
 future explicit read-view/searcher API; the current executor supports
 `current_snapshot` and fails closed on root/commit changes observed between
 bounded phases.

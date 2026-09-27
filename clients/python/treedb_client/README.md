@@ -43,26 +43,36 @@ listeners share one backend, manager and service. Close the client and drain
 both listeners before database cleanup.
 
 `TreeDBClient(http_url, native_address="127.0.0.1:7121", timeout=10)` negotiates
-native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
-dense 64/v2 for the default FP32 path, or dense 64/v3 when
-`query_mode="quantized_rerank"` explicitly selects the negotiated legacy
-scalar-u8/v1 score plane. The separate `typed_dense_quantized_rerank` index
-capability is required; benchmark quantized capabilities do not imply it.
-Both versions require caller-held selected typed `IndexInfo` returned by HTTP
-create/open/ensure. Its generation is sent as the server guard; conflicting
-explicit generations fail. For v3, omitted or zero `ef_search` is resolved from
-that `IndexInfo` and sent as a positive value so `score_plane.requested_ef_search`
-authenticates the candidate-width bound. Raw v3 clients must likewise send a
-positive EF; zero/default resolution is not deferred across the native wire.
-HTTP success proofs instead bind an omitted EF to the returned index's positive
-`vector_ef_search`; a wider error prefix is retained only when generation-bound
-caller `IndexInfo` authenticates the same default. Create/build/admission and reopen re-admission
-remain explicit HTTP control operations. Dense results contain content/meta
-from the same search owner and are Python-owned after return. Embedding echo is
-opt-in with `return_embedding=True` on either HTTP or native; the default is
-false. Commands 64 and 65 pack query and ingest FP32 values respectively;
-document responses from commands 50 and 64 remain JSON, with stored FP32 values
-represented as JSON numbers and decoded Python floats.
+native capabilities lazily. Declare the canonical representation at creation
+with `BenchmarkVectorIndexOptions(strategy="column_graph",
+representation="cosine_normalized_f32_v1", ...)`. The returned caller-held
+`IndexInfo.vector_representation` selects dense 64/v4; the client never probes
+or downgrades to v2/v3. Its generation is the server guard, and conflicting
+explicit generations fail before search.
+
+`query_by_embedding(..., index_info=info)` defaults to exact v4 production.
+Set `query_mode="quantized_rerank"`, the declared `quantized_index_name`, and a
+positive `quantized_rerank_candidates` to select scalar-u8 candidates plus
+packed FP32 rerank. Omitted/zero `ef_search` is resolved from `IndexInfo` before
+encoding, so v4 always carries positive E; R must be at least top-K. Production
+is `diagnostics=False` by default and returns `native_command_version=4` plus
+compact owned `route_identity`, with `dense_work` and `score_plane` unset.
+`diagnostics=True` adds full dense work and, for SQ8, packed score-plane-v2.
+
+Create/build/admission and reopen re-admission remain explicit HTTP control
+operations. Dense results contain content/meta from the same search owner and
+are Python-owned after return. Embedding echo is opt-in with
+`return_embedding=True` on either HTTP or native; false performs zero output
+embedding materialization. V4 validates returned canonical vectors when true
+but never parses them to recompute scores. Commands 64 and 65 pack query and
+ingest FP32 values respectively; document responses remain JSON. Legacy
+representations retain dense 64/v2 exact and 64/v3 scalar-u8 rerank.
+
+Native dense preparation converts each query component once and validates
+finiteness in that same pass, then packs the unchanged FP32 request format.
+Non-finite values, failed numeric conversions, and FP32 overflow raise
+`TreeDBConfigError` before sending a frame. HTTP retains its own normalized
+query preflight; neither transport skips dimension or generation validation.
 
 Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
 numeric IPv6 literals (`[::1]:7121`), without zone identifiers. Hostnames are
@@ -92,24 +102,55 @@ write. Supply numeric embeddings (not base64); build/admission is still explicit
 including when `defer_vector_index_rebuild` is false. Successful mutations use
 the service's configured durability, not a new wire acknowledgment guarantee.
 
-Native delete/filter-delete remain unsupported; use an explicit HTTP control
-client for these operations. Other
+`replace_source_by_id(index, delete_ids, documents,
+expected_generation=info.generation, index_info=info)` uses negotiated
+local-only 67/v1 when native transport is configured, or one explicit HTTP
+request otherwise. It supplies a complete bounded old-ID set and live typed
+replacement rows to one atomic core operation; it never fetches old vectors,
+discovers chunks, or composes delete plus upsert. Overlap is valid and insertion
+wins. Empty documents perform delete-only, and an empty/empty request is a
+validated no-op. Missing capability or mismatched typed `IndexInfo` fails closed
+without HTTP fallback. `CommitAmbiguousError` and `RecoveryRequiredError` are
+non-retry signals unless the caller first establishes the stored outcome.
+
+`update_metadata_by_id(index, ids, set, unset,
+expected_generation=info.generation, index_info=info)` changes only explicit
+`meta.*` paths on existing typed rows. Missing IDs are skipped and the response
+returns exact `matched_count`/`modified_count`. It accepts no vector or content
+argument; unchanged scoring/content authority is preserved by the partial
+metadata WAL/publication path. Declared scalar metadata values must be strings
+and cannot be unset, paths cannot overlap, and the expected schema generation
+is mandatory. Nested metadata strings and keys must encode losslessly as UTF-8;
+the client rejects unpaired surrogates before either transport sends a request.
+Native transport uses the independent local-only 68/v1
+`typed_metadata_update_versions` capability and fails closed without retry or
+HTTP fallback; HTTP uses one atomic `update_metadata_by_id` request.
+
+Native general delete/filter-delete remain unsupported; use an explicit HTTP
+control client for those operations. Other
 existing HTTP APIs retain their existing transport. There is no native request
 retry or HTTP fallback after a native error. `native_command_version=2` is
 dispatch identity only; default-zero legacy work fields are unavailable typed
 phase evidence, not proof of zero indexed JSON extraction.
 
-Selected typed dense responses expose `response.dense_work`, an owned frozen
+Legacy selected typed dense responses expose `response.dense_work`, an owned frozen
 `DenseSearchWork` dataclass tree (version 1). It records the actual empty/exact/
 HNSW branch, graph/filter work, captured schema/base/current identities and
 coverage, and full search-output materialization. Use
 `dataclasses.asdict(response.dense_work)` for JSON-ready evidence. Completion
 and availability flags scope counts; missing proof is `None`, never fabricated
-zero work. This proof is mandatory on native 64/v2 and 64/v3 success and
+zero work. This proof is mandatory on legacy native 64/v2 and 64/v3 success and
 optional on HTTP for compatibility with older/unavailable routes. Quantized
 v3 responses additionally expose sibling `response.score_plane`, owned
 versioned proof of the selected score plane; it is never inserted into the
 frozen `dense_work` graph.
+
+Canonical v4 production instead exposes only `response.route_identity`; full
+proofs are present only when diagnostics were explicitly requested. The route
+identity binds representation, exact/SQ8 mode, executed route, owner generation,
+E/R/top-K, result count, candidate-code reads, FP32/packed scoring reads, and
+embedding output work. Python strictly rejects unknown sections/flags, malformed
+counts, invalid IDs/scores/documents, and proof/identity mismatches.
 
 Existing service/protocol exceptions expose optional `.dense_work`. Service
 errors retain actual work prefixes without returning partial documents. A
@@ -117,6 +158,10 @@ native encoding or client document-decoding error after completed service work
 preserves those producer completion flags; they do not mean delivery succeeded.
 Malformed proof is rejected without attaching it as trustworthy detail. Proof
 objects reject missing/unknown fields, invalid types and out-of-range integers.
+Quantized v4 errors authenticate the request-bearing score-plane sibling.
+Exact dense-work v1 has no full request digest, so Python retains it only as
+debug detail and reports a consistency error instead of trusting the original
+remote-error classification.
 Available snapshots require a nonzero schema generation and base/current
 coverage LSN, plus nonzero generation and checksum in both base and current
 manifest identities; the manifest version is exactly 1 and current manifest
@@ -143,12 +188,13 @@ carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
 client also evaluates the exact requested filter against every decoded native or
 HTTP document, preserving integral metadata precision for equality, range, and
 membership operators; producer work counts alone do not prove result membership.
-Native v3 document JSON rejects duplicate fields at the top level and
+Native v3/v4 document JSON rejects duplicate fields at the top level and
 recursively throughout metadata before model conversion, matching the Go
 consumer contract. Selected HTTP proof envelopes reject the same ambiguity.
 When embedding echo is requested on the selected quantized path, native v3 and
 HTTP consumers also recompute the FP32 cosine score and bind it to the returned
-embedding within the documented rounding tolerance.
+embedding within the documented rounding tolerance. Canonical v4 deliberately
+does not perform that redundant rescore.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return
@@ -321,8 +367,9 @@ print(bench_binary.ids)
 
 keyword = client.search_keyword(
     "docs",
-    query="dense scoring filters",
+    query='Which ("dense") scoring filters apply?',
     top_k=5,
+    text_query_mode="literal",
     operator="or",
     candidate_limit=1000,
     max_postings_scanned=100000,
@@ -330,11 +377,17 @@ keyword = client.search_keyword(
 
 hybrid = client.search_hybrid(
     "docs",
-    query="dense scoring filters",
+    query='Which ("dense") scoring filters apply?',
     query_embedding=[0.1, 0.2, 0.3],
     top_k=5,
+    text_query_mode="literal",
+    text_operator="or",
     text_candidate_limit=100,
+    max_postings_scanned=100000,
     vector_candidate_limit=100,
+    vector_query_mode="quantized_rerank",
+    quantized_index_name="embedding.scalar_u8.fast",
+    quantized_rerank_candidates=100,
     ef_search=64,
     max_chunks_per_parent=2,
     fusion={
@@ -348,6 +401,15 @@ hybrid = client.search_hybrid(
 for doc in hybrid.documents:
     print(doc.id, doc.score, doc.meta.get("_treedb_search"))
 ```
+
+Hybrid vectors use exact scoring by default. To select the admitted scalar-u8
+rerank path, set `vector_query_mode="quantized_rerank"` and
+`quantized_index_name`. `quantized_rerank_candidates` is optional; omission or
+zero lets the service use its effective traversal width, while a nonzero value
+must cover the effective vector candidate limit. The response records the
+selected values in `hybrid.plan` and the compact serving receipt in
+`hybrid.stats.vector_route`; no detailed query proof is produced for hybrid
+search. Returned documents omit embeddings unless `return_embedding=True`.
 
 `max_chunks_per_parent` is optional and disabled when omitted or zero. A positive
 value preserves the service's fused order and source attribution while limiting
@@ -402,6 +464,13 @@ without partial ranking or a local/primary document scan. Truncation raises
 `IndexUnavailableError` with `scalar_filter_unbounded`. Hybrid plan/stats models
 expose lookup count, per-lookup and aggregate bounds, input IDs, intersection
 steps, and final IDs. The client never broadens a filter into a local scan.
+
+Keyword and hybrid requests default to Boolean lexical parsing. Set
+`text_query_mode="literal"` for natural-language input so quotes, parentheses,
+and standalone connectives are analyzed as text. `operator` (keyword) or
+`text_operator` (hybrid) then combines analyzed terms with OR/AND. A supplied
+`max_postings_scanned` remains active with filters and fails closed rather than
+being ignored; hybrid lexical options require a text query.
 
 ## Selected typed column graph lifecycle
 

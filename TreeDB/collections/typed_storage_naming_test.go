@@ -331,6 +331,29 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Owner preparation and paged build/session consume the retained public schema API.
+	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_source_session_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_ann_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_domain_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_graph_build_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_scaling_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_build_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_append_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/nativewire/vector_partition_source_preparation_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
+	{path: "TreeDB/collections/vector_partition_paged_source_session_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Source directories and import/reader paths use the retained public
+	// configuration and value types; these are compatibility names.
+	{path: "TreeDB/collections/column_source_directory_gc_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/column_source_directory_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
+	{path: "TreeDB/collections/vector_partition_source_import_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
+	{path: "TreeDB/collections/vector_partition_source_import_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/vector_partition_source_reader_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	// Metadata mutation uses existing exported compatibility schema/value types.
+	{path: "TreeDB/collections/column_metadata_row.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
+	{path: "TreeDB/collections/column_metadata_row_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/typed_metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 7},
+	{path: "TreeDB/collections/typed_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 7},
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
@@ -338,6 +361,12 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Buffered retained-document reconstruction tests exercise the public
 	// compatibility configuration and typed-column value vocabulary.
 	{path: "TreeDB/collections/api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
+	// Prepared insertion validates and copies the compatibility-retained public
+	// configuration; it does not introduce a second typed-storage vocabulary.
+	{path: "TreeDB/collections/prepared_catalog.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/prepared_root_profiles.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/prepared_system_meta_json.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/collections/prepared_system_meta_json_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
 	// RAG benchmark harness (issue #4267) consumes the public compatibility
 	// configuration API for typed-column collection setup; no new legacy
 	// terminology introduced.
@@ -387,9 +416,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// and value type names to fold the live carrier into document publication.
 	{path: "TreeDB/collections/vector_index_partition_live_replay_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/vector_index_partition_live_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	// #4324's nativewire integration fixture uses the exported compatibility
-	// schema names to configure one typed-column vector source.
-	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// #4324's nativewire integration fixtures use the exported compatibility
+	// schema names to configure typed-column vector and sorted-scalar sources.
+	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	// #4728's fixed-peer mutation fixture uses the same exported compatibility
 	// schema names for its typed-column vector source.
 	{path: "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
@@ -453,14 +483,14 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_physical_row_reader_test.go", classification: typedStorageLegacyDeferred, matchingLines: 30, occurrences: 34},
 	{path: "TreeDB/collections/column_physical_scan.go", classification: typedStorageLegacyDeferred, matchingLines: 51, occurrences: 62},
 	{path: "TreeDB/collections/column_physical_scan_test.go", classification: typedStorageLegacyDeferred, matchingLines: 37, occurrences: 44},
-	{path: "TreeDB/collections/column_physical_visibility.go", classification: typedStorageLegacyDeferred, matchingLines: 9, occurrences: 9},
+	{path: "TreeDB/collections/column_physical_visibility.go", classification: typedStorageLegacyDeferred, matchingLines: 11, occurrences: 11},
 	{path: "TreeDB/collections/column_physical_visibility_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	{path: "TreeDB/collections/column_publish_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 47, occurrences: 60},
 	{path: "TreeDB/collections/column_publish_plan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 69, occurrences: 90},
 	// The plan-lease tests reuse compatibility configuration and fixture helpers
 	// while exercising publication ownership; they introduce no storage format.
 	{path: "TreeDB/collections/column_publish_plan_lease_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
-	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 63, occurrences: 69},
+	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 69, occurrences: 78},
 	{path: "TreeDB/collections/column_publish_write_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 36, occurrences: 38},
 	{path: "TreeDB/collections/column_publish_write_path_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 222, occurrences: 248},
 	{path: "TreeDB/collections/typed_source_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -469,13 +499,17 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_row_sidecar_assets.go", classification: typedStorageLegacyDerived, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/column_query_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 43, occurrences: 43},
 	{path: "TreeDB/collections/column_query_plan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 68},
-	{path: "TreeDB/collections/column_reconstruction.go", classification: typedStorageLegacyCompatibility, matchingLines: 58, occurrences: 73},
+	{path: "TreeDB/collections/column_reconstruction.go", classification: typedStorageLegacyCompatibility, matchingLines: 60, occurrences: 75},
 	{path: "TreeDB/collections/column_reconstruction_monotonic.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
 	{path: "TreeDB/collections/column_reconstruction_monotonic_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 30},
 	{path: "TreeDB/collections/column_reconstruction_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 27, occurrences: 31},
 	{path: "TreeDB/collections/column_retained_payload_audit.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/collections/column_retained_payload_audit_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 29, occurrences: 30},
-	{path: "TreeDB/collections/column_retained_semantic_stream.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 19},
+	{path: "TreeDB/collections/column_retained_semantic_stream.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 20},
+	// Prepared inserts use the existing public schema configuration and
+	// compatibility error vocabulary; they introduce no new storage owner.
+	{path: "TreeDB/collections/prepared_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
+	{path: "TreeDB/collections/prepared_insert_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 37, occurrences: 47},
 	{path: "TreeDB/collections/column_retained_semantic_stream_raw_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 16},
 	{path: "TreeDB/collections/column_retained_vlog_placement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 56},
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
@@ -516,7 +550,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_store_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 39, occurrences: 46},
 	{path: "TreeDB/collections/column_store_compaction_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 78, occurrences: 90},
 	{path: "TreeDB/collections/column_store_compatibility_api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 9},
-	{path: "TreeDB/collections/column_store_physical_accounting.go", classification: typedStorageLegacyCompatibility, matchingLines: 226, occurrences: 258},
+	{path: "TreeDB/collections/column_store_physical_accounting.go", classification: typedStorageLegacyCompatibility, matchingLines: 228, occurrences: 260},
 	{path: "TreeDB/collections/column_store_physical_accounting_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 29},
 	{path: "TreeDB/collections/column_store_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 301, occurrences: 378},
 	{path: "TreeDB/collections/scalar_primitive.go", classification: typedStorageLegacyCompatibility, matchingLines: 36, occurrences: 42},
@@ -593,7 +627,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_column_string_scan.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 18},
 	{path: "TreeDB/collections/typed_column_string_scan_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 9},
 	{path: "TreeDB/collections/typed_column_string_scan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 14},
-	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 22, occurrences: 24},
+	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 25},
 	{path: "TreeDB/collections/typed_column_publication_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 96, occurrences: 99},
 	{path: "TreeDB/collections/typed_column_semantics_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 30},
 	{path: "TreeDB/collections/typed_storage_layout.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 52},

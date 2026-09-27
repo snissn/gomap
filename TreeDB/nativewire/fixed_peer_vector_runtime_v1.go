@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"reflect"
@@ -45,6 +46,44 @@ type FixedPeerTCPVectorConfigV1 struct {
 	ShardAddresses  map[raftcluster.GroupID]map[raftcluster.NodeID]string
 	RequestBase     VectorPartitionCoordinatorRequestV1
 	IndexedThrough  uint64
+}
+
+// Keep the validated vector configuration independent of caller-owned maps and
+// slices, as the fixed-peer configuration did before its bounded clone path.
+func cloneFixedPeerVectorConfigV1(input *FixedPeerTCPVectorConfigV1) *FixedPeerTCPVectorConfigV1 {
+	if input == nil {
+		return nil
+	}
+	v := *input
+	v.Catalog.Features.Required = slices.Clone(v.Catalog.Features.Required)
+	v.Catalog.Groups = slices.Clone(v.Catalog.Groups)
+	for i := range v.Catalog.Groups {
+		v.Catalog.Groups[i].Members = slices.Clone(v.Catalog.Groups[i].Members)
+	}
+	v.Catalog.Placements = slices.Clone(v.Catalog.Placements)
+	for i := range v.Catalog.Placements {
+		v.Catalog.Placements[i].TokenPartitions = slices.Clone(v.Catalog.Placements[i].TokenPartitions)
+	}
+	v.Manifest.DomainPacks = slices.Clone(v.Manifest.DomainPacks)
+	v.Manifest.Placements = slices.Clone(v.Manifest.Placements)
+	v.Manifest.Memberships = slices.Clone(v.Manifest.Memberships)
+	v.Manifest.OverlapMemberships = slices.Clone(v.Manifest.OverlapMemberships)
+	v.Manifest.Representatives = slices.Clone(v.Manifest.Representatives)
+	v.Manifest.Assets = slices.Clone(v.Manifest.Assets)
+	if v.Manifest.PagedRootV2 != nil {
+		paged := *v.Manifest.PagedRootV2
+		paged.SourceOwners = slices.Clone(paged.SourceOwners)
+		paged.ANNOwners = slices.Clone(paged.ANNOwners)
+		v.Manifest.PagedRootV2 = &paged
+	}
+	v.Placement.Partitions = slices.Clone(v.Placement.Partitions)
+	v.PublicAddresses = maps.Clone(v.PublicAddresses)
+	v.ShardAddresses = maps.Clone(v.ShardAddresses)
+	for group, addresses := range v.ShardAddresses {
+		v.ShardAddresses[group] = maps.Clone(addresses)
+	}
+	v.RequestBase.Query = slices.Clone(v.RequestBase.Query)
+	return &v
 }
 
 type fixedPeerVectorCoordinatorRouterSourceV1 struct {
@@ -689,10 +728,9 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 			return errors.New("vector request base identity exceeds coordinator limit")
 		}
 	}
-	if request.RouterCandidateBudget < 1 || request.RouterCandidateBudget > limits.MaxRouterCandidates ||
+	if request.RouterScoreBudget < 1 || request.RouterScoreBudget > min(limits.MaxRouterScoreCalls, collections.MaxVectorPartitionRouterScoreBudgetV3) ||
 		(request.RouterMode != collections.VectorPartitionRouterModeExactV1 && request.RouterMode != collections.VectorPartitionRouterModeApproxV1) ||
-		(request.RouterMode == collections.VectorPartitionRouterModeExactV1 && request.RouterCandidateBudget < len(manifest.Representatives)) ||
-		(request.RouterMode == collections.VectorPartitionRouterModeApproxV1 && request.RouterCandidateBudget > len(manifest.Representatives)) ||
+		(request.RouterMode == collections.VectorPartitionRouterModeExactV1 && request.RouterScoreBudget < len(manifest.Representatives)) ||
 		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 {
 		return errors.New("invalid vector request base router or stats defaults")
 	}
@@ -992,8 +1030,8 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if err != nil || readySetDigest != request.ReadySetDigest || routerStatus.ModelDigest != request.RouterModelDigest {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
-	selection, err := lease.session.router.SearchWithContextV1(ctx, decoded, collections.VectorPartitionRouterSearchOptionsV1{
-		Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 1,
+	selection, err := lease.session.router.SearchWithContextV1(ctx, decoded, collections.VectorPartitionRouterSearchOptionsV3{
+		Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives), PartitionProbes: 1,
 	})
 	if err != nil || len(selection.Partitions) != 1 {
 		return errors.Join(ErrFixedPeerVectorWrongOwnerV1, err)

@@ -140,8 +140,8 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 		if _, mutated, err := authority.promote(); err != nil || !mutated {
 			b.Fatalf("promote mutated=%t err=%v", mutated, err)
 		}
-		descriptors += uint64(len(authority.resources.Descriptors()))
-		for _, descriptor := range authority.resources.Descriptors() {
+		descriptors += uint64(len(mustStableResourceDescriptors(b, authority.resources)))
+		for _, descriptor := range mustStableResourceDescriptors(b, authority.resources) {
 			obligations += uint64(len(descriptor.LogicalObligations()))
 		}
 		for _, stats := range authority.resources.Stats(time.Now()) {
@@ -213,7 +213,7 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 	if got := fixture.registry.ActivePins(); got != 2 {
 		t.Fatalf("capture+frozen-set pins=%d want 2", got)
 	}
-	descriptors := authority.resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, authority.resources)
 	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafPack ||
 		descriptors[0].Generation() != uint64(fixture.fileID) || descriptors[0].Frontier().Bytes < fixture.pointer.Offset+uint64(fixture.pointer.RecordLength()) {
 		t.Fatalf("packed descriptors=%+v", descriptors)
@@ -280,7 +280,7 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 		t.Fatalf("promote mutated=%v err=%v", mutated, err)
 	}
 	var hasDictionary, hasPacked bool
-	for _, descriptor := range authority.resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, authority.resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityDictionaryGeneration:
@@ -415,7 +415,7 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 	if got := fixture.registry.ActivePins(); got != 4 {
 		t.Fatalf("two capture and two resource-set pins=%d want 4", got)
 	}
-	if descriptors := authority.resources.Descriptors(); len(descriptors) != 2 {
+	if descriptors := mustStableResourceDescriptors(t, authority.resources); len(descriptors) != 2 {
 		t.Fatalf("packed descriptors=%d want 2", len(descriptors))
 	}
 	if stats := authority.resources.Stats(time.Now()); len(stats) != 1 || stats[0].NamespaceSyncs != 2 {

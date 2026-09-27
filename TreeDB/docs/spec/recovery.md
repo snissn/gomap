@@ -137,8 +137,8 @@ returns `ErrLegacyFormatRebuildRequired`; callers must rebuild the DB directory.
   and meta-projection digest.
 - Sort valid candidates by descending `CommitSeq`, with slot ID as the stable
   tie-breaker.
-- Validate each candidate independently without recursing through the B-tree or
-  scanning value-log contents:
+- Validate each candidate independently without scanning user/system B-trees or
+  value-log contents:
   - load the exact durable-root-record page and verify both its page checksum
     and SHA-256 digest from the meta,
   - require its commit/durable sequences and projection digest to match the
@@ -157,6 +157,23 @@ older complete slot. If neither slot is complete, open fails with
 `ErrNoRecoverableMeta` and stable per-slot rejection reasons. Normal recovery
 never follows the parent-record chain and never repairs a candidate by combining
 fields or resources from the other slot.
+
+For an opt-in `dependency_directory_v2` store, the version-2 durable-root record
+selects the dependency B-tree instead of a contiguous V1 manifest. Recovery
+streams the selected directory under that record's page extent, validates exact
+physical identities and logical ownership/frontiers, and retains physical pins
+and bounded summaries rather than a copied logical-obligation corpus. Point
+lookups and streaming walks propagate missing/corrupt pages and bounded-depth
+failures; an I/O or decoding error is never interpreted as logical absence.
+Each fallback slot is independently validated against its own extent and root.
+An incomplete newest directory therefore permits only a complete older slot,
+never a mixture of their descriptors. Both slots and old readers retain shared
+subtrees until their leases are released.
+
+The required feature is checked before malformed root or WAL contents can be
+inspected, including read-only and no-lock snapshot entry points. An unsupported
+feature, a populated V1 store newly marked V2, or feature removal fails closed.
+Normal startup performs no V1-to-V2 conversion or directory repair.
 
 ### 2.3 State install
 
@@ -227,6 +244,27 @@ cleaned. A missing non-cleaned commit-log segment that may contain required
 command frames is recovery corruption.
 
 ## 4. Replay Algorithm
+
+Metadata-only update frames use `CollectionTypedMetadataByIDV1` (format 13,
+collection update kind 102). Replay checks the collection/schema, sorted IDs and
+metadata columns, and protected-field ownership before applying complete metadata
+after-images through the metadata-only planner. It resolves preserved full-row
+coordinates from the preceding authoritative snapshot; the WAL does not contain
+physical pointers or unchanged vectors. Missing rows, incompatible schema, or
+after-images changing content/vector/chunk linkage fail closed. A validated
+metadata after-image requires valid UTF-8 and paired JSON surrogate escapes;
+replay rejects lossy Unicode before decoding it. A validated
+object replacement preserves literal keys inside its JSON value;
+replay does not reinterpret them as dotted mutation paths. Validation descends
+only where a protected ancestor prevents a whole-value mutation. Empty-object
+additions remain real changes, and changed keys that cannot be addressed by a
+public mutation fail closed; unchanged unusual keys may remain present. A
+successfully replayed command publishes row locators, secondary indexes and `AppliedCommandLSN`
+atomically. Repeated metadata updates flatten to one ordinary full-row reference.
+Current and recovery manifests retain that row's assets until a fold replaces
+them coherently; a fold raced by post-capture metadata must retry. Errors after
+durable intent retain the normal commit-ambiguous/recovery-required fence, even
+for a subsequent no-op request.
 
 Collection insert/update frames may use `CollectionTypedBatchByIDV1` (payload format
 11). Decode the accepted string/FP32 values and retained bytes separately,
@@ -643,3 +681,13 @@ After successful open:
 2. RID join (when present) must be exact; no synthetic value reconstruction is permitted.
 3. Commit-log cleanup occurs only after successful replay.
 4. Value-log segments are not deleted as part of normal replay cleanup.
+
+
+## Draft source import V2 recovery
+
+Format14 source import uses the existing command-WAL `CollectionReplaceSourceByID` executor and ordered root publication. The source directory, immutable row/proof records, primary rows, column assets, row locators, checkpoint and receipt share that publication. Exact retries compare the complete command receipt; changed retries, gaps and existing exact IDs refuse. Replay preserves the explicit input ordinal order even though the typed command payload sorts IDs. The completed source root is reconstructed from the fixed checkpoint.
+
+An explicit `tcd2` source directory retains `SCL2` source bytes and Merkle nodes in the existing B-tree root, so verification does not require an old WAL segment or a later mutable document value. After checkpoint/reopen the public source reader verifies the requested local bytes against the expected completed snapshot. This local recovery path does not admit canonical source authority or enable schema7 ANN serving. Source-directory lifecycle/GC and cross-node source admission remain draft qualification work.
+
+
+`SIS2` completion bindings and historical directory headers retain the original semantic root across later imports. Explicit V2 asset discovery participates in ordinary recoverable-root/GC protection, with fail-closed metadata budgets. Replay retains the same immutable source identity and exact rows even if physical segment packing differs. Destructive GC/held-source tests and race qualification remain required on each candidate; canonical source admission and owner-only paged ANN lifecycle are still gated.

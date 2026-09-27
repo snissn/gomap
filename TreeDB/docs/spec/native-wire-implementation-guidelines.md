@@ -122,6 +122,12 @@ Adding a command version is preferred over changing existing semantics. Once a
 command version can appear in a deterministic command entry, its deterministic
 meaning is immutable for that Raft log lineage.
 
+Command 67/v1 (`typed_source_replace`) is a LocalOnly envelope over one existing
+atomic collection source replacement. It reuses typed carrier sections
+102/103/131, adds delete IDs in section 140, and returns counts in section 141.
+It must remain rejected by generic deterministic-entry encoding and cluster
+submission; command 66 has a separate explicitly routed vector-insert boundary.
+
 Each command should also have an implementation-status row recording:
 
 - whether it is in the v1 target surface,

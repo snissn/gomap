@@ -599,11 +599,16 @@ type DB struct {
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned atomic.Bool
 
-	durableRootManifestBuildCount     atomic.Uint64
-	durableRootManifestBuildNs        atomic.Uint64
-	durableRootManifestEntriesSeen    atomic.Uint64
-	durableRootManifestEntriesEncoded atomic.Uint64
-	durableRootManifestBytesEncoded   atomic.Uint64
+	durableRootManifestBuildCount      atomic.Uint64
+	durableRootManifestBuildNs         atomic.Uint64
+	durableRootManifestEntriesSeen     atomic.Uint64
+	durableRootManifestEntriesEncoded  atomic.Uint64
+	durableRootManifestBytesEncoded    atomic.Uint64
+	durableRootDirectoryBytesEncoded   atomic.Uint64
+	durableRootDirectoryRecordsEncoded atomic.Uint64
+	durableRootDirectoryPagesWritten   atomic.Uint64
+
+	dependencyDirectoryRequiredFeature bool
 
 	commandWALStatsMu                sync.Mutex
 	commandWALRequiredFeature        bool
@@ -2166,6 +2171,10 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
+	if err != nil {
+		return nil, err
+	}
 	if opts.ReadOnly {
 		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
@@ -2223,6 +2232,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
+		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
+
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,
 		valueLogRefTracker:             newValueLogRefTrackerForOptions(opts),
@@ -3095,7 +3106,7 @@ func (db *DB) recover() error {
 		return db.initializeDurableRootV1(idx)
 	}
 
-	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1)
+	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(idx))
 	if err != nil {
 		return err
 	}
@@ -3109,6 +3120,11 @@ func (db *DB) recover() error {
 			selected.SlotResources[i] = nil
 		}
 	}()
+	for _, record := range selected.SlotRecords {
+		if record.CommitSeq != 0 && (record.Directory.RootPageID != 0) != db.dependencyDirectoryRequiredFeature {
+			return fmt.Errorf("%w: dependency_directory_v2 feature and persisted root disagree; rebuild required", ErrLegacyFormatRebuildRequired)
+		}
+	}
 	p.SetPageCount(selected.Record.TotalPages)
 	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
 		return fmt.Errorf("enable recovered COW freelist: %w", err)

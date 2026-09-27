@@ -411,11 +411,7 @@ func cloneRecoverableResourceUnion(sources ...*rootpublication.StableResourceSet
 	if len(filtered) == 0 {
 		return nil, nil
 	}
-	view, err := rootpublication.UnionStableResourceSets(filtered...)
-	if err != nil {
-		return nil, err
-	}
-	return rootpublication.CloneStableResourceSetExcludingKinds(view)
+	return rootpublication.ClonePhysicalReachabilityUnion(filtered...)
 }
 
 func recoverableRootsForBasis(state StateToken, durable recoverableDurableBasis, coordinator rootpublication.ReachabilitySnapshot) []RecoverableRoot {

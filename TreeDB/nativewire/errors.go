@@ -240,6 +240,20 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	if code, ok := iwire.ErrorCodeOf(err); ok {
 		return code
 	}
+	// Publication ambiguity and recovery state outrank a joined cancellation:
+	// callers must never infer that a non-idempotent mutation was not accepted.
+	switch documentservice.ErrorCodeOf(err) {
+	case documentservice.CodeCommitAmbiguous:
+		return iwire.ErrCommitAmbiguous
+	case documentservice.CodeRecoveryRequired:
+		return iwire.ErrDurabilityUnavailable
+	}
+	if errors.Is(err, collections.ErrCommitAmbiguous) {
+		return iwire.ErrCommitAmbiguous
+	}
+	if errors.Is(err, collections.ErrRecoveryRequired) || errors.Is(err, backenddb.ErrRecoveryRequired) {
+		return iwire.ErrDurabilityUnavailable
+	}
 	switch {
 	case errors.Is(err, context.Canceled):
 		return iwire.ErrCanceled
@@ -294,7 +308,15 @@ func isMalformedProtocolError(err error) bool {
 	return ok && code == iwire.ErrMalformedFrame
 }
 
-func retryableError(code iwire.ErrorCode) bool {
+func retryableError(err error, code iwire.ErrorCode) bool {
+	// Recovery-required means the handle must be reopened and reconciled before
+	// another mutation. It currently shares the durability-unavailable wire
+	// code, but must not inherit that code's ordinary pre-commit retry hint.
+	if documentservice.ErrorCodeOf(err) == documentservice.CodeRecoveryRequired ||
+		errors.Is(err, collections.ErrRecoveryRequired) ||
+		errors.Is(err, backenddb.ErrRecoveryRequired) {
+		return false
+	}
 	switch code {
 	case iwire.ErrTimeout, iwire.ErrCanceled, iwire.ErrResourceExhausted, iwire.ErrDurabilityUnavailable, iwire.ErrConsistencyUnavailable:
 		return true

@@ -78,6 +78,15 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
 		t.Fatal(err)
 	}
+	calibration.PackIdentityNeutralSHA256 = map[uint32]string{0: strings.Repeat("a", 64)}
+	holdout.PackIdentityNeutralSHA256 = map[uint32]string{0: strings.Repeat("b", 64)}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
+		t.Fatal("accepted different full-pack geometry with equal snapshots")
+	}
+	holdout.PackIdentityNeutralSHA256[0] = calibration.PackIdentityNeutralSHA256[0]
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
+		t.Fatal(err)
+	}
 	holdout.Snapshots[0] = collections.VectorPartitionPackLayoutSnapshotV1{Rows: 1, RowOrdinals: []uint32{8}}
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
 		t.Fatal("accepted incompatible capture snapshots")
@@ -87,18 +96,19 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
 	sha := strings.Repeat("a", 64)
 	capture := m0LocalityCaptureV1{
-		Schema:         "treedb_vector_partition_m0_exact_pack_trace_v3",
-		Artifact:       sha,
-		Descriptor:     sha,
-		Source:         vectorpartition.Source{SourceID: "fixture", Checksum: sha, Vectors: 1, Dimensions: 1, Metric: "cosine"},
-		Manifest:       sha,
-		ReadySet:       sha,
-		RouterModel:    sha,
-		BinarySHA256:   sha,
-		SourceRevision: strings.Repeat("b", 40),
-		Rows:           []m0LocalityCaptureRowV1{{}},
-		Traces:         []m0LocalityTraceRowV1{{}},
-		Snapshots:      map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {}},
+		Schema:            "treedb_vector_partition_m0_exact_pack_trace_v5",
+		Artifact:          sha,
+		Descriptor:        sha,
+		Source:            vectorpartition.Source{SourceID: "fixture", Checksum: sha, Vectors: 1, Dimensions: 1, Metric: "cosine"},
+		Manifest:          sha,
+		ReadySet:          sha,
+		RouterModel:       sha,
+		BinarySHA256:      sha,
+		SourceRevision:    strings.Repeat("b", 40),
+		RouterScoreBudget: 1024,
+		Rows:              []m0LocalityCaptureRowV1{{}},
+		Traces:            []m0LocalityTraceRowV1{{}},
+		Snapshots:         map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {}},
 	}
 	write := func(name string, value m0LocalityCaptureV1) string {
 		t.Helper()
@@ -114,6 +124,24 @@ func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
 	}
 	if _, _, err := m0ReadCaptureV1(write("clean.json", capture)); err != nil {
 		t.Fatal(err)
+	}
+	capture.PackIdentityNeutralSHA256 = map[uint32]string{0: sha}
+	got, _, err := m0ReadCaptureV1(write("pack-digest.json", capture))
+	if err != nil || !reflect.DeepEqual(got.PackIdentityNeutralSHA256, capture.PackIdentityNeutralSHA256) {
+		t.Fatalf("pack digest round-trip: %v %v", got.PackIdentityNeutralSHA256, err)
+	}
+	for name, digests := range map[string]map[uint32]string{
+		"invalid": {0: "not-sha256"},
+		"unknown": {1: sha},
+		"extra":   {0: sha, 1: sha},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := capture
+			invalid.PackIdentityNeutralSHA256 = digests
+			if _, _, err := m0ReadCaptureV1(write(name+".json", invalid)); err == nil {
+				t.Fatal("accepted invalid full-pack digest evidence")
+			}
+		})
 	}
 	capture.VCSModified = true
 	if _, _, err := m0ReadCaptureV1(write("modified.json", capture)); err == nil {
@@ -160,6 +188,28 @@ func TestM0SnapshotRejectsOverflowingVectorStride(t *testing.T) {
 	}
 	if err := m0ValidateSnapshotV1(snapshot); err == nil {
 		t.Fatal("accepted overflowing vector stride")
+	}
+}
+
+func TestM0AddRangeUsesChunkPhysicalIdentities(t *testing.T) {
+	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{PhysicalExtents: []collections.VectorPartitionPackLayoutExtentV1{
+		{LogicalOffset: 100, Length: 4096, Namespace: "pack", FileID: 7, BaseOffset: 0},
+		{LogicalOffset: 4196, Length: 4096, Namespace: "pack", FileID: 8, BaseOffset: 4096},
+	}}
+	tokens := map[m0PageTokenV1]struct{}{}
+	if err := m0AddRangeV1(tokens, snapshot, 4190, 12); err != nil {
+		t.Fatal(err)
+	}
+	want := map[m0PageTokenV1]struct{}{
+		{Namespace: "pack", FileID: 7, Page: 0}: {},
+		{Namespace: "pack", FileID: 8, Page: 1}: {},
+	}
+	if !reflect.DeepEqual(tokens, want) {
+		t.Fatalf("tokens=%v want=%v", tokens, want)
+	}
+	snapshot.PhysicalExtents[1].LogicalOffset++
+	if err := m0AddRangeV1(map[m0PageTokenV1]struct{}{}, snapshot, 4190, 12); err == nil {
+		t.Fatal("accepted a logical gap between physical chunks")
 	}
 }
 

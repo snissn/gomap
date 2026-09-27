@@ -21,7 +21,7 @@ func TestDocsVectorPartitionRaftM0Contract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"_id", "logical vector", "Raft replica", "overlap membership", "vector_index_id", "source_snapshot_generation", "partition_generation", "router_generation", "building", "ready", "cutover", "invalidated", "snapshot-bound", "fail closed", "simulation_only", "SearchRouteHNSWSearchPack=1", "exact_hnsw_search_pack_v1", "response-owned", "sorted partition-ID set", "TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth", "treedb_vector_partition_fixture_v2", "ieee754_binary64_explicit_fma_v1", "full fixture checksum", "canonical selected-stage set", "overrides both environment values", "exact_truth_queries", "ordered exact-truth", "gp-ann", "Parent invariant matrix", "TestTruthOracleTieOrderingAndAllPartitionParity", "M1 owns", "M8", "VPM1", "V1 API/schema contract, VPM1 wire version 4, and bounds", "logical-domain-to-physical-pack", "selected-domain and selected-pack counters separately", "Lifecycle, publication, and cleanup authority", "AcquireVectorPartitionReaderPinV1", "Durable ingress inventory", "SubmitCommandEntryWithVectorPartitionAdmissionV1", "ConfirmCommittedVectorPartitionMutationV1", "V1 operator boundary (#4018)", "OperationsConfigV1{Enabled:true}", "catalog_mismatch", "topology_unavailable"} {
+	for _, s := range []string{"_id", "logical vector", "Raft replica", "overlap membership", "vector_index_id", "source_snapshot_generation", "partition_generation", "router_generation", "building", "ready", "cutover", "invalidated", "snapshot-bound", "fail closed", "simulation_only", "SearchRouteHNSWSearchPack=1", "exact_hnsw_search_pack_v1", "response-owned", "sorted partition-ID set", "TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth", "treedb_vector_partition_fixture_v2", "ieee754_binary64_explicit_fma_v1", "full fixture checksum", "canonical selected-stage set", "overrides both environment values", "exact_truth_queries", "ordered exact-truth", "gp-ann", "Parent invariant matrix", "TestTruthOracleTieOrderingAndAllPartitionParity", "M1 owns", "M8", "VPM1", "V1 API/schema contract, VPM1 wire version 6, and bounds", "connectivity_preserving_vamana_r64_l256_alpha_1_2", "logical-domain-to-physical-pack", "selected-domain and selected-pack counters separately", "Lifecycle, publication, and cleanup authority", "AcquireVectorPartitionReaderPinV1", "Durable ingress inventory", "SubmitCommandEntryWithVectorPartitionAdmissionV1", "ConfirmCommittedVectorPartitionMutationV1", "V1 operator boundary (#4018)", "OperationsConfigV1{Enabled:true}", "catalog_mismatch", "topology_unavailable"} {
 		if !strings.Contains(string(b), s) {
 			t.Fatalf("contract missing %q", s)
 		}
@@ -132,13 +132,17 @@ func TestDocsVectorPartitionCoordinatorM6Contract(t *testing.T) {
 				"VectorPartitionCoordinatorV1",
 				"NewVectorPartitionCoordinatorForTopologyV1",
 				"VectorPartitionShardSearchDispatcherV1",
+				"VectorPartitionRouterSearchOptionsV3",
+				"complete child groups",
+				"RouterScoreBudget",
+				"MaxRouterScoreCalls",
 				"linearizable_generation_snapshot",
 				"`basic` stats mode; `none` is rejected",
 				"There is no partially successful state",
 				"MaxConcurrentRequests",
 				"MaxWallClock",
 				"one retry and one redirect",
-				"approximate native HNSW traversal",
+				"approximate hierarchical traversal",
 				"longest valid group",
 				"M5's downstream stable-ID ceiling",
 				"max(membership_rows[p] * 64, conservative_search_scratch_bytes(p), ef_search * 64)",

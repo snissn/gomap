@@ -74,6 +74,23 @@ are commit-ambiguous only between complete old and complete new states. No
 intermediate parent/child/index state is certified. Retrying the same source
 converges because child IDs are deterministic.
 
+## Precomputed typed source replacement
+
+Applications that already own chunking and embedding should use the document
+service/Python `replace_source_by_id` operation instead of `IngestSources`.
+The caller supplies an explicit bounded old-ID set and every live replacement
+document, including embeddings. One request maps to
+`Collection.ReplaceTypedSourceByID`; TreeDB does not discover old chunks, fetch
+old vectors, chunk text, or call an embedder. This also supports arbitrary
+application IDs that do not implement TreeDB's built-in parent/ordinal linkage.
+
+IDs present in both sets are replaced (insertion wins). Empty live documents
+delete the explicit set; both sets empty is a validated no-op. Positive live
+replacement uses the existing typed source command-WAL payload, while
+delete-only uses the existing source payload. A commit-ambiguous result must not
+be blindly retried. `IngestSources` remains the richer Go-only lifecycle owner;
+multiple sources in one `IngestSources` call are not one global transaction.
+
 ## Quick smoke path
 
 Use the hashing embedder for deterministic local checks, then verify text, scalar, and vector queries against `result.Ingested[*].ChildIDs`. For durable evidence, call `Flush` or `Checkpoint`, close the database, reopen it, and repeat the index checks.

@@ -25,7 +25,7 @@ vector typed-column placement is covered by
 | Vector-only (`SearchVectorIndex` / `SearchHybrid` with only `Vector`) | Semantic nearest-neighbor recall is the main signal. | Keep vector route choices (`exact`, `quantized_only`, `quantized_rerank`) and their recall/storage caveats separate from hybrid claims. |
 | Hybrid (`SearchHybrid` with `Text` + `Vector`) | You need both lexical precision and semantic candidates, usually with a metadata/scalar filter and final materialized documents. | Default fusion is rank-based RRF, not learned relevance. Caller/future layers own reranking/cross-encoder/LLM scoring. |
 
-Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. Use `ResultMode` to choose `score_only`, `compact`, or `full`; documents are fetched only in full mode (or legacy `IncludeDocuments=true`) after fusion/filtering and are bounded by final `TopK`.
+Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. `QueryMode: TextSearchQueryModeLiteral` is the natural-language path: quotes, parentheses, and standalone `and`/`or` are analyzer input rather than syntax. `Operator` still chooses OR/AND across analyzed terms, and `MaxPostingsScanned` is one fail-closed allowance across scan, fallback, and attribution. Use `ResultMode` to choose `score_only`, `compact`, or `full`; documents are fetched only in full mode (or legacy `IncludeDocuments=true`) after fusion/filtering and are bounded by final `TopK`.
 
 For explicitly admitted typed `column_graph` collections, hybrid vector
 candidates use the same captured base and current mutation overlay as ordinary
@@ -38,6 +38,23 @@ typed graph filter/work limits both apply; prefilter runs within the vector
 source, while postfilter keeps its existing position after source ranking.
 Candidate generation uses production statistics and fetches no documents.
 These are correctness contracts, separate from dense-query performance results.
+
+Hybrid vectors default to exact scoring. To use scalar-u8 candidates plus
+canonical FP32 reranking, declare and admit a typed cosine `column_graph` with a
+legacy scalar-u8/v1 plane, then set `QueryMode: VectorIndexQueryModeQuantizedRerank`,
+and `QuantizedIndexName`. `QuantizedRerankCandidates` is optional: zero uses the
+effective traversal width, while a nonzero width must be at least the effective
+vector candidate limit. Selected queries keep fixed source budgets. A small
+complete scalar filter may execute `typed_exact`, while an empty filter performs
+no vector traversal. Both cases still validate the named asset. Missing/stale
+assets, `quantized_only`, and unsupported codec/representation combinations fail
+closed without an exact retry.
+
+The selected path retains one read owner through scalar/text work, fusion,
+parent collapse, and final fetch. Its compact route receipt reports actual
+`typed_hnsw` or `typed_exact` work plus SQ8/packed-rerank counters. Excluding the
+embedding from final documents avoids output-vector reads and bytes; FP32 reads
+for reranking remain expected.
 
 ## Index creation sketch
 
@@ -98,14 +115,19 @@ resp, err := col.SearchHybrid(collections.HybridSearchOptions{
     Text: &collections.HybridTextQuery{
         IndexName: "lexical",
         Query: "refund policy",
+        QueryMode: collections.TextSearchQueryModeLiteral,
+        Operator: collections.TextSearchOperatorAND,
         CandidateLimit: 64,
+        MaxPostingsScanned: 4096,
     },
     Vector: &collections.HybridVectorQuery{
         IndexName: "embedding_graph",
         Query: queryEmbedding,
         CandidateLimit: 64,
         EfSearch: 128,
-        QueryMode: collections.VectorIndexQueryModeExact,
+        QueryMode: collections.VectorIndexQueryModeQuantizedRerank,
+        QuantizedIndexName: "embedding.scalar_u8.fast",
+        QuantizedRerankCandidates: 64,
     },
     ScalarFilter: &collections.HybridScalarFilter{
         And: []collections.HybridScalarFilter{

@@ -24,7 +24,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		FixtureChecksum: hash, ExecutableSHA256: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, GraphBuildSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
 		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, SourceOrdinalDigest: hash, PartitionGeneration: 4, RouterGeneration: 4,
-		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
+		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 32, PartitionHNSWEfC: 256, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
 	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 3, Budget: 1, Realized: 1, BuildIdentityDigest: d.BuildIdentityDigest})
@@ -241,24 +241,24 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 func testM3ByteBoundedDescriptorV1(t *testing.T, dir string) m3VariantDescriptorV1 {
 	t.Helper()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		Vectors: 8, Dimensions: 2, LogicalDomains: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
 		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Partitions != 3 || plan.OverlapCapacity != 3 {
+	if plan.LogicalDomains != 2 || plan.Partitions != 4 || plan.PacksPerDomain != 2 || plan.DomainOverlapCapacity != 5 || plan.OverlapCapacity != 3 {
 		t.Fatalf("unexpected fixture plan=%+v", plan)
 	}
 	d := testM3VariantDescriptorV1(dir)
 	d.ShardPlan = plan
 	d.Partitions = uint32(plan.Partitions)
-	d.PartitionConfig.Partitions = plan.Partitions
+	d.PartitionConfig.Partitions = plan.LogicalDomains
 	d.Capacity = plan.OverlapCapacity
-	d.PartitionLoads = []int{3, 3, 3}
+	d.PartitionLoads = []int{2, 2, 3, 2}
 	d.ShardGenerationDigest = strings.Repeat("d", 64)
 	d.ShardGenerationBytes = 4096
-	d.OverlapUnusedCapacity = plan.OverlapCapacity*plan.Partitions - int(d.SourceRows) - d.OverlapRealized
+	d.OverlapUnusedCapacity = plan.DomainOverlapCapacity*plan.LogicalDomains - int(d.SourceRows) - d.OverlapRealized
 	refreshTestM3DescriptorIdentityV1(t, &d)
 	if err := validateM3VariantDescriptorV1(d); err != nil {
 		t.Fatalf("byte-bounded fixture rejected: %v", err)
@@ -345,10 +345,7 @@ func TestM3VariantDescriptorValidatesPersistedShardPlanV1(t *testing.T) {
 	}
 	// A build that never opted into the planner records no plan at all, and an
 	// absent plan stays absent rather than being partially believed.
-	unplanned := d
-	unplanned.ShardPlan = vectorpartition.ShardPlanV1{}
-	unplanned.ShardGenerationDigest = ""
-	unplanned.ShardGenerationBytes = 0
+	unplanned := testM3VariantDescriptorV1(t.TempDir())
 	refreshTestM3DescriptorIdentityV1(t, &unplanned)
 	if err := validateM3VariantDescriptorV1(unplanned); err != nil {
 		t.Fatalf("unplanned descriptor rejected: %v", err)
@@ -466,8 +463,10 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 		RouterAsset:           collections.VectorPartitionAssetV1{Checksum: d.RouterAssetChecksum},
 		SourceGeneration:      d.SourceGeneration, SourceChecksum: d.SourceChecksum, SourceSchemaHash: d.SourceSchemaHash, SourceRowCount: d.SourceRows,
 		Generation: d.PartitionGeneration, RouterGeneration: d.RouterGeneration, PartitionCount: d.Partitions, BalancePolicy: d.OverlapPolicy,
+		DomainCount:        4,
+		DomainPacks:        []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}, {DomainID: 2, PackID: 2}, {DomainID: 3, PackID: 3}},
 		Memberships:        []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 3, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 5, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}, {VectorOrdinal: 7, PartitionID: 3}},
-		Representatives:    []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}},
+		Representatives:    []collections.VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}, {VectorOrdinal: 2, PartitionID: 1, NodeID: 1}, {VectorOrdinal: 4, PartitionID: 2, NodeID: 1}, {VectorOrdinal: 6, PartitionID: 3, NodeID: 1}},
 		OverlapMemberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 7, PartitionID: 0}},
 		Assets:             []collections.VectorPartitionAssetV1{{Bytes: 200}, {Bytes: 200}, {Bytes: 200}, {Bytes: 200}},
 	}

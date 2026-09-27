@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -915,6 +916,9 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
+	if err := bindDenseVectorRepresentation(&req, info); err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
 	if req.TopK <= 0 {
 		return DenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
 	}
@@ -983,6 +987,23 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Route: RouteExact, Exact: true, Candidates: candidateCount}, nil
 }
 
+func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo) error {
+	if req == nil {
+		return serviceError(CodeInvalidRequest, "dense vector request is nil")
+	}
+	if req.RequireVectorRepresentation || req.VectorRepresentation != "" {
+		if req.VectorRepresentation != info.VectorRepresentation {
+			return serviceErrorf(CodeUnsupported, "dense vector representation %q does not match index representation %q", req.VectorRepresentation, info.VectorRepresentation)
+		}
+	} else {
+		req.VectorRepresentation = info.VectorRepresentation
+	}
+	if req.Diagnostics && info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+		return serviceError(CodeUnsupported, "dense vector diagnostics require cosine_normalized_f32_v1")
+	}
+	return nil
+}
+
 // resolveDenseSearchRoute applies the deterministic route defaulting rules:
 // explicit route values are validated; an omitted route selects ann when the
 // index declares a compatible no-document vector route, including declared
@@ -1049,11 +1070,18 @@ func normalizeDenseQueryOptions(req *DenseVectorSearchRequest, info IndexInfo) (
 	if req.QuantizedRerankCandidates != 0 && req.QuantizedRerankCandidates < req.TopK {
 		return "", serviceErrorf(CodeInvalidRequest, "quantized_rerank_candidates=%d must be zero or at least top_k=%d", req.QuantizedRerankCandidates, req.TopK)
 	}
+	if err := validatePublicTypedScalarU8Index(info, req.QuantizedIndexName); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+func validatePublicTypedScalarU8Index(info IndexInfo, name string) error {
 	// The public metadata is the only service-owned declaration exposed here;
 	// require an exact legacy scalar-u8/v1 match before handing the request to
 	// the collection owner. Unknown names and unsupported codecs fail closed.
 	for _, q := range info.QuantizedIndexes {
-		if q.Name != req.QuantizedIndexName {
+		if q.Name != name {
 			continue
 		}
 		codec := q.Codec
@@ -1061,11 +1089,43 @@ func normalizeDenseQueryOptions(req *DenseVectorSearchRequest, info IndexInfo) (
 			codec = collections.QuantizedVectorCodecScalarU8
 		}
 		if codec != collections.QuantizedVectorCodecScalarU8 || q.Version != 1 || q.ScalarU8Calibration != nil && q.ScalarU8Calibration.Mode != "" && q.ScalarU8Calibration.Mode != collections.ScalarU8CalibrationModeLegacy {
-			return "", serviceErrorf(CodeUnsupported, "typed dense quantized index %q is not the supported scalar_u8/v1 legacy asset", q.Name)
+			return serviceErrorf(CodeUnsupported, "typed quantized index %q is not the supported scalar_u8/v1 legacy asset", q.Name)
+		}
+		return nil
+	}
+	return serviceErrorf(CodeInvalidRequest, "unknown quantized_index_name %q", name)
+}
+
+func normalizeHybridVectorQueryOptions(req HybridSearchRequest, info IndexInfo, candidateLimit int) (collections.VectorIndexQueryMode, error) {
+	mode := collections.VectorIndexQueryMode(strings.TrimSpace(strings.ToLower(string(req.VectorQueryMode))))
+	if mode == "" {
+		mode = collections.VectorIndexQueryModeExact
+	}
+	if req.QuantizedRerankCandidates < 0 {
+		return "", serviceError(CodeInvalidRequest, "quantized_rerank_candidates must be non-negative")
+	}
+	if mode == collections.VectorIndexQueryModeExact {
+		if req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0 {
+			return "", serviceError(CodeInvalidRequest, "exact hybrid vector search does not accept quantized_index_name or quantized_rerank_candidates")
 		}
 		return mode, nil
 	}
-	return "", serviceErrorf(CodeInvalidRequest, "unknown quantized_index_name %q", req.QuantizedIndexName)
+	if mode != collections.VectorIndexQueryModeQuantizedRerank {
+		return "", serviceErrorf(CodeUnsupported, "hybrid vector_query_mode %q is unsupported", mode)
+	}
+	if !info.TypedInput || !info.Capabilities.TypedDenseQuantizedRerank {
+		return "", serviceError(CodeUnsupported, "hybrid quantized rerank requires admitted typed scalar_u8 serving")
+	}
+	if req.QuantizedIndexName == "" {
+		return "", serviceError(CodeInvalidRequest, "quantized_rerank hybrid search requires quantized_index_name")
+	}
+	if req.QuantizedRerankCandidates != 0 && req.QuantizedRerankCandidates < candidateLimit {
+		return "", serviceErrorf(CodeInvalidRequest, "quantized_rerank_candidates=%d must be zero or at least the effective vector candidate limit=%d", req.QuantizedRerankCandidates, candidateLimit)
+	}
+	if err := validatePublicTypedScalarU8Index(info, req.QuantizedIndexName); err != nil {
+		return "", err
+	}
+	return mode, nil
 }
 
 // ResetIndex creates a missing benchmark index or clears an existing compatible
@@ -1350,6 +1410,9 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 	if err != nil {
 		return KeywordSearchResponse{}, err
 	}
+	if err := validateTextQueryMode(req.TextQueryMode); err != nil {
+		return KeywordSearchResponse{}, err
+	}
 	if req.CandidateLimit < 0 || req.MaxPostingsScanned < 0 {
 		return KeywordSearchResponse{}, serviceError(CodeInvalidRequest, "candidate_limit and max_postings_scanned must be non-negative")
 	}
@@ -1357,15 +1420,13 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 		if err := req.Filter.Validate(); err != nil {
 			return KeywordSearchResponse{}, err
 		}
-		if req.MaxPostingsScanned > 0 {
-			return KeywordSearchResponse{}, serviceError(CodeUnsupported, "max_postings_scanned with metadata filters is unsupported; the filtered route fails closed rather than ignoring the guardrail")
-		}
 		return s.searchKeywordWithScalarFilter(ctx, col, info, req, operator)
 	}
 
 	textResponse, err := col.SearchText(collections.TextSearchOptions{
 		IndexName:            defaultTextIndexName,
 		Query:                req.Query,
+		QueryMode:            req.TextQueryMode,
 		Operator:             operator,
 		TopK:                 req.TopK,
 		CandidateLimit:       req.CandidateLimit,
@@ -1396,8 +1457,21 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	}
 	hasText := strings.TrimSpace(req.Query) != ""
 	hasVector := len(req.QueryEmbedding) > 0
+	if !hasText && (req.TextQueryMode != "" || req.TextOperator != "" || req.MaxPostingsScanned != 0) {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid text_query_mode, text_operator, and max_postings_scanned require a text query")
+	}
 	if !hasText && !hasVector {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid search requires query, query_embedding, or both")
+	}
+	if !hasVector && (req.VectorCandidateLimit != 0 || req.VectorQueryMode != "" || req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0 || req.EfSearch != 0) {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid vector options require query_embedding")
+	}
+	textOperator, err := normalizeKeywordSearchOperator(req.TextOperator)
+	if err != nil {
+		return HybridSearchResponse{}, err
+	}
+	if err := validateTextQueryMode(req.TextQueryMode); err != nil {
+		return HybridSearchResponse{}, err
 	}
 	nativeVectorOnly := !hasText &&
 		hasVector &&
@@ -1406,8 +1480,8 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if !nativeVectorOnly && !info.Capabilities.HybridSearch {
 		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
 	}
-	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
-		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
+	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.MaxPostingsScanned < 0 || req.QuantizedRerankCandidates < 0 || req.EfSearch < 0 {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits, max_postings_scanned, and ef_search must be non-negative")
 	}
 	if req.MaxChunksPerParent < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "max_chunks_per_parent must be non-negative")
@@ -1423,13 +1497,16 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		return HybridSearchResponse{}, err
 	}
 
+	fetchOptions := serviceDocumentFetchOptions(req.ReturnEmbedding)
+	fetchOptions.Context = ctx
 	opts := collections.HybridSearchOptions{
+		Context:              ctx,
 		TopK:                 req.TopK,
 		MaxChunksPerParent:   req.MaxChunksPerParent,
 		Fusion:               req.Fusion,
 		ScalarFilter:         scalarFilter,
 		IncludeDocuments:     true,
-		DocumentFetchOptions: serviceDocumentFetchOptions(req.ReturnEmbedding),
+		DocumentFetchOptions: fetchOptions,
 	}
 	response := HybridSearchResponse{Index: info}
 	if hasText {
@@ -1437,7 +1514,14 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		if limit == 0 {
 			limit = req.CandidateLimit
 		}
-		opts.Text = &collections.HybridTextQuery{IndexName: defaultTextIndexName, Query: req.Query, CandidateLimit: limit}
+		opts.Text = &collections.HybridTextQuery{
+			IndexName:          defaultTextIndexName,
+			Query:              req.Query,
+			QueryMode:          req.TextQueryMode,
+			Operator:           textOperator,
+			CandidateLimit:     limit,
+			MaxPostingsScanned: req.MaxPostingsScanned,
+		}
 		response.TextIndex = defaultTextIndexName
 	}
 	if hasVector {
@@ -1448,12 +1532,27 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		if limit == 0 {
 			limit = req.CandidateLimit
 		}
+		if limit == 0 {
+			limit = req.TopK
+			maxInt := int(^uint(0) >> 1)
+			if limit <= maxInt/4 {
+				limit *= 4
+			} else {
+				limit = maxInt
+			}
+		}
+		vectorMode, err := normalizeHybridVectorQueryOptions(req, info, limit)
+		if err != nil {
+			return HybridSearchResponse{}, err
+		}
 		opts.Vector = &collections.HybridVectorQuery{
-			IndexName:      defaultVectorIndexName,
-			Query:          append([]float32(nil), req.QueryEmbedding...),
-			CandidateLimit: limit,
-			EfSearch:       req.EfSearch,
-			QueryMode:      collections.VectorIndexQueryModeExact,
+			IndexName:                 defaultVectorIndexName,
+			Query:                     append([]float32(nil), req.QueryEmbedding...),
+			CandidateLimit:            limit,
+			EfSearch:                  req.EfSearch,
+			QueryMode:                 vectorMode,
+			QuantizedIndexName:        req.QuantizedIndexName,
+			QuantizedRerankCandidates: req.QuantizedRerankCandidates,
 		}
 		response.VectorIndex = defaultVectorIndexName
 	}
@@ -2097,6 +2196,9 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, len(ids))
 	for i, id := range ids {
+		if !utf8.ValidString(id) {
+			return nil, serviceErrorf(CodeInvalidRequest, "ids[%d] must be valid UTF-8", i)
+		}
 		trimmed := strings.TrimSpace(id)
 		if trimmed == "" {
 			return nil, serviceErrorf(CodeInvalidRequest, "ids[%d] must not be empty", i)
@@ -2690,12 +2792,23 @@ func validateBenchmarkQuantizedVectorSearchRoute(mode BenchmarkVectorQueryMode, 
 
 func normalizeKeywordSearchOperator(op collections.TextSearchOperator) (collections.TextSearchOperator, error) {
 	switch strings.TrimSpace(strings.ToLower(string(op))) {
-	case "", string(collections.TextSearchOperatorOR):
+	case "":
+		return "", nil
+	case string(collections.TextSearchOperatorOR):
 		return collections.TextSearchOperatorOR, nil
 	case string(collections.TextSearchOperatorAND):
 		return collections.TextSearchOperatorAND, nil
 	default:
 		return "", serviceErrorf(CodeInvalidRequest, "unsupported keyword operator %q", op)
+	}
+}
+
+func validateTextQueryMode(mode collections.TextSearchQueryMode) error {
+	switch mode {
+	case "", collections.TextSearchQueryModeBoolean, collections.TextSearchQueryModeLiteral:
+		return nil
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported text_query_mode %q", mode)
 	}
 }
 
@@ -2887,6 +3000,9 @@ func mapHybridSearchError(err error) error {
 	var serviceErr *Error
 	if errors.As(err, &serviceErr) {
 		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return wrapServiceError(CodeIndexUnavailable, "request context is no longer available", err)
 	}
 	if errors.Is(err, collections.ErrHybridSearchStaleIndex) {
 		return wrapServiceError(CodeIndexStale, "hybrid search index snapshot is stale", err)

@@ -9,7 +9,7 @@ import (
 
 // newM8HistoricalOverlayRetainedAssetsV1 makes the explicit V2 overlay source
 // used only by #4105 characterization fixtures. Production fixture creation
-// deliberately remains on the V3 auxiliary-navigation default.
+// remains on the canonical V5 native-HNSW profile.
 func newM8HistoricalOverlayRetainedAssetsV1(vectors [][]float64, groups []string, partitions int) (*m8ProductionMultiGroupAssetsV1, error) {
 	source, err := newM8ProductionMultiGroupAssetsV1(vectors, groups, partitions)
 	if err != nil {

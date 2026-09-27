@@ -648,7 +648,10 @@ func waitCatalogMetaStates(t *testing.T, states map[NodeID]*concurrentCatalogMet
 
 func waitCatalogMetaCondition(t *testing.T, ready func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	// Inmem raft election normally converges in seconds, but provider
+	// construction (bolt stores, bootstrap) can serialize ahead of it on
+	// slower runners; the deadline only bounds genuinely stuck clusters.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if ready() {
 			return

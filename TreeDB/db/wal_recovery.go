@@ -730,9 +730,10 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	case commitlog.CommandKindCollectionDeleteBatchByID:
 		workstats.Replay.DeleteFrames.Add(1)
 	case commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
-		if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 || env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
+		switch env.PayloadFormat {
+		case commitlog.PayloadFormatCollectionTypedBatchByIDV1, commitlog.PayloadFormatCollectionTypedSourceByIDV1, commitlog.PayloadFormatCollectionTypedMetadataByIDV1:
 			workstats.Replay.TypedPayloadFrames.Add(1)
-		} else {
+		default:
 			workstats.Replay.LegacyCollectionFrames.Add(1)
 		}
 	}

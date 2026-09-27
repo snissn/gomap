@@ -115,14 +115,14 @@ func (prepared *columnVectorGraphPreparedPhysicalAsset) takeStablePreparedClosur
 	if prepared == nil || prepared.stableResources == nil {
 		return nil, fmt.Errorf("%w: vector graph preparation returned no stable authority", rootpublication.ErrUnresolvedResource)
 	}
-	descriptors := prepared.stableResources.Descriptors()
+	descriptors := prepared.stableResources.PhysicalDescriptors()
 	var obligations uint64
 	for _, descriptor := range descriptors {
 		fields := descriptor.ReachabilityFields()
-		if len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
+		if !descriptor.LogicalObligationCountAvailable || len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
 			return nil, fmt.Errorf("%w: vector graph descriptor reachability=%q", rootpublication.ErrResourceConflict, fields)
 		}
-		obligations += uint64(len(descriptor.LogicalObligations()))
+		obligations += descriptor.LogicalObligationCount
 	}
 	if len(descriptors) == 0 || obligations == 0 || prepared.stableSegments == 0 ||
 		prepared.stableContentSyncs != prepared.stableSegments || prepared.stableNamespaceSyncs != prepared.stableSegments {

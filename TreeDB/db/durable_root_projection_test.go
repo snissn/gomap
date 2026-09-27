@@ -298,7 +298,7 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 		projectionResourceFixtureV1{rootpublication.ResourceIndex, rootpublication.ReachabilityIndexFile, nil},
 	)
 	defer missingNamespace.Release()
-	if rebuiltOlderRootIndexAuthorityV1(missingNamespace, missingNamespace.Descriptors()[0].Identity(), 1) {
+	if rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1) {
 		t.Fatal("index without exact namespace authority accepted")
 	}
 }
@@ -376,13 +376,13 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 				t.Fatal("older root has no captured exact closure")
 			}
 			var valueLog, index bool
-			for _, descriptor := range source.Descriptors() {
+			for _, descriptor := range mustStableResourceDescriptors(t, source) {
 				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
 				index = index || descriptor.Kind() == rootpublication.ResourceIndex
 			}
 			if !valueLog || index {
 				database.maintenanceMu.Unlock()
-				t.Fatalf("older closure kinds=%+v, want external value-log dependency and no index descriptor", source.Descriptors())
+				t.Fatalf("older closure kinds=%+v, want external value-log dependency and no index descriptor", mustStableResourceDescriptors(t, source))
 			}
 			if test.mutate != nil {
 				test.mutate(roots, key)
@@ -483,13 +483,13 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 				t.Fatal("visible root has no captured exact closure")
 			}
 			var valueLog, outerLeaf bool
-			for _, descriptor := range source.Descriptors() {
+			for _, descriptor := range mustStableResourceDescriptors(t, source) {
 				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
 				outerLeaf = outerLeaf || descriptor.Kind() == rootpublication.ResourceOuterLeafLog
 			}
 			if !valueLog || !outerLeaf {
 				database.maintenanceMu.Unlock()
-				t.Fatalf("visible closure kinds=%+v, want value-log and outer-leaf dependencies", source.Descriptors())
+				t.Fatalf("visible closure kinds=%+v, want value-log and outer-leaf dependencies", mustStableResourceDescriptors(t, source))
 			}
 			if test.mutate != nil {
 				test.mutate(roots, key)

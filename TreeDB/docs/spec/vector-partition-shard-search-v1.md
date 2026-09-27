@@ -12,6 +12,15 @@ more logical vector partitions owned by one Raft group. The response contains
 stable IDs, authoritative FP32 cosine scores, bounded search counters, and the
 actual group read proof. It never returns full documents.
 
+Source V2 paged projections currently support trusted catalog BUILD preparation
+and local immutable build/open/search only. They do not enter this distributed
+V1 service: catalog V2 activation and native distributed search explicitly
+refuse that identity mode. A local `SearchLocalV2` result carries source
+shard/snapshot/ordinal/document-revision provenance, but it is not a substitute
+for this service's routed quorum read proof. See the
+[catalog lifecycle](vector-partition-raft-v1.md) and
+[typed-column guide](../guides/vector-search-typed-column.md#immutable-owner-local-source-v2-projections).
+
 This service is a local owner endpoint, not a coordinator:
 
 - it does not run the kRt router or scatter to several groups;
@@ -70,7 +79,7 @@ Required search shape:
 - FP32 query vector;
 - `cosine` metric and `no_document_partition` mode;
 - `top_k`, `ef_search`, and `none` or `basic` stats;
-- request, candidate, and response byte budgets;
+- request, candidate, response-byte, and local score-call budgets;
 - optional Unix-nanosecond deadline.
 
 The mode promises an IDs/scores-only partition response, not an exact-scan
@@ -90,6 +99,7 @@ Default service ceilings are:
 | request bytes | 64 KiB |
 | candidate bytes | 80 MiB |
 | response bytes | 64 MiB |
+| local score calls | 1,000,000 |
 | identity / stable-ID bytes | 4,096 / 4,096 |
 
 Before routing or opening local state, validation checks dimensions, all
@@ -114,7 +124,8 @@ The service executes the following fail-closed sequence:
    additionally pins matching revision/coverage while immutable and replicated
    serving retains the source-current check;
 6. open every requested M3 partition searcher before searching any partition;
-7. run M3's IDs/scores-only search with the explicit `ef_search`;
+7. run M3's IDs/scores-only search with the explicit `ef_search`, decrementing
+   one strict score-call budget across every immutable and live-domain search;
 8. validate IDs, finite scores, counters, and response bytes before returning
    the single success envelope.
 
@@ -157,6 +168,16 @@ underneath an active request.
 
 A concurrent activation can therefore make the requested generation old, but
 cannot mix old and new assets inside one accepted request.
+
+Each partial reports its immutable partition score calls. The response reports
+their sum plus live-domain score calls; that live excess is response-only
+provenance and is not assigned to an immutable partition partial. Exhausting
+the shared budget fails before returning partial neighbors. The production
+coordinator has a separate 16,000,000-call request ceiling, distributes the
+selected budget across shard requests, and rejects any partial or aggregate
+that exceeds its assigned allowance. The native contract and TCP frame now use
+protocol version 2; pre-alpha peers using the earlier layout must upgrade
+together.
 
 ## Stable failure classes
 

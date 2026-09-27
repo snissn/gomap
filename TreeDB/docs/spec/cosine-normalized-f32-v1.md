@@ -1,10 +1,10 @@
 # Canonical normalized FP32 cosine representation v1 (#4722)
 
-Status: implemented for the opt-in Go collection and document-service
-`cosine_normalized_f32_v1` representation. Q1 froze the contract and engine
-gates; Q2 implements the durable owner, mutable serving, scalar-u8 candidates,
-and packed rerank. Native command and Python support remain unavailable until
-Q3. Legacy and omitted representations keep their existing behavior.
+Status: implemented for the opt-in Go collection/document service, negotiated
+native command64/v4, HTTP, and Python client. Q1 froze the contract and engine
+gates; Q2 implemented the durable owner, mutable serving, scalar-u8 candidates,
+and packed rerank; Q3 exposes the production and explicit diagnostic envelopes.
+Legacy and omitted representations keep their existing behavior.
 
 ## Declaration and admission
 
@@ -43,10 +43,27 @@ silently normalize a vector and fails before WAL. A generic document update may
 carry forward already-canonical bytes, but a noncanonical replacement likewise
 fails before WAL; callers use typed replacement admission for a new vector.
 
-A metadata-only or document-only update preserves the existing canonical
+A generic metadata-only or document-only update preserves the existing canonical
 embedding bytes without renormalization. It may copy those identical bytes into
 the bounded mutable suffix and therefore may replace the physical row mapping.
 Supplying an embedding is a new vector admission and follows the rules above.
+
+The explicit `UpdateTypedMetadataByID` operation is stricter: its metadata-only
+WAL and row publication contain no unchanged vector/content payload. It retains
+one durable full-row reference and shares the existing scoring rows/inverse norms,
+without normalization, vector admission, or graph topology changes. Current
+metadata locators and scalar roots advance atomically; filters resolve eligibility
+against those roots, not stale immutable-base filter caches. Cold reconstruction
+may read the preserved full row, and later fold may materialize it into a new
+canonical generation. Those maintenance/read costs are not mutation work.
+
+Graph row references identify scoring data, not necessarily the latest document.
+Final document fetch validates the scoring reference against the captured locator's
+preserved-row link and uses its current metadata coordinates. Normalized rebuild must
+likewise copy scalar/content values from the current locator while retaining the
+preserved vector as scoring input. An explicit public document-row-ref request
+remains strict: stale coordinates are rejected, not silently upgraded. All of
+these decisions are snapshot-local; pinned old readers retain old metadata.
 
 ## Score and ordering
 
@@ -88,6 +105,13 @@ candidates are scored exactly once by indexed/batched packed FP32 scoring in
 one call or bounded chunks of that kernel. A token packed call followed by
 scalar or stable rescoring is non-conforming.
 
+Packed batch counters describe base candidates only. Mutable suffix rows use
+the strided packed FP32 kernel and separate exact-suffix counters. Thus a
+nonempty response may have zero base packed work after replacements shadow
+every base row. Scalar-u8 traversal still reads codes; its live shortlist and
+base rerank may both be empty. FP32 calls partition into exact base plus exact
+suffix calls, and an unchanged base/current manifest permits no suffix calls.
+
 ## Result projection
 
 `return_embedding` defaults to false. False permits FP32 reads for scoring but
@@ -99,6 +123,17 @@ applications that need them must store a separate field.
 IDs, scores, document fetches, and optional embedding fetches remain bound to
 one captured read owner. Projection cannot reopen a newer owner.
 
+Public hybrid search can opt into the same named scalar-u8 candidate plane and
+packed canonical rerank with `vector_query_mode=quantized_rerank` and a
+quantized index name. The rerank width is optional; zero uses the effective
+traversal width. Exact remains the default. The existing hybrid executor owns
+scalar/text work, fusion, parent collapse, and bounded final fetch under the
+captured typed owner; there is no client-side fusion or alternate endpoint. A
+selective allow-set may use the truthful typed-exact route, while an empty
+allow-set performs no vector work after asset validation. Production exposes
+only a compact route receipt and counters; no diagnostic score-plane proof is
+required.
+
 ## Native capability boundary
 
 Native command64/v4 identifies this score contract. Its production envelope
@@ -108,10 +143,13 @@ Proof is explicit diagnostic work. Production clients do not reconstruct
 vectors or re-score results. Older command versions fail closed for this
 representation rather than translating it to legacy semantics.
 
-Q1 records Go/Python v4 as `NOT_IMPLEMENTED`. Q2 keeps those stages unavailable
-while implementing storage and collection/service behavior. Q3 owns the native
-wire and Python seam. An unsupported stage is never filled with a legacy
-measurement.
+Create-time `vector_representation` metadata selects v4 in Go and Python.
+Production returns compact route identity and omits full proofs; explicit
+diagnostics returns dense-work and, for scalar-u8 rerank, packed score-plane v2.
+HTTP and direct service searches reject `diagnostics=true` for other index
+representations with `unsupported` (HTTP 501), including ANN and document-exact
+routes. Ordinary searches on those representations retain their existing behavior.
+An unsupported or unnegotiated stage is never filled with a legacy measurement.
 
 ## Phase gates and qualification ownership
 

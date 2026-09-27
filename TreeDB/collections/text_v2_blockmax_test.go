@@ -550,6 +550,7 @@ func TestTextV2BlockMaxSingleTermOverlappingMutationFallsBackExact2728(t *testin
 	if got.Stats.TextBlockMaxFallbacks == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 || got.Stats.FailClosed != 0 {
 		t.Fatalf("stats=%+v want exact fallback for overlapping single-term mutation blocks without docs/state/fail", got.Stats)
 	}
+	assertTextV2FallbackBudgetIsMonotonic4766(t, col, opts, exhaustive)
 }
 
 func TestTextV2BlockMaxMultiTermANDOverlappingMutationFallsBackExact2688(t *testing.T) {
@@ -580,6 +581,7 @@ func TestTextV2BlockMaxMultiTermANDOverlappingMutationFallsBackExact2688(t *test
 	if got.Stats.TextBlockMaxFallbacks == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 {
 		t.Fatalf("stats=%+v want exact fallback for overlapping mutation blocks without docs/state", got.Stats)
 	}
+	assertTextV2FallbackBudgetIsMonotonic4766(t, col, opts, exhaustive)
 }
 
 func TestTextV2BlockMaxMultiTermOROverlappingMutationFallsBackExact2730(t *testing.T) {
@@ -609,6 +611,23 @@ func TestTextV2BlockMaxMultiTermOROverlappingMutationFallsBackExact2730(t *testi
 	}
 	if got.Stats.TextBlockMaxFallbacks == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 {
 		t.Fatalf("stats=%+v want exact fallback for overlapping OR mutation blocks without docs/state", got.Stats)
+	}
+	assertTextV2FallbackBudgetIsMonotonic4766(t, col, opts, exhaustive)
+}
+
+func assertTextV2FallbackBudgetIsMonotonic4766(t *testing.T, col *Collection, opts TextSearchOptions, exhaustive TextSearchResponse) {
+	t.Helper()
+	if exhaustive.Stats.TextPostingsScanned == 0 {
+		t.Fatal("exhaustive control charged no postings")
+	}
+	tight := opts
+	tight.MaxPostingsScanned = int(exhaustive.Stats.TextPostingsScanned)
+	got, err := col.searchText(tight, textSearchResultScoreOnly)
+	if !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("fallback with exact-only budget err=%v response=%+v want fail closed", err, got)
+	}
+	if got.Stats.TextPostingsScanned != uint64(tight.MaxPostingsScanned) || got.Stats.PostingsScanned != got.Stats.TextPostingsScanned || !got.Stats.Truncated || got.Stats.FailClosedReason != textSearchFailClosedPostingsLimit {
+		t.Fatalf("fallback stats=%+v want monotonic cap=%d and postings-limit failure", got.Stats, tight.MaxPostingsScanned)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 )
 
 const denseScorePlaneVersion = uint64(1)
+const denseScorePlaneWireVersionV2 = uint64(2)
 
 func denseScorePlaneModeTag(mode collections.VectorIndexQueryMode) uint64 {
 	switch mode {
@@ -211,6 +212,17 @@ func minUint64(a, b uint64) uint64 {
 // intentionally not extended; all strings and counters are owned by the
 // returned value and bounded by the negotiated section limit.
 func appendDenseScorePlane(dst []byte, proof collections.ColumnGraphScorePlaneWork, limits iwire.Limits) ([]byte, error) {
+	return appendDenseScorePlaneVersion(dst, proof, limits, denseScorePlaneVersion)
+}
+
+func appendDenseScorePlaneV2(dst []byte, proof collections.ColumnGraphScorePlaneWork, limits iwire.Limits) ([]byte, error) {
+	if err := validateDenseScorePlaneV2(proof); err != nil {
+		return nil, err
+	}
+	return appendDenseScorePlaneVersion(dst, proof, limits, denseScorePlaneWireVersionV2)
+}
+
+func appendDenseScorePlaneVersion(dst []byte, proof collections.ColumnGraphScorePlaneWork, limits iwire.Limits, wireVersion uint64) ([]byte, error) {
 	limits = denseDefaultLimits(limits)
 	if err := validateDenseScorePlane(proof); err != nil {
 		return nil, err
@@ -226,7 +238,7 @@ func appendDenseScorePlane(dst []byte, proof collections.ColumnGraphScorePlaneWo
 		flags |= 4
 	}
 	for _, value := range []uint64{
-		denseScorePlaneVersion, flags, denseScorePlaneModeTag(proof.RequestedMode), denseScorePlaneModeTag(proof.EffectiveMode), denseScorePlaneRouteTag(proof.Route),
+		wireVersion, flags, denseScorePlaneModeTag(proof.RequestedMode), denseScorePlaneModeTag(proof.EffectiveMode), denseScorePlaneRouteTag(proof.Route),
 		uint64(proof.QuantizedVersion), proof.QuantizedConfigHash,
 		proof.RequestedTopK, proof.RequestedEFSearch, proof.RequestedRerankCandidates, proof.NormalizedCandidateWidth, proof.RawCandidateWidth, proof.RerankCandidateCap,
 		proof.RawRetainedCandidates, proof.LiveShortlistCandidates, proof.ActualRerankCandidates, proof.QuantizedScoreCalls, proof.QuantizedCodeBytesRead,
@@ -234,6 +246,11 @@ func appendDenseScorePlane(dst []byte, proof collections.ColumnGraphScorePlaneWo
 		proof.Snapshot.SchemaHash, proof.Snapshot.SchemaGeneration, proof.Snapshot.BaseCoverageLSN, proof.Snapshot.CurrentCoverageLSN,
 	} {
 		dst = binary.AppendUvarint(dst, value)
+	}
+	if wireVersion == denseScorePlaneWireVersionV2 {
+		for _, value := range []uint64{proof.PackedScoreBatchCalls, proof.PackedScoreCandidates, proof.PackedVectorBytesRead, proof.ForbiddenStableScoreCalls} {
+			dst = binary.AppendUvarint(dst, value)
+		}
 	}
 	for _, value := range []string{proof.Reason, proof.QuantizedIndexName, proof.QuantizedCodec} {
 		var err error
@@ -258,18 +275,30 @@ func appendDenseScorePlane(dst []byte, proof collections.ColumnGraphScorePlaneWo
 }
 
 func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnGraphScorePlaneWork, error) {
+	return decodeDenseScorePlaneVersion(raw, limits, denseScorePlaneVersion)
+}
+
+func decodeDenseScorePlaneV2(raw []byte, limits iwire.Limits) (collections.ColumnGraphScorePlaneWork, error) {
+	return decodeDenseScorePlaneVersion(raw, limits, denseScorePlaneWireVersionV2)
+}
+
+func decodeDenseScorePlaneVersion(raw []byte, limits iwire.Limits, wireVersion uint64) (collections.ColumnGraphScorePlaneWork, error) {
 	limits = denseDefaultLimits(limits)
 	var proof collections.ColumnGraphScorePlaneWork
-	values := make([]uint64, 0, 27)
+	valueCount := 27
+	if wireVersion == denseScorePlaneWireVersionV2 {
+		valueCount += 4
+	}
+	values := make([]uint64, 0, valueCount)
 	off := 0
-	for len(values) < 27 {
+	for len(values) < valueCount {
 		value, err := readUvarintField(raw, &off, "dense score-plane")
 		if err != nil {
 			return proof, err
 		}
 		values = append(values, value)
 	}
-	if values[0] != denseScorePlaneVersion || values[1] > 7 || values[2] == 0 || values[3] == 0 || values[4] > 4 || values[5] > 65535 {
+	if values[0] != wireVersion || values[1] > 7 || values[2] == 0 || values[3] == 0 || values[4] > 4 || values[5] > 65535 {
 		return proof, protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane fields")
 	}
 	requested, ok := denseScorePlaneMode(values[2])
@@ -284,7 +313,9 @@ func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnG
 	if !ok {
 		return proof, protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane route")
 	}
-	proof.Version = uint16(values[0])
+	// The wire envelope may advance independently; the decoded owner proof keeps
+	// its stable public schema version.
+	proof.Version = uint16(denseScorePlaneVersion)
 	proof.Available, proof.Completed = values[1]&1 != 0, values[1]&2 != 0
 	proof.RequestedMode, proof.EffectiveMode, proof.Route = requested, effective, route
 	proof.QuantizedVersion, proof.QuantizedConfigHash = uint16(values[5]), values[6]
@@ -297,6 +328,10 @@ func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnG
 	proof.Snapshot.Available = values[1]&4 != 0
 	proof.Snapshot.SchemaHash, proof.Snapshot.SchemaGeneration = values[23], values[24]
 	proof.Snapshot.BaseCoverageLSN, proof.Snapshot.CurrentCoverageLSN = values[25], values[26]
+	if wireVersion == denseScorePlaneWireVersionV2 {
+		proof.PackedScoreBatchCalls, proof.PackedScoreCandidates = values[27], values[28]
+		proof.PackedVectorBytesRead, proof.ForbiddenStableScoreCalls = values[29], values[30]
+	}
 	for _, target := range [](*string){&proof.Reason, &proof.QuantizedIndexName, &proof.QuantizedCodec} {
 		value, err := readDenseScorePlaneString(raw, &off, limits.MaxSectionLen, "string")
 		if err != nil {
@@ -322,7 +357,13 @@ func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnG
 	if off != len(raw) {
 		return proof, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof has trailing bytes")
 	}
-	return proof, validateDenseScorePlane(proof)
+	if err := validateDenseScorePlane(proof); err != nil {
+		return proof, err
+	}
+	if wireVersion == denseScorePlaneWireVersionV2 {
+		return proof, validateDenseScorePlaneV2(proof)
+	}
+	return proof, nil
 }
 
 func decodeDenseScorePlaneSection(sections []iwire.Section, required bool, limits iwire.Limits) (*collections.ColumnGraphScorePlaneWork, error) {
@@ -346,4 +387,49 @@ func decodeDenseScorePlaneSection(sections []iwire.Section, required bool, limit
 		return nil, err
 	}
 	return &proof, nil
+}
+
+func decodeDenseScorePlaneV2Section(sections []iwire.Section, required bool, limits iwire.Limits) (*collections.ColumnGraphScorePlaneWork, error) {
+	raw, found, err := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		if required {
+			return nil, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof section missing")
+		}
+		return nil, nil
+	}
+	for _, section := range sections {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && section.Flags != iwire.SectionFlagCritical {
+			return nil, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof section must be critical")
+		}
+	}
+	proof, err := decodeDenseScorePlaneV2(raw, limits)
+	if err != nil {
+		return nil, err
+	}
+	return &proof, nil
+}
+
+func validateDenseScorePlaneV2(proof collections.ColumnGraphScorePlaneWork) error {
+	if proof.ForbiddenStableScoreCalls != 0 {
+		return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense score-plane used the forbidden stable scorer")
+	}
+	baseCalls := proof.ExactBaseRerankScoreCalls
+	if proof.ExactSmallFilterScoreCalls > ^uint64(0)-baseCalls {
+		return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense packed score count overflow")
+	}
+	baseCalls += proof.ExactSmallFilterScoreCalls
+	if proof.PackedScoreCandidates != baseCalls || proof.PackedVectorBytesRead != proof.ExactBaseVectorBytesRead {
+		return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense packed score accounting is inconsistent")
+	}
+	if baseCalls == 0 {
+		if proof.PackedScoreBatchCalls != 0 {
+			return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense empty packed score batch is invalid")
+		}
+	} else if proof.PackedScoreBatchCalls != 1 {
+		return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense rerank did not use one packed score batch")
+	}
+	return nil
 }

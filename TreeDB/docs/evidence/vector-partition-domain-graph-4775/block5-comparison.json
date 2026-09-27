@@ -1,0 +1,331 @@
+{
+  "status": "COMPARISON_REDUCED_NOT_QUALIFICATION",
+  "plan_sha256": "370cbfb6542ba3c220fa6ff5a806cb27207b77f535e2525491ae4cccb849dc78",
+  "scope": "individually pinned producing runtimes and source-specific strict replay; identical shard-generation bytes, fixture, host and serving coordinates; per-pack versus per-domain traversal; all five paired windows retained; CPU/resources, chronological isolation and full F qualification remain external obligations",
+  "replay_receipts": {
+    "domain": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=321e7f4acf53285ce1b18352002f09490568260429994028b5f757b8fcee223f rows=20\n",
+    "perpack": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=13ff8b7f6a96e4e0d8cf87fb4fdf93cc7fe3f6f60f8c79c18107efe8f3ff7161 rows=20\n"
+  },
+  "logical_membership_digests": {},
+  "pairs": [
+    {
+      "pair": {
+        "name": "domain-v-perpack",
+        "kind": "domain_graph_runtime",
+        "baseline": "perpack",
+        "candidate": "domain",
+        "baseline_probes": 5,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 0,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 1.7730995897967334,
+          "p95_ratio": 0.6282558669198597
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 1,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.1374277557109607,
+          "p95_ratio": 0.4727779165502855
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 7,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 1.7558841955245033,
+          "p95_ratio": 0.6357956133655501
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 6,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.1110659997702617,
+          "p95_ratio": 0.4874152340481842
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 8,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 1.762263020789894,
+          "p95_ratio": 0.6327119769665784
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 9,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.116060995259623,
+          "p95_ratio": 0.47958339656547117
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 15,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 1.7777792104227288,
+          "p95_ratio": 0.6304680840897225
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 14,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.1385770071200003,
+          "p95_ratio": 0.4705997716708385
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 16,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 1.7733694269342934,
+          "p95_ratio": 0.6356910679930915
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 17,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.094819216462448,
+          "p95_ratio": 0.4739593021822493
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    },
+    {
+      "pair": {
+        "name": "perpack-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "perpack",
+        "candidate": "perpack",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.773637888169007,
+          "p95_ratio": 0.3632691144704055
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.457797477616351,
+          "p95_ratio": 0.41816710173107685
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.8033147771836013,
+          "p95_ratio": 0.3552315042562697
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.4614788560730387,
+          "p95_ratio": 0.4089768656608721
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.777743992356549,
+          "p95_ratio": 0.36192655243808003
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.4124159999993964,
+          "p95_ratio": 0.39358310976420535
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.7775722175328252,
+          "p95_ratio": 0.3589774571281329
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.4215886253237784,
+          "p95_ratio": 0.4139369954494949
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.7761049229314536,
+          "p95_ratio": 0.3597582154129585
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.399442295566357,
+          "p95_ratio": 0.4260682777037207
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    },
+    {
+      "pair": {
+        "name": "domain-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "domain",
+        "candidate": "domain",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.222629807761939,
+          "p95_ratio": 0.4909780171517071
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.764738922302833,
+          "p95_ratio": 0.37337617990384936
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.225656250329596,
+          "p95_ratio": 0.4870541052720364
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.7886700714507002,
+          "p95_ratio": 0.35804579121881286
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.2172868410911617,
+          "p95_ratio": 0.4903434825689426
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.762383194365704,
+          "p95_ratio": 0.3554332057468884
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.2310763454468376,
+          "p95_ratio": 0.4846717351236071
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.7747379124255973,
+          "p95_ratio": 0.3530902101273677
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.2053783372540807,
+          "p95_ratio": 0.4913403009197909
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.6742124395693954,
+          "p95_ratio": 0.36897355251729747
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    }
+  ],
+  "retained_original": {
+    "path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/result.json",
+    "sha256": "efa5caaa5f6586519606575702877b8984f00a37305143e0430992fa9f91bd46"
+  }
+}

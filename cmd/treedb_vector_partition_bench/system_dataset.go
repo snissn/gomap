@@ -65,7 +65,10 @@ func runVectorPartitionSystemExportDatasetV1(args []string, stdout io.Writer) er
 	if err := validateM3FixtureWithCaps(fixture, maxVectors, maxFixtureBytes); err != nil {
 		return err
 	}
-	vectors, queries := fixtureData(fixture)
+	vectors, queries, err := loadFixtureDataV1(dataset, fixture)
+	if err != nil {
+		return err
+	}
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}

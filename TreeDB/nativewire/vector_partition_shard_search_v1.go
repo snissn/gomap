@@ -24,11 +24,11 @@ import (
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-const VectorPartitionShardSearchVersionV1 uint32 = 1
+const VectorPartitionShardSearchVersionV1 uint32 = 3
 
 const (
-	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 344
-	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 128
+	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 352
+	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 160
 	vectorPartitionDuplicateLinearThresholdV1                = 16
 )
 
@@ -124,6 +124,7 @@ func (e *VectorPartitionShardSearchErrorV1) Unwrap() error {
 
 type VectorPartitionShardSearchLimitsV1 struct {
 	MaxDimensions, MaxQueryBytes, MaxPartitions, MaxTopK, MaxEfSearch int
+	MaxScoreCalls                                                     uint64
 	MaxRequestBytes, MaxCandidateBytes, MaxResponseBytes              uint64
 	MaxIdentityBytes, MaxStableIDBytes                                int
 }
@@ -135,6 +136,7 @@ func DefaultVectorPartitionShardSearchLimitsV1() VectorPartitionShardSearchLimit
 		MaxPartitions:     32,
 		MaxTopK:           256,
 		MaxEfSearch:       4096,
+		MaxScoreCalls:     1_000_000,
 		MaxRequestBytes:   64 << 10,
 		MaxCandidateBytes: 80 << 20,
 		MaxResponseBytes:  64 << 20,
@@ -160,13 +162,14 @@ type VectorPartitionShardSearchRequestV1 struct {
 	PartitionIDs  []uint32
 	LiveDomainIDs []uint32
 
-	Query       []float32
-	Metric      VectorPartitionShardSearchMetricV1
-	Mode        VectorPartitionShardSearchModeV1
-	Consistency VectorPartitionShardSearchConsistencyV1
-	StatsMode   VectorPartitionShardSearchStatsModeV1
-	TopK        int
-	EfSearch    int
+	Query           []float32
+	Metric          VectorPartitionShardSearchMetricV1
+	Mode            VectorPartitionShardSearchModeV1
+	Consistency     VectorPartitionShardSearchConsistencyV1
+	StatsMode       VectorPartitionShardSearchStatsModeV1
+	TopK            int
+	EfSearch        int
+	ScoreCallsLimit uint64
 
 	DeadlineUnixNano    int64
 	RequestBytesLimit   uint64
@@ -182,14 +185,17 @@ type VectorPartitionShardSearchNeighborV1 struct {
 }
 
 type VectorPartitionShardSearchPartialV1 struct {
-	PartitionID       uint32
-	Neighbors         []VectorPartitionShardSearchNeighborV1
-	Candidates, Edges uint64
-	SearchRoute       string
-	PackBytes         uint64
-	MappedBytes       uint64
-	HeapBytes         uint64
-	OpenNanos         uint64
+	PartitionID                   uint32
+	Neighbors                     []VectorPartitionShardSearchNeighborV1
+	ScoreCalls, Candidates, Edges uint64
+	SearchRoute                   string
+	PackBytes                     uint64
+	MappedBytes                   uint64
+	HeapBytes                     uint64
+	RequiredChunks                uint64
+	OpenedChunks                  uint64
+	AccessedChunks                uint64
+	OpenNanos                     uint64
 }
 
 type VectorPartitionShardSearchProofV1 struct {
@@ -217,7 +223,7 @@ type VectorPartitionShardSearchResponseV1 struct {
 	Proof                                                  VectorPartitionShardSearchProofV1
 	Partials                                               []VectorPartitionShardSearchPartialV1
 	Partitions, ReadProofs, GenerationPins, PartitionOpens uint64
-	Candidates                                             uint64
+	ScoreCalls, Candidates                                 uint64
 	BaseCandidates, DeltaCandidates                        uint64
 	BaseResults, DeltaResults                              uint64
 	LiveDomainsSearched, LiveMutatedIDs, LiveIDs, Cutovers uint64
@@ -417,6 +423,7 @@ func normalizeVectorPartitionShardSearchLimitsV1(limits VectorPartitionShardSear
 func validateVectorPartitionShardSearchLimitsV1(l VectorPartitionShardSearchLimitsV1) error {
 	if l.MaxDimensions < 1 || l.MaxDimensions > 4096 ||
 		l.MaxQueryBytes < 4 || l.MaxPartitions < 1 || l.MaxTopK < 1 || l.MaxEfSearch < l.MaxTopK ||
+		l.MaxScoreCalls == 0 || l.MaxScoreCalls > uint64(math.MaxInt) ||
 		l.MaxRequestBytes == 0 || l.MaxCandidateBytes == 0 || l.MaxResponseBytes == 0 ||
 		l.MaxIdentityBytes < 1 || l.MaxStableIDBytes < 1 {
 		return fmt.Errorf("%w: invalid service limits", ErrVectorPartitionShardSearchInvalidRequest)
@@ -601,7 +608,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	var openedCandidateBytes uint64
 	for _, domain := range liveDomains {
 		candidateCeiling, scratchBytes, preflightErr := livePin.DomainSearchPreflightV1(domain, collections.VectorPartitionSearchOptionsV1{
-			TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: s.limits.MaxStableIDBytes,
+			TopK: request.TopK, EfSearch: request.EfSearch, MaxScoreCalls: int(request.ScoreCallsLimit), MaxStableIDBytes: s.limits.MaxStableIDBytes,
 		})
 		if preflightErr != nil {
 			return response, s.wrapError(fmt.Errorf("%w: live domain %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, domain, preflightErr), groupID)
@@ -660,6 +667,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		status, scratchBytes, scratchErr := searcher.SearchPreflightV1(collections.VectorPartitionSearchOptionsV1{
 			TopK:              request.TopK,
 			EfSearch:          request.EfSearch,
+			MaxScoreCalls:     int(request.ScoreCallsLimit),
 			MaxStableIDBytes:  s.limits.MaxStableIDBytes,
 			ExcludedStableIDs: excludedStableIDs,
 		})
@@ -712,8 +720,12 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 
 	responseWorkStarted := time.Now()
 	partials := make([]VectorPartitionShardSearchPartialV1, len(searchers))
-	var totalCandidates, totalEdges, actualCandidateBytes, searchNanos uint64
+	var totalScoreCalls, totalCandidates, totalEdges, actualCandidateBytes, searchNanos uint64
+	remainingScoreCalls := request.ScoreCallsLimit
 	for i, lease := range searchers {
+		if remainingScoreCalls == 0 {
+			return response, s.wrapError(fmt.Errorf("%w: score calls", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+		}
 		searcher := lease.Searcher
 		search := searchVectorPartitionWithContextV1
 		if searcher.Status().SearchRoute == collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
@@ -728,6 +740,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		results, metrics, searchErr := search(ctx, searcher, request.Query, collections.VectorPartitionSearchOptionsV1{
 			TopK:              request.TopK,
 			EfSearch:          request.EfSearch,
+			MaxScoreCalls:     int(remainingScoreCalls),
 			MaxStableIDBytes:  s.limits.MaxStableIDBytes,
 			ExcludedStableIDs: excludedStableIDs,
 		})
@@ -736,6 +749,11 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		if searchErr != nil {
 			return response, s.wrapError(searchErr, groupID)
 		}
+		if metrics.ScoreCalls > remainingScoreCalls {
+			return response, s.wrapError(fmt.Errorf("%w: score calls", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+		}
+		remainingScoreCalls -= metrics.ScoreCalls
+		totalScoreCalls += metrics.ScoreCalls
 		if s.testBeforePartialMaterialization != nil {
 			s.testBeforePartialMaterialization()
 		}
@@ -767,13 +785,17 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(fmt.Errorf("%w: actual candidate bytes", ErrVectorPartitionShardSearchInvalidRequest), groupID)
 		}
 		partials[i] = VectorPartitionShardSearchPartialV1{
-			PartitionID: request.PartitionIDs[i],
-			Neighbors:   make([]VectorPartitionShardSearchNeighborV1, len(results)),
-			SearchRoute: metrics.Route,
-			PackBytes:   status.PackBytes,
-			MappedBytes: status.MappedBytes,
-			HeapBytes:   status.HeapBytes,
-			OpenNanos:   status.OpenNanos,
+			PartitionID:    request.PartitionIDs[i],
+			Neighbors:      make([]VectorPartitionShardSearchNeighborV1, len(results)),
+			ScoreCalls:     metrics.ScoreCalls,
+			SearchRoute:    metrics.Route,
+			PackBytes:      status.PackBytes,
+			MappedBytes:    status.MappedBytes,
+			HeapBytes:      status.HeapBytes,
+			RequiredChunks: status.RequiredChunks,
+			OpenedChunks:   status.OpenedChunks,
+			AccessedChunks: status.AccessedChunks,
+			OpenNanos:      status.OpenNanos,
 		}
 		if request.StatsMode == VectorPartitionShardSearchStatsBasicV1 {
 			partials[i].Candidates = metrics.Candidates
@@ -785,13 +807,21 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	}
 	if livePin != nil {
 		for _, domain := range liveDomains {
+			if remainingScoreCalls == 0 {
+				return response, s.wrapError(fmt.Errorf("%w: score calls", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+			}
 			deltaSearchStarted := time.Now()
-			results, metrics, searchErr := livePin.SearchDomainV1(ctx, domain, request.Query, collections.VectorPartitionSearchOptionsV1{TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: s.limits.MaxStableIDBytes})
+			results, metrics, searchErr := livePin.SearchDomainV1(ctx, domain, request.Query, collections.VectorPartitionSearchOptionsV1{TopK: request.TopK, EfSearch: request.EfSearch, MaxScoreCalls: int(remainingScoreCalls), MaxStableIDBytes: s.limits.MaxStableIDBytes})
 			searchNanos += elapsedNanosV1(deltaSearchStarted)
 			response.Timing.SearchNanos = searchNanos
 			if searchErr != nil {
 				return response, s.wrapError(searchErr, groupID)
 			}
+			if metrics.ScoreCalls > remainingScoreCalls {
+				return response, s.wrapError(fmt.Errorf("%w: live score calls", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+			}
+			remainingScoreCalls -= metrics.ScoreCalls
+			totalScoreCalls += metrics.ScoreCalls
 			var ok bool
 			totalCandidates, ok = addUint64V1(totalCandidates, metrics.Candidates)
 			if !ok {
@@ -880,6 +910,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		ReadProofs:          response.ReadProofs,
 		GenerationPins:      response.GenerationPins,
 		PartitionOpens:      response.PartitionOpens,
+		ScoreCalls:          totalScoreCalls,
 		Candidates:          totalCandidates,
 		BaseCandidates:      response.BaseCandidates,
 		DeltaCandidates:     response.DeltaCandidates,
@@ -1007,7 +1038,8 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 		r.SourceGeneration == 0 || r.SourceRowCount == 0 || r.PartitionGeneration == 0 || r.RouterGeneration == 0 ||
 		len(r.PartitionIDs) < 1 || len(r.PartitionIDs) > l.MaxPartitions ||
 		len(r.Query) < 1 || len(r.Query) > l.MaxDimensions ||
-		r.TopK < 1 || r.TopK > l.MaxTopK || r.EfSearch < r.TopK || r.EfSearch > l.MaxEfSearch {
+		r.TopK < 1 || r.TopK > l.MaxTopK || r.EfSearch < r.TopK || r.EfSearch > l.MaxEfSearch ||
+		r.ScoreCallsLimit == 0 || r.ScoreCallsLimit > l.MaxScoreCalls || r.ScoreCallsLimit > uint64(math.MaxInt) {
 		return ErrVectorPartitionShardSearchInvalidRequest
 	}
 	if r.TargetGroupID == "" {
@@ -1154,14 +1186,24 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 	if err != nil || responseBytes > r.ResponseBytesLimit || responseBytes > s.limits.MaxResponseBytes {
 		return 0, ErrVectorPartitionShardSearchResponseTooLarge
 	}
+	var partialScoreCalls uint64
 	for i, partial := range partials {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		if partial.PartitionID != r.PartitionIDs[i] || len(partial.Neighbors) > r.TopK ||
+			partial.RequiredChunks != partial.OpenedChunks || partial.RequiredChunks != partial.AccessedChunks ||
 			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
 				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			return 0, fmt.Errorf("%w: malformed partition envelope", ErrVectorPartitionShardSearchAssetsUnavailable)
+		}
+		if r.StatsMode == VectorPartitionShardSearchStatsBasicV1 {
+			var ok bool
+			partialScoreCalls, ok = addUint64V1(partialScoreCalls, partial.ScoreCalls)
+			if !ok || partialScoreCalls > r.ScoreCallsLimit ||
+				partial.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 && partial.ScoreCalls != partial.Candidates {
+				return 0, fmt.Errorf("%w: malformed score accounting", ErrVectorPartitionShardSearchAssetsUnavailable)
+			}
 		}
 		var seenIDs map[string]struct{}
 		if len(partial.Neighbors) > vectorPartitionDuplicateLinearThresholdV1 {
@@ -1276,15 +1318,15 @@ func classifyVectorPartitionShardSearchErrorV1(err error) VectorPartitionShardSe
 }
 
 type VectorPartitionShardSearchServiceStatsV1 struct {
-	Requests, Successes, Errors, OwnerRoutes, ReadProofs, Partitions uint64
-	Candidates, ResponseBytes, Opens, MappedOpens, HeapOpens         uint64
-	CacheHits, CacheMisses                                           uint64
-	Invalid, UnsupportedConsistency, MissingOwner, UnknownOwner      uint64
-	RemoteOwner, RouteMismatch, NotLeader, Unavailable               uint64
-	GenerationMismatch, AssetsUnavailable, ResponseTooLarge          uint64
-	Canceled, TimedOut                                               uint64
-	RouteOwnerNanos, ReadIndexApplyNanos, GenerationOpenNanos        uint64
-	SearchNanos, ResponseCopyNanos, TotalNanos                       uint64
+	Requests, Successes, Errors, OwnerRoutes, ReadProofs, Partitions     uint64
+	ScoreCalls, Candidates, ResponseBytes, Opens, MappedOpens, HeapOpens uint64
+	CacheHits, CacheMisses                                               uint64
+	Invalid, UnsupportedConsistency, MissingOwner, UnknownOwner          uint64
+	RemoteOwner, RouteMismatch, NotLeader, Unavailable                   uint64
+	GenerationMismatch, AssetsUnavailable, ResponseTooLarge              uint64
+	Canceled, TimedOut                                                   uint64
+	RouteOwnerNanos, ReadIndexApplyNanos, GenerationOpenNanos            uint64
+	SearchNanos, ResponseCopyNanos, TotalNanos                           uint64
 }
 
 type vectorPartitionShardSearchStatsAccumulatorV1 struct {
@@ -1367,6 +1409,7 @@ func (a *vectorPartitionShardSearchStatsAccumulatorV1) succeed(response VectorPa
 	defer a.mu.Unlock()
 	a.value.Successes++
 	a.value.Partitions += response.Partitions
+	a.value.ScoreCalls += response.ScoreCalls
 	a.value.Candidates += response.Candidates
 	a.value.ResponseBytes += response.ResponseBytes
 	a.value.RouteOwnerNanos += response.Timing.RouteOwnerNanos

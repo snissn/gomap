@@ -114,6 +114,7 @@ type columnPhysicalAssetReaderRowIndex struct {
 }
 
 type columnPhysicalRowReaderRow struct {
+	Preserved         *columnRowCoordinates
 	Generation        uint64
 	PartID            uint64
 	AppliedCommandLSN uint64
@@ -494,7 +495,7 @@ func cloneColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader) co
 }
 
 func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowReaderBlock, ordinal, rowIndex int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
-	if block.version >= columnPhysicalAssetVersionV7 {
+	if block.version == columnPhysicalAssetVersionV7 || block.version == columnPhysicalAssetVersionV8 {
 		switch block.rowEncoding {
 		case columnPhysicalAssetRowEncodingFixedID:
 			return r.decodeFixedIDRowFromBlock(block, ordinal, rowIndex, scratch)
@@ -509,6 +510,10 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 	deleted := false
 	if block.version >= columnPhysicalAssetVersionV2 {
 		deleted = cur.bool()
+	}
+	var preserved *columnRowCoordinates
+	if block.version == columnPhysicalAssetVersionV9 {
+		preserved = readColumnPreservedRow(&cur, id, block.header.Generation, block.header.AppliedCommandLSN, block.header.Operation, deleted)
 	}
 	if cur.err != nil {
 		return columnPhysicalRowReaderRow{}, cur.err
@@ -539,6 +544,7 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 		return columnPhysicalRowReaderRow{}, cur.err
 	}
 	return columnPhysicalRowReaderRow{
+		Preserved:         preserved,
 		Generation:        block.header.Generation,
 		PartID:            block.header.PartID,
 		AppliedCommandLSN: block.header.AppliedCommandLSN,
@@ -648,7 +654,7 @@ func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset i
 	if rowsOffset < 0 || rowsOffset > len(raw) {
 		return columnPhysicalAssetReaderRowIndex{}, fmt.Errorf("column physical asset invalid rows offset=%d len=%d", rowsOffset, len(raw))
 	}
-	if version >= columnPhysicalAssetVersionV7 {
+	if version == columnPhysicalAssetVersionV7 || version == columnPhysicalAssetVersionV8 {
 		return indexColumnPhysicalAssetReaderFixedIDRows(raw, rowsOffset, header)
 	}
 	offsets := make([]int, header.RowCount)
@@ -656,10 +662,13 @@ func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset i
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		visited++
 		offsets[rowIdx] = cur.pos
-		_ = cur.bytesView()
+		id := cur.bytesView()
 		deleted := false
 		if version >= columnPhysicalAssetVersionV2 {
 			deleted = cur.bool()
+		}
+		if version == columnPhysicalAssetVersionV9 {
+			_ = readColumnPreservedRow(&cur, id, header.Generation, header.AppliedCommandLSN, header.Operation, deleted)
 		}
 		if cur.err != nil {
 			return columnPhysicalAssetReaderRowIndex{}, cur.err
@@ -748,6 +757,9 @@ func indexColumnPhysicalAssetReaderFixedIDRows(raw []byte, rowsOffset int, heade
 
 func skipColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig) error {
 	for colIdx, col := range cfg.Columns {
+		if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+			continue
+		}
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
 			return cur.err
@@ -831,6 +843,12 @@ func skipColumnPhysicalValue(cur *manifestCursor, col ColumnStoreColumn) error {
 func readColumnPhysicalRowValuesIntoScratch(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch) error {
 	rowValues := scratch.Values
 	for colIdx, col := range cfg.Columns {
+		if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+			if output := projection.outputByColumn[colIdx]; output >= 0 {
+				rowValues[output] = columnDeclaredValue{}
+			}
+			continue
+		}
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
 			return cur.err

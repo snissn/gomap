@@ -32,6 +32,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, _, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -58,6 +59,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, _, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -84,6 +86,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
@@ -123,6 +126,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
@@ -171,6 +175,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -196,6 +201,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+		defer server.Close()
 		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		ids := benchmarkStoredIDs(0, batchSize)

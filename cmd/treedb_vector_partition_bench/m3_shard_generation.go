@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -29,7 +30,7 @@ const (
 // It is produced before the build-identity digest so that digest binds the
 // record, and a retained row may materialize less than the planned envelope but
 // never more.
-func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, overlap vectorpartition.OverlapResult) ([]byte, string, error) {
+func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, overlap vectorpartition.OverlapResult, packing *vectorpartition.HomePackingReceiptV1) ([]byte, string, error) {
 	if plan.Partitions == 0 {
 		return nil, "", nil
 	}
@@ -42,6 +43,7 @@ func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, 
 	if err != nil {
 		return nil, "", fmt.Errorf("build shard generation descriptor: %w", err)
 	}
+	descriptor.HomePacking = packing
 	raw, err := vectorpartition.CanonicalShardGenerationJSONV1(descriptor)
 	if err != nil {
 		return nil, "", fmt.Errorf("encode shard generation descriptor: %w", err)
@@ -74,6 +76,70 @@ func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio f
 	for partition, load := range overlap.Loads {
 		if load != summaries[partition].Rows {
 			return fmt.Errorf("pack %d load=%d does not match membership-derived rows=%d", partition, load, summaries[partition].Rows)
+		}
+	}
+	return nil
+}
+
+// m3ValidateActualShardPackBytesV1 binds the planner's conservative byte
+// envelope to the immutable bytes the encoder actually produced. Production
+// domain graphs share their physical-pack envelopes across storage chunks;
+// offline graph variants retain one independently bounded asset per pack.
+func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1, packsPerDomain int, domainGraphs bool) error {
+	if len(summaries) == 0 {
+		return nil
+	}
+	if packsPerDomain < 1 || len(summaries)%packsPerDomain != 0 {
+		return errors.New("planned shard packs do not form complete domains")
+	}
+	for partition, summary := range summaries {
+		if summary.Partition != partition {
+			return fmt.Errorf("planned shard pack %d is noncanonical", partition)
+		}
+	}
+	if !domainGraphs {
+		if len(assets) != len(summaries) {
+			return fmt.Errorf("materialized shard packs=%d want=%d", len(assets), len(summaries))
+		}
+		seen := make([]bool, len(summaries))
+		for _, asset := range assets {
+			if asset.PartitionID >= uint32(len(summaries)) {
+				return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
+			}
+			partition := int(asset.PartitionID)
+			if seen[partition] || asset.Bytes == 0 || asset.Bytes > summaries[partition].Bytes {
+				return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", partition, asset.Bytes, summaries[partition].Bytes)
+			}
+			seen[partition] = true
+		}
+		return nil
+	}
+	domains := len(summaries) / packsPerDomain
+	planned := make([]uint64, domains)
+	actual := make([]uint64, domains)
+	for partition, summary := range summaries {
+		if planned[partition/packsPerDomain] > ^uint64(0)-summary.Bytes {
+			return fmt.Errorf("planned shard pack %d overflows its domain", partition)
+		}
+		planned[partition/packsPerDomain] += summary.Bytes
+	}
+	for _, asset := range assets {
+		if asset.PartitionID >= uint32(len(summaries)) {
+			return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
+		}
+		partition := int(asset.PartitionID)
+		if partition%packsPerDomain != 0 {
+			return fmt.Errorf("materialized shard pack %d is not a domain anchor", asset.PartitionID)
+		}
+		domain := partition / packsPerDomain
+		if actual[domain] > ^uint64(0)-asset.Bytes {
+			return fmt.Errorf("materialized domain %d byte accounting overflow", domain)
+		}
+		actual[domain] += asset.Bytes
+	}
+	for domain := range planned {
+		if actual[domain] == 0 || actual[domain] > planned[domain] {
+			return fmt.Errorf("materialized domain %d bytes=%d outside planned envelope (0,%d]", domain, actual[domain], planned[domain])
 		}
 	}
 	return nil
@@ -119,6 +185,12 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	if record.Plan != d.ShardPlan {
 		return errors.New("retained shard generation record does not describe the descriptor's plan")
 	}
+	if d.ShardPlan.PacksPerDomain > 1 && d.KaHIPAdapterSHA256 == kahipHomePackingAdapterSHA256 && record.HomePacking == nil {
+		return errors.New("retained selected-adapter multi-pack generation is missing its home-packing receipt")
+	}
+	if record.HomePacking != nil && (record.HomePacking.ParentSHA256 != d.ArtifactSHA256 || d.KaHIPAdapterSHA256 != kahipHomePackingAdapterSHA256) {
+		return errors.New("retained graph-aware homes do not bind the parent artifact and selected adapter")
+	}
 	if record.OverlapConfig.Ratio != d.OverlapRatio || record.OverlapConfig.Capacity != d.Capacity {
 		return fmt.Errorf("retained shard generation record requests ratio %v capacity %d, descriptor declares %v/%d",
 			record.OverlapConfig.Ratio, record.OverlapConfig.Capacity, d.OverlapRatio, d.Capacity)
@@ -143,6 +215,24 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	return nil
 }
 
+func m3ValidateRetainedShardPackBytesV1(dir string, d m3VariantDescriptorV1, assets []collections.VectorPartitionAssetV1) (vectorpartition.ShardGenerationDescriptorV1, error) {
+	if d.ShardPlan == (vectorpartition.ShardPlanV1{}) {
+		return vectorpartition.ShardGenerationDescriptorV1{}, nil
+	}
+	if err := m3VerifyRetainedShardGenerationV1(dir, d); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	record, err := m3ReadShardGenerationDescriptorV1(dir, d.ShardGenerationDigest)
+	if err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	domainGraphs := d.PartitionHNSWM == 32 && m3DescriptorPartitionHNSWEfCV1(d) == 256 && record.Plan.PacksPerDomain > 1
+	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries, record.Plan.PacksPerDomain, domainGraphs); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	return record, nil
+}
+
 // m3VerifyShardGenerationMembershipsV1 compares the record's individual
 // membership pairs against the per-partition artifact ordinals that actually
 // materialized the packs.
@@ -159,7 +249,11 @@ func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGeneration
 	if len(membershipOrdinals) != len(record.PackSummaries) {
 		return fmt.Errorf("shard generation record covers %d packs, materialization used %d", len(record.PackSummaries), len(membershipOrdinals))
 	}
+	if record.Plan.PacksPerDomain < 1 {
+		return errors.New("shard generation record has no physical pack geometry")
+	}
 	perPartition := make([][]int, len(membershipOrdinals))
+	packsPerDomain := record.Plan.PacksPerDomain
 	for _, membership := range record.Memberships {
 		if membership.Partition < 0 || membership.Partition >= len(perPartition) {
 			return fmt.Errorf("shard generation membership names partition %d outside the materialized %d", membership.Partition, len(perPartition))
@@ -171,7 +265,7 @@ func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGeneration
 		// assignment is immutable. Comparing only the (vector, partition) pairs
 		// would let a record flip a vector's home onto one of its overlap
 		// partitions with every pack row count and the overlap total unchanged.
-		if membership.Home != (membership.Partition == assignment[membership.VectorOrdinal]) {
+		if membership.Home != (membership.Partition/packsPerDomain == assignment[membership.VectorOrdinal]) {
 			return fmt.Errorf("shard generation membership vector %d partition %d declares home=%v against assignment %d",
 				membership.VectorOrdinal, membership.Partition, membership.Home, assignment[membership.VectorOrdinal])
 		}

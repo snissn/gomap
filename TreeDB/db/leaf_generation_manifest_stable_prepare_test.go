@@ -126,7 +126,7 @@ func TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement(t *tes
 		closure.Release()
 		t.Fatal(err)
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != 1 || descriptors[0].Generation() != persisted.ManifestRevision || descriptors[0].Digest() != closure.Digest() {
 		resources.Release()
 		t.Fatalf("manifest descriptors=%+v revision=%d digest=%x", descriptors, persisted.ManifestRevision, closure.Digest())

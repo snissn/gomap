@@ -49,6 +49,7 @@ func TestEngineEncodeDecode(t *testing.T) {
 	}
 	store := &stubStore{defBytes: defBytes, id: 1}
 	engine := NewEngine(cfg)
+	defer engine.Close()
 
 	value := []byte("prefix-ABC-suffix")
 	payload, ok := engine.Encode(context.Background(), value, store)
@@ -122,6 +123,7 @@ func TestEngineColdGateLimitsCandidateLookups(t *testing.T) {
 		cands:    []Candidate{{ID: 1, Size: len(defBytes)}},
 	}
 	engine := NewEngine(cfg)
+	defer engine.Close()
 	value := []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 
 	const iters = 100
@@ -171,6 +173,7 @@ func TestEngineStartupColdGateLimitsCandidateLookups_DefaultConfig(t *testing.T)
 		cands:    []Candidate{{ID: 1, Size: len(defBytes)}},
 	}
 	engine := NewEngine(cfg)
+	defer engine.Close()
 	value := []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 
 	const iters = 200

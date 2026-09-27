@@ -32,12 +32,14 @@ class TreeDBProtocolError(TreeDBClientError):
         response_body: Optional[str] = None,
         dense_work=None,
         score_plane=None,
+        native_error_code: Optional[int] = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
         self.dense_work = dense_work
         self.score_plane = score_plane
+        self.native_error_code = native_error_code
 
 
 class TreeDBServiceError(TreeDBClientError):
@@ -100,6 +102,14 @@ class InternalServiceError(TreeDBServiceError):
     code = "internal"
 
 
+class CommitAmbiguousError(TreeDBServiceError):
+    code = "commit_ambiguous"
+
+
+class RecoveryRequiredError(TreeDBServiceError):
+    code = "recovery_required"
+
+
 ERROR_CLASS_BY_CODE: Dict[str, Type[TreeDBServiceError]] = {
     InvalidRequestError.code: InvalidRequestError,
     MalformedJSONError.code: MalformedJSONError,
@@ -109,6 +119,8 @@ ERROR_CLASS_BY_CODE: Dict[str, Type[TreeDBServiceError]] = {
     SnapshotMismatchError.code: SnapshotMismatchError,
     ConflictError.code: ConflictError,
     UnsupportedError.code: UnsupportedError,
+    CommitAmbiguousError.code: CommitAmbiguousError,
+    RecoveryRequiredError.code: RecoveryRequiredError,
     InternalServiceError.code: InternalServiceError,
 }
 

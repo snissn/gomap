@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -19,6 +20,7 @@ import (
 // response buffer. They remain valid until the next round trip on the same
 // client; callers that need to keep them longer must copy them.
 type Client struct {
+	peerAdmission                 *peerNodeAdmissionV1
 	conn                          net.Conn
 	local                         *localEndpoint
 	limits                        iwire.Limits
@@ -35,6 +37,7 @@ type Client struct {
 	denseResults                  []DenseVectorSearchResult
 	denseTypedNegotiated          bool
 	denseTypedQuantizedNegotiated bool
+	denseNormalizedNegotiated     bool
 }
 
 // requestNotSubmittedError marks failures before local handler dispatch or a
@@ -84,6 +87,7 @@ func (c *Client) Hello(ctx context.Context) error {
 	defer c.mu.Unlock()
 	c.denseTypedNegotiated = false
 	c.denseTypedQuantizedNegotiated = false
+	c.denseNormalizedNegotiated = false
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
 	if err != nil {
 		return err
@@ -106,6 +110,9 @@ func (c *Client) Hello(ctx context.Context) error {
 		}
 		if version == "3" {
 			c.denseTypedQuantizedNegotiated = true
+		}
+		if version == "4" {
+			c.denseNormalizedNegotiated = true
 		}
 	}
 	return nil
@@ -203,6 +210,17 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 	if ctx != nil && ctx.Err() != nil {
 		return iwire.Header{}, nil, &requestNotSubmittedError{ctx.Err()}
 	}
+	if c.peerAdmission != nil {
+		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize {
+			return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound")
+		}
+		work, err := c.peerAdmission.request(ctx, "native", int64(c.limits.MaxFrameSize)*4, peerRequestDescendantV1)
+		if err != nil {
+			return iwire.Header{}, nil, err
+		}
+		defer work.release()
+		ctx = work.ctx
+	}
 	requestID := c.nextReq.Add(1)
 	if deadline, ok := ctxDeadline(ctx); ok {
 		_ = c.conn.SetDeadline(deadline)
@@ -258,6 +276,17 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if c.peerAdmission != nil {
+		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize {
+			return protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound")
+		}
+		work, err := c.peerAdmission.request(ctx, "native", int64(c.limits.MaxFrameSize)*4, peerRequestDescendantV1)
+		if err != nil {
+			return err
+		}
+		defer work.release()
+		ctx = work.ctx
 	}
 	requestID := c.nextReq.Add(1)
 	if deadline, ok := ctxDeadline(ctx); ok {
@@ -393,11 +422,16 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 			}
 		}
 	}
-	if denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion {
+	if denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion || denseVersion == iwire.DenseVectorSearchNormalizedVersion {
 		scoreRaw, scoreFound, candidateErr := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
 		scoreErr = candidateErr
 		if scoreErr == nil && scoreFound {
-			decoded, candidateErr := decodeDenseScorePlane(scoreRaw, limits)
+			var decoded collections.ColumnGraphScorePlaneWork
+			if denseVersion == iwire.DenseVectorSearchNormalizedVersion {
+				decoded, candidateErr = decodeDenseScorePlaneV2(scoreRaw, limits)
+			} else {
+				decoded, candidateErr = decodeDenseScorePlane(scoreRaw, limits)
+			}
 			scoreErr = candidateErr
 			if scoreErr == nil {
 				out.ScorePlane = &decoded
@@ -411,16 +445,22 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 		return &DenseVectorSearchDecodeError{Err: candidate, DenseWork: out.DenseWork, ScorePlane: out.ScorePlane}
 	}
 	for _, section := range sections {
+		if denseVersion == iwire.DenseVectorSearchNormalizedVersion && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "unexpected normalized dense error section"))
+		}
+		if denseVersion == iwire.DenseVectorSearchNormalizedVersion && section.ID == iwire.SectionError && section.Flags != 0 {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "normalized dense error section flags are invalid"))
+		}
 		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call"))
 		}
 		if section.ID == iwire.SectionDenseSearchWork && denseWorkAllowed && section.Flags != iwire.SectionFlagCritical {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work section must be critical"))
 		}
-		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion && denseVersion != iwire.DenseVectorSearchNormalizedVersion {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call"))
 		}
-		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion && section.Flags != iwire.SectionFlagCritical {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && (denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion || denseVersion == iwire.DenseVectorSearchNormalizedVersion) && section.Flags != iwire.SectionFlagCritical {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error score-plane proof section must be critical"))
 		}
 		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof && section.Flags&iwire.SectionFlagCritical != 0 {

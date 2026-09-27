@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,22 +15,26 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
-	for _, want := range []struct {
-		variant collections.VectorPartitionLocalGraphVariantV1
-		m, ef   int
-	}{
-		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128},
-		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256},
-		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256},
-	} {
-		variant, m, efConstruction, err := m0MaterializeVariantV1(string(want.variant))
-		if err != nil || variant != want.variant || m != want.m || efConstruction != want.ef {
-			t.Fatalf("variant %q = (%q,%d,%d,%v)", want.variant, variant, m, efConstruction, err)
-		}
+type m0BalancedPartitionerV1 struct{}
+
+func (m0BalancedPartitionerV1) Name() string    { return "m0_balanced_test" }
+func (m0BalancedPartitionerV1) License() string { return "test" }
+func (m0BalancedPartitionerV1) Partition(graph vectorpartition.Graph, partitions, _ int) ([]int, error) {
+	assignment := make([]int, len(graph.Neighbors))
+	for i := range assignment {
+		assignment[i] = i * partitions / len(assignment)
 	}
-	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)); err == nil {
-		t.Fatal("unsupported M22 variant accepted")
+	return assignment, nil
+}
+
+func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
+	want := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	variant, m, efConstruction, err := m0MaterializeVariantV1(string(want))
+	if err != nil || variant != want || m != 32 || efConstruction != 256 {
+		t.Fatalf("variant %q = (%q,%d,%d,%v)", want, variant, m, efConstruction, err)
+	}
+	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)); err == nil {
+		t.Fatal("historical M18 auxiliary variant accepted for production publication")
 	}
 }
 
@@ -165,7 +170,7 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 		t.Fatalf("strict reopen: %v", err)
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(h.manifest.BalancePolicy)
-	if !ok || descriptor.PartitionHNSWM != 18 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+	if !ok || descriptor.PartitionHNSWM != 32 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
 		_ = h.Close()
 		t.Fatalf("rewritten descriptor=%+v policy=%+v", descriptor, policy)
 	}
@@ -331,22 +336,30 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 // must replace the sidecar rather than leave its old membership provenance
 // under the rewritten descriptor.
 func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) {
+	for _, graphHomes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("graph_homes=%v", graphHomes), func(t *testing.T) {
+			testM0MaterializeByteBoundedMembershipReopensDisposableClone(t, graphHomes)
+		})
+	}
+}
+
+func testM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T, graphHomes bool) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
 	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
-	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 40, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
+	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 100, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
 	planConfig := vectorpartition.DefaultConfig()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
-		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, LogicalDomains: 16, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
-	if err != nil || plan.Partitions != 16 {
+	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 || plan.DomainHomeCapacity != 7 || plan.DomainOverlapCapacity != 8 || plan.OverlapCapacity != 4 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
-	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{}, graphHomes)
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
@@ -354,7 +367,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	}
 	config := vectorpartition.DefaultConfig()
 	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, m0BalancedPartitionerV1{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +377,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 		t.Fatal(err)
 	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
-	if err != nil || plan.OverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+	if err != nil || artifact.Metrics.Cap >= capacity || plan.DomainOverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
 		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
 	}
 	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {
@@ -426,8 +439,27 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	zeroOrdinals := make([][]int, config.Partitions)
-	for _, membership := range zero.Memberships {
+	if (retained.HomePacking != nil) != graphHomes {
+		t.Fatal("home packing receipt lost")
+	}
+	original, err := m3ReadShardGenerationDescriptorV1(sourceDB, sourceDescriptor.ShardGenerationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHomes, err := original.HomePacksV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHomes, err := retained.HomePacksV1()
+	if err != nil || !reflect.DeepEqual(gotHomes, wantHomes) {
+		t.Fatalf("materialization changed retained homes: %v", err)
+	}
+	packedZero, err := m0PackRetainedMembershipV1(retained, artifact, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroOrdinals := make([][]int, plan.Partitions)
+	for _, membership := range packedZero.Memberships {
 		zeroOrdinals[membership.Partition] = append(zeroOrdinals[membership.Partition], membership.VectorOrdinal)
 	}
 	if err = m3VerifyShardGenerationMembershipsV1(retained, zeroOrdinals, artifact.Assignment); err != nil {
@@ -436,6 +468,23 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
 	if err != nil {
 		t.Fatalf("strict byte-bounded reopen: %v", err)
+	}
+	if h.manifest.PartitionCount != 32 || h.manifest.DomainCount != 16 || len(h.manifest.Assets) == int(h.manifest.PartitionCount) {
+		t.Fatalf("strict byte-bounded topology partitions=%d domains=%d assets=%d", h.manifest.PartitionCount, h.manifest.DomainCount, len(h.manifest.Assets))
+	}
+	bindings, err := m0FrontierBindingChecksV1(h, artifact)
+	if err != nil {
+		t.Fatalf("split-plan diagnostic bindings: %v", err)
+	}
+	hasSplitPack := false
+	for _, binding := range bindings {
+		if binding.AssignedDomain != int(binding.ManifestDomain) {
+			t.Fatalf("diagnostic domain binding=%+v", binding)
+		}
+		hasSplitPack = hasSplitPack || binding.ManifestPack >= h.manifest.DomainCount
+	}
+	if !hasSplitPack {
+		t.Fatalf("diagnostic bindings did not cover a split physical pack: %+v", bindings)
 	}
 	if err = h.Close(); err != nil {
 		t.Fatal(err)

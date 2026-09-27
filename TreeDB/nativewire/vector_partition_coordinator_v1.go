@@ -21,7 +21,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
-const VectorPartitionCoordinatorVersionV1 uint32 = 1
+// Version 3 replaces the flat-HNSW width/beam contract with direct hierarchical
+// routing controlled only by the actual centroid-score budget C and probes P.
+const VectorPartitionCoordinatorVersionV1 uint32 = 3
 
 var (
 	ErrVectorPartitionCoordinatorInvalidRequest     = errors.New("nativewire: invalid vector partition coordinator request")
@@ -81,7 +83,7 @@ func (e *VectorPartitionCoordinatorErrorV1) Unwrap() error {
 
 type VectorPartitionCoordinatorLimitsV1 struct {
 	MaxSelectedPartitions, MaxGroups, MaxRequests, MaxConcurrentRequests int
-	MaxRetries, MaxRedirects, MaxRouterCandidates                        int
+	MaxRetries, MaxRedirects, MaxRouterScoreCalls, MaxLocalScoreCalls    int
 	MaxQueryBytes, MaxTopK, MaxEfSearch, MaxPartitionsPerRequest         int
 	MaxIdentityBytes, MaxStableIDBytes, MaxMergeEntries                  int
 	MaxRequestBytes, MaxCandidateBytes, MaxResponseBytes                 uint64
@@ -97,7 +99,8 @@ func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimit
 		MaxConcurrentRequests:   8,
 		MaxRetries:              1,
 		MaxRedirects:            1,
-		MaxRouterCandidates:     1_000_000,
+		MaxRouterScoreCalls:     1_000_000,
+		MaxLocalScoreCalls:      16_000_000,
 		MaxQueryBytes:           shard.MaxQueryBytes,
 		MaxTopK:                 shard.MaxTopK,
 		MaxEfSearch:             shard.MaxEfSearch,
@@ -115,7 +118,7 @@ func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimit
 // VectorPartitionCoordinatorRouterV1 is the exact pinned M4 generation used by
 // one coordinator request.
 type VectorPartitionCoordinatorRouterV1 interface {
-	SearchWithContextV1(context.Context, []float32, collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error)
+	SearchWithContextV1(context.Context, []float32, collections.VectorPartitionRouterSearchOptionsV3) (collections.VectorPartitionRouterSearchResultV1, error)
 	Status() collections.VectorPartitionRouterRuntimeStatusV1
 	Close() error
 }
@@ -247,19 +250,20 @@ type VectorPartitionCoordinatorRequestV1 struct {
 	Database, Catalog, Collection    string
 	IndexName, IndexDefinitionDigest string
 
-	Query                 []float32
-	Metric                VectorPartitionShardSearchMetricV1
-	RouterMode            string
-	RouterCandidateBudget int
-	PartitionProbes       int
-	Consistency           VectorPartitionShardSearchConsistencyV1
-	StatsMode             VectorPartitionShardSearchStatsModeV1
-	TopK, EfSearch        int
-	DeadlineUnixNano      int64
-	RequestBytesLimit     uint64
-	CandidateBytesLimit   uint64
-	ResponseBytesLimit    uint64
-	MergeEntriesLimit     int
+	Query               []float32
+	Metric              VectorPartitionShardSearchMetricV1
+	RouterMode          string
+	RouterScoreBudget   int
+	LocalScoreBudget    int
+	PartitionProbes     int
+	Consistency         VectorPartitionShardSearchConsistencyV1
+	StatsMode           VectorPartitionShardSearchStatsModeV1
+	TopK, EfSearch      int
+	DeadlineUnixNano    int64
+	RequestBytesLimit   uint64
+	CandidateBytesLimit uint64
+	ResponseBytesLimit  uint64
+	MergeEntriesLimit   int
 }
 
 type VectorPartitionCoordinatorNeighborV1 struct {
@@ -268,24 +272,25 @@ type VectorPartitionCoordinatorNeighborV1 struct {
 }
 
 type VectorPartitionCoordinatorCountersV1 struct {
-	SelectedDomains, SelectedPacks                           uint64
-	SelectedPartitions, SelectedGroups                       uint64
-	HNSWServedPartitions, ExactScanPartitions                uint64
-	Requests, RPCs, Retries, Redirects                       uint64
-	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens uint64
-	Cancellations, Failures                                  uint64
-	QueryBytes, RequestBytes                                 uint64
-	ResponseBytes, CandidateBytes                            uint64
-	MaxShardPartitions                                       uint64
-	MaxShardRequestBytes                                     uint64
-	MaxShardResponseBytes                                    uint64
-	MaxShardCandidateBytes                                   uint64
-	Candidates, Edges, MergeEntries                          uint64
-	BaseCandidates, DeltaCandidates                          uint64
-	BaseResults, DeltaResults                                uint64
-	LiveDomainsSearched, LiveMutatedIDs, LiveIDs, Cutovers   uint64
-	RequestPathFullRebuilds                                  uint64
-	Duplicates, ScoreDisagreements                           uint64
+	RouterScoreCalls, LocalScoreCalls, RouterCandidates, RouterEdges uint64
+	SelectedDomains, SelectedPacks                                   uint64
+	SelectedPartitions, SelectedGroups                               uint64
+	HNSWServedPartitions, ExactScanPartitions                        uint64
+	Requests, RPCs, Retries, Redirects                               uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens         uint64
+	Cancellations, Failures                                          uint64
+	QueryBytes, RequestBytes                                         uint64
+	ResponseBytes, CandidateBytes                                    uint64
+	MaxShardPartitions                                               uint64
+	MaxShardRequestBytes                                             uint64
+	MaxShardResponseBytes                                            uint64
+	MaxShardCandidateBytes                                           uint64
+	Candidates, Edges, MergeEntries                                  uint64
+	BaseCandidates, DeltaCandidates                                  uint64
+	BaseResults, DeltaResults                                        uint64
+	LiveDomainsSearched, LiveMutatedIDs, LiveIDs, Cutovers           uint64
+	RequestPathFullRebuilds                                          uint64
+	Duplicates, ScoreDisagreements                                   uint64
 }
 
 type VectorPartitionCoordinatorTimingV1 struct {
@@ -412,6 +417,7 @@ type vectorPartitionCoordinatorRouterSessionV1 struct {
 	partitionRows     []uint64
 	domainPackOffsets []int
 	domainPacks       []collections.VectorPartitionDomainPackV1
+	domainGraphs      bool
 	stats             *vectorPartitionCoordinatorRouterSessionStatsV1
 	refs              uint64
 	retired, closing  bool
@@ -593,6 +599,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		var partitionRows []uint64
 		var domainPackOffsets []int
 		var domainPacks []collections.VectorPartitionDomainPackV1
+		var domainGraphs bool
 		if err == nil && router != nil {
 			status := router.Status()
 			status.Manifest.DomainPacks = slices.Clone(status.Manifest.DomainPacks)
@@ -601,10 +608,31 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 				err = c.validateRouterStatus(status, domainPackOffsets)
 			}
 			if err == nil {
-				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				for domain := range len(domainPackOffsets) - 1 {
+					anchor := status.Manifest.DomainPacks[domainPackOffsets[domain]].PackID
+					groupID := c.placement.Partitions[anchor].GroupID
+					for _, mapping := range status.Manifest.DomainPacks[domainPackOffsets[domain]:domainPackOffsets[domain+1]] {
+						if c.placement.Partitions[mapping.PackID].GroupID != groupID {
+							err = fmt.Errorf("%w: split domain %d ownership", ErrVectorPartitionCoordinatorRouteMismatch, domain)
+							break
+						}
+					}
+					if err != nil {
+						break
+					}
+				}
 			}
 			if err == nil {
 				domainPacks = status.Manifest.DomainPacks
+				domainGraphs = vectorPartitionCoordinatorUsesDomainGraphsV1(status.Manifest)
+				if domainGraphs {
+					partitionRows, err = collections.VectorPartitionDomainGraphRowCountsV1(ctx, status.Manifest)
+					if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+						err = fmt.Errorf("%w: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err)
+					}
+				} else {
+					partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				}
 			}
 		}
 		c.sessionMu.Lock()
@@ -617,7 +645,8 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		}
 		if err == nil {
 			session := &vectorPartitionCoordinatorRouterSessionV1{
-				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, domainPacks: domainPacks, stats: stats, refs: 1,
+				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, domainPacks: domainPacks,
+				domainGraphs: domainGraphs, stats: stats, refs: 1,
 			}
 			c.sessions[key] = session
 			c.leases++
@@ -831,7 +860,8 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	if limits.MaxRedirects == 0 {
 		limits.MaxRedirects = defaults.MaxRedirects
 	}
-	fillInt(&limits.MaxRouterCandidates, defaults.MaxRouterCandidates)
+	fillInt(&limits.MaxRouterScoreCalls, defaults.MaxRouterScoreCalls)
+	fillInt(&limits.MaxLocalScoreCalls, defaults.MaxLocalScoreCalls)
 	fillInt(&limits.MaxQueryBytes, defaults.MaxQueryBytes)
 	fillInt(&limits.MaxTopK, defaults.MaxTopK)
 	fillInt(&limits.MaxEfSearch, defaults.MaxEfSearch)
@@ -847,7 +877,7 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	}
 	if limits.MaxSelectedPartitions < 1 || limits.MaxGroups < 1 || limits.MaxRequests < 1 ||
 		limits.MaxConcurrentRequests < 1 || limits.MaxConcurrentRequests > limits.MaxRequests ||
-		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterCandidates < 1 ||
+		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterScoreCalls < 1 || limits.MaxLocalScoreCalls < 1 ||
 		limits.MaxQueryBytes < 4 ||
 		limits.MaxTopK < 1 ||
 		limits.MaxEfSearch < limits.MaxTopK ||
@@ -920,6 +950,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	var partitionRows []uint64
 	var domainPackOffsets []int
 	var domainPacks []collections.VectorPartitionDomainPackV1
+	var domainGraphs bool
 	if strict == nil {
 		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 		if err != nil {
@@ -934,11 +965,13 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		partitionRows = routerLease.session.partitionRows
 		domainPackOffsets = routerLease.session.domainPackOffsets
 		domainPacks = routerLease.session.domainPacks
+		domainGraphs = routerLease.session.domainGraphs
 	} else {
 		router = strict.snapshot.snapshot.router.session.router
 		partitionRows = strict.snapshot.snapshot.router.session.partitionRows
 		domainPackOffsets = strict.snapshot.snapshot.router.session.domainPackOffsets
 		domainPacks = strict.snapshot.snapshot.router.session.domainPacks
+		domainGraphs = strict.snapshot.snapshot.router.session.domainGraphs
 	}
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if router == nil {
@@ -1001,10 +1034,14 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	routerStarted := time.Now()
-	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV1{
-		Mode: request.RouterMode, CandidateBudget: request.RouterCandidateBudget, PartitionProbes: request.PartitionProbes,
+	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV3{
+		Mode: request.RouterMode, ScoreBudget: request.RouterScoreBudget,
+		PartitionProbes: request.PartitionProbes,
 	})
 	response.Timing.RouterSearchNanos = elapsedNanosV1(routerStarted)
+	response.Counters.RouterScoreCalls = routed.Status.ScoreCalls
+	response.Counters.RouterCandidates = routed.Status.Candidates
+	response.Counters.RouterEdges = routed.Status.Edges
 	if err != nil {
 		return response, c.wrapError(err, "")
 	}
@@ -1014,7 +1051,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, domainPacks, partitionRows, replicatedReadySetDigest, routed.Partitions, strict, livePin)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, domainPacks, domainGraphs, partitionRows, replicatedReadySetDigest, routed.Partitions, strict, livePin)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -1024,6 +1061,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	counters := VectorPartitionCoordinatorCountersV1{
+		RouterScoreCalls: routed.Status.ScoreCalls, RouterCandidates: routed.Status.Candidates, RouterEdges: routed.Status.Edges,
 		SelectedDomains: uint64(len(routed.Partitions)), SelectedPacks: uint64(len(selectedPartitions)),
 		SelectedPartitions: uint64(len(selectedPartitions)), SelectedGroups: uint64(len(selectedGroups)),
 		Requests: uint64(len(tasks)), QueryBytes: uint64(len(request.Query)) * 4,
@@ -1056,6 +1094,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		return response, c.wrapError(err, "")
 	}
 	if counters.ResponseBytes > request.ResponseBytesLimit ||
+		counters.LocalScoreCalls > budget.scoreCalls ||
 		counters.CandidateBytes > request.CandidateBytesLimit {
 		return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")
 	}
@@ -1137,6 +1176,7 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 		return false
 	}
 	responseBytes, responseBytesOK := addUint64V1(counters.ResponseBytes, response.ResponseBytes)
+	scoreCalls, scoreCallsOK := addUint64V1(counters.LocalScoreCalls, response.ScoreCalls)
 	candidates, candidatesOK := addUint64V1(counters.Candidates, response.Candidates)
 	edges, edgesOK := addUint64V1(counters.Edges, response.Edges)
 	baseCandidates, baseCandidatesOK := addUint64V1(counters.BaseCandidates, response.BaseCandidates)
@@ -1168,7 +1208,7 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	hnswTotal, hnswOK := addUint64V1(counters.HNSWServedPartitions, hnswPartitions)
 	exactTotal, exactOK := addUint64V1(counters.ExactScanPartitions, exactPartitions)
 	candidateBytes, candidateBytesOK := mulUint64V1(response.Candidates, 64)
-	if !responseBytesOK || !candidatesOK || !edgesOK || !baseCandidatesOK || !deltaCandidatesOK || !baseResultsOK || !deltaResultsOK || !liveDomainsOK || !rebuildsOK || !readProofsOK || !generationPinsOK || !partitionOpensOK || !hnswOK || !exactOK || !candidateBytesOK {
+	if !responseBytesOK || !scoreCallsOK || !candidatesOK || !edgesOK || !baseCandidatesOK || !deltaCandidatesOK || !baseResultsOK || !deltaResultsOK || !liveDomainsOK || !rebuildsOK || !readProofsOK || !generationPinsOK || !partitionOpensOK || !hnswOK || !exactOK || !candidateBytesOK {
 		return false
 	}
 	shardCandidateBytes := candidateBytes
@@ -1177,6 +1217,7 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 		return false
 	}
 	counters.ResponseBytes = responseBytes
+	counters.LocalScoreCalls = scoreCalls
 	counters.Candidates = candidates
 	counters.Edges = edges
 	counters.BaseCandidates = baseCandidates
@@ -1276,9 +1317,9 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 		len(request.Query) < 1 || len(request.Query)*4 > l.MaxQueryBytes ||
 		request.PartitionProbes < 1 || request.PartitionProbes > l.MaxSelectedPartitions ||
 		request.PartitionProbes > int(p.PartitionCount) ||
-		request.RouterCandidateBudget < 1 || request.RouterCandidateBudget > l.MaxRouterCandidates ||
-		request.RouterMode == collections.VectorPartitionRouterModeApproxV1 &&
-			request.RouterCandidateBudget < request.PartitionProbes ||
+		request.RouterScoreBudget < 1 ||
+		request.RouterScoreBudget > min(l.MaxRouterScoreCalls, collections.MaxVectorPartitionRouterScoreBudgetV3) ||
+		request.LocalScoreBudget < 0 || request.LocalScoreBudget > l.MaxLocalScoreCalls ||
 		request.TopK < 1 || request.TopK > l.MaxTopK ||
 		request.EfSearch < request.TopK || request.EfSearch > l.MaxEfSearch ||
 		request.MergeEntriesLimit < 1 || request.MergeEntriesLimit > l.MaxMergeEntries {
@@ -1356,8 +1397,8 @@ func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCo
 		return ErrVectorPartitionCoordinatorInvalidRequest
 	}
 	if request.RouterMode == collections.VectorPartitionRouterModeExactV1 &&
-		request.RouterCandidateBudget < int(status.Representatives) {
-		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
+		request.RouterScoreBudget < int(status.Representatives) {
+		return fmt.Errorf("%w: exact router score budget", ErrVectorPartitionCoordinatorBudgetExceeded)
 	}
 	return nil
 }
@@ -1387,6 +1428,18 @@ func vectorPartitionCoordinatorDomainPackOffsetsV1(manifest collections.VectorPa
 	return offsets, nil
 }
 
+func vectorPartitionCoordinatorUsesDomainGraphsV1(manifest collections.VectorPartitionManifestV1) bool {
+	if manifest.DomainCount >= manifest.PartitionCount {
+		return false
+	}
+	root, section := false, false
+	for _, asset := range manifest.Assets {
+		root = root || asset.GraphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+		section = section || strings.Contains(asset.ID, "/section/")
+	}
+	return root && section
+}
+
 func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool {
 	return errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) ||
 		errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch)
@@ -1394,6 +1447,7 @@ func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool 
 
 type vectorPartitionCoordinatorBudgetV1 struct {
 	requestBytes uint64
+	scoreCalls   uint64
 }
 
 type vectorPartitionCoordinatorTaskV1 struct {
@@ -1405,7 +1459,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, domainPacks []collections.VectorPartitionDomainPackV1, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1, livePin *collections.VectorIndexPartitionLiveSearchPinV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, domainPacks []collections.VectorPartitionDomainPackV1, domainGraphs bool, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1, livePin *collections.VectorIndexPartitionLiveSearchPinV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1420,6 +1474,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
 	selected := make([]uint32, 0, len(routed))
+	servingRows := make([]uint64, len(partitionRows))
 	byGroup := make(map[raftcluster.GroupID][]uint32)
 	seen := make(map[uint32]struct{}, len(routed))
 	for _, score := range routed {
@@ -1432,17 +1487,35 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		}
 		seen[score.PartitionID] = struct{}{}
 		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
-		if start < 0 || end < start || end > len(domainPacks) {
+		if start < 0 || end <= start || end > len(domainPacks) {
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 		}
+		anchor := domainPacks[start].PackID
+		if int(anchor) >= len(c.placement.Partitions) || int(anchor) >= len(servingRows) {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		groupID := c.placement.Partitions[anchor].GroupID
 		for _, mapping := range domainPacks[start:end] {
 			packID := mapping.PackID
-			selected = append(selected, packID)
-			groupID := c.placement.Partitions[packID].GroupID
-			if _, ok := c.groups[groupID]; !ok {
+			if int(packID) >= len(c.placement.Partitions) || int(packID) >= len(partitionRows) {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+			}
+			if c.placement.Partitions[packID].GroupID != groupID {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
 			}
-			byGroup[groupID] = append(byGroup[groupID], packID)
+			if !domainGraphs {
+				servingRows[packID] = partitionRows[packID]
+				selected = append(selected, packID)
+				byGroup[groupID] = append(byGroup[groupID], packID)
+			}
+		}
+		if _, ok := c.groups[groupID]; !ok {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
+		}
+		if domainGraphs {
+			servingRows[anchor] = partitionRows[anchor]
+			selected = append(selected, anchor)
+			byGroup[groupID] = append(byGroup[groupID], anchor)
 		}
 	}
 	if len(selected) > c.limits.MaxSelectedPartitions {
@@ -1470,7 +1543,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
 	candidateRows, totalCandidateWeight, err := vectorPartitionCoordinatorCandidateRowsV1(
-		ctx, partitionRows, selected,
+		ctx, servingRows, selected,
 	)
 	if err != nil {
 		return nil, nil, nil, zero, err
@@ -1481,6 +1554,15 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	if err != nil {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
+	localScoreBudget := request.LocalScoreBudget
+	if localScoreBudget == 0 {
+		localScoreBudget = c.limits.MaxLocalScoreCalls
+	}
+	if localScoreBudget < taskCount {
+		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+	}
+	scoreSurplus := uint64(localScoreBudget - taskCount)
+	totalScoreWeight := totalCandidateWeight
 	type liveDomainKeyV1 struct {
 		group  raftcluster.GroupID
 		domain uint32
@@ -1492,6 +1574,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return livePin
 	}
 	liveDomainFloors := make(map[liveDomainKeyV1]uint64, len(routed))
+	liveDomainScoreWeights := make(map[liveDomainKeyV1]uint64, len(routed))
 	for _, score := range routed {
 		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
 		seenGroups := make(map[raftcluster.GroupID]struct{}, end-start)
@@ -1518,7 +1601,13 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			liveDomainFloors[liveDomainKeyV1{group: group, domain: score.PartitionID}] = deltaFloor
+			key := liveDomainKeyV1{group: group, domain: score.PartitionID}
+			liveDomainFloors[key] = deltaFloor
+			liveDomainScoreWeights[key] = candidateCeiling
+			totalScoreWeight, floorOK = addUint64V1(totalScoreWeight, candidateCeiling)
+			if !floorOK {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
 			totalCandidateFloor, floorOK = addUint64V1(totalCandidateFloor, deltaFloor)
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
@@ -1530,6 +1619,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	}
 	candidateSurplus := request.CandidateBytesLimit - totalCandidateFloor
 	var candidateWeightCursor uint64
+	var scoreWeightCursor uint64
 	assignedLiveDomains := make(map[liveDomainKeyV1]struct{})
 	for _, groupID := range groupIDs {
 		group := c.groups[groupID]
@@ -1578,6 +1668,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 				TopK: request.TopK, EfSearch: request.EfSearch, DeadlineUnixNano: request.DeadlineUnixNano,
 			}
 			var liveBaseline uint64
+			var liveScoreWeight uint64
 			if groupLivePin != nil {
 				shardRequest.LiveRevision = liveStatus.Revision
 				shardRequest.LiveCoverage = liveStatus.Coverage
@@ -1593,6 +1684,9 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 					assignedLiveDomains[key] = struct{}{}
 					shardRequest.LiveDomainIDs = append(shardRequest.LiveDomainIDs, domain)
 					liveBaseline, ok = addUint64V1(liveBaseline, liveDomainFloors[key])
+					if ok {
+						liveScoreWeight, ok = addUint64V1(liveScoreWeight, liveDomainScoreWeights[key])
+					}
 					if !ok {
 						return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 					}
@@ -1638,6 +1732,19 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			}
 			candidateShare = min(candidateShare, shardLimits.MaxCandidateBytes)
 			shardRequest.CandidateBytesLimit = candidateShare
+			taskScoreWeight, ok := addUint64V1(taskCandidateWeight, liveScoreWeight)
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			scoreShare := vectorPartitionCoordinatorWeightedBudgetShareV1(
+				scoreSurplus, totalScoreWeight, scoreWeightCursor, taskScoreWeight,
+			)
+			scoreShare++
+			scoreWeightCursor, ok = addUint64V1(scoreWeightCursor, taskScoreWeight)
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			shardRequest.ScoreCallsLimit = min(scoreShare, shardLimits.MaxScoreCalls)
 			if strict != nil {
 				identity := strict.snapshot.IdentityV1()
 				groupApplied := uint64(0)
@@ -1678,7 +1785,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	if !ok || mergeEntries > uint64(request.MergeEntriesLimit) {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
-	return tasks, selected, groupIDs, vectorPartitionCoordinatorBudgetV1{requestBytes: totalRequestBytes}, nil
+	return tasks, selected, groupIDs, vectorPartitionCoordinatorBudgetV1{requestBytes: totalRequestBytes, scoreCalls: uint64(localScoreBudget)}, nil
 }
 
 func vectorPartitionCoordinatorCandidateRowsV1(
@@ -2011,7 +2118,7 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 			return ErrVectorPartitionCoordinatorMalformedResponse
 		}
 	}
-	var candidates, edges, results uint64
+	var scoreCalls, candidates, edges, results uint64
 	for i, partial := range response.Partials {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -2028,6 +2135,14 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 			partial.Candidates != task.candidateRows[i] {
 			return ErrVectorPartitionCoordinatorMalformedResponse
 		}
+		if partial.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 && partial.ScoreCalls != partial.Candidates {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
+		scoreCallsNext, ok := addUint64V1(scoreCalls, partial.ScoreCalls)
+		if !ok {
+			return ErrVectorPartitionCoordinatorBudgetExceeded
+		}
+		scoreCalls = scoreCallsNext
 		expectedNeighbors := uint64(request.TopK)
 		if request.LiveCoverage == 0 && partial.Candidates < expectedNeighbors {
 			expectedNeighbors = partial.Candidates
@@ -2088,7 +2203,11 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		validContributions = true
 	}
 	validLiveDomains := request.LiveCoverage == 0 || response.LiveDomainsSearched == uint64(len(request.LiveDomainIDs))
-	if !ok || !validContributions || !validLiveDomains || response.ResponseBytes != responseBytes ||
+	validScoreCalls := response.ScoreCalls >= scoreCalls && response.ScoreCalls <= request.ScoreCallsLimit
+	if request.LiveCoverage == 0 {
+		validScoreCalls = response.ScoreCalls == scoreCalls
+	}
+	if !ok || !validContributions || !validLiveDomains || !validScoreCalls || response.ResponseBytes != responseBytes ||
 		response.Candidates != totalCandidates || response.Edges != edges {
 		return ErrVectorPartitionCoordinatorMalformedResponse
 	}
@@ -2246,7 +2365,7 @@ func classifyVectorPartitionCoordinatorErrorV1(err error) VectorPartitionCoordin
 		return VectorPartitionCoordinatorErrorGenerationMismatchV1
 	case errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch):
 		return VectorPartitionCoordinatorErrorRouteMismatchV1
-	case errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded):
+	case errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded), errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget):
 		return VectorPartitionCoordinatorErrorBudgetExceededV1
 	case errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse):
 		return VectorPartitionCoordinatorErrorMalformedResponseV1

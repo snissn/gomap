@@ -11,6 +11,14 @@ import (
 )
 
 func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
+	for _, cache := range []string{"warm", "cold", "stale", "cold-sibling"} {
+		t.Run(cache, func(t *testing.T) {
+			testTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t, cache)
+		})
+	}
+}
+
+func testTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T, cache string) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
@@ -19,6 +27,22 @@ func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
 	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, opts); err != nil {
 		t.Fatal(err)
 	}
+	reader := col
+	if cache == "cold-sibling" {
+		var err error
+		reader, err = NewCollectionManager(col.db).OpenCollection(col.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader.catalogMu.Lock()
+	switch cache {
+	case "cold", "cold-sibling":
+		reader.catalog = nil
+	case "stale":
+		reader.catalogCommitSeq++
+	}
+	reader.catalogMu.Unlock()
 	before := col.typedGraphPublicationSnapshot()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once, releaseOnce sync.Once
@@ -43,10 +67,10 @@ func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
 	}
 	done := make(chan opened, 1)
 	go func() {
-		owner, err := col.openTypedGraphReadOwner(limits)
+		owner, err := reader.openTypedGraphReadOwner(limits)
 		if err == nil {
 			var buffer VectorIndexSearchBuffer
-			response, view, searchErr := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+			response, view, searchErr := reader.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
 			if view != nil {
 				_, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 				searchErr = errors.Join(searchErr, fetchErr, view.Close())
@@ -80,7 +104,7 @@ func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
 	if err := <-written; err != nil {
 		t.Fatal(err)
 	}
-	next, err := col.openTypedGraphReadOwner(limits)
+	next, err := reader.openTypedGraphReadOwner(limits)
 	if err != nil {
 		t.Fatal(err)
 	}

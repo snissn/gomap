@@ -12,6 +12,7 @@ import (
 // base is solely an immutable accelerator. Explicit serving admission installs
 // this route without changing the current snapshot's logical authority.
 type typedGraphOverlaySearch struct {
+	lastMetadataGeneration       uint64
 	base                         *VectorIndexSearcher
 	pack                         *columnHNSWSearchPackPreparedView
 	current                      *CollectionReadView
@@ -46,12 +47,14 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 	if !eligible {
 		return nil, errColumnHNSWSearchPackSearchUnavailable
 	}
-	rows, err := suffix.prepareRows(current, limits.Bytes)
+	var lastMetadataGeneration uint64
+	rows, err := suffix.prepareRowsWithAccounting(current, limits.Bytes, 0, nil, &lastMetadataGeneration)
 	if err != nil {
 		return nil, err
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
 	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, sourceRows: suffix.rows, sourceTombstones: suffix.tombstones, sourceBytes: suffix.bytes}
+	view.lastMetadataGeneration = lastMetadataGeneration
 	if !vectorIndexUsesCosineNormalizedF32V1(base.reader.def) {
 		view.invNorms = make([]float32, len(rows))
 	}

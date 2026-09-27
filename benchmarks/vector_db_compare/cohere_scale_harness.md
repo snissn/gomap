@@ -429,3 +429,82 @@ error; cleanup, guard, provenance, schema, an unknown/additional public call, or
 evidence defects are `invalid`. Final state is reported only as the reviewed
 producer's exhaustive semantic attestation with
 `independently_recomputed:false` and `digest_claim:false`.
+
+### Normalized-v4 final packet
+
+The replacement production-shaped campaign uses packet schema
+`treedb_cohere_normalized_v4_packet/v1`. It has exactly `schema`,
+`candidate_commit`, `files`, `dataset`, `inputs`, `runs`, and `predecessors`.
+`files` retains distinct relative-path/SHA-256/byte records. `dataset` maps
+`manifest`, `documents`, `queries`, and `truth`; `inputs` maps
+`treedb_service_binary`, `go_helper`, and `serving`.
+
+`runs` has exact `exact` and `sq8` entries. Each entry records `files`,
+`support`, exact freeze/run argv, and zero exit status. Exact run files are
+`plan`, `events`, `truth`, and `resources`. SQ8 adds `matrix` and `engine`, and
+its support map has `service_cpu_pprof`, `service_cpu_top`, `profile_manifest`,
+and `service_stats`; exact support is empty. Every inventoried file has exactly
+one role.
+
+The ordered predecessor receipts bind issue/PR pairs 4730/4731, 4723/4732,
+4724/4733, and 4725/4735. Each records `reviewed_head`, `merge_commit`,
+`reviewed_tree`, and `merge_tree`; the reviewed and merged trees must match.
+The consumer rejects a dirty or different source checkout and independently
+recomputes production-lane statistics, same-shortlist engine thresholds,
+canonical quality, final-state projection, one-FP32/SQ8 resource ownership, and
+disk/RSS deltas from raw retained evidence.
+
+Normalized-v4 admits the producer's exact SHA-256-pinned Go 1.26 service/helper
+binaries with the correct package/module, candidate VCS revision and
+`vcs.modified=false`, whether or not built with `-trimpath`. Actual build
+settings are retained; untrimmed binaries do **not** claim reproducibility across
+arbitrary source paths. This differs from legacy **Q5 packet analysis**, whose
+trimming requirement remains unchanged. Prefer `go build -trimpath` for fresh
+campaigns; never rebuild and relabel already measured binaries.
+
+For an independently reviewed, landed offline-consumer-only repair, pass
+`--analyzer-commit <full-commit>` and write a new `--output` path. The analyzer
+commit must descend from the unchanged packet's producer candidate. Within the
+recorded product/harness source trees, only this analyzer, its existing test
+file and this documentation may differ. Executing source/imports must match the
+clean analyzer commit; all other local imports must also match the producer.
+Product, producer, client and other imported-code drift fails closed. The
+analysis records distinct producer/analyzer identities, actual imported blob
+hashes and the consumer-only changed paths. Without that option, source must
+match the producer as before. Packet/plan/binary/producer implementation binding,
+normalization, truth, numerical thresholds and resource rules remain
+unchanged. Preserve the original raw packet, binaries, hashes and invalid
+analysis; no measured runtime/data change is covered by this exception.
+
+The owner-authorized offline qualification correction validates ANN results
+independently before and after reopen: source-recomputed scores, ordering,
+scalar cohort, route/packed-work receipts, and all existing recall thresholds.
+Each phase must pass separately; their recall is not pooled. Candidate IDs need
+not be identical across asynchronous filter-navigation warmup or graph rebuild.
+Small exhaustive filters (at most 4096 eligible rows) still require identical
+IDs and scores. Exhaustive final-state verification remains mandatory.
+
+For timed exact service/native clients, omitted Go `omitempty` SQ8 metadata
+means its documented empty string or integer zero. Explicit nulls, wrong types,
+nonempty metadata or nonzero SQ8 work still fail; collection receipts and SQ8
+clients retain their required fields. This is metadata handling, not vector
+output: production requests already omit embeddings by default. Record the
+landed corrected analyzer identity and a new analysis; retain earlier invalid
+verdicts rather than presenting the correction as unchanged acceptance logic.
+
+All five resource inventories (`initial_ready`, `pre_fold`, `post_fold`,
+`post_reopen`, `final_verified`) are LIVE serving observations. File rows,
+category bytes and their total come from the same collected metadata; a second
+live directory walk is not required to agree. The walker uses one no-follow stat
+per observed entry, excludes symlinks, skips files/directories that disappear
+with ENOENT/ESTALE, and propagates other errors. Required vector assets still
+must be present with valid owned extents and canonical typed-part references.
+These observations do not claim filesystem quiescence or an atomic snapshot.
+
+The final whole-directory exact/SQ8 disk comparison instead uses the existing
+terminal `final_disk_bytes`, after successful clean shutdown of all expected
+owned service lifetimes. The consumer independently validates shutdown and
+positive integer totals. This boundary is **post-clean-shutdown owned-directory
+bytes, including retained WAL**. Live asset/category breakdowns remain separate
+from stopped totals; shutdown does not imply removal of every theoretically
+reclaimable byte. All numerical qualification thresholds are unchanged.

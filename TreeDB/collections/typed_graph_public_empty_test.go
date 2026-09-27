@@ -37,7 +37,7 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 			if retainedEmpty {
 				t.Fatal("empty ensure retained a prepared holder")
 			}
-			query := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, 0, 0, 0, 0, 0, 0, 0}, TopK: 4, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}
+			query := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, 0, 0, 0, 0, 0, 0, 0}, TopK: 4, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}
 			check := func(want string) {
 				t.Helper()
 				for _, filtered := range []bool{false, true} {

@@ -113,8 +113,8 @@ func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Con
 	}
 	// Mutation ownership is always one canonical exact-router decision. Search
 	// tuning in RequestBase must never weaken the write-owner proof.
-	selection, err := lease.session.router.SearchWithContextV1(ctx, request.Vector, collections.VectorPartitionRouterSearchOptionsV1{
-		Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(status.Representatives), PartitionProbes: 1,
+	selection, err := lease.session.router.SearchWithContextV1(ctx, request.Vector, collections.VectorPartitionRouterSearchOptionsV3{
+		Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(status.Representatives), PartitionProbes: 1,
 	})
 	if err != nil {
 		return public.InsertResponseV1{}, publicBackendErrorV1(err)
@@ -181,6 +181,9 @@ type vectorPartitionPublicPinnedSearchV1 struct {
 }
 
 func (b *VectorPartitionPublicBackendV1) PinVectorPartitionSearchSnapshotV1(ctx context.Context, options public.PinSearchSnapshotOptionsV1) (public.SearchSnapshotBackendV1, public.FastSearchEvidenceV1, error) {
+	if b != nil && b.opts.Identity.SourceFormat == 2 {
+		return nil, public.FastSearchEvidenceV1{}, raftplacement.ErrVectorPartitionLifecycleGuard
+	}
 	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
 		return nil, public.FastSearchEvidenceV1{}, errors.New("production topology is unavailable")
 	}
@@ -214,6 +217,9 @@ func (p *vectorPartitionPublicPinnedSearchV1) Close() error {
 }
 
 func (b *VectorPartitionPublicBackendV1) coordinatorRequestV1(request public.SearchRequestV1) (VectorPartitionCoordinatorRequestV1, error) {
+	if b != nil && b.opts.Identity.SourceFormat == 2 {
+		return VectorPartitionCoordinatorRequestV1{}, raftplacement.ErrVectorPartitionLifecycleGuard
+	}
 	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
 		return VectorPartitionCoordinatorRequestV1{}, errors.New("production topology is unavailable")
 	}
@@ -224,7 +230,8 @@ func (b *VectorPartitionPublicBackendV1) coordinatorRequestV1(request public.Sea
 	sequence := b.sequence.Add(1)
 	r.RequestID = fmt.Sprintf("%s/%016x", r.RequestID, sequence)
 	r.CancellationID = fmt.Sprintf("%s/%016x", r.CancellationID, sequence)
-	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Version, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
+	// Public API V1 and coordinator routing V2 are separate protocol boundaries.
+	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = VectorPartitionCoordinatorVersionV1, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
 	r.RequestBytesLimit, r.CandidateBytesLimit, r.ResponseBytesLimit, r.MergeEntriesLimit = request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, request.Limits.MergeEntries
 	r.DeadlineUnixNano = 0
 	if !request.Deadline.IsZero() {
@@ -242,6 +249,7 @@ func (b *VectorPartitionPublicBackendV1) publicSearchResponseV1(request public.S
 	}
 	adapterStarted := time.Now()
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
+		RouterScoreCalls: response.Counters.RouterScoreCalls, RouterCandidates: response.Counters.RouterCandidates, RouterEdges: response.Counters.RouterEdges,
 		SelectedDomains: response.Counters.SelectedDomains, SelectedPacks: response.Counters.SelectedPacks,
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		HNSWServedPartitions: response.Counters.HNSWServedPartitions, ExactScanPartitions: response.Counters.ExactScanPartitions,
@@ -470,6 +478,12 @@ func publicBackendErrorV1(err error) error {
 	}
 	if errors.Is(err, ErrFixedPeerVectorProofStaleV1) || errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {
 		return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: err}
+	}
+	// The public query does not choose the coordinator's score-call budget.
+	// Preserve exhaustion of that server-owned limit as availability rather
+	// than blaming a valid client request.
+	if errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
+		return &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: err}
 	}
 	var coordinatorErr *VectorPartitionCoordinatorErrorV1
 	if errors.As(err, &coordinatorErr) {

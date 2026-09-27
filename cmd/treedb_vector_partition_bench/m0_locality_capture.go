@@ -37,34 +37,35 @@ type m0LocalityTraceRowV1 struct {
 	Partitions []m0LocalityTracePartitionV1 `json:"partitions"`
 }
 type m0LocalityCaptureV1 struct {
-	Schema           string                                                     `json:"schema"`
-	DB               string                                                     `json:"retained_db"`
-	Split            string                                                     `json:"split_sha256"`
-	Artifact         string                                                     `json:"graph_artifact_sha256,omitempty"`
-	Descriptor       string                                                     `json:"descriptor_sha256,omitempty"`
-	Source           vectorpartition.Source                                     `json:"source,omitempty"`
-	Manifest         string                                                     `json:"manifest_integrity_digest,omitempty"`
-	ReadySet         string                                                     `json:"ready_set_digest,omitempty"`
-	RouterModel      string                                                     `json:"router_model_digest,omitempty"`
-	BinarySHA256     string                                                     `json:"binary_sha256"`
-	SourceRevision   string                                                     `json:"source_revision"`
-	VCSModified      bool                                                       `json:"vcs_modified"`
-	Probes           int                                                        `json:"probes"`
-	RouterCandidates int                                                        `json:"router_candidates"`
-	EF               int                                                        `json:"ef_search"`
-	PageScope        string                                                     `json:"page_scope"`
-	MedianPages      uint64                                                     `json:"median_unique_graph_vector_pages"`
-	P95Pages         uint64                                                     `json:"p95_unique_graph_vector_pages"`
-	Rows             []m0LocalityCaptureRowV1                                   `json:"rows"`
-	Traces           []m0LocalityTraceRowV1                                     `json:"traces,omitempty"`
-	Snapshots        map[uint32]collections.VectorPartitionPackLayoutSnapshotV1 `json:"snapshots,omitempty"`
+	Schema                    string                                                     `json:"schema"`
+	DB                        string                                                     `json:"retained_db"`
+	Split                     string                                                     `json:"split_sha256"`
+	Artifact                  string                                                     `json:"graph_artifact_sha256,omitempty"`
+	Descriptor                string                                                     `json:"descriptor_sha256,omitempty"`
+	Source                    vectorpartition.Source                                     `json:"source,omitempty"`
+	Manifest                  string                                                     `json:"manifest_integrity_digest,omitempty"`
+	ReadySet                  string                                                     `json:"ready_set_digest,omitempty"`
+	RouterModel               string                                                     `json:"router_model_digest,omitempty"`
+	BinarySHA256              string                                                     `json:"binary_sha256"`
+	SourceRevision            string                                                     `json:"source_revision"`
+	VCSModified               bool                                                       `json:"vcs_modified"`
+	Probes                    int                                                        `json:"probes"`
+	RouterScoreBudget         int                                                        `json:"router_score_budget"`
+	EF                        int                                                        `json:"ef_search"`
+	PageScope                 string                                                     `json:"page_scope"`
+	MedianPages               uint64                                                     `json:"median_unique_graph_vector_pages"`
+	P95Pages                  uint64                                                     `json:"p95_unique_graph_vector_pages"`
+	Rows                      []m0LocalityCaptureRowV1                                   `json:"rows"`
+	Traces                    []m0LocalityTraceRowV1                                     `json:"traces,omitempty"`
+	Snapshots                 map[uint32]collections.VectorPartitionPackLayoutSnapshotV1 `json:"snapshots,omitempty"`
+	PackIdentityNeutralSHA256 map[uint32]string                                          `json:"pack_identity_neutral_sha256,omitempty"`
 }
 
 func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-locality-capture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var dataset, db, splitPath, out, artifactPath string
-	var probes, candidates, ef int
+	var probes, scoreBudget, ef int
 	var rawTraces bool
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&db, "retained-db", "", "read-only retained M3 DB")
@@ -72,14 +73,24 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	fs.StringVar(&artifactPath, "artifact", "", "frozen graph artifact for raw layout identity")
 	fs.IntVar(&probes, "probes", 2, "router partition probes")
-	fs.IntVar(&candidates, "router-candidates", 64, "router candidate budget")
+	fs.IntVar(&scoreBudget, "router-score-budget", defaultRouterScoreBudgetV3, "actual router score-call ceiling")
 	fs.IntVar(&ef, "ef-search", 128, "native ef search")
 	fs.BoolVar(&rawTraces, "raw-traces", false, "persist offline trace events and pack layout snapshots")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || candidates < probes || ef < 1 {
-		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-candidates/ef")
+	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || scoreBudget < 1 || scoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV3 || ef < 1 {
+		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-score-budget/ef")
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		return err
+	}
+	if err := validateFixture(fixture); err != nil {
+		return err
+	}
+	if !supportedFixtureGeneratorV1(fixture.Generator) {
+		return errors.New("historical M0 locality capture requires a procedural fixture")
 	}
 	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
 	if err != nil {
@@ -108,14 +119,10 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			ordinals[id] = uint32(ordinal)
 		}
 	}
-	fixture, err := loadFixture(dataset)
+	queries, err := loadFixtureQueriesV1(dataset, fixture)
 	if err != nil {
 		return err
 	}
-	if err := validateFixture(fixture); err != nil {
-		return err
-	}
-	_, queries := fixtureData(fixture)
 	split, splitSHA, err := loadLocalHNSWQuerySplitV1(splitPath)
 	if err != nil {
 		return err
@@ -145,39 +152,38 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if int(assets.manifest.DomainCount) < probes {
 		return errors.New("probes exceed retained routing domains")
 	}
-	// Open/verify each immutable pack once. Reopening inside the query loop
-	// would measure checksum/open work rather than traversal page locality.
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, assets.manifest.PartitionCount)
-	defer func() {
-		for _, s := range searchers {
-			if s != nil {
-				_ = s.Close()
-			}
-		}
-	}()
-	for p := range searchers {
-		searchers[p], err = assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(p))
-		if err != nil {
-			return err
-		}
+	// Reuse the serving harness so a multi-pack domain opens and routes to its
+	// one searchable anchor instead of treating every physical pack as a graph.
+	harness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		return err
 	}
+	defer harness.Close()
+	searchers := harness.searchers
 	snapshots := map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{}
+	var packDigests map[uint32]string
 	if rawTraces {
-		for p, s := range searchers {
+		packDigests = make(map[uint32]string, len(harness.servingPartitions))
+		for _, p := range harness.servingPartitions {
+			s := searchers[p]
 			snapshot, e := s.PackLayoutSnapshotV1(ordinals)
 			if e != nil {
 				return e
 			}
-			snapshots[uint32(p)] = snapshot
+			snapshots[p] = snapshot
+			packDigests[p], e = s.PackIdentityNeutralSHA256ForOfflineV1()
+			if e != nil {
+				return e
+			}
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v3", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v5", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterScoreBudget: scoreBudget, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots, PackIdentityNeutralSHA256: packDigests}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")
 		}
 		q := m8Query32V1(queries[ordinal])
-		route, err := localHNSWAttributionQueryRouteV1(context.Background(), assets, q, candidates, probes)
+		route, err := harness.route(context.Background(), q, probes, collections.VectorPartitionRouterModeApproxV1, scoreBudget)
 		if err != nil {
 			return err
 		}

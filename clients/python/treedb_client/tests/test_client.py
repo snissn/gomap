@@ -18,6 +18,7 @@ from unittest import mock
 
 import _support  # noqa: F401
 from treedb_client import (
+    IndexInfo,
     BenchmarkVectorIndexOptions,
     Document,
     HybridFusionOptions,
@@ -41,6 +42,7 @@ from treedb_client.client import (
     _dense_http_results_ordered,
     _dense_work_requires_score_plane,
     _is_legacy_scalar_u8_v1_index,
+    _validate_metadata_update_paths,
 )
 from treedb_client._dense_work import DenseScorePlaneProof, dense_quantized_response_work_matches
 
@@ -599,6 +601,74 @@ class TreeDBClientTests(unittest.TestCase):
             documents = json_body(server.records[0])["documents"]
             self.assertEqual(documents[0], {"id": "model", "embedding_f32_le_b64": encoded})
             self.assertEqual(documents[1], {"id": "mapping", "embedding_f32_le_b64": encoded})
+
+    def test_replace_source_by_id_sends_one_explicit_atomic_request(self) -> None:
+        route = "/v1/indexes/docs/documents/replace_source_by_id"
+        response = {"index": SAMPLE_INDEX, "deleted_count": 2, "inserted_count": 1}
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.replace_source_by_id(
+                "docs", ["source#0", "source#1", "missing"],
+                [Document(id="source#0", content="fresh", embedding=[1, 0], meta={"repo": "gomap"})],
+                expected_generation=1,
+            )
+            self.assertEqual((result.deleted_count, result.inserted_count), (2, 1))
+            self.assertEqual(len(server.records), 1)
+            body = json_body(server.records[0])
+            self.assertEqual(body["expected_generation"], 1)
+            self.assertEqual(body["delete_ids"], ["source#0", "source#1", "missing"])
+            self.assertEqual([doc["id"] for doc in body["documents"]], ["source#0"])
+        for generation in (None, 0, -1, True, 1 << 64):
+            with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").replace_source_by_id("docs", [], [], expected_generation=generation)
+
+    def test_update_metadata_by_id_sends_no_vectors_and_validates_paths(self) -> None:
+        route = "/v1/indexes/docs/documents/update_metadata_by_id"
+        response = {"index": SAMPLE_INDEX, "matched_count": 1, "modified_count": 1}
+        unicode_values = {"emoji": "\U0001f600", "replacement": "\ufffd", "literal": "\\ud800"}
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.update_metadata_by_id(
+                "docs", ["a", "missing"], {"meta.acl": "new", "meta.rank": 2, "meta.unicode": unicode_values}, ["meta.old"], expected_generation=1
+            )
+            self.assertEqual((result.matched_count, result.modified_count), (1, 1))
+            body = json_body(server.records[0])
+            self.assertEqual(body, {
+                "expected_generation": 1,
+                "ids": ["a", "missing"],
+                "set": {"meta.acl": "new", "meta.rank": 2, "meta.unicode": unicode_values},
+                "unset": ["meta.old"],
+            })
+        invalid = (
+            (["a", "a"], {"meta.x": 1}, []),
+            (["a"], {"content": "x"}, []),
+            (["a"], {"meta.x": 1}, ["meta.x"]),
+            (["a"], {"meta.x": 1}, ["meta.x.child"]),
+            (["a"], {"meta.x": 1, "meta.x-child": 2}, ["meta.x.child"]),
+            (["a"], {}, ["meta.x", "meta.x"]),
+            ([], {"meta.x": 1}, []),
+            (["a"], {"meta.x": "\ud800"}, []),
+            (["a"], {"meta.x": {"\udc00": 1}}, []),
+            (["a"], {"meta.x": ["\ud800"]}, []),
+        )
+        for ids, set_values, unset in invalid:
+            with self.subTest(ids=ids, set=set_values, unset=unset), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ids, set_values, unset, expected_generation=1
+                )
+        for generation in (None, 0, -1, True, 1 << 64):
+            with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ["a"], {}, [], expected_generation=generation
+                )
+
+    def test_metadata_many_paths_preserve_input(self) -> None:
+        paths = [f"meta.field{i:04d}" for i in range(4096, 0, -1)]
+        before = paths.copy()
+        _validate_metadata_update_paths({"meta.a-child": 1, "meta.a.child": 2}, paths)
+        self.assertEqual(paths, before)
+        with self.assertRaises(InvalidRequestError):
+            _validate_metadata_update_paths({"meta.a": 1, "meta.a-child": 2, "meta.a.child": 3}, paths)
 
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {
@@ -1183,6 +1253,30 @@ class TreeDBClientTests(unittest.TestCase):
                 self.assertIsNotNone(caught.exception.dense_work)
                 self.assertIsNotNone(caught.exception.score_plane)
 
+            # Normalized HTTP requests pin the caller-held generation even
+            # when expected_generation was omitted from the public call.
+            normalized_info = IndexInfo.from_dict({
+                **typed_index, "vector_representation": "cosine_normalized_f32_v1",
+            })
+            for future in (False, True):
+                snapshot = replace(result.score_plane.snapshot, schema_generation=2 if future else 1)
+                proof = replace(result.score_plane, snapshot=snapshot,
+                                requested_ef_search=normalized_info.vector_ef_search,
+                                requested_rerank_candidates=normalized_info.vector_ef_search)
+                work = replace(result.dense_work, graph=replace(result.dense_work.graph, snapshot=snapshot))
+                error = IndexUnavailableError("index_unavailable", "budget", dense_work=work, score_plane=proof)
+                with self.subTest(normalized_implicit_generation=future), \
+                     mock.patch.object(client, "_request", side_effect=error) as request, \
+                     self.assertRaises(TreeDBProtocolError if future else IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", diagnostics=True,
+                        index_info=normalized_info,
+                    )
+                self.assertEqual(request.call_args.args[2]["expected_generation"], normalized_info.generation)
+                self.assertEqual(caught.exception.dense_work, work)
+                self.assertEqual(caught.exception.score_plane, proof)
+
             partial_proof = replace(
                 result.score_plane, completed=False, reason="scoring interrupted",
                 quantized_code_bytes_read=0, exact_base_vector_bytes_read=0,
@@ -1685,6 +1779,33 @@ class TreeDBClientTests(unittest.TestCase):
                     "a",
                 )
                 filtered_exact_client.close()
+            packed_filtered_exact = copy.deepcopy(filtered_exact)
+            packed_filtered_exact["dense_work"]["graph"].update(
+                base_ann_scored=4097, exact_base_scored=4097, base_result_ids=4097,
+            )
+            packed_filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 4097
+            packed_filtered_exact["score_plane"].update(
+                exact_small_filter_score_calls=4097,
+                exact_base_vector_bytes_read=4097 * 8,
+                packed_score_batch_calls=1,
+                packed_score_candidates=4097,
+                packed_vector_bytes_read=4097 * 8,
+                forbidden_stable_score_calls=0,
+            )
+            with FixtureServer({
+                ("POST", "/v1/indexes/docs/search/vector"): (200, packed_filtered_exact, 0),
+            }) as packed_exact_server:
+                packed_exact_client = TreeDBClient(packed_exact_server.base_url, timeout=1)
+                packed_result = packed_exact_client.query_by_embedding(
+                    "docs", [1, 0], 1,
+                    filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertTrue(dense_quantized_response_work_matches(
+                    packed_result.dense_work, packed_result.score_plane, 1, 1, True,
+                ))
+                packed_exact_client.close()
             zero_width_filtered_exact = copy.deepcopy(filtered_exact)
             zero_width_filtered_exact["dense_work"]["graph"].update(
                 delta_scored=1, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
@@ -2558,6 +2679,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "docs",
                 "refund policy",
                 5,
+                text_query_mode="literal",
                 operator="and",
                 candidate_limit=100,
                 max_postings_scanned=1000,
@@ -2580,6 +2702,7 @@ class TreeDBClientTests(unittest.TestCase):
                     "top_k": 5,
                     "return_embedding": True,
                     "expected_generation": 2,
+                    "text_query_mode": "literal",
                     "operator": "and",
                     "candidate_limit": 100,
                     "max_postings_scanned": 1000,
@@ -2626,9 +2749,15 @@ class TreeDBClientTests(unittest.TestCase):
                 query="refund policy",
                 query_embedding=[0.1, 0.2],
                 top_k=5,
+                text_query_mode="literal",
+                text_operator="and",
                 candidate_limit=50,
                 text_candidate_limit=25,
+                max_postings_scanned=1000,
                 vector_candidate_limit=30,
+                vector_query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=32,
                 ef_search=64,
                 max_chunks_per_parent=1,
                 fusion=HybridFusionOptions(
@@ -2656,7 +2785,13 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["fusion"]["source_order"], ["text", "vector"])
             self.assertEqual(body["fusion"]["tie_policy"], "fused_score_best_rank_source_order_id")
             self.assertEqual(body["text_candidate_limit"], 25)
+            self.assertEqual(body["text_query_mode"], "literal")
+            self.assertEqual(body["text_operator"], "and")
+            self.assertEqual(body["max_postings_scanned"], 1000)
             self.assertEqual(body["vector_candidate_limit"], 30)
+            self.assertEqual(body["vector_query_mode"], "quantized_rerank")
+            self.assertEqual(body["quantized_index_name"], "embedding.scalar_u8.fast")
+            self.assertEqual(body["quantized_rerank_candidates"], 32)
             self.assertEqual(body["max_chunks_per_parent"], 1)
             self.assertEqual(body["return_embedding"], False)
 
@@ -2668,6 +2803,12 @@ class TreeDBClientTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "invalid_request")
         self.assertIn("query or query_embedding", caught.exception.message)
+
+        with self.assertRaises(InvalidRequestError) as lexical:
+            client.search_hybrid(
+                "docs", query_embedding=[1.0, 0.0], top_k=1, text_query_mode="literal"
+            )
+        self.assertIn("lexical options require query", lexical.exception.message)
 
     def test_service_errors_propagate(self) -> None:
         routes = {

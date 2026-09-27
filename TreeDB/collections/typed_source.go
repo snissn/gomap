@@ -73,6 +73,15 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	if err := c.requireColumnStoreCommandWAL(c.Meta(), nil); err != nil {
 		return 0, err
 	}
+	if err := c.db.CheckCommandWALPublishReady(); err != nil {
+		return 0, err
+	}
+	// An empty replacement is still admitted against the live typed schema and
+	// command-WAL policy above, but it has no source plan to publish. In
+	// particular, do not manufacture an empty legacy source WAL frame.
+	if len(deleteIDs) == 0 && len(insertIDs) == 0 {
+		return 0, nil
+	}
 	deleted, err := c.replaceSourceDocumentsAtomicModeSchemaLocked(nil, deleteIDs, insertIDs, retained, nil, nil, projection, upsert, insertStats)
 	return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }

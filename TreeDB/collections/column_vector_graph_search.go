@@ -1143,6 +1143,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreTileOrdinals            []int
 	scoreTileScores              []float64
 	scoreTileRowIDs              []uint32
+	segmentedScoreRowIDs         []uint32
 	filterNavigationRowIDs       []uint32
 	scoreTileDots                []float32
 	scoreTileQuantizedDots       []int64
@@ -1189,6 +1190,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, scoreTileCapacity)
 	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, scoreTileCapacity)
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, scoreTileCapacity)
+	s.segmentedScoreRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.segmentedScoreRowIDs, scoreTileCapacity)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, scoreTileCapacity)
 	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, scoreTileCapacity)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, wavefrontWidth)
@@ -1219,6 +1221,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
 	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, scoreTileCapacity)
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, scoreTileCapacity)
+	s.segmentedScoreRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.segmentedScoreRowIDs, scoreTileCapacity)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, scoreTileCapacity)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
 	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, ordinalTileCapacity)

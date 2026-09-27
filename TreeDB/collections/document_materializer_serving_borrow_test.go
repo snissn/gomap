@@ -526,12 +526,18 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 
 func TestTypedGraphPublicConcurrentMaterializersShareOnlyHolderBacking(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
+	const callers = 8
 	col, base, ids, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	index := base.indexName
 	if err := base.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := col.EnsureColumnGraphServing(context.Background(), index, typedGraphPublicTestOptions()); err != nil {
+	opts := typedGraphPublicTestOptions()
+	// Each caller may hold an owner concurrently, in addition to the anchor
+	// and serving keeper. Catalog loading must not accidentally serialize
+	// enough callers to fit the default four-owner test budget.
+	opts.Owners.Owners = callers + 2
+	if err := col.EnsureColumnGraphServing(context.Background(), index, opts); err != nil {
 		t.Fatal(err)
 	}
 	query := VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 16, StatsMode: VectorIndexSearchStatsModeMinimal}
@@ -552,7 +558,6 @@ func TestTypedGraphPublicConcurrentMaterializersShareOnlyHolderBacking(t *testin
 	}
 	warm := access.pool.ledger.snapshot()
 
-	const callers = 8
 	type result struct {
 		documents                  DocumentFetchResponse
 		rowCache, typedColumnCache *columnPhysicalAssetReadCache

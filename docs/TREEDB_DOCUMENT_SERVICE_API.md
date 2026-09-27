@@ -275,7 +275,14 @@ scalar strings, create a cosine `column_graph` index with `typed_input=true`:
   "dimension": 2,
   "metric": "cosine",
   "typed_input": true,
-  "vector_index_options": {"strategy": "column_graph"},
+  "vector_index_options": {
+    "strategy": "column_graph",
+    "representation": "cosine_normalized_f32_v1",
+    "ef_search": 64,
+    "quantized_indexes": [
+      {"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}
+    ]
+  },
   "scalar_fields": [
     {"field": "user_id", "value_type": "string"},
     {"field": "fpath", "value_type": "string"}
@@ -283,7 +290,10 @@ scalar strings, create a cosine `column_graph` index with `typed_input=true`:
 }
 ```
 
-The response echoes `index.typed_input=true`. Undeclared metadata remains
+The response echoes `index.typed_input=true` and
+`index.vector_representation="cosine_normalized_f32_v1"`. The representation
+is fixed at creation; an omitted representation retains legacy behavior and
+cannot be changed in place. Undeclared metadata remains
 residual JSON. Creation without `column_graph_serving` declares the schema; it
 does not build or admit the graph. Load typed documents, then use the explicit
 [optimize actions](#selected-typed-optimize-actions) below. A compatible create
@@ -315,6 +325,7 @@ Responses include:
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
     "vector_strategy": "column_graph",
+    "vector_representation": "cosine_normalized_f32_v1",
     "vector_m": 16,
     "vector_ef_construction": 128,
     "vector_ef_search": 64,
@@ -372,6 +383,93 @@ POST /v1/indexes/{index}/documents/upsert
 
 Duplicate IDs in one request, missing embeddings, non-finite vector values, and
 dimension mismatches fail with `invalid_request`.
+
+## Atomically replace an explicit source
+
+```http
+POST /v1/indexes/{index}/documents/replace_source_by_id
+```
+
+```json
+{
+  "expected_generation": 1,
+  "delete_ids": ["source#0", "source#1", "source#2"],
+  "documents": [
+    {
+      "id": "source#0",
+      "content": "replacement chunk",
+      "embedding": [0.1, 0.2, 0.3],
+      "meta": {"source": "source"}
+    }
+  ]
+}
+```
+
+The caller supplies the complete bounded old-ID scope and every live replacement
+document. TreeDB does not discover, chunk, or embed the source and does not fetch
+old vectors. IDs may overlap across the two sets (insertion wins), but duplicates
+within either set are invalid. Empty `documents` is delete-only; both sets empty
+is an admitted no-op. The response contains `index`, `deleted_count`, and
+`inserted_count`. A positive `expected_generation` is mandatory.
+
+This operation maps to one `ReplaceTypedSourceByID` publication. A
+`commit_ambiguous` response may already be visible or recoverable and must not be
+blindly retried; `recovery_required` requires reopening/recovery first.
+
+## Update metadata for explicit IDs
+
+```http
+POST /v1/indexes/{index}/documents/update_metadata_by_id
+```
+
+```json
+{
+  "expected_generation": 1,
+  "ids": ["doc-1", "missing"],
+  "set": {"meta.acl": "team-a", "meta.attributes.rank": 2},
+  "unset": ["meta.obsolete"]
+}
+```
+
+`expected_generation` is mandatory and refers to the persisted vector/text
+schema generation, not a document revision. IDs must be non-empty and unique.
+Missing IDs are skipped: `matched_count` reports existing IDs and
+`modified_count` reports rows whose metadata actually changed.
+
+Only dotted `meta.*` paths are accepted. Identical or ancestor/descendant path
+overlaps across `set` and `unset` are invalid. Declared scalar metadata fields
+require string values and are required, so they cannot be unset. Content,
+embedding/vector, ID, and chunk-linkage mutations are outside this operation.
+Metadata strings and object keys must be valid UTF-8, including nested values
+supplied through the Go API; invalid input is rejected before publication.
+Metadata JSON also rejects unpaired UTF-16 surrogate escapes before decoding,
+including HTTP/native requests and Go `json.RawMessage` values. Valid surrogate
+pairs and intentional U+FFFD characters remain supported. Other document routes
+retain their existing JSON semantics.
+The Go operation validates potentially serialized struct fields, including
+exported fields promoted through private embedded structs; private ordinary
+fields and exact `json:"-"` tags are ignored. Custom `MarshalJSON` output owns
+its representation and is validated as raw JSON. `MarshalText`-dependent values
+and non-string map keys are unsupported: convert them to explicit valid UTF-8
+strings first. String-kind map keys retain Go's ordinary underlying-string
+semantics. Custom serializers must not mutate the supplied request.
+An allowed `set` value is a whole JSON value: literal keys inside an object
+replacement are preserved as keys, including during recovery.
+Path-overlap checks scale with the input size and sorting, not all path pairs.
+Recovery accounts metadata format 13 as typed payload frames and decoded rows,
+not legacy collection/projection work.
+The request contains no vector input; durable format 13 and runtime publication
+preserve the existing content and scoring/vector authority. A fully admitted
+no-op creates no WAL or row/manifest publication. The explicit batch is atomic.
+
+Native clients negotiate the independent local-only command 68/v1 capability
+and fail closed without an HTTP retry or fallback. `commit_ambiguous` and
+`recovery_required` retain the same non-retry outcome semantics as source
+replacement.
+
+This is a pre-alpha format/API addition. Older binaries do not understand
+command 68 or durable payload format 13; rebuild experimental database
+directories rather than expecting migration support.
 
 ## Delete documents
 
@@ -681,8 +779,37 @@ ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
 supported by `native_runtime` and selected typed `column_graph`; unsupported
 shapes fail closed. Typed clients validate every decoded result document against
 the requested filter rather than treating filter-work counts as membership proof.
-Selected executed empty/exact/HNSW behavior is reported in
-`dense_work.graph.route`, independently of the top-level route tag.
+Selected legacy or diagnostic empty/exact/HNSW behavior is reported in
+`dense_work.graph.route`; canonical production reports the same value in
+`route_identity.execution_route`, independently of the top-level route tag.
+
+For `cosine_normalized_f32_v1`, production HTTP requests use the same controls
+as native v4 and bind them to caller-held metadata:
+
+```json
+{
+  "query_embedding": [0.1, 0.2, 0.3],
+  "top_k": 10,
+  "route": "ann",
+  "expected_generation": 1,
+  "vector_representation": "cosine_normalized_f32_v1",
+  "query_mode": "quantized_rerank",
+  "quantized_index_name": "embedding.scalar_u8.fast",
+  "quantized_rerank_candidates": 64,
+  "ef_search": 64,
+  "return_embedding": false,
+  "diagnostics": false
+}
+```
+
+The response includes compact `route_identity` binding representation, exact or
+SQ8 mode, executed empty/exact/HNSW route, captured owner, E/R/top-K, result
+count, candidate-code reads, FP32/packed scoring reads, and embedding output
+work. Production omits `dense_work` and `score_plane`. Set `diagnostics=true`
+only for explicit evidence: it adds `dense_work`, and SQ8 adds the packed
+score-plane proof. Diagnostics does not change decisions. With
+`return_embedding=false`, route identity proves zero output embedding reads and
+bytes; true returns the canonical normalized vector.
 
 Legacy `column_graph` indexes with persisted update/delete parts report
 `no_document_vector_search=false`: an omitted route selects the existing
@@ -713,6 +840,7 @@ Request:
 {
   "query": "refund policy",
   "top_k": 10,
+  "text_query_mode": "literal",
   "operator": "or",
   "candidate_limit": 1000,
   "max_postings_scanned": 100000,
@@ -720,13 +848,15 @@ Request:
   "return_embedding": false
 }
 ```
-`operator` is `or` (default) or `and`; explicit `AND`/`OR` in the query string is
-also understood by TreeDB text search. `candidate_limit` and
-`max_postings_scanned` are optional guardrails for unfiltered keyword search.
-When a metadata `filter` is supplied, `max_postings_scanned` is rejected with
-typed `unsupported` rather than ignored, because the filtered route currently
-cannot propagate that guardrail. Other guardrail or scalar allow-set truncation
-fails closed with `index_unavailable`; no incomplete ranking is returned.
+`text_query_mode` is `boolean` when omitted and `literal` when natural-language
+text should be analyzed without treating quotes, parentheses, or standalone
+`AND`/`OR` as syntax. `operator` is `or` (default) or `and` over the analyzed
+terms. In Boolean mode explicit connectives in `query` remain supported and
+must not conflict with an explicitly requested operator. `candidate_limit` and
+`max_postings_scanned` are optional guardrails with or without a metadata
+filter. The posting cap covers scan, fallback, and match-attribution work as one
+request allowance. Exhaustion or scalar allow-set truncation fails closed with
+`index_unavailable`; no incomplete ranking is returned.
 `filter` is supported only for fields declared in `scalar_fields` at index
 creation. Keyword/hybrid accepts equality and one/two-sided range leaves, either
 alone or joined by nested `AND`; same-field bounds are merged and different
@@ -786,9 +916,15 @@ Request:
   "query": "refund policy",
   "query_embedding": [0.1, 0.2, 0.3],
   "top_k": 10,
+  "text_query_mode": "literal",
+  "text_operator": "and",
+  "max_postings_scanned": 100000,
   "candidate_limit": 100,
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
+  "vector_query_mode": "quantized_rerank",
+  "quantized_index_name": "embedding.scalar_u8.fast",
+  "quantized_rerank_candidates": 100,
   "ef_search": 64,
   "max_chunks_per_parent": 2,
   "filter": {
@@ -814,6 +950,21 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
+`text_query_mode`, `text_operator`, and `max_postings_scanned` have the same
+semantics as keyword search and require a non-empty text `query`; vector-only
+requests that supply lexical options are invalid. An explicit posting cap uses
+one fixed lexical source attempt rather than resetting the cap across adaptive
+candidate retries.
+Vector mode defaults to `exact`. `quantized_rerank` requires the explicit mode,
+an admitted typed cosine `column_graph`, and its named legacy scalar-u8/v1
+plane. `quantized_rerank_candidates` is optional: omitted or zero selects the
+effective traversal width; a nonzero value must be at least the effective
+vector candidate limit. Selected hybrid uses fixed source budgets. A small
+complete filter may execute `typed_exact`, and an empty filter executes no
+vector work, but both validate the selected asset first. Quantized fields with
+exact mode, `quantized_only`, missing/stale assets, unsupported codecs or
+representations, and unadmitted serving fail closed without retrying another
+route.
 `max_chunks_per_parent` is disabled when omitted or zero and must otherwise be
 positive. When enabled, the executor walks the already-bounded fused order,
 keeps at most that many canonical `<parentID>#<ordinal>` built-in chunk IDs per
@@ -875,6 +1026,9 @@ object shown in the index metadata section):
     "fusion_tie_policy": "fused_score_best_rank_source_order_id",
     "text_candidate_limit": 100,
     "vector_candidate_limit": 100,
+    "vector_query_mode": "quantized_rerank",
+    "quantized_index_name": "embedding.scalar_u8.fast",
+    "quantized_rerank_candidates": 100,
     "max_chunks_per_parent": 2,
     "final_top_k": 10
   },
@@ -887,6 +1041,14 @@ object shown in the index metadata section):
     "text_candidates_returned": 10,
     "vector_candidates_requested": 100,
     "vector_candidates_returned": 10,
+    "vector_route": {
+      "route": "typed_hnsw",
+      "query_mode": "quantized_rerank",
+      "quantized_index_name": "embedding.scalar_u8.fast"
+    },
+    "vector_quantized_score_calls": 509,
+    "vector_quantized_rerank_candidates": 100,
+    "vector_packed_exact_score_calls": 1,
     "candidates_fused": 20,
     "fusion_both": 1,
     "collapse_rejections": 4,
@@ -905,6 +1067,12 @@ therefore return fewer documents than `top_k`. `truncated` continues to count
 fused candidates omitted by the final bound, including cap rejections. With
 collapse disabled, both collapse counters are zero and IDs, scores, and source
 contributions retain their prior behavior.
+
+For selected SQ8, one captured read owner governs scalar/text candidates,
+vector traversal/rerank, fusion/collapse, and final fetch. `vector_route`
+reports actual work, so a selective request can report `typed_exact`; a
+validated empty allow-set omits the receipt and has zero vector work counters.
+By default responses omit embeddings and `embedding_output_bytes` is zero.
 
 Missing/stale/unavailable text or vector indexes, text postings/candidate budget
 exhaustion, corrupt index state, and bounded document-fetch failures return a
@@ -935,6 +1103,9 @@ Codes used by this contract:
 - `index_not_found`
 - `index_unavailable`
 - `index_stale`
+- `snapshot_mismatch`
 - `conflict`
 - `unsupported`
+- `commit_ambiguous`
+- `recovery_required`
 - `internal`

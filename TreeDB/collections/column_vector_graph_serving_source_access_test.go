@@ -239,7 +239,7 @@ func TestTypedGraphServingPackedSourcesUseOneSegmentPool(t *testing.T) {
 				t.Fatalf("public serving result semantics changed: got=%+v want=%+v", gotSearch.Results, wantSearch.Results)
 			}
 			stats := gotSearch.Stats
-			if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteColumnGraphFallback != 0 || stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.ColumnGraphWork.Route != "typed_hnsw" || !stats.ColumnGraphWork.Completed || stats.GraphRowFallbacks != 0 || stats.VectorScratchDecodes != 0 || stats.AdjacencyTypedListScratchDecodes != 0 {
+			if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteColumnGraphFallback != 0 || stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || !stats.ColumnGraphReceipt.Available || stats.ColumnGraphReceipt.Route != "typed_hnsw" || stats.ColumnGraphWork.Available || stats.GraphRowFallbacks != 0 || stats.VectorScratchDecodes != 0 || stats.AdjacencyTypedListScratchDecodes != 0 {
 				_ = readView.Close()
 				_ = owner.Close()
 				t.Fatalf("public serving route/diagnostics changed under %s: %+v work=%+v", mode.name, stats, stats.ColumnGraphWork)
@@ -571,7 +571,7 @@ func openTypedGraphServingScalarU8SourceFixtureWithRepresentation(t testing.TB, 
 			QuantizedRerankCandidates: len(vectors),
 			TopK:                      2,
 			EfSearch:                  len(vectors),
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
+			StatsMode:                 VectorIndexSearchStatsModeProduction,
 		},
 		codes: assets.Codes.Ref,
 	}

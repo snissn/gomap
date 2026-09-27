@@ -278,6 +278,14 @@ drain/checkpoint hooks before taking backend locks that async publishers need, o
 use a nonblocking protocol that cannot wait on those publishers while holding
 the locks they need.
 
+Public vector rebuilds use the two-phase publication handoff documented in
+`collections-write-domain.md`: stable index capture precedes raw acquisition;
+each barrier drain precedes mutation ownership; a busy mutation acquisition
+releases raw before waiting. Construction does not retain global raw ownership,
+and final publication releases mutation before reacquiring raw, then validates
+the captured collection source before append. Staged publication inherits the
+guard's teardown lease and never reacquires it while Close may be queued.
+
 ### 4.3 Backend lock roles
 
 - `writeMu`:

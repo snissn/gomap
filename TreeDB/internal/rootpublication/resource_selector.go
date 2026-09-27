@@ -14,6 +14,9 @@ type StableResourceSelector struct {
 // resource set for an exact logical obligation. Indexed frozen sets use their
 // per-kind logical-resource index; flat sets retain their bounded linear form.
 func CloneStableResourceForSelector(source *StableResourceSet, selector StableResourceSelector) (*StableResourceSet, error) {
+	if source != nil && source.physicalOnly {
+		return nil, ErrResourceOwnership
+	}
 	if source == nil || selector.Kind == "" || selector.LogicalLane == "" || selector.ResourceID == "" || selector.PhysicalGeneration == 0 {
 		return nil, ErrUnresolvedResource
 	}
@@ -46,7 +49,11 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 		source.mu.Unlock()
 		return nil, ErrUnresolvedResource
 	}
-	obligation, found := findStableLogicalObligationIndex(entry.logicalObligations.index, selector.Obligation, nil)
+	obligation, found, lookupErr := entry.logicalObligations.lookup(selector.Obligation, nil)
+	if lookupErr != nil {
+		source.mu.Unlock()
+		return nil, lookupErr
+	}
 	if !found {
 		source.mu.Unlock()
 		return nil, ErrUnresolvedResource

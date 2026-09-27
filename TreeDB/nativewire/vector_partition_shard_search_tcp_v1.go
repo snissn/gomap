@@ -22,7 +22,7 @@ import (
 const (
 	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
 	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
-	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 2
+	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 3
 	vectorPartitionShardSearchTCPFrameRequestV1       byte   = 1
 	vectorPartitionShardSearchTCPFrameResponseV1      byte   = 2
 	vectorPartitionShardSearchTCPFrameErrorV1         byte   = 3
@@ -30,12 +30,12 @@ const (
 	vectorPartitionShardSearchTCPFrameProbeResponseV1 byte   = 5
 	// Fixed bytes include the frame-body header and every fixed-width request
 	// field plus the length prefix for each request string.
-	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 171
+	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 179
 	// The capability fixed bytes include its six string length prefixes.
 	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
 	// Response byte accounting excludes the request ID and six proof strings.
 	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
-	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 60
+	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 92
 	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
 	vectorPartitionShardSearchTCPProbeResponseFixedBytesV1  uint64 = 934
 )
@@ -45,12 +45,19 @@ const (
 // in-process registry: every request and response crosses a serialized socket
 // boundary before the coordinator can consume it.
 type VectorPartitionShardSearchTCPDispatcherV1 struct {
+	peerAdmission             *peerNodeAdmissionV1
 	endpoints                 map[raftcluster.GroupID]string
 	nodeEndpoints             map[raftcluster.GroupID]map[raftcluster.NodeID]string
 	dial                      func(context.Context, string, string) (net.Conn, error)
 	maxRequestFrame           uint32
 	maxResponseFrame          uint32
 	maxConnectionsPerEndpoint int
+	connectionSlots           chan struct{}
+	requestSlots              chan struct{}
+	groupRequests             map[raftcluster.GroupID]chan struct{}
+	groupReserved             map[raftcluster.GroupID]chan struct{}
+	lifetime                  context.Context
+	cancel                    context.CancelFunc
 	mu                        sync.Mutex
 	pools                     map[string]*vectorPartitionShardSearchTCPEndpointPoolV1
 	closed                    bool
@@ -86,6 +93,9 @@ func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map
 func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxConnectionsPerEndpoint int, limits VectorPartitionShardSearchLimitsV1) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if len(endpoints) == 0 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires endpoints")
+	}
+	if len(endpoints) > 128 {
+		return nil, errors.New("nativewire: shard dispatcher exceeds 128 declared owner groups")
 	}
 	if maxConnectionsPerEndpoint < 1 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires a positive per-endpoint connection limit")
@@ -124,7 +134,16 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		}
 		copyNodeEndpoints[group] = copyNodes
 	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	groupRequests := make(map[raftcluster.GroupID]chan struct{}, len(endpoints))
+	groupReserved := make(map[raftcluster.GroupID]chan struct{}, len(endpoints))
+	for group := range endpoints {
+		groupRequests[group] = make(chan struct{}, vectorPartitionShardSearchTCPGroupRequestsV1)
+		groupReserved[group] = make(chan struct{}, 1)
+	}
 	return &VectorPartitionShardSearchTCPDispatcherV1{
+		lifetime:                  lifetime,
+		cancel:                    cancel,
 		endpoints:                 copyEndpoints,
 		nodeEndpoints:             copyNodeEndpoints,
 		dial:                      dialer.DialContext,
@@ -132,6 +151,10 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		maxResponseFrame:          maxResponseFrame,
 		maxConnectionsPerEndpoint: maxConnectionsPerEndpoint,
 		pools:                     make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
+		connectionSlots:           make(chan struct{}, vectorPartitionShardSearchTCPGlobalConnectionsV1),
+		requestSlots:              make(chan struct{}, vectorPartitionShardSearchTCPGlobalRequestsV1-len(endpoints)),
+		groupRequests:             groupRequests,
+		groupReserved:             groupReserved,
 	}, nil
 }
 
@@ -141,6 +164,51 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
+	}
+	// Bound active callers and pool waiters together, across all endpoints.
+	// Refusal happens before encoding or sending a search request.
+	groupSlots := d.groupRequests[request.TargetGroupID]
+	if groupSlots == nil {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
+	}
+	select {
+	case groupSlots <- struct{}{}:
+		defer func() { <-groupSlots }()
+	default:
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard group request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(groupSlots), cap(groupSlots))}
+	}
+	// Reserve one slot for every declared group; the remaining shared slots
+	// can absorb bursts without allowing hot groups to consume that reserve.
+	reserved := d.groupReserved[request.TargetGroupID]
+	select {
+	case reserved <- struct{}{}:
+		defer func() { <-reserved }()
+	default:
+		select {
+		case d.requestSlots <- struct{}{}:
+			defer func() { <-d.requestSlots }()
+		default:
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard shared request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(d.requestSlots), cap(d.requestSlots))}
+		}
+	}
+	if d.peerAdmission != nil {
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+		if err != nil || requestBytes > uint64(d.maxRequestFrame) {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: errors.Join(raftcluster.ErrRouteTargetUnsupported, err)}
+		}
+		bound, err := peerShardResponseFrameV1(request, d.maxResponseFrame)
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: err}
+		}
+		work, err := d.peerAdmission.request(ctx, "shard:"+string(request.TargetGroupID), int64(requestBytes)*8+int64(bound)*2, peerRequestDescendantV1)
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
+		}
+		defer work.release()
+		ctx = work.ctx
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
@@ -166,6 +234,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	}
 	pool, conn, err := d.acquire(requestCtx, endpoint)
 	if err != nil {
+		if errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
+		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	reusable := false
@@ -179,7 +250,14 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxRequestFrame); err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, d.maxResponseFrame, request)
+	responseFrame := d.maxResponseFrame
+	if d.peerAdmission != nil {
+		responseFrame, err = peerShardResponseFrameV1(request, responseFrame)
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: err}
+		}
+	}
+	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, responseFrame, request)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
@@ -221,7 +299,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 		d.pools[endpoint] = pool
 	}
 	d.mu.Unlock()
-	conn, err := pool.acquire(ctx, d.dial, endpoint)
+	conn, err := pool.acquire(ctx, d.dialBounded, endpoint)
 	return pool, conn, err
 }
 
@@ -252,6 +330,7 @@ func (p *vectorPartitionShardSearchTCPEndpointPoolV1) acquire(ctx context.Contex
 	}
 	if n := len(p.idle); n != 0 {
 		conn := p.idle[n-1]
+		p.idle[n-1] = nil
 		p.idle = p.idle[:n-1]
 		p.mu.Unlock()
 		return conn, nil
@@ -323,6 +402,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 		return nil
 	}
 	d.closed = true
+	d.cancel()
 	pools := d.pools
 	d.pools = make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1)
 	d.mu.Unlock()
@@ -345,6 +425,8 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
+	PeerTransport            *PeerTransportV1
+	PeerGroupID              raftcluster.GroupID
 	Service                  VectorPartitionShardSearchHandlerV1
 	EndpointIdentity         VectorPartitionShardEndpointIdentityV1
 	EndpointIdentityProvider func() VectorPartitionShardEndpointIdentityV1
@@ -405,10 +487,34 @@ type VectorPartitionShardSearchHandlerV1 interface {
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	if s.PeerTransport != nil {
+		var err error
+		conn, err = s.PeerTransport.admission.accept(conn, "shard:"+string(s.PeerGroupID))
+		if err != nil {
+			return
+		}
+	}
+	s.serveAdmittedConnV1(ctx, conn)
+}
+
+func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if s.PeerTransport != nil {
+		var err error
+		conn, err = s.PeerTransport.accept(ctx, conn, s.PeerGroupID)
+		if err != nil {
+			return
+		}
+	}
 	maxFrame := s.MaxFrame
 	if maxFrame == 0 {
 		maxFrame = vectorPartitionShardSearchTCPMaxFrameBytesV1
+		if s.PeerTransport != nil {
+			maxFrame = uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes)
+		}
 	}
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
@@ -425,60 +531,88 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	if initialTimeout == 0 {
 		initialTimeout = 5 * time.Second
 	}
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
-		frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, maxFrame)
-		_ = conn.SetReadDeadline(time.Time{})
-		if err != nil {
-			return
-		}
-		if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
-			identity := s.EndpointIdentity
-			if s.EndpointIdentityProvider != nil {
-				identity = s.EndpointIdentityProvider()
-			}
-			if frame.Probe.Version != 1 || identity.Version != 1 || identity.GroupID == "" || identity.InstanceIdentity == "" {
-				_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
-				return
-			}
-			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
-				return
-			}
-			continue
-		}
-		if frame.Request == nil || frame.Probe != nil || frame.Response != nil || frame.Error != nil || frame.ProbeResponse != nil {
-			// A peer that sends no frame (or never reads) must not strand this server
-			// goroutine while we try to report the bounded framing failure.
-			_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
-			_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxResponseFrame)
-			return
-		}
-		if s.Service == nil {
-			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
-			return
-		}
-		requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
-		stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
-		response, err := s.Service.Search(requestCtx, *frame.Request)
-		peerInput := stopPeerMonitor()
-		cancel()
-		if peerInput {
-			return
-		}
-		writeDeadline := time.Now().Add(initialTimeout)
-		if deadline, ok := requestCtx.Deadline(); ok {
-			writeDeadline = deadline
-		}
-		if err != nil {
-			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxResponseFrame, writeDeadline) != nil {
-				return
-			}
-			continue
-		}
-		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxResponseFrame, writeDeadline) != nil {
-			return
-		}
+	for s.serveOneFrameV1(ctx, conn, maxFrame, maxResponseFrame, initialTimeout) {
 	}
+}
+
+func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Context, conn net.Conn, maxFrame, maxResponseFrame uint32, initialTimeout time.Duration) bool {
+	_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
+	var admission *peerNodeAdmissionV1
+	if s.PeerTransport != nil {
+		admission = s.PeerTransport.admission
+	}
+	frame, work, err := readPeerShardFrameV1(ctx, conn, maxFrame, admission, "shard:"+string(s.PeerGroupID))
+	defer work.release()
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return false
+	}
+	if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
+		identity := s.EndpointIdentity
+		if s.EndpointIdentityProvider != nil {
+			identity = s.EndpointIdentityProvider()
+		}
+		if frame.Probe.Version != 1 || identity.Version != 1 || identity.GroupID == "" || identity.InstanceIdentity == "" {
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
+			return false
+		}
+		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
+			return false
+		}
+		return true
+	}
+	if frame.Request == nil || frame.Probe != nil || frame.Response != nil || frame.Error != nil || frame.ProbeResponse != nil {
+		// A peer that sends no frame (or never reads) must not strand this server
+		// goroutine while we try to report the bounded framing failure.
+		_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
+		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxResponseFrame)
+		return false
+	}
+	if s.Service == nil {
+		_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
+		return false
+	}
+	if admission != nil {
+		if frame.Request.TargetGroupID != s.PeerGroupID {
+			return false
+		}
+		bound, err := peerShardResponseFrameV1(*frame.Request, maxResponseFrame)
+		if err != nil {
+			return false
+		}
+		maxResponseFrame = bound
+		response, err := admission.acquire("shard:"+string(s.PeerGroupID), peerBytesV1, int64(bound)*2)
+		if err != nil {
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: err.Error()}}, uint32(vectorPartitionShardSearchTCPMinFrameBytesV1), time.Now().Add(initialTimeout))
+			return true
+		}
+		defer response.release()
+	}
+	if work.ctx != nil {
+		ctx = work.ctx
+	}
+	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
+	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
+	response, err := s.Service.Search(requestCtx, *frame.Request)
+	peerInput := stopPeerMonitor()
+	cancel()
+	if peerInput {
+		return false
+	}
+	writeDeadline := time.Now().Add(initialTimeout)
+	if deadline, ok := requestCtx.Deadline(); ok {
+		writeDeadline = deadline
+	}
+	if err != nil {
+		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxResponseFrame, writeDeadline) != nil {
+			return false
+		}
+		return true
+	}
+	if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxResponseFrame, writeDeadline) != nil {
+		return false
+	}
+	return true
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) error {
@@ -511,6 +645,11 @@ func ProbeVectorPartitionShardEndpointV1(ctx context.Context, endpoint string) (
 		return identity, err
 	}
 	defer conn.Close()
+	return probeVectorPartitionShardConnV1(probeCtx, conn)
+}
+
+func probeVectorPartitionShardConnV1(probeCtx context.Context, conn net.Conn) (VectorPartitionShardEndpointIdentityV1, error) {
+	var identity VectorPartitionShardEndpointIdentityV1
 	if err := vectorPartitionShardSearchTCPDeadlineV1(probeCtx, 0, conn); err != nil {
 		return identity, err
 	}
@@ -553,7 +692,7 @@ func (e vectorPartitionShardSearchTCPErrorV1) toError() error {
 }
 
 func writeVectorPartitionShardSearchTCPFrameV1(w io.Writer, frame vectorPartitionShardSearchTCPFrameV1, max uint32) error {
-	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(nil, frame, uint64(max))
 	if err != nil {
 		return err
 	}
@@ -609,17 +748,38 @@ func readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r io.Reader, max
 type vectorPartitionShardSearchTCPBodyWriterV1 struct {
 	body []byte
 	err  error
+	max  uint64
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) reserve(n uint64) bool {
+	if w.err != nil {
+		return false
+	}
+	if w.max != 0 && (uint64(len(w.body)) > w.max || n > w.max-uint64(len(w.body))) {
+		w.err = errors.New("M5 TCP encoded frame exceeds byte bound")
+		return false
+	}
+	return true
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u8(v byte) {
+	if !w.reserve(1) {
+		return
+	}
 	w.body = append(w.body, v)
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u32(v uint32) {
+	if !w.reserve(4) {
+		return
+	}
 	w.body = binary.LittleEndian.AppendUint32(w.body, v)
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u64(v uint64) {
+	if !w.reserve(8) {
+		return
+	}
 	w.body = binary.LittleEndian.AppendUint64(w.body, v)
 }
 
@@ -636,6 +796,9 @@ func (w *vectorPartitionShardSearchTCPBodyWriterV1) f32(v float32) {
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) string(v string) {
+	if !w.reserve(uint64(len(v)) + 4) {
+		return
+	}
 	if uint64(len(v)) > math.MaxUint32 && w.err == nil {
 		w.err = errors.New("M5 TCP string exceeds uint32")
 		return
@@ -737,6 +900,10 @@ func (r *vectorPartitionShardSearchTCPBodyReaderV1) done() error {
 }
 
 func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPartitionShardSearchTCPFrameV1) ([]byte, error) {
+	return appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(dst, frame, 0)
+}
+
+func appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(dst []byte, frame vectorPartitionShardSearchTCPFrameV1, max uint64) ([]byte, error) {
 	count := 0
 	typ := byte(0)
 	if frame.Request != nil {
@@ -775,9 +942,12 @@ func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPart
 		case vectorPartitionShardSearchTCPFrameProbeV1:
 			capacity = 16
 		}
+		if max != 0 && uint64(capacity) > max {
+			return nil, errors.New("M5 TCP encoded frame exceeds byte bound")
+		}
 		dst = make([]byte, 0, capacity)
 	}
-	w := vectorPartitionShardSearchTCPBodyWriterV1{body: dst}
+	w := vectorPartitionShardSearchTCPBodyWriterV1{body: dst, max: max}
 	w.u8(vectorPartitionShardSearchTCPFrameVersionV1)
 	w.u8(typ)
 	w.u32(0)
@@ -898,6 +1068,7 @@ func appendVectorPartitionShardSearchTCPRequestV1(w *vectorPartitionShardSearchT
 	}
 	w.u32(uint32(r.TopK))
 	w.u32(uint32(r.EfSearch))
+	w.u64(r.ScoreCallsLimit)
 	w.i64(r.DeadlineUnixNano)
 	w.u64(r.RequestBytesLimit)
 	w.u64(r.CandidateBytesLimit)
@@ -956,6 +1127,7 @@ func readVectorPartitionShardSearchTCPRequestV1(r *vectorPartitionShardSearchTCP
 		r.err = errors.New("M5 TCP search count overflows int")
 	}
 	value.TopK, value.EfSearch = int(topK), int(efSearch)
+	value.ScoreCallsLimit = r.u64()
 	value.DeadlineUnixNano = r.i64()
 	value.RequestBytesLimit, value.CandidateBytesLimit, value.ResponseBytesLimit = r.u64(), r.u64(), r.u64()
 	switch r.u8() {
@@ -1104,15 +1276,19 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 			w.string(neighbor.ID)
 			w.f32(neighbor.Score)
 		}
+		w.u64(partial.ScoreCalls)
 		w.u64(partial.Candidates)
 		w.u64(partial.Edges)
 		w.string(partial.SearchRoute)
 		w.u64(partial.PackBytes)
 		w.u64(partial.MappedBytes)
 		w.u64(partial.HeapBytes)
+		w.u64(partial.RequiredChunks)
+		w.u64(partial.OpenedChunks)
+		w.u64(partial.AccessedChunks)
 		w.u64(partial.OpenNanos)
 	}
-	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
+	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
 		w.u64(value)
 	}
 }
@@ -1144,12 +1320,14 @@ func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionSha
 					partial.Neighbors = append(partial.Neighbors, neighbor)
 				}
 			}
-			partial.Candidates, partial.Edges = r.u64(), r.u64()
+			partial.ScoreCalls, partial.Candidates, partial.Edges = r.u64(), r.u64(), r.u64()
 			partial.SearchRoute = r.string()
-			partial.PackBytes, partial.MappedBytes, partial.HeapBytes, partial.OpenNanos = r.u64(), r.u64(), r.u64(), r.u64()
+			partial.PackBytes, partial.MappedBytes, partial.HeapBytes = r.u64(), r.u64(), r.u64()
+			partial.RequiredChunks, partial.OpenedChunks, partial.AccessedChunks = r.u64(), r.u64(), r.u64()
+			partial.OpenNanos = r.u64()
 		}
 	}
-	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
+	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
 	v.BaseCandidates, v.DeltaCandidates = r.u64(), r.u64()
 	v.BaseResults, v.DeltaResults, v.LiveDomainsSearched = r.u64(), r.u64(), r.u64()
 	v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds = r.u64(), r.u64(), r.u64(), r.u64()

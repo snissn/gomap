@@ -9,6 +9,25 @@ router, and the M5 shard-search contract
 
 ## Purpose and boundary
 
+Router revision R (#4773) uses coordinator request/response version **3**.
+The retained Go `V1` type names do not imply the old numeric protocol version.
+Requests explicitly provide `RouterScoreBudget` (C) and partition probes (P).
+C is a positive bounded ceiling on actual centroid score calls and is not
+clamped to model size. `MaxRouterScoreCalls` bounds C. The collection router
+receives the same values through `VectorPartitionRouterSearchOptionsV3`.
+`ErrVectorPartitionRouterScoreBudget` maps to `budget_exceeded`, without
+dispatching shards or returning partial routes. Approximate routing first
+scores every domain root, then expands complete child groups in best-parent
+order while the next whole group fits C. Per-response counters preserve
+`RouterScoreCalls`, `RouterCandidates` (currently identical to charged score
+calls), and `RouterEdges` separately from local shard work, including failed
+routing work. The public V1 adapter translates its own protocol version to
+coordinator V3 and inherits server-owned C/P; the public query API is unchanged.
+A server-owned C exhaustion retains the internal `budget_exceeded` cause but
+maps to public `unavailable`, not a malformed-client `invalid_request`.
+See the R section in `vector-partition-v1-contract.md` for format and rebuild
+requirements. Historical candidate-budget receipts cannot be relabeled as C.
+
 `VectorPartitionCoordinatorV1` is the bounded, transport-neutral scatter/gather
 coordinator for one vector query. It:
 
@@ -111,8 +130,10 @@ Search(context.Context, VectorPartitionCoordinatorRequestV1)
   digest matching the constructed M1 placement;
 - a nonempty finite FP32 query with nonzero norm;
 - cosine metric;
-- exact or approximate M4 router mode, an explicit representative-candidate
-  budget, and a partition-probe count;
+- exact or approximate M4 router mode, explicit score-call ceiling
+  `RouterScoreBudget` (C), and a partition-probe count (P);
+- positive C no greater than `MaxRouterScoreCalls`, and
+  `1 <= P <=` the persisted logical-domain count;
 - `linearizable_generation_snapshot` consistency;
 - `basic` stats mode; `none` is rejected because coordinator response
   validation and budget enforcement require actual candidate/edge and stage
@@ -133,9 +154,11 @@ to match the constructed M1 placement exactly:
 - valid ready-set and router-model SHA-256 digests;
 - nonzero representatives and consistent runtime partition count.
 
-Exact router mode additionally requires a candidate budget at least as large
-as the persisted representative count. A mismatch fails before M5 dispatch;
-the coordinator never mixes router, partition, source, placement, or live
+Exact router mode scans every persisted representative and therefore requires
+C at least as large as the persisted representative count. A mismatch fails
+before M5 dispatch. Approximate mode requires C at least as large as the root
+count and rejects a smaller budget before making any score call.
+The coordinator never mixes router, partition, source, placement, or live
 revision/coverage identities. When the standalone router lease exposes a live
 pin, the coordinator copies that one identity to every shard request and
 assigns each selected logical-domain delta to exactly one request even when its
@@ -168,7 +191,7 @@ accepted epoch until retirement or `Close`.
 The effective deadline is the earliest of the caller context deadline, the
 request deadline, and `now + MaxWallClock`. The default wall-clock ceiling is
 30 seconds. The effective deadline is propagated to every M5 request.
-Both the exact representative scan and approximate native HNSW traversal poll
+Both the exact representative scan and approximate hierarchical traversal poll
 that context during search. Cancellation is also checked before work, before
 and after dispatch, while validating partials, during dedupe, and periodically
 during heap merge.
@@ -213,7 +236,7 @@ Zero-valued limit fields select the following defaults:
 | M5 requests | 256 |
 | concurrent M5 requests | 8 |
 | retries / redirects | 1 / 1 |
-| router candidates | 1,000,000 |
+| router score calls | 1,000,000 |
 | query bytes | 16 KiB |
 | `top_k` / `ef_search` | 256 / 4,096 |
 | partitions per M5 request | 32 |

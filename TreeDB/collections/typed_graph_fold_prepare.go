@@ -69,17 +69,18 @@ func typedGraphFoldStreamedSourcesEligible(cfg ColumnStoreConfig, def VectorInde
 }
 
 type typedGraphFoldRowSource struct {
-	ctx        context.Context
-	rows       []columnVectorGraphAssetRow
-	readView   CollectionReadView
-	view       columnPhysicalScanSnapshotView
-	projection columnPhysicalScanProjection
-	scratch    columnPhysicalRowReaderScratch
+	resolveScoringRefs bool // captured locator root contains metadata-only rows
+	ctx                context.Context
+	rows               []columnVectorGraphAssetRow
+	readView           CollectionReadView
+	view               columnPhysicalScanSnapshotView
+	projection         columnPhysicalScanProjection
+	scratch            columnPhysicalRowReaderScratch
 }
 
 var typedGraphFoldRowSourceCloseErrorForTest error
 
-func newTypedGraphFoldRowSource(ctx context.Context, c *Collection, state columnStoreCompactionState, rows []columnVectorGraphAssetRow) (*typedGraphFoldRowSource, error) {
+func newTypedGraphFoldRowSource(ctx context.Context, c *Collection, state columnStoreCompactionState, rows []columnVectorGraphAssetRow, resolveScoringRefs bool) (*typedGraphFoldRowSource, error) {
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(state.snap, state.catalog, state.meta.Name, state.baseRoot, state.cfg, true)
 	if err != nil {
 		return nil, err
@@ -89,11 +90,12 @@ func newTypedGraphFoldRowSource(ctx context.Context, c *Collection, state column
 		return nil, err
 	}
 	source := &typedGraphFoldRowSource{
-		ctx:        ctx,
-		rows:       rows,
-		readView:   CollectionReadView{collection: c, snapshot: state.snap, catalog: state.catalog},
-		view:       view,
-		projection: projection,
+		resolveScoringRefs: resolveScoringRefs,
+		ctx:                ctx,
+		rows:               rows,
+		readView:           CollectionReadView{collection: c, snapshot: state.snap, catalog: state.catalog},
+		view:               view,
+		projection:         projection,
 	}
 	if err := source.readView.ensureAssetReadCaches(state.cfg, ""); err != nil {
 		_ = source.Close()
@@ -114,6 +116,13 @@ func (s *typedGraphFoldRowSource) Row(i int) (columnDeclaredRow, error) {
 	graphRow := s.rows[i]
 	ref := graphRow.BaseRowRef
 	ref.DocumentID = graphRow.ID
+	if s.resolveScoringRefs {
+		var err error
+		ref, err = s.readView.resolveDocumentRowRefLatest(ref, nil, true)
+		if err != nil {
+			return columnDeclaredRow{}, err
+		}
+	}
 	row, err := s.readView.fetchDocumentPointRow(s.view, ref, s.projection, &s.scratch, nil)
 	if err != nil {
 		return columnDeclaredRow{}, err

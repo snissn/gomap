@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -265,15 +266,22 @@ func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartition
 			if entry.Manifest == nil || entry.Deleting {
 				continue
 			}
-			assets := append([]VectorPartitionAssetV1(nil), entry.Manifest.Assets...)
-			if entry.Manifest.State == "ready" {
-				assets = append(assets, entry.Manifest.RouterAsset)
+			namespace := ""
+			if entry.Manifest.PagedRootV2 != nil {
+				r := entry.Manifest.PagedRootV2
+				namespace = r.MetadataDirectory.Ref.Namespace
+				if namespace == "" {
+					namespace = r.SourceShardDirectory.Ref.Namespace
+				}
+			} else if len(entry.Manifest.Assets) > 0 {
+				namespace = entry.Manifest.Assets[0].Ref.Namespace
+			} else {
+				namespace = entry.Manifest.RouterAsset.Ref.Namespace
 			}
-			if len(assets) == 0 {
+			if namespace == "" {
 				return fmt.Errorf("%w: snapshot vector partition generation %d has no assets", ErrVectorPartitionManifestInvalid, generation)
 			}
-			namespace := assets[0].Ref.Namespace
-			if err := verifyVectorPartitionAssetsV1(filepath.Join(root, "column_assets"), namespace, assets); err != nil {
+			if err := walkVectorPartitionManifestAssetsV2(context.Background(), filepath.Join(root, "column_assets"), namespace, *entry.Manifest, nil); err != nil {
 				return fmt.Errorf("%w: snapshot vector partition generation %d assets: %v", ErrVectorPartitionManifestInvalid, generation, err)
 			}
 		}

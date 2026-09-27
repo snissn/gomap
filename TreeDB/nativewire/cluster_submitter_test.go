@@ -1075,6 +1075,7 @@ func TestCatalogRoutedVectorPartitionAdmissionInvalidatesBeforeDataCommitV1(t *t
 		}
 	}
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, ClusterSubmitter: submitter})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	if err := client.Hello(ctx); err != nil {
 		t.Fatal(err)
@@ -2384,6 +2385,7 @@ func TestClusterSubmitterCatalogGuardDoesNotBlockSubmitterReplay(t *testing.T) {
 
 func TestClusterSubmitterCatalogVersionUpdateIsMonotonic(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{HasCatalogVersion: true, CatalogVersion: 10}); err != nil {
 		t.Fatalf("update explicit version 10: %v", err)
 	}
@@ -3665,6 +3667,7 @@ func serveRaftClusterBridgePipeWithRoute(t testing.TB, admission raftcluster.Adm
 		Backend:          db,
 		ClusterSubmitter: submitter,
 	})
+	t.Cleanup(func() { _ = server.Close() })
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() {
 		_ = fsm.Close()
@@ -3700,6 +3703,7 @@ func serveGroupRoutedRaftClusterBridgePipe(t testing.TB, routeProvider ClusterRo
 		Backend:          db,
 		ClusterSubmitter: NewRoutedRaftClusterSubmitter(dispatcher, routeProvider, mgr),
 	})
+	t.Cleanup(func() { _ = server.Close() })
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	return client, groupA, groupB, mgr, db
@@ -3741,6 +3745,7 @@ func serveCatalogMetaGroupRoutedRaftClusterBridgePipe(t testing.TB, routeProvide
 		Backend:          db,
 		ClusterSubmitter: NewRoutedRaftClusterSubmitter(dispatcher, routeProvider, mgr),
 	})
+	t.Cleanup(func() { _ = server.Close() })
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	return client, groupA, groupB, mgr, db

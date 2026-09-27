@@ -157,9 +157,9 @@ func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.Stable
 		return fmt.Errorf("%w: dictionary capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
 	var index, valueLog bool
-	for _, descriptor := range resources.Descriptors() {
-		if descriptor.Kind() != rootpublication.ResourceDictionary {
-			return fmt.Errorf("%w: dictionary closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
+	for _, descriptor := range resources.PhysicalDescriptors() {
+		if descriptor.Kind != rootpublication.ResourceDictionary {
+			return fmt.Errorf("%w: dictionary closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)
 		}
 		switch descriptor.Digest() {
 		case dictionaryIndexPhysicalDigest:

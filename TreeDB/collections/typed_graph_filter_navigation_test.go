@@ -74,7 +74,7 @@ func TestTypedGraphFilterNavigationDoesNotQueueBehindBusySlot(t *testing.T) {
 	go func() {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
-			IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal,
+			IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction,
 			DeclaredScalarFilter: &HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}},
 		}, &buffer)
 		done <- queryResult{response: response, view: view, err: err}
@@ -112,7 +112,7 @@ func TestTypedGraphFilterNavigationDoesNotQueueBehindBusySlot(t *testing.T) {
 	held = false
 	var warmBuffer VectorIndexSearchBuffer
 	warm, warmView, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
-		IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal,
+		IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction,
 		DeclaredScalarFilter: &HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}},
 	}, &warmBuffer)
 	if warmView != nil {

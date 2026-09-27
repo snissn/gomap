@@ -174,6 +174,36 @@ type UpsertDocumentsResponse struct {
 	CompactEmbeddings int       `json:"compact_embeddings,omitempty"`
 }
 
+// ReplaceSourceByIDRequest atomically replaces one caller-bounded source
+// scope. DeleteIDs is explicit; the service never discovers source members.
+type ReplaceSourceByIDRequest struct {
+	ExpectedGeneration uint64     `json:"expected_generation"`
+	DeleteIDs          []string   `json:"delete_ids"`
+	Documents          []Document `json:"documents"`
+}
+
+type ReplaceSourceByIDResponse struct {
+	Index         IndexInfo `json:"index"`
+	DeletedCount  int       `json:"deleted_count"`
+	InsertedCount int       `json:"inserted_count"`
+}
+
+// UpdateMetadataByIDRequest applies one atomic metadata-only mutation to the
+// existing explicit IDs. Missing IDs are skipped; vectors and content are not
+// accepted by this shape.
+type UpdateMetadataByIDRequest struct {
+	ExpectedGeneration uint64         `json:"expected_generation"`
+	IDs                []string       `json:"ids"`
+	Set                map[string]any `json:"set"`
+	Unset              []string       `json:"unset"`
+}
+
+type UpdateMetadataByIDResponse struct {
+	Index         IndexInfo `json:"index"`
+	MatchedCount  int       `json:"matched_count"`
+	ModifiedCount int       `json:"modified_count"`
+}
+
 // DeleteDocumentsRequest deletes either explicit IDs or documents matching a
 // metadata filter. Supplying both IDs and Filter is rejected as ambiguous.
 type DeleteDocumentsRequest struct {
@@ -226,16 +256,57 @@ type FilterDocumentsResponse struct {
 // when one exists) or exact (bounded filtered scan). Declared scalar filters use
 // native_runtime ANN; unsupported fields and shapes fail closed.
 type DenseVectorSearchRequest struct {
-	ExpectedGeneration        uint64                           `json:"expected_generation,omitempty"`
-	QueryEmbedding            []float32                        `json:"query_embedding"`
-	TopK                      int                              `json:"top_k"`
-	Route                     Route                            `json:"route,omitempty"`
-	EfSearch                  int                              `json:"ef_search,omitempty"`
-	QueryMode                 collections.VectorIndexQueryMode `json:"query_mode,omitempty"`
-	QuantizedIndexName        string                           `json:"quantized_index_name,omitempty"`
-	QuantizedRerankCandidates int                              `json:"quantized_rerank_candidates,omitempty"`
-	Filter                    *Filter                          `json:"filter,omitempty"`
-	ReturnEmbedding           bool                             `json:"return_embedding,omitempty"`
+	ExpectedGeneration        uint64                                `json:"expected_generation,omitempty"`
+	QueryEmbedding            []float32                             `json:"query_embedding"`
+	TopK                      int                                   `json:"top_k"`
+	Route                     Route                                 `json:"route,omitempty"`
+	EfSearch                  int                                   `json:"ef_search,omitempty"`
+	QueryMode                 collections.VectorIndexQueryMode      `json:"query_mode,omitempty"`
+	QuantizedIndexName        string                                `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                                   `json:"quantized_rerank_candidates,omitempty"`
+	Filter                    *Filter                               `json:"filter,omitempty"`
+	ReturnEmbedding           bool                                  `json:"return_embedding,omitempty"`
+	Diagnostics               bool                                  `json:"diagnostics,omitempty"`
+	VectorRepresentation      collections.VectorIndexRepresentation `json:"vector_representation,omitempty"`
+	// RequireVectorRepresentation is set only by negotiated native protocols;
+	// it makes the zero legacy representation meaningful rather than a default.
+	RequireVectorRepresentation bool `json:"-"`
+}
+
+// DenseSearchRouteIdentity is the compact always-on production receipt. Full
+// graph/snapshot proofs remain available only when diagnostics are requested.
+type DenseSearchRouteIdentity struct {
+	Version                   uint16                                `json:"version"`
+	Representation            collections.VectorIndexRepresentation `json:"representation"`
+	QueryMode                 collections.VectorIndexQueryMode      `json:"query_mode"`
+	ExecutionRoute            string                                `json:"execution_route"`
+	QuantizedCodec            string                                `json:"quantized_codec,omitempty"`
+	QuantizedIndexName        string                                `json:"quantized_index_name,omitempty"`
+	QuantizedVersion          uint16                                `json:"quantized_version,omitempty"`
+	ReturnEmbedding           bool                                  `json:"return_embedding"`
+	Diagnostics               bool                                  `json:"diagnostics"`
+	Filter                    bool                                  `json:"filter"`
+	SchemaHash                uint64                                `json:"schema_hash"`
+	SchemaGeneration          uint64                                `json:"schema_generation"`
+	BaseManifestGeneration    uint64                                `json:"base_manifest_generation"`
+	BaseManifestChecksum      uint64                                `json:"base_manifest_checksum"`
+	CurrentManifestGeneration uint64                                `json:"current_manifest_generation"`
+	CurrentManifestChecksum   uint64                                `json:"current_manifest_checksum"`
+	CurrentCoverageLSN        uint64                                `json:"current_coverage_lsn"`
+	TopK                      uint64                                `json:"top_k"`
+	EfSearch                  uint64                                `json:"ef_search"`
+	RerankCandidates          uint64                                `json:"rerank_candidates"`
+	ResultCount               uint64                                `json:"result_count"`
+	QuantizedScoreCalls       uint64                                `json:"quantized_score_calls,omitempty"`
+	QuantizedCodeBytesRead    uint64                                `json:"quantized_code_bytes_read,omitempty"`
+	FP32ScoreCalls            uint64                                `json:"fp32_score_calls"`
+	FP32VectorBytesRead       uint64                                `json:"fp32_vector_bytes_read"`
+	PackedScoreCalls          uint64                                `json:"packed_score_calls,omitempty"`
+	PackedScoreCandidates     uint64                                `json:"packed_score_candidates,omitempty"`
+	PackedVectorBytesRead     uint64                                `json:"packed_vector_bytes_read,omitempty"`
+	EmbeddingVectorReads      uint64                                `json:"embedding_vector_reads"`
+	EmbeddingVectorBytes      uint64                                `json:"embedding_vector_bytes"`
+	EmbeddingOutputBytes      uint64                                `json:"embedding_output_bytes"`
 }
 
 type DenseVectorSearchResponse struct {
@@ -244,6 +315,7 @@ type DenseVectorSearchResponse struct {
 	// typed quantized score plane. It is deliberately a sibling of dense_work;
 	// dense_work-v1 remains byte/schema compatible for existing callers.
 	ScorePlane                              *collections.ColumnGraphScorePlaneWork `json:"score_plane,omitempty"`
+	RouteIdentity                           *DenseSearchRouteIdentity              `json:"route_identity,omitempty"`
 	ColumnGraphPreparedSearch               uint64                                 `json:"column_graph_prepared_search,omitempty"`
 	ColumnGraphDeltaScored                  uint64                                 `json:"column_graph_delta_scored,omitempty"`
 	Index                                   IndexInfo                              `json:"index"`
@@ -252,35 +324,35 @@ type DenseVectorSearchResponse struct {
 	Route                                   Route                                  `json:"route,omitempty"`
 	Exact                                   bool                                   `json:"exact"`
 	Candidates                              int                                    `json:"candidates"`
-	NativeBasePlusLiveDelta                 bool                                   `json:"native_base_plus_live_delta"`
-	ScalarFilterMembershipSource            string                                 `json:"scalar_filter_membership_source"`
-	ScalarFilterPlan                        collections.NativeScalarFilterPlan     `json:"scalar_filter_plan"`
-	ScalarFilterProbeIDs                    uint64                                 `json:"scalar_filter_probe_ids"`
-	ScalarFilterProbeTruncated              uint64                                 `json:"scalar_filter_probe_truncated"`
-	ScalarFilterCandidates                  uint64                                 `json:"scalar_filter_candidates"`
-	ScalarFilterCandidateIDs                uint64                                 `json:"scalar_filter_candidate_ids"`
-	ScalarFilterRetainedCandidateIDs        uint64                                 `json:"scalar_filter_retained_candidate_ids"`
-	ScalarFilterRefinedCandidateIDs         uint64                                 `json:"scalar_filter_refined_candidate_ids"`
-	ScalarFilterVisited                     uint64                                 `json:"scalar_filter_visited"`
-	ScalarFilterScored                      uint64                                 `json:"scalar_filter_scored"`
-	ScalarFilterAdmitted                    uint64                                 `json:"scalar_filter_admitted"`
-	ScalarFilterExactScoring                bool                                   `json:"scalar_filter_exact_scoring"`
-	ScalarFilterUnderfill                   bool                                   `json:"scalar_filter_underfill"`
-	ScalarFilterPlanCacheHits               uint64                                 `json:"scalar_filter_plan_cache_hits"`
-	ScalarFilterPlanCacheMisses             uint64                                 `json:"scalar_filter_plan_cache_misses"`
-	ScalarFilterPlanCacheInvalidations      uint64                                 `json:"scalar_filter_plan_cache_invalidations"`
-	ScalarFilterPlanCacheGenerationBypasses uint64                                 `json:"scalar_filter_plan_cache_generation_bypasses"`
-	ScalarFilterPlanCacheEvictions          uint64                                 `json:"scalar_filter_plan_cache_evictions"`
-	ScalarFilterPlanCacheEntries            uint64                                 `json:"scalar_filter_plan_cache_entries"`
-	ScalarFilterPlanCacheRetainedBytes      uint64                                 `json:"scalar_filter_plan_cache_retained_bytes"`
-	ScalarFilterUnbounded                   uint64                                 `json:"scalar_filter_unbounded"`
-	ExactFallbacks                          uint64                                 `json:"exact_fallbacks"`
-	FullDocumentScanFallbacks               uint64                                 `json:"full_document_scan_fallbacks"`
-	AllowedIDMaterializationRows            uint64                                 `json:"allowed_id_materialization_rows"`
-	PrimaryDocumentScans                    uint64                                 `json:"primary_document_scans"`
-	DocumentMaterializationRows             uint64                                 `json:"document_materialization_rows"`
-	VisibilityMismatchCount                 uint64                                 `json:"visibility_mismatch_count"`
-	VisibilityRetryCount                    uint64                                 `json:"visibility_retry_count"`
+	NativeBasePlusLiveDelta                 bool                                   `json:"native_base_plus_live_delta,omitempty"`
+	ScalarFilterMembershipSource            string                                 `json:"scalar_filter_membership_source,omitempty"`
+	ScalarFilterPlan                        collections.NativeScalarFilterPlan     `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs                    uint64                                 `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated              uint64                                 `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates                  uint64                                 `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs                uint64                                 `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs        uint64                                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs         uint64                                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited                     uint64                                 `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored                      uint64                                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterAdmitted                    uint64                                 `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterExactScoring                bool                                   `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterUnderfill                   bool                                   `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                                 `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                                 `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                                 `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                                 `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                                 `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                                 `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                                 `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
+	ScalarFilterUnbounded                   uint64                                 `json:"scalar_filter_unbounded,omitempty"`
+	ExactFallbacks                          uint64                                 `json:"exact_fallbacks,omitempty"`
+	FullDocumentScanFallbacks               uint64                                 `json:"full_document_scan_fallbacks,omitempty"`
+	AllowedIDMaterializationRows            uint64                                 `json:"allowed_id_materialization_rows,omitempty"`
+	PrimaryDocumentScans                    uint64                                 `json:"primary_document_scans,omitempty"`
+	DocumentMaterializationRows             uint64                                 `json:"document_materialization_rows,omitempty"`
+	VisibilityMismatchCount                 uint64                                 `json:"visibility_mismatch_count,omitempty"`
+	VisibilityRetryCount                    uint64                                 `json:"visibility_retry_count,omitempty"`
 }
 
 // Route selects the dense search execution path.
@@ -444,14 +516,15 @@ type BenchmarkVectorSearchIDsResponse struct {
 // index. Filters use the same bounded declared-scalar AND grammar as hybrid
 // search and never fall back to a document scan.
 type KeywordSearchRequest struct {
-	ExpectedGeneration uint64                         `json:"expected_generation,omitempty"`
-	Query              string                         `json:"query"`
-	TopK               int                            `json:"top_k"`
-	Operator           collections.TextSearchOperator `json:"operator,omitempty"`
-	CandidateLimit     int                            `json:"candidate_limit,omitempty"`
-	MaxPostingsScanned int                            `json:"max_postings_scanned,omitempty"`
-	Filter             *Filter                        `json:"filter,omitempty"`
-	ReturnEmbedding    bool                           `json:"return_embedding,omitempty"`
+	ExpectedGeneration uint64                          `json:"expected_generation,omitempty"`
+	Query              string                          `json:"query"`
+	TopK               int                             `json:"top_k"`
+	TextQueryMode      collections.TextSearchQueryMode `json:"text_query_mode,omitempty"`
+	Operator           collections.TextSearchOperator  `json:"operator,omitempty"`
+	CandidateLimit     int                             `json:"candidate_limit,omitempty"`
+	MaxPostingsScanned int                             `json:"max_postings_scanned,omitempty"`
+	Filter             *Filter                         `json:"filter,omitempty"`
+	ReturnEmbedding    bool                            `json:"return_embedding,omitempty"`
 }
 
 type KeywordSearchResponse struct {
@@ -490,18 +563,24 @@ type KeywordSearchStats struct {
 // to bounded equality/range leaves joined only by AND over declared scalar
 // fields; unsupported shapes fail closed without a document scan.
 type HybridSearchRequest struct {
-	ExpectedGeneration   uint64                          `json:"expected_generation,omitempty"`
-	Query                string                          `json:"query,omitempty"`
-	QueryEmbedding       []float32                       `json:"query_embedding,omitempty"`
-	TopK                 int                             `json:"top_k"`
-	TextCandidateLimit   int                             `json:"text_candidate_limit,omitempty"`
-	VectorCandidateLimit int                             `json:"vector_candidate_limit,omitempty"`
-	CandidateLimit       int                             `json:"candidate_limit,omitempty"`
-	MaxChunksPerParent   int                             `json:"max_chunks_per_parent,omitempty"`
-	EfSearch             int                             `json:"ef_search,omitempty"`
-	Fusion               collections.HybridFusionOptions `json:"fusion,omitempty"`
-	Filter               *Filter                         `json:"filter,omitempty"`
-	ReturnEmbedding      bool                            `json:"return_embedding,omitempty"`
+	ExpectedGeneration        uint64                           `json:"expected_generation,omitempty"`
+	Query                     string                           `json:"query,omitempty"`
+	QueryEmbedding            []float32                        `json:"query_embedding,omitempty"`
+	TopK                      int                              `json:"top_k"`
+	TextQueryMode             collections.TextSearchQueryMode  `json:"text_query_mode,omitempty"`
+	TextOperator              collections.TextSearchOperator   `json:"text_operator,omitempty"`
+	TextCandidateLimit        int                              `json:"text_candidate_limit,omitempty"`
+	MaxPostingsScanned        int                              `json:"max_postings_scanned,omitempty"`
+	VectorCandidateLimit      int                              `json:"vector_candidate_limit,omitempty"`
+	VectorQueryMode           collections.VectorIndexQueryMode `json:"vector_query_mode,omitempty"`
+	QuantizedIndexName        string                           `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                              `json:"quantized_rerank_candidates,omitempty"`
+	CandidateLimit            int                              `json:"candidate_limit,omitempty"`
+	MaxChunksPerParent        int                              `json:"max_chunks_per_parent,omitempty"`
+	EfSearch                  int                              `json:"ef_search,omitempty"`
+	Fusion                    collections.HybridFusionOptions  `json:"fusion,omitempty"`
+	Filter                    *Filter                          `json:"filter,omitempty"`
+	ReturnEmbedding           bool                             `json:"return_embedding,omitempty"`
 }
 
 type HybridSearchResponse struct {

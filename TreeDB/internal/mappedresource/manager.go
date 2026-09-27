@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // Source identifies how a handle's bytes are backed.
@@ -108,6 +109,14 @@ type globalPinKey struct {
 	id      uint64
 }
 
+// ConservativeHandleMetadataBytes bounds one retained handle and its manager
+// and process-global pin registrations without depending on Go map internals.
+func ConservativeHandleMetadataBytes() uint64 {
+	managerEntry := unsafe.Sizeof(uint64(0)) + unsafe.Sizeof(Pin{})
+	globalEntry := unsafe.Sizeof(globalPinKey{}) + unsafe.Sizeof(Pin{})
+	return uint64(unsafe.Sizeof(Handle{}) + 2*(managerEntry+globalEntry))
+}
+
 var globalResourceState = struct {
 	mu     sync.Mutex
 	stats  Stats
@@ -142,6 +151,7 @@ type Handle struct {
 	scope      Scope
 	source     Source
 	bytes      []byte
+	accounted  int64
 	release    func() error
 	err        error
 	done       bool
@@ -185,6 +195,20 @@ func (h *Handle) Bytes() []byte {
 	return h.bytes
 }
 
+// AccountedBytes returns the backing extent charged while the handle is live.
+// For a range mmap this includes the page-alignment prefix, not just Bytes().
+func (h *Handle) AccountedBytes() int64 {
+	if h == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.done {
+		return 0
+	}
+	return h.accounted
+}
+
 // Released reports whether the handle has been released.
 func (h *Handle) Released() bool {
 	if h == nil {
@@ -208,7 +232,7 @@ func (h *Handle) Release() error {
 	mgr := h.mgr
 	id := h.id
 	source := h.source
-	bytes := int64(len(h.bytes))
+	bytes := h.accounted
 	release := h.release
 	h.bytes = nil
 
@@ -247,7 +271,7 @@ func (m *Manager) AcquireBytes(key Key, scope Scope, source Source, data []byte,
 		m.recordDenied(DenyUnsupported)
 		return nil, fmt.Errorf("mappedresource: unsupported source %q", source)
 	}
-	return m.acquireRegistered(key, scope, source, data, nil, opts), nil
+	return m.acquireRegistered(key, scope, source, data, int64(len(data)), nil, opts), nil
 }
 
 // AcquireFileRange opens path and returns either an mmap-backed or heap-copy
@@ -277,24 +301,23 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 	}
 	m.recordOpen()
 	if opts.PreferMapped {
-		mapped, mapErr := mmapFile(file)
+		mapped, view, mapErr := mmapFileRange(file, key.Offset, key.Length)
 		if mapErr == nil {
-			end := key.Offset + key.Length
-			if key.Offset < 0 || end < key.Offset || end > int64(len(mapped)) {
+			accounted, accountErr := mappedPageExtentBytes(int64(len(mapped)))
+			if accountErr != nil {
 				_ = munmapFile(mapped)
 				_ = file.Close()
 				m.recordClose()
 				m.recordDenied(DenyOutOfBounds)
-				return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside mapped bytes=%d", key.Offset, key.Length, len(mapped))
+				return nil, accountErr
 			}
-			view := mapped[key.Offset:end]
 			release := func() error {
 				err := errors.Join(munmapFile(mapped), file.Close())
 				m.recordClose()
 				return err
 			}
 			opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
-			return m.acquireRegistered(key, scope, SourceMapped, view, release, opts), nil
+			return m.acquireRegistered(key, scope, SourceMapped, view, accounted, release, opts), nil
 		}
 		if !opts.AllowHeapCopy {
 			_ = file.Close()
@@ -345,7 +368,15 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		return nil, closeErr
 	}
 	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
-	return m.acquireRegistered(key, scope, SourceHeapCopy, raw, nil, opts), nil
+	return m.acquireRegistered(key, scope, SourceHeapCopy, raw, int64(len(raw)), nil, opts), nil
+}
+
+func mappedPageExtentBytes(length int64) (int64, error) {
+	pageSize := int64(os.Getpagesize())
+	if length <= 0 || length > int64(^uint64(0)>>1)-(pageSize-1) {
+		return 0, fmt.Errorf("mappedresource: mapped extent too large bytes=%d", length)
+	}
+	return (length + pageSize - 1) / pageSize * pageSize, nil
 }
 
 func mappedResourceOptionPath(explicit, fallback string) string {
@@ -355,12 +386,12 @@ func mappedResourceOptionPath(explicit, fallback string) string {
 	return fallback
 }
 
-func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []byte, release func() error, opts AcquireOptions) *Handle {
+func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []byte, accountedBytes int64, release func() error, opts AcquireOptions) *Handle {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextID++
 	id := m.nextID
-	bytes := int64(len(data))
+	bytes := accountedBytes
 	m.stats.ActiveHandles++
 	m.stats.TotalAcquires++
 	if opts.ValidationMode != "" {
@@ -384,7 +415,7 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}
 	m.active[id] = pin
 	globalRegisterPin(m, id, pin, opts.ValidationMode, opts.FallbackReason)
-	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, release: release}
+	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, accounted: bytes, release: release}
 }
 
 func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr error) {

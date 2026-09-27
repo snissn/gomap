@@ -7,11 +7,139 @@ Consumes: the M1/M4/M5/M6 contracts in `vector-partition-raft-v1.md`,
 
 ## Purpose and admission boundary
 
+### Router representation revision R (#4773)
+
+The public search API remains V1, but newly built routers use
+`treedb_vector_partition_router_v3`: a **global** representative budget B,
+not B per domain. Canonically ordered nonempty logical domains reserve one
+token each before quotas are apportioned by integer largest remainders,
+weighted by membership count, with domain/node order breaking ties and a
+non-unary-forest capacity of `2*n-1`. B below the domain count fails.
+
+A logical domain is an unrepresented container. It learns and emits up to its
+quota of genuine spherical bucket centroids; it does not emit or charge an
+additional aggregate domain center. Every emitted centroid consumes one token.
+Splitting a retained centroid preserves that centroid and consumes one token
+per emitted child centroid. Residual quota is apportioned only among buckets
+that are large and shallow enough to recurse. The reference defaults are
+fanout 64 and minimum recursive cluster size 250. Initialization is a
+deterministic sampled traversal; empty-cluster repair reuses assignment
+distances. If a bucket's FP64 member sum has zero norm, its center is the
+normalized vector of the first member in canonical ordinal order. Identical
+vectors, leaf size, depth, insufficient quota, and failed
+non-unary splits stop subdivision. Unused tokens are reported, not filled with
+fabricated duplicate nodes. Physical packing does not multiply the
+logical-domain quota.
+
+Representative identity is `(logical domain, represented node ID)`. Source
+ordinal is provenance, may repeat at several levels, and is not a uniqueness
+key. Ordering, node ancestry, true leaf flags, quotas, config, centers, and
+source identity are digest-bound and checked on open. Routing remains
+nearest-center distance, with deterministic domain/representative ties;
+frequency voting is diagnostic only.
+
+Search uses partition probes **P** and actual centroid score-call ceiling **C**
+(`VectorPartitionRouterSearchOptionsV3`). C is bounded to [1, 1,000,000]
+before execution. Approximate search requires C to cover every depth-zero
+centroid, scores those roots first, and then expands complete sibling groups in
+best-parent-distance order. If the next complete group does not fit C, search
+stops successfully without partially scoring it. Every logical domain has a
+scored root, so routing ranks all domains by their minimum scored-centroid
+distance with stable domain/node ties and returns P domains. The explicit exact
+reference requires C at least equal to N, scores all N representatives, and
+uses the same domain reducer. No mode clamps C, retries with a larger budget,
+or falls back to exact search.
+
+This is an intentional pre-alpha format break: router model/record/asset
+semantics are version 3. Manifest binary version 6 carries every local asset's
+graph variant. Ready-promotion payload version 4 adopts the graph-variant-capable
+asset frame for its empty-variant router asset, and its ready digest binds the
+reconstructed manifest. Router records are 16-byte-identity records
+(source ordinal, domain, node); path metadata retains leaf flags and quota.
+Rebuild old DB/benchmark directories; do not migrate or silently reinterpret
+version-2 router assets. Existing publication, generation pin, checkpoint,
+reopen, GC/rewrite reachability, and persistent-value-log obligations remain.
+The mapped immutable owner retains vector storage; live owners still clone
+their retained vectors before the pin is released.
+
+The benchmark uses `-router-global-budget` and `-router-score-budget`. M8
+evidence is schema 7, system-node config is schema 3, and production routing
+binds hierarchical C/P semantics. Width/beam remain only in the immutable
+offline flat-HNSW policy diagnostic and are not serving controls.
+Old #4744/#4745 receipts remain historical; neither rebuilding nor changing
+their labels makes them evidence for this revision. R does not change
+memberships or establish the final scaling/recall verdict.
+
+### Connectivity-preserving partition-local Vamana revision V (#4787)
+
+Production partition-local search has one graph identity:
+`connectivity_preserving_vamana_r64_l256_alpha_1_2`. It uses pack version 6
+with final out-degree `R=64`, construction search list `L=256`, and two
+deterministic passes at alpha `1.0` then `1.2`. Construction and serving use
+exact FP32 squared L2 over the authoritative normalized vectors. The pack
+contains one flat native graph plus those vectors; separate repair graphs,
+auxiliary navigation, external-vector references, degree filler, and
+search-time ordinal reseeding are not production paths.
+
+The entry is the exact centroid-nearest row with ordinal ties. Each pass uses a
+membership-bound deterministic permutation; GreedySearch returns expanded
+nodes and RobustPrune applies the source-distance/candidate-separation ratio
+directly to stored squared distances. A final degree-preserving native-edge
+swap pass requires every row to be reachable from the entry without increasing
+any row's degree. Public results tie by stable ID after score.
+
+VPM1 version 6 carries each partition asset's explicit graph variant, while the
+READY-promotion ready digest binds the reconstructed VPM1. Open and reopen
+require the connectivity-preserving Vamana identity and pack version;
+historical or missing variants fail closed and require rebuild. Local score
+budgets cover immutable
+native beam traversal, deterministic final FP32 rescoring, and live-domain
+layer-zero traversal across base, delta, and resumed passes; an exact scan
+charges only non-excluded rows. No path raises a budget, retries with a larger
+budget, or silently falls back to exact search.
+
+M8 schema 7 records the graph identity and local score calls/caps. That schema
+is harness readiness, not retained qualification: the preregistered
+structured-250K run and accepted issue receipt remain required.
+
+### One graph per logical domain over bounded chunks (#4775)
+
+When a logical domain contains several physical membership packs, production
+materialization builds the accepted version-6 Vamana graph once over the
+domain's complete canonical membership union. The domain's lowest pack ID is
+its serving `PartitionID`; routing, placement, open, traversal, top-k and the
+shard response use that ID once. The remaining physical pack IDs remain
+membership/build inputs and do not create additional searchers, frontiers or
+partials.
+
+Persistence uses one metadata root plus immutable section chunks under the
+same partition and generation. Chunk IDs are canonical
+`section/<kind>/<index>/chunk/<ordinal>` paths. Vectors split only between
+whole padded rows, adjacency neighbors only between complete CSR lists,
+document bytes only between complete IDs, and fixed-width planes only between
+elements. Empty sections emit no chunk. Every nonempty root section must have
+one gap-free, nonduplicated exact cover; missing, stale, foreign, truncated,
+oversized, mixed-generation or cross-owner groups fail activation. A single
+indivisible row, list or ID above the per-asset bound also fails.
+
+Open pins and validates the complete chunk set but does not concatenate it.
+Search retains the original global ordinals, graph entry, edge order, one
+frontier, one stop decision and one top-k heap while resolving vectors, CSR,
+row refs and IDs through chunk-aware views. Batched scoring may split a tile at
+a vector-chunk boundary without changing candidate order or score accounting.
+The shard partial reports section `required_chunks`, `opened_chunks` and
+`accessed_chunks`; a successful open reports the same count for all three
+because every required chunk has been acquired, checksum-read and semantically
+validated before the request can run. Mapped and heap bytes charge the actual
+backing extents, including mmap page prefixes, retained chunk directories and
+conservative per-handle bookkeeping.
+
 This document freezes the supported snapshot-bound graph-partitioned vector
 search V1 contract. It is an admission contract, not an enablement claim: the
 feature remains internal and experimental/off until its owning rollout gate
-accepts it. It does not add a runtime route, change a persistent format, or
-promote the benchmark simulation to production evidence.
+accepts it. The original V1 admission contract did not add a runtime route or
+promote the benchmark simulation to production evidence. The R revision above
+explicitly changes derived-asset formats without changing that enablement gate.
 
 V1 has two deliberately disjoint result classifications:
 
@@ -38,11 +166,13 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
    `route_mismatch`; it is not folded into `generation_mismatch`.
 2. Where routing is used, the exact representative route scores every persisted
    representative and selects unique logical domains deterministically by
-   `(distance, domain_id)`. Every selected domain expands to all of its required
-   physical search packs. Representative selection is not a substitute for
-   an exhaustive exact union.
-3. The union covers every canonical physical search pack exactly as named by
-   the accepted generation. Each pack is searched with `exact_fp32_scan_v1`;
+   `(distance, domain_id)`. In the domain-graph format every selected domain
+   expands to its one serving anchor; historical one-graph-per-pack generations
+   remain rejected rather than silently mixed. Representative selection is not
+   a substitute for an exhaustive exact union.
+3. The union covers every canonical logical-domain membership exactly as named
+   by the accepted generation. Each domain graph is searched with
+   `exact_fp32_scan_v1` for this exact classification;
    overlap may yield repeated stable IDs but may not create a second logical
    document.
 4. Scores use the canonical FP32 cosine contract. Global dedupe keeps the best score per stable ID and final top-k ordering is `(score descending, stable ID bytewise ascending)`. Equal-score ties and duplicate arrival order therefore
@@ -82,7 +212,7 @@ a response.
 Representative routing and partition-local HNSW are separate approximations:
 
 - `RouteExactV1` is the representative-routing oracle. Approximate
-  representative routing has an explicit candidate budget and reports recall
+  representative routing has an explicit score-call budget and reports recall
   separately from partition-local loss.
 - `hnsw_search_pack_v1` is a partition-local ANN traversal. The historical
   `exact_hnsw_search_pack_v1` route label names the prepared native search-pack
@@ -217,3 +347,66 @@ the public production generation-source-to-shard-to-coordinator path. They
 complement the exact-union, HNSW-route, lifecycle, source-identity,
 response-proof, and all-or-error executable tests in the M1 through M6
 packages; documentation is not a substitute for them.
+
+### Optional offline quality diagnostics
+
+The M8 benchmark's explicit `-m8-quality-diagnostics` selection is an offline,
+static-generation attribution contract, not a public serving policy. It MUST
+bind canonical query/truth, source/model and complete logical-domain to physical
+pack ownership. It MUST NOT count overlap twice, invent unsampled score traces,
+or interpret independent domain-cost and pack-cost optima as the same feasible
+route. Actual coordinator truth masks are attached from measured output and
+remain distinct from offline local-search masks.
+
+The existing canonical score/tie, exact-union, all-or-error, generation-pin and
+visibility contracts are unchanged. Historical receipts without the selection
+retain their previous method. A selected diagnostic's producer, command binding,
+work preflight and retained replay must agree on the new method and fields;
+missing or conflicting data reject rather than falling back to a partial pass.
+See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
+representative-baseline boundary.
+
+Selected quality evidence on `candidate_coverage_shortfall`,
+`router_score_budget_exhausted`, or `mixed_router_refusal` rows MUST also be
+recomputed from reopened static assets. Structural validation alone cannot bind
+query/truth/model digests, coverage costs or nearest-member routing. Only the
+unavailable local/coordinator observations are suppressed, using the same rule
+as the producer. Failed serving is not permission to trust self-reported static
+observations.
+
+Offline trace-ID preparation uses the context-aware ordinal-map copy while the
+prepared owner is pinned. It checks cancellation before allocation, during the
+copy, and before cache publication; cancellation returns no partial mapping and
+releases the operation's pin. This does not add trace preparation to serving.
+
+Offline qualification fixtures may specify `query_ordinal_offset` (default zero,
+omitted from legacy JSON). It selects only query generator ordinals, never corpus
+ordinals. The nonnegative half-open range end MUST fit in signed 64 bits before
+allocation; the legacy generator MUST reject nonzero offsets. Query bytes and
+canonical truth remain checksum-bound, so fresh ranges require fresh fixture and
+truth-cache identities. Relative query indices in reports and calibration splits
+remain unchanged. Existing retained descriptors MUST still match the complete
+fixture checksum; corpus equality alone does not authorize descriptor reuse.
+
+### Optional same-candidate ranking comparison
+
+The M8-only `-m8-router-policy-diagnostics` selection additionally compares
+minimum-distance, frequency and frequency-first/distance-rest rankings under
+one immutable representative owner. It MUST use one candidate collection per
+comparison, count distinct returned representative identities, preserve the
+remaining distance order after prepending the frequency winner, and bind set
+and sequence identities separately. Exact-reference voting MUST first truncate
+to the declared nearest returned width while charging the full scan.
+
+A typed candidate-coverage shortfall MUST retain its work and candidate identity
+but return no partial policy route. Producer and retained consumer MUST preserve
+all query outcomes and actual logical-domain/physical-pack cost. This is an
+offline coverage experiment, not admission of any new public routing policy or
+model. Ordinary query results, score/tie order, generation lifetime, write
+placement, durability and default allocation behavior remain unchanged.
+
+Selected router-policy preflight MUST bound query/truth identity checks on cache
+hits across both producer and strict-replay EF/concurrency populations, not just
+new candidate collections. Cached identity validation MUST NOT be removed to
+avoid that cost. Nearest-width and policy ordering MUST observe cancellation
+while sorting under the captured owner; canceled diagnostics return no routes.

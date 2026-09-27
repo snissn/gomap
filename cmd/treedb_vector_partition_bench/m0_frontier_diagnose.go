@@ -32,20 +32,21 @@ type m0FrontierDiagnosticBindingV1 struct {
 	StableID        string `json:"stable_id"`
 	DocumentID      string `json:"document_id"`
 	SourceOrdinal   int    `json:"source_ordinal"`
-	AssignedPack    int    `json:"assigned_pack"`
+	AssignedDomain  int    `json:"assigned_domain"`
+	ManifestDomain  uint32 `json:"manifest_domain"`
 	ManifestPack    uint32 `json:"manifest_pack"`
 }
 type m0FrontierRouterSweepCellV1 struct {
-	Mode            string    `json:"mode"`
-	CandidateBudget int       `json:"candidate_budget"`
-	Probes          int       `json:"probes"`
-	Queries         int       `json:"queries"`
-	TruthRankSlots  [5]uint64 `json:"truth_slots_at_route_rank"`
-	Candidates      uint64    `json:"router_candidates"`
-	Edges           uint64    `json:"router_edges"`
-	ElapsedNanos    uint64    `json:"router_elapsed_nanos"`
-	P50Nanos        uint64    `json:"router_p50_nanos"`
-	P95Nanos        uint64    `json:"router_p95_nanos"`
+	Mode           string    `json:"mode"`
+	ScoreBudget    int       `json:"score_budget"`
+	Probes         int       `json:"probes"`
+	Queries        int       `json:"queries"`
+	TruthRankSlots [5]uint64 `json:"truth_slots_at_route_rank"`
+	Candidates     uint64    `json:"router_candidates"`
+	Edges          uint64    `json:"router_edges"`
+	ElapsedNanos   uint64    `json:"router_elapsed_nanos"`
+	P50Nanos       uint64    `json:"router_p50_nanos"`
+	P95Nanos       uint64    `json:"router_p95_nanos"`
 }
 type m0FrontierDiagnosticV1 struct {
 	Schema                    string                          `json:"schema"`
@@ -57,6 +58,7 @@ type m0FrontierDiagnosticV1 struct {
 	SourceRevision            string                          `json:"source_revision"`
 	VCSModified               bool                            `json:"vcs_modified"`
 	EFSearch                  int                             `json:"ef_search"`
+	RouterScoreBudget         int                             `json:"router_score_budget"`
 	TruthRankSlots            [5]uint64                       `json:"truth_slots_at_route_rank"`
 	ExactTruthRankSlots       [5]uint64                       `json:"exact_truth_slots_at_route_rank"`
 	ApproxMissSiblingSelected uint64                          `json:"approx_miss_slots_with_selected_original_component_sibling"`
@@ -99,6 +101,9 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err := validateFixture(fixture); err != nil {
 		return err
 	}
+	if !supportedFixtureGeneratorV1(fixture.Generator) {
+		return errors.New("historical M0 diagnostic requires a procedural fixture")
+	}
 	split, splitSHA, err := loadLocalHNSWQuerySplitV1(calibration)
 	if err != nil {
 		return err
@@ -135,7 +140,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.PartitionCount) {
+	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.DomainCount) {
 		return errors.New("M0 diagnostic artifact binding")
 	}
 	if err := m0FrontierMembershipTopologyV1(artifactPath, graphArtifactPath, account, selected, fixture, h); err != nil {
@@ -165,19 +170,20 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		}
 		childParent[child] = parent
 	}
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
-	defer closeM3PartitionSearchers(searchers)
-	for i, a := range h.manifest.Assets {
-		searchers[i], err = h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, a)
-		if err != nil {
-			return err
-		}
+	harness, err := newM8AttributionHarnessV1(h)
+	if err != nil {
+		return err
 	}
+	defer harness.Close()
+	searchers := harness.searchers
 	members, err := m0FrontierMembershipOracleV1(h)
 	if err != nil {
 		return err
 	}
-	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, EFSearch: ef}
+	if h.status.Representatives < 1 {
+		return errors.New("M0 diagnostic router is empty")
+	}
+	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v3", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, EFSearch: ef, RouterScoreBudget: defaultRouterScoreBudgetV3}
 	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members)
 	if err != nil {
 		return fmt.Errorf("M0 diagnostic router sweep: %w", err)
@@ -187,15 +193,20 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	for _, ordinal := range split.Ordinals {
 		q := m8Query32V1(queries[ordinal])
-		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: 64, PartitionProbes: 4})
+		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV3{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: report.RouterScoreBudget, PartitionProbes: 4})
 		if err != nil || len(routed.Partitions) != 4 {
 			return errors.New("M0 diagnostic route")
 		}
 		row := m0FrontierDiagnosticQueryV1{Query: ordinal, Route: make([]uint32, 4)}
 		routePacks := make([][]uint32, 4)
+		routeSearchPartitions := make([][]uint32, 4)
 		for i, r := range routed.Partitions {
 			row.Route[i] = r.PartitionID
 			routePacks[i], err = m8AttributionPacksForDomainsV1(h.manifest, len(searchers), []uint32{r.PartitionID})
+			if err != nil {
+				return err
+			}
+			routeSearchPartitions[i], err = harness.partitionsForDomains([]uint32{r.PartitionID})
 			if err != nil {
 				return err
 			}
@@ -218,21 +229,19 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 				if !ok {
 					return errors.New("M0 diagnostic truth ID absent from graph artifact")
 				}
-			siblingSelected:
-				for _, packs := range routePacks {
-					for _, pack := range packs {
-						if childParent[int(pack)] == parent {
-							report.ApproxMissSiblingSelected++
-							break siblingSelected
-						}
-					}
+				siblingSelected, err := m0FrontierRouteHasParentV1(childParent, row.Route, parent)
+				if err != nil {
+					return err
+				}
+				if siblingSelected {
+					report.ApproxMissSiblingSelected++
 				}
 			}
 		}
 		if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) {
 			return errors.New("M0 diagnostic exact router representatives")
 		}
-		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), PartitionProbes: 4})
+		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV3{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(h.status.Representatives), PartitionProbes: 4})
 		if err != nil || len(exact.Partitions) != 4 {
 			return errors.New("M0 diagnostic exact route")
 		}
@@ -258,7 +267,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 			report.ExactTruthRankSlots[rank]++
 		}
 		var prior []m8CanonicalResultV1
-		for rank, packs := range routePacks {
+		for rank, packs := range routeSearchPartitions {
 			combined := append([]m8CanonicalResultV1(nil), prior...)
 			for _, pack := range packs {
 				got, _, _, e := searchers[pack].SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
@@ -318,19 +327,19 @@ func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, 
 		return nil, errors.New("M0 diagnostic router sweep status")
 	}
 	cells := make([]m0FrontierRouterSweepCellV1, 0, 12)
-	for _, budget := range []int{64, 128, 256} {
+	for _, budget := range []int{defaultRouterScoreBudgetV3 / 2, defaultRouterScoreBudgetV3, defaultRouterScoreBudgetV3 * 2} {
 		for _, probes := range []int{1, 2, 4} {
-			cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: budget, Probes: probes})
+			cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: budget, Probes: probes})
 		}
 	}
 	for _, probes := range []int{1, 2, 4} {
-		cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), Probes: probes})
+		cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(h.status.Representatives), Probes: probes})
 	}
 	for i := range cells {
 		lat := make([]uint64, 0, len(ordinals))
 		for _, ordinal := range ordinals {
 			started := time.Now()
-			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV1{Mode: cells[i].Mode, CandidateBudget: cells[i].CandidateBudget, PartitionProbes: cells[i].Probes})
+			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV3{Mode: cells[i].Mode, ScoreBudget: cells[i].ScoreBudget, PartitionProbes: cells[i].Probes})
 			elapsed := uint64(time.Since(started).Nanoseconds())
 			if err != nil || len(route.Partitions) != cells[i].Probes {
 				return nil, errors.New("M0 diagnostic sweep route")
@@ -374,8 +383,8 @@ func m0FrontierRouterSweepCompleteV1(cells []m0FrontierRouterSweepCellV1) bool {
 	}
 	seen := map[string]bool{}
 	for _, c := range cells {
-		key := fmt.Sprintf("%s/%d/%d", c.Mode, c.CandidateBudget, c.Probes)
-		if seen[key] || c.Queries != 806 || c.Candidates == 0 || c.ElapsedNanos == 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos {
+		key := fmt.Sprintf("%s/%d/%d", c.Mode, c.ScoreBudget, c.Probes)
+		if seen[key] || c.ScoreBudget < 1 || c.Queries != 806 || c.Candidates == 0 || c.ElapsedNanos == 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos {
 			return false
 		}
 		seen[key] = true
@@ -393,6 +402,20 @@ func m0FrontierSameIDsV1(a, b []m8CanonicalResultV1) bool {
 		}
 	}
 	return true
+}
+
+func m0FrontierRouteHasParentV1(childParent map[int]int, route []uint32, parent int) (bool, error) {
+	selected := false
+	for _, domain := range route {
+		candidate, ok := childParent[int(domain)]
+		if !ok {
+			return false, errors.New("M0 diagnostic routed domain absent from assignment")
+		}
+		if candidate == parent {
+			selected = true
+		}
+	}
+	return selected, nil
 }
 
 func m0FrontierBindingChecksV1(h *m8ProductionMultiGroupAssetsV1, artifact vectorpartition.Artifact) ([]m0FrontierDiagnosticBindingV1, error) {
@@ -422,16 +445,24 @@ func m0FrontierBindingChecksV1(h *m8ProductionMultiGroupAssetsV1, artifact vecto
 		}
 		home[m.VectorOrdinal] = m.PartitionID
 	}
+	packDomains, _, err := m8QualityPackOwnersV1(h.manifest)
+	if err != nil {
+		return nil, err
+	}
 	samples := []int{0, len(artifact.IDs) / 7, len(artifact.IDs) / 3, len(artifact.IDs) / 2, 2 * len(artifact.IDs) / 3, 6 * len(artifact.IDs) / 7, len(artifact.IDs) - 1}
 	out := make([]m0FrontierDiagnosticBindingV1, 0, len(samples))
 	for _, ordinal := range samples {
 		source := mapping[ordinal]
 		pack, ok := home[uint64(source)]
 		doc := docs[uint64(source)]
-		if !ok || doc == "" || pack != uint32(artifact.Assignment[ordinal]) {
-			return nil, errors.New("M0 diagnostic source ID pack binding")
+		if !ok || doc == "" || int(pack) >= len(packDomains) {
+			return nil, errors.New("M0 diagnostic source ID physical pack binding")
 		}
-		out = append(out, m0FrontierDiagnosticBindingV1{ArtifactOrdinal: ordinal, StableID: artifact.IDs[ordinal], DocumentID: doc, SourceOrdinal: source, AssignedPack: artifact.Assignment[ordinal], ManifestPack: pack})
+		domain := packDomains[pack]
+		if domain != uint32(artifact.Assignment[ordinal]) {
+			return nil, errors.New("M0 diagnostic source ID domain binding")
+		}
+		out = append(out, m0FrontierDiagnosticBindingV1{ArtifactOrdinal: ordinal, StableID: artifact.IDs[ordinal], DocumentID: doc, SourceOrdinal: source, AssignedDomain: artifact.Assignment[ordinal], ManifestDomain: domain, ManifestPack: pack})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ArtifactOrdinal < out[j].ArtifactOrdinal })
 	return out, nil

@@ -182,6 +182,7 @@ func (c *Collection) finishTypedGraphReadOwnerOpen(open *typedGraphReadOwnerServ
 		return ErrVectorIndexSnapshotMismatch
 	}
 	view.rows, view.invNorms = state.rows, state.invNorms
+	view.lastMetadataGeneration = state.lastMetadataGeneration
 	view.sourceRows, view.sourceTombstones, view.sourceBytes = state.physicalRows, state.tombstones, state.installedAssetBytes
 	if state.servingBase != nil {
 		prepared := state.servingMaterializer
@@ -275,9 +276,18 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			return ErrVectorIndexSnapshotMismatch
 		}
 		coord.typedPublicationDebtMu.Unlock()
-		catalog, err := loadCollectionCatalog(snap, c.collectionName())
-		if err != nil {
-			return err
+		snap.MarkForegroundRead()
+		catalog := c.cachedCatalogForSnapshot(snap, false)
+		if catalog == nil || catalog.typedGraphBase == nil || len(catalog.typedGraphBase.roots) == 0 || len(catalog.meta.VectorIndexes) != 1 || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
+			// Capture already holds the storage barrier. The general catalog
+			// loader can wait on writeDomain.mu, so a local miss must go
+			// directly to this fresh snapshot instead. Refresh the existing
+			// single metadata entry, never a request snapshot or asset lease.
+			catalog, err = loadCollectionCatalog(snap, c.collectionName())
+			if err != nil {
+				return err
+			}
+			c.rememberCatalog(snap, catalog)
 		}
 		state := coord.typedPublication.Load()
 		if coord.typedGraphServing.Load() != nil && (state == nil || state.servingBase == nil || !state.servingAdmitted) {

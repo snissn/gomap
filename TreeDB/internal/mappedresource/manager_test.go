@@ -215,7 +215,11 @@ func TestAcquireFileRangeMappedAndHeapReturnIdenticalBytes(t *testing.T) {
 		t.Fatalf("mapped bytes %q != heap bytes %q", string(mapped.Bytes()), string(heap.Bytes()))
 	}
 	stats := mgr.Stats()
-	if stats.ActiveHandles != 2 || stats.ActiveMappedBytes != 16 || stats.ActiveHeapCopyBytes != 16 || stats.Opens != 2 || stats.Closes != 1 {
+	mappedBytes := int64(os.Getpagesize())
+	if mapped.AccountedBytes() != mappedBytes || heap.AccountedBytes() != key.Length {
+		t.Fatalf("accounted bytes mapped=%d heap=%d want %d/%d", mapped.AccountedBytes(), heap.AccountedBytes(), mappedBytes, key.Length)
+	}
+	if stats.ActiveHandles != 2 || stats.ActiveMappedBytes != mappedBytes || stats.ActiveHeapCopyBytes != 16 || stats.Opens != 2 || stats.Closes != 1 {
 		_ = mapped.Release()
 		_ = heap.Release()
 		t.Fatalf("unexpected stats with mapped+heap active: %+v", stats)
@@ -230,6 +234,32 @@ func TestAcquireFileRangeMappedAndHeapReturnIdenticalBytes(t *testing.T) {
 	stats = mgr.Stats()
 	if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || stats.Opens != 2 || stats.Closes != 2 {
 		t.Fatalf("unexpected stats after releases: %+v", stats)
+	}
+}
+
+func TestAcquireFileRangeZeroLengthAtEOFRemainsMapped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap unsupported in test manager on windows")
+	}
+	path := t.TempDir() + "/asset.bin"
+	payload := []byte("nonempty")
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := testKey()
+	key.Offset, key.Length = int64(len(payload)), 0
+	mgr := NewManager()
+	h, err := mgr.AcquireFileRange(key, testScope(), path, AcquireOptions{PreferMapped: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Release() })
+	stats := mgr.Stats()
+	if h.Source() != SourceMapped || len(h.Bytes()) != 0 || stats.ActiveMappedBytes == 0 {
+		t.Fatalf("zero-length range source=%q bytes=%d stats=%+v", h.Source(), len(h.Bytes()), stats)
+	}
+	if err := h.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -413,7 +443,7 @@ func TestMappedResourceReleaseConcurrentIdempotent(t *testing.T) {
 	releaseErr := errors.New("release failed")
 	releaseEntered := make(chan struct{})
 	releaseProceed := make(chan struct{})
-	h := mgr.acquireRegistered(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), func() error {
+	h := mgr.acquireRegistered(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), 16, func() error {
 		close(releaseEntered)
 		<-releaseProceed
 		return releaseErr

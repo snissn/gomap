@@ -7,8 +7,8 @@ import (
 	"os"
 )
 
-func mmapFile(file *os.File) ([]byte, error) {
-	return nil, fmt.Errorf("%w on windows", ErrMmapUnsupported)
+func mmapFileRange(file *os.File, offset, length int64) ([]byte, []byte, error) {
+	return nil, nil, fmt.Errorf("%w on windows", ErrMmapUnsupported)
 }
 
 func munmapFile(data []byte) error {

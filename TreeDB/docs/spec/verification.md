@@ -2,6 +2,64 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Prepared no-index JSON semantic-stream insertion is covered by
+`TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
+before publication, with no early acknowledgment),
+`TestPreparedInsertSortedValuesAndReopen` (caller-order IDs, sorted retained
+and typed values, caller-buffer reuse, one-shot commit, durable reopen),
+`TestPreparedInsertAbandonBoundsAndLateConflict` (oversized admission,
+abandonment, duplicate precedence, and authoritative late conflict),
+`TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
+sibling ordinary write, checkpoint, and durable reopen),
+`TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC` (persistent block
+pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (observed
+WAL sync before durable acknowledgment and WAL/asset/applied-LSN cuts during
+commit, plus queued root-installation cuts under checkpoint),
+`TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction` (unsupported
+scalar type uses ordinary insertion), and
+`TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog
+validation), and `TestPreparedInsertThreeAggregateSpecsRemainEligible`
+(the JSONBench five-column, three-metadata-spec target stays on the prepared
+path without assigning a part identity).
+`TestPreparedInsertNearRowLimitHighEntropy`,
+`TestPreparedInsertRejectsTypedPrebuildWithoutCredit`, and
+`TestPreparedInsertLongIDsRejectCommitReserveBeforeWAL` exercise bounded
+admission at real batch cardinality and assert resource rejection before LSN
+assignment. The stream quota tests cover rare-path growth and compressed/raw
+block capacity. These focused tests establish the checked limits; the strict
+incremental-byte envelope still requires the encoder and typed/aggregate
+allocation-site audit described in the prepared-insert memory gate.
+`BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and
+one-ahead public insertion with the real WAL/publication path. These tests do
+not replace the JSONBench real-data load and query comparison.
+
+Within-domain physical home packing: `TestDomainHomePackingKeepsCommunitiesV1`
+is the interleaved-community regression; `TestHomePackingBoundResponseAndRetainedReuseV1`
+checks bound requests, hostile responses, exact capacity and persisted homes
+across overlap variants. `TestHomePackingPinnedKaHIPV1` optionally executes the
+pinned native solver, including repeatability and empty/single-pack cases.
+`TestM0MaterializeByteBoundedMembershipReopensDisposableClone` retains non-striped homes
+through materialization/reopen. `BenchmarkDomainHomePackingV1` compares the
+100K-row packing/validation allocation boundary, excluding the separately
+measured solver and serving. These are construction checks, not qualification
+of the real-data serving improvement required by #4775/#4753.
+
+The global all-level spherical router is distinguished from the historical
+leaf-only model by `TestRouterGlobalBudgetRetainsInternalCenters`,
+`TestRouterGlobalBudgetDegenerateUnderfill`,
+`TestRouterGlobalBudgetApportionment` and
+`TestRouterGlobalBudgetCanonicalSiblingQuotaIdentity`. These cover retained
+parents, repeated provenance, global conservation, structural underfill and
+canonical sibling/quota identity across clustering seeds.
+`TestVectorPartitionRouterV3HierarchyBudgetAndDurableNodeIdentity` exercises
+actual published records/reopen, roots-first scoring, atomic child-group budget
+stops, typed pre-score exhaustion with no partial routes, and charged exact
+scans. `TestVectorPartitionRouterV3ConcurrentPinnedSearch` checks shared-owner
+search.
+Existing manifest/lifecycle, live-index and production public-backend tests
+continue to own checkpoint/reopen, source changes, pin/deletion and stable-ID
+merge behavior. These are correctness tests, not scaling qualification.
+
 `TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta`
 proves that materialized FP32 cosine reranking preserves close-vector order and
 filtered/unfiltered distance parity, with zero distance for an identical live
@@ -198,6 +256,16 @@ namespace registration alongside append evidence. The service
 held read view, current full fetch and ordinary reopen. The existing deferred
 maintenance lifecycle/manager/crash tests remain regression gates.
 
+`TestVectorIndexRebuildDrainsRawBarriersBeforeMutation` covers ordinary and
+normalized, empty and populated rebuild capture/publication without barriers
+under mutation ownership. `TestVectorIndexRebuildCheckpointPublicationHandoff`
+forces checkpoint raw ownership during construction, proves unrelated raw
+writes are not blocked by construction, and checks unchanged-source publication,
+changed-source rejection and ordinary reopen. Normalized public search after
+reopen additionally requires supported prepared-holder/namespace authority.
+`TestVectorIndexRebuildReleasesRawWhileMutationIsBusy` forces mutation contention
+at capture and final publication; unrelated raw commands must still progress.
+
 ### Internal mutable graph consumer (#4617)
 
 `TestTypedGraphOverlay*` covers checked base/current lineage, insert/replacement/
@@ -206,7 +274,16 @@ delete visibility, cumulative physical bounds and the still-gated public route.
 validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
 checks the shared borrowed lookup boundary and unchanged owning public results.
 `TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication` checks admission and
-public search while an immediate writer is paused before publication.
+public search while an immediate writer is paused before publication, including
+cold/stale local entries and a cold sibling handle.
+`TestTypedGraphReadOwnerReusesExactLocalCatalog` proves warm owner and public
+normalized SQ8/full-fetch calls do not persistently reload the catalog.
+`TestTypedGraphReadOwnerRejectsStaleOrIncompleteLocalCatalog` covers pager,
+system-root, commit, missing-base/roots and base-schema invalidation with a
+single cold repair.
+`TestTypedGraphReadOwnerCatalogMatchesPublishers` separately compares current
+roots and captured base metadata/root maps to direct persistent loading after
+initial build, upsert, delete, fold and rebuild.
 `TestTypedGraphReadOwnerRetriesPublicationChangedDuringCapture`,
 `TestTypedGraphReadOwnerInstallationGapWaiters`, and
 `TestTypedGraphReadOwnerCloseWakesPublicationWaiter` cover coherent capture,
@@ -1066,6 +1143,7 @@ Coverage:
 - `TreeDB/collections/text_search_m4_test.go`:
   - `TestSearchTextSingleTermRankedSearchM4`
   - `TestSearchTextANDOROperatorsM4`
+  - `TestSearchTextLiteralModeM4`
   - `TestSearchTextFieldWeightAffectsRankingM4`
   - `TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4`
   - `TestSearchTextSeesUnflushedTextIndexedInsertM4`
@@ -1074,6 +1152,16 @@ Coverage:
   - `TestSearchTextTopKBoundsDocumentFetchM4`
   - `TestSearchTextReopenParityM4`
   - `BenchmarkSearchTextM4`
+- `TreeDB/collections/hybrid_text_candidates_test.go`:
+  - `TestSearchHybridTextCandidatesLexicalOptions4766`
+- `TreeDB/collections/text_v2_blockmax_test.go` and
+  `text_v2_position_validation_4558_test.go`:
+  - block-max fallback and final-attribution posting budgets remain monotonic
+    and fail closed without exceeding the explicit cap
+- `TreeDB/documentservice/rag_parity_test.go`:
+  - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
+  - `TestHTTPBooleanOperatorConflictParity4766`
+  - `BenchmarkHTTPFilteredLexicalSearch4766`
 
 ## 11.2 Raft Placement Route Preflight
 
@@ -1925,6 +2013,11 @@ Invariant:
   only that shortlist by graph ordinal, and returns exact cosine scores.
 - Missing, stale, mismatched, unsupported, or unprepared quantized assets fail
   closed with no hidden exact fallback.
+- Public hybrid `quantized_rerank` uses the same admitted scalar-u8 traversal
+  and authoritative FP32 rerank under one captured owner. Exact remains the
+  default; selected requests use fixed source budgets, truthful typed-exact or
+  typed-HNSW receipts, bounded final fetch, and zero output-vector bytes unless
+  embeddings are explicitly requested.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/quantized-vector-index.md`.
@@ -1946,6 +2039,13 @@ Coverage:
     allocation guardrails, BRQ counters, and fail-closed asset validation.
   - `TreeDB/collections/vector_index_search_test.go` covers public exact,
     quantized_only, quantized_rerank, searcher buffer, and missing-name behavior.
+  - `TreeDB/collections/typed_graph_hybrid_test.go` covers coherent selected
+    hybrid ownership across concurrent publication, response ownership, scalar
+    strategies, and independent filter budgets.
+  - `TreeDB/documentservice/typed_hybrid_test.go` covers public service/HTTP
+    selection, truthful selective/empty routing, cancellation, omitted
+    embeddings, and invalid field/asset combinations. The Python client model,
+    HTTP, and integration tests cover request serialization and receipt decode.
   - `TreeDB/internal/quantizedasset/quantized_asset_test.go` covers prepared
     ordinal readers, mixed row-count granule metadata roles, role/schema
     validation, footprint metrics, and scorer-shaped allocation benchmarks.
@@ -1973,6 +2073,10 @@ Coverage:
     BRQ lower-level buffered search, BRQ-specific counters, exact-read
     guardrails, logical code bytes/vector, asset bytes/vector, recall@K, and
     rebuild/storage overhead.
+  - `BenchmarkTypedGraphHybridPublicRoutes4767` compares exact and selected
+    SQ8+rerank on the same unfiltered admitted hybrid fixture and reports route,
+    quantized/rerank/packed work, fused candidates, final fetches, embedding
+    output bytes, `ns/op`, `B/op`, and `allocs/op`.
 
 ## 13. Native Wire Protocol
 
@@ -2023,6 +2127,117 @@ It does not claim ANN query serving. Reader pins cover only this generation's
 local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
 contract.
 
+# Vector partition owner-scoped search-plan verification
+
+The schema-7 path uses a bounded root and immutable owner/domain directory
+pages. `TestVectorPartitionDirectoryPageV2OwnerSelectionAndRefusals` checks
+owner selection and missing, corrupt, misbound or incorrectly ordered pages;
+`TestVectorPartitionDirectoryPageV2StreamingWriterTails` covers bounded writer
+tails. The `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
+mixed inline/paged refusal, identity/digest bindings, copied root lifetime,
+legacy runtime/reclaim refusal and count-independent root decode allocation.
+
+`TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner` exercises
+completed durable source imports, owner-bound source verification, source-only
+Stage, reopen and session lifetime. Its current-chunk and concurrent-traversal
+subtests check verified chunk reuse and replacement, complete identity matching,
+cancellation, independently owned returned rows and traversal-local state under
+the race detector. `TestANNOwnerCommitmentV2BindsExactCanonicalIntent`
+checks the semantic domain/member commitment independently of physical page
+layout. `TestVectorPartitionPagedGraphV2BuildStageReopen` exercises the combined
+source/ANN producer, exact retry, one colocated graph per domain, reopened local
+search and source provenance. `TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports`
+reaches these producers from the applied Raft BUILD identity and actual local
+hosting. Unsupported stable lifecycle namespace platforms must refuse before
+creating the store or retaining producer pins.
+
+The source-only producer refuses nodes that also require local ANN output.
+The combined producer consumes source and ANN input once, verifies complete
+owner commitments, builds one bounded domain through the existing Vamana core,
+and stages the complete local closure. Local domain readers retain an
+independent generation pin after their parent source session closes. These
+checks do not admit distributed activation/search; those schema-7 paths remain
+refused pending the P3 contract. Destructive schema-7 generation retirement
+also remains refused before tombstone or lifecycle mutation.
+
+The older `TestVectorPartitionOwnerSearchOpenPlan*V2` and
+`TestOwnerGenerationSource*V2` cases retain intermediate owner-plan and legacy
+public-open coverage. Their constructor allocation benchmark excludes V1
+manifest acquisition/decoding and cannot establish bounded paged public open.
+Full #4808 acceptance requires complete public build/open growth and resource
+measurements, partial-build failure cleanup, snapshot/GC protection and
+current-head platform/race checks. The producer uses separate private segments
+for temporary intent and final output, with exact-identity cleanup for ordinary
+failures. It requires an active recovery-authoritative source directory before
+writing pages, so existing explicit column-asset GC can reclaim crash orphans.
+Repeated crashes without that maintenance can still accumulate disk usage.
+
+The `TestVectorPartitionPagedPrivateSegmentV2*` cases exercise process-crash
+orphan GC, rebound-child refusal, retained parent-sync debt, constructor failure
+recovery, changed frontiers and colliding write-lock stripes during shutdown.
+The combined graph case checks selected snapshot closure and active-reader GC
+protection, including corrupt transitive graph sections. Focused cleanup,
+race, native preparation and storage-name checks passed on the retained
+cleanup6 checkpoint. The legacy ConditionalTxn guard passed eight alternating
+matched pairs after optional resource metadata became lazy: 152662.5 to 152662
+bytes/op, with 281 allocations/op unchanged. Enabled DPM2 imports retain a
+measured incremental 218 allocations for continuous imports and 310 after
+reopen at the small32 boundary; these costs are separate from the passing
+canonical-directory growth bound and remain subject to allocation review.
+
+The call-local chunk repair at `f7edce49b` passed focused and race checks plus
+three independent matched processes for each of five public build/open cases.
+The 1024-row build median fell from 239.09 to 50.64 ms and 193.08 to 42.67 MB;
+cold open with 256 local rows fell from 27.69 to 2.61 ms and 23.80 to 2.88 MB.
+All five measured cases improved. `BenchmarkVectorPartitionPagedProjectionV2`
+also separates fixture setup, global-map admission, build/Stage, cold open,
+reused-session domain open and warmed local search. Remote fixture entries
+represent admitted semantic metadata, not distributed storage preparation.
+The complete matched matrix uses 32/256/1024 local rows, 0/1024/8192 remote
+metadata entries and three independent alternating processes per arm/case.
+All 216 build/open/search processes and 18 separate map-admission processes
+pass. All 36 stage time medians and all 27 build/open allocation medians
+improve; warmed local search remains 160 bytes and two allocations per call
+in every cell. Global map admission still grows with remote metadata; its
+8192-entry candidate median is 2.68 ms, 4.28 MB and 81788 allocations.
+Fixture setup metrics exclude retained session/domain preparation in warm
+cases; whole-process RSS and heap observations include it.
+
+Process RSS improves in 34 of 36 cells, but warmed search with 32 local rows
+and 1024 remote entries consistently rises from a 50344 KiB median to 62392
+KiB (+24%). This real process-peak increase remains in the original matrix.
+Three paired phase diagnostics locate the excess during the second fixture's
+import, before its changed build/open paths: live heap and heap-in-use are
+essentially equal, while anonymous resident memory differs. File-backed
+residency is similar, and queries add approximately 127 KiB in both arms.
+The candidate has lower RSS in all three single-fixture runs. These observations
+support sensitivity to preceding fixture allocation/GC history; they do not
+isolate the complete page-residency mechanism or establish a long-running RSS
+plateau. No forced GC or fixture-lifetime adjustment replaces the original
+measurement.
+
+Component performance review accepts the build/open gains with this measured
+RSS limitation; it makes no universal resident-memory improvement claim. The
+unchanged-production phase packet retains 74 authenticated receipts and 18
+successful exits at `growth-rss2` under the P2 evidence root, with manifest
+`4317f88aef8cd4d8f63f19a7c4c669cb05fde701350c8480861e035dc189ef0b`.
+Current-head platform checks and mature review remain required. These
+small-fixture results do not establish P2 readiness or distributed capacity.
+
+`TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
+`TestSourceShardMapBoundImmutableLookupV2` and
+`TestSourceShardMapRefusesIdentityCoverageDriftV2` exercise immutable lookup,
+wrong-shard refusal, epoch/collection/digest drift and complete range coverage.
+`TestSourceShardMapSameTokenRangeDoesNotAliasIDsV2` checks exact-ID duplicate
+semantics and caller input lifetime. `BenchmarkSourceShardMapResolveDocumentIDV2`
+measures the enabled token/lookup cost; map validation does not grant catalog
+authority or persist import progress.
+
+`TestVectorPartitionLegacyByteCompatibilityProbeV2` uses only schema-6 APIs
+and the same fixture on the candidate and exact D0 base; the scoped owner-local
+workflow compares binary, JSON, integrity and ready digests. The workflow also
+records exact-head Go version, focused/race checks and constructor benchmarks.
+
 # Vector partition V1 correctness and approximation verification
 
 The snapshot-bound V1 admission contract has disjoint exact and ANN gates. The
@@ -2050,6 +2265,22 @@ Coverage and commands:
 ```sh
 GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1|PartitionLocalHNSWStageIsRecallQualifiedNotExact)'
 GOWORK=off go test -count=1 ./TreeDB/docs -run TestDocsVectorPartitionV1CorrectnessAndApproximationContract
+```
+
+The #4775 domain-graph storage gate is
+`TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1`,
+`TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1`, and
+`TestVectorPartitionDomainPackRejectsOneByteOversizeRecordV1`. Together they
+compare an unchunked and forced-split V6 graph through the same traversal and
+canonical top-10 path, require an in-frontier cross-chunk edge, prove one
+searcher plus truthful chunk receipts for a multi-pack domain, and reject
+missing, duplicate, mixed-generation, canceled and indivisible inputs without
+mapped-handle leaks. Manifest, coordinator and M8 tests separately require
+canonical gap-free IDs, co-location and one domain anchor/search/partial.
+
+```sh
+GOWORK=off go test ./TreeDB/collections ./TreeDB/nativewire ./cmd/treedb_vector_partition_bench \
+  -run 'Test(VectorPartitionDomainPack|VectorPartitionCoordinator|M8LocalSearchFanoutIsOneGraphPerDomain)' -count=1
 ```
 
 # Vector partition standalone live-delta verification
@@ -2126,6 +2357,43 @@ profile nor response pack footprint is presented as retained overlay growth.
 These bounded local profiles do not replace the H-C qualification owned by
 #4249.
 
+`TestM8ScalingComparisonCompleteBlocksV1`,
+`TestM8ScalingComparisonIdentityAndPackingV1` and
+`TestM8ScalingLogicalUnionV1` check five complete comparison blocks, failed-row
+retention, frozen identity/settings and unchanged logical membership across
+physical packing. `TestM8WholeCollectionPopulationV1` and
+`TestM8WholeCollectionAdmissionV1` cover complete ordinary-reference outcomes
+and refusal before output creation. On Linux,
+`TestM8WholeCollectionReadOnlyPublicPathV1` verifies persisted-source reopen,
+ordinary public search with worker-owned buffers at c1/c32, path counters,
+truth-ID recall, error retention and unchanged source identity. These are
+measurement-apparatus checks, not final qualification; the ordinary HNSW
+in-process reference is not a same-algorithm/native-TCP comparator. See the
+[comparison runbook](../performance/vector-partition-m8.md#fixed-cross-report-comparisons-and-ordinary-reference-4753).
+
+`TestVectorPartitionLiveSelectedLifecycleV1` adds a bounded selected-product
+component gate:512 procedural768D rows, approximate routing, selected Vamana
+immutable packs and the native HNSW delta, TCP mutations/shard requests, and
+independent concurrent readers/writer. It validates canonical truth against
+the actual revision/coverage, acknowledged-write freshness, exact physical
+pack expansion and every terminal attempt. Insert/delete/domain movement,
+metadata-only updates, cold sources, checkpoint-backed durable-ack crash,
+reopen and active-generation GC are checked separately, including native
+document visibility. A quiesced full-source/partition/router replacement absorbs
+the overlay; a held old-generation reader pin fences deletion, and repeated
+reclamation plus physical absence and reopened new-generation searches are
+checked. Deletion must be observable in the initial ANN result, and cross-domain
+movement uses verified live owners, not inferred approximate-router winners.
+`TestVectorPartitionLiveLifecycleReceiptRejectsV1` provides hostile population,
+freshness, route and current-vector/tombstone score controls.
+`TestVectorPartitionLiveBoundedTruthV1` compares the unchanged-top-K plus touched
+delta oracle with a complete scan, including ties, replacements and deletions.
+See the [component gate runbook](../performance/vector-partition-m8.md#selected-product-standalone-lifecycle-component-gate-4753)
+for receipts and the opt-in pinned100K/768D real fixture. The default procedural
+corpus and test read proof do not establish real-data scale or replicated/public
+live serving. The maintenance-window replacement is not automatic online fold;
+adding the real-fixture path does not by itself earn a retained real-data pass.
+
 ```sh
 GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'
 GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(VectorPartitionLiveProduction|VectorPartitionCoordinator|VectorPartitionShardSearch|CollectionVectorPartitionGenerationSource)'
@@ -2182,3 +2450,307 @@ The accepted 1M-vector row is an all-partition correctness row using an
 in-process M5-contract simulation and synthetic read proof. It is not network,
 production Raft, or M8 evidence. See
 `TreeDB/docs/performance/vector-partition-m6.md`.
+
+## M8 opt-in graph-quality attribution (#4744)
+
+`cmd/treedb_vector_partition_bench/m8_coverage_cost_test.go` checks the top-10
+mask DP against exhaustive subsets, additive physical costs, simultaneous-budget
+counterexamples, checked bounds, cancellation and owned scratch/results.
+`m8_no_coarsening_test.go` checks all-pack nearest-member reduction, eligibility
+empties, ties, duplicate route rejection and nested actual truth masks.
+
+`m8_quality_integration_test.go` exercises real persisted local packs and fresh
+prepared owners, exact canonical-union parity, DP/legacy-oracle parity across
+probe counts, trace/ordinary result-and-work parity, replay identity, physical
+pack expansion, CLI/child propagation, selected/missing/forged evidence, and
+work/memory rejection. These tests preserve the existing public serving policy;
+they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.
+
+`m8_quality_replay_review_test.go` verifies that schema-valid forged static
+quality evidence in failed-coverage rows is rejected after independent asset
+reopen, and that canceled trace preparation does not publish a cache.
+`TreeDB/collections/vector_partition_trace_ids_test.go` covers cancellation
+before and during the offline ID copy, reader-pin release, retry, and ownership
+of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
+unchanged router-only work as the stacked policy diagnostic's control; it is not
+full partition-search or service QPS.
+
+`cmd/treedb_vector_partition_bench/fixture_query_offset_test.go` verifies CLI and
+manifest query-range admission, zero-offset manifest bytes/checksum/cache
+compatibility, unchanged corpus generation, fresh query ordinals and identities,
+and negative/overflow/legacy rejection. The calibration builder test also checks
+offset-aware selected queries and retained-source truth parity, with invalid
+ranges rejected before corpus allocation. These are provenance/correctness
+checks, not an observed fresh-holdout or baseline performance result.
+
+`m8_report_replay_test.go` checks required independent pins before I/O, frozen
+fixture/query-offset and argv identities before expensive work, dirty or mixed
+source/executable/variant rejection, canonical root containment, escaping
+symlinks, report digest and bounded/trailing-JSON rejection. The command reuses
+the real production profile, command/executable, truth-anchor, transcript,
+resource and retained-asset/attribution verifiers; these boundary tests do not
+substitute for a complete successful replay of real retained artifacts. Its
+`REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
+acceptance and does not modify historical `validate-qualification`.
+
+## R reference-topology correction (#4773)
+
+`TreeDB/internal/vectorpartition/router_all_levels_test.go` verifies that a
+logical domain is an unrepresented container whose depth-zero nodes are genuine
+bucket centroids, and that residual quota is assigned only to splittable
+buckets. `router_test.go` covers the deterministic sampled initializer, the
+bounded forest-work proof, v3 defaults, and forged build-metadata rejection.
+`TreeDB/collections/vector_partition_router_v1_test.go` preserves build,
+publication, reopen, pin, and strict old-record rejection across the corrected
+multi-root topology. These are product and format gates, not retained
+qualification evidence.
+
+## L canonical partition-local HNSW (#4774)
+
+`TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent` and
+`TestVectorIndexConstructionSearchDescendsWithFullSeedSet` cover full bounded
+SEARCH-LAYER descent across construction levels. The local-searcher exact/HNSW
+tests cover deterministic public rescoring, non-excluded exact work, and strict
+combined score budgets. The version-5 pack test rejects disconnected ordinal
+reseeding. Run:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorIndexCanonicalInsertPreservesUpperSearchSetForDescent|VectorIndexConstructionSearchDescendsWithFullSeedSet|VectorPartitionLocalSearcherV1(ExactStableIDsAndPins|HNSWCanonicalizesFP32TieOrder|PinnedExactPackScanV1)|ColumnHNSWCanonicalPartitionPackDoesNotReseedDisconnectedRowsV5)'
+```
+
+Manifest mutation, READY-promotion round trip, explicit graph-variant identity,
+and persistent-searcher reopen/corruption tests own VPM1 v6, VRP1 v4, canonical
+pack v5, and recovery fail-closed behavior. Live-delta stale-ID exclusion stays
+under the standalone live-delta commands above. Shard/coordinator tests cover
+score-budget transport, per-query accounting even without optional statistics,
+cross-partition exhaustion, and corrupt or over-budget responses. Run:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorPartitionManifestV1BinaryMutationAndResealMatrix|VectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction|VectorPartitionLocalGraphVariantIdentityFailsClosedV1|VectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1)'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run '^TestVectorPartition'
+```
+
+The M8 schema-7 producer/replay tests bind the manifest graph variant, full
+configured population, local score calls and caps, retained identity pins, and
+the `REPLAY_ACCEPTED_NOT_QUALIFICATION` boundary. They are harness-readiness
+gates only; the preregistered structured-250K retained run and explicit issue
+receipt remain the scaling qualification.
+
+```sh
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks|M8RetainedGraphVariantUsesManifestIdentityV1|M8ProductionReportRejectsUnexercisedDataGroupV1|ReplayM8Report)'
+```
+
+## V connectivity-preserving partition-local Vamana (#4787)
+
+`vector_partition_vamana_v1_test.go` covers both frozen passes, construction
+search, outgoing replacement, reciprocal insertion, overflow pruning, alpha
+boundary, deterministic ties, candidate cap, current-neighbor union, and the
+degree-preserving entry-reachability pass, including an alternate-source case
+where the preferred reverse boundary would disconnect a reachable row.
+Version-6 pack tests pin that exact one-layer R64/L256 profile identity and
+corruption rejection. The ordinary materialize/publish/search/checkpoint/reopen,
+recovery, pin, GC, score-budget, and stable-ID tests run through this Vamana
+profile because it is the default; M18 HNSW remains an explicit offline
+historical variant.
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorPartitionVamana|ColumnVamanaConnectivityPreservingPartitionPackV6|VectorPartitionLocalLayer0ReachabilityRepair|VectorPartitionLocalDefaultMaterializationVariantV1|VectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1)'
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M0MaterializeVariantV1OnlyAcceptsProductionVariants|M8RetainedGraphVariantUsesManifestIdentityV1|ReplayM8Report)'
+```
+
+Acceptance still requires the immutable exact-head structured250K P2/EF96
+concurrency-1 and concurrency-32 retained cells. Unit and CI coverage are not
+qualification evidence.
+
+## M bounded graph, pack bytes, and retained membership feasibility (#4775)
+
+`TreeDB/internal/vectorpartition` tests bind recursive current-bucket pivot
+sampling to the seed, repetition, and canonical bucket membership while
+preserving deterministic artifacts and input-order invariance. M3 shard tests
+reject zero, duplicate, incomplete, or over-envelope materialized packs before
+publication. The M8 feasibility tests compare the existing joint DP with an
+independent `P<=2` enumerator, charge complete expanded physical-pack ownership,
+bind the whole query population into the work plan, publish immutable evidence,
+and replay from the exact retained truth/membership/pack assets. Stale truth or
+shard-generation identity fails closed.
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/internal/vectorpartition -run 'Test(RecursivePivotSampling|BuildCanonicalizesInput)'
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ActualShardPackBytes|M8Membership|M8RetainedMembershipFeasibility)'
+```
+
+## M8 same-candidate router policy diagnostics (#4745)
+
+`TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the
+hybrid golden across all 720 permutations and all probe prefixes, unique
+representative voting, conflicting duplicate rejection, nearest-width exact
+voting, deterministic ties, set/sequence identity, refusal receipts and owned
+prefix buffers. The digest-byte golden protects the documented encoding during
+allocation minimization.
+
+`vector_partition_router_policy_diagnostic_test.go` covers the real persisted
+router's shared candidate path, ordinary-result/work parity, unchanged ordinary
+counters, independent owner reopening, invalid selection, cancellation, close,
+concurrent readers and result ownership. The ordinary collector is shared, not
+reimplemented in a benchmark-only approximate search.
+
+`cmd/treedb_vector_partition_bench/m8_router_policy_experiment_test.go` covers
+explicit CLI/config/child selection, full-population coverage refusals, cached
+probe versus EF identity, actual physical pack cost, flags/source/query/candidate
+replay and independently reopened retained report verification. Work and byte
+preflight include actual retained model sizes. Failure receipts cannot be dropped
+or replaced by successful-only averages. These tests do not select a production
+policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
+
+- Router-policy cache-hit work, dimension-sized scratch and overflow admission:
+  `TestM8RouterPolicyResourcePlanChargesEveryPopulationRecheck`,
+  `TestM8RouterPolicyResourcePlanChargesQueryScratchAndRejectsOverflow`.
+- Cancellation within nearest-width sorting and without partial policy results:
+  `TestVectorPartitionRouterPolicyNearestWidthSortCancellation`,
+  `TestVectorPartitionRouterPolicyReductionCancellationNoPartial`.
+- Combined representative admission and typed full-512-query receipt bytes:
+  `TestM8RouterPolicyRepresentativeCombinedAdmissionV1`,
+  `TestM8PlannedRouterPolicyReceiptSizeV1`. These source checks preserve the
+  original 200M work and 64MiB diagnostic caps; they are not policy outcomes.
+
+- Optional complete identity-neutral pack digest admission and split parity:
+  `TestM0ReadCaptureRequiresCleanBuildIdentity`,
+  `TestM0CaptureSplitPairRejectsLeakage`. Missing historical hashes do not prove
+  full geometry. Empty-ordinal geometry controls do not qualify as locality traces.
+
+## Atomic typed source replacement (#4768)
+
+`TestTypedSourceEmptyReplacementIsAdmittedNoop` proves that the collection
+primitive performs normal typed/WAL admission while leaving WAL, root, and
+sequence unchanged for an empty scope. Existing `TestTypedSource*` coverage
+continues to own atomic publication, failure, replay, delete-only, and graph
+visibility semantics.
+
+`TestServiceReplaceSourceByIDLifecycle` exercises the public HTTP/service 5→2→0
+lifecycle across lexical, scalar, dense, and hybrid visibility, including an
+explicit graph build/ensure boundary. `TestTypedSourceReplaceEmptyCarrierAndRegistry`
+pins command 67/v1, the canonical zero-live carrier, required sections, and
+LocalOnly deterministic-entry rejection. Python codec/client tests pin one
+HTTP/native request, fail-closed capability use, response counts, and structured
+ambiguous/recovery errors. `BenchmarkTypedSourceReplacement` and
+`BenchmarkTypedUpsertDecode` remain the bounded core/decoder performance gates;
+no separate application harness is introduced.
+
+## Typed metadata-only update (#4769)
+
+`TestCollectionTypedMetadataPayloadGoldenRoundTrip` and its corruption suite pin
+format 13's canonical metadata after-images, owned decoding, truncation/bounds,
+and absence of vector-dimension-dependent bytes. Collection tests own atomic
+old-or-new replay/publication, no-op, missing-ID, repeated-update, reopen/fold,
+and preserved scoring/vector authority.
+
+`TestTypedMetadataNormalizedColdFoldRaceAndGC4769` covers normalized SQ8 scoring
+across base/suffix metadata updates, cold reopen, racing fold rejection/retry,
+column/value-log GC, pinned old metadata, and subsequent replacement/deletion.
+`TestTypedMetadataWALRecovery4769` injects a durable-intent failure and verifies
+the recovery fence and replay. Invalid-batch and protected-afterimage tests
+reject partial/prohibited updates. `TestTypedMetadataDimensionIndependentPayload4769`
+compares batches 1/32/128 at 8/768 dimensions without vector-bearing plan values.
+
+`BenchmarkTypedMinimaMetadataMutation` and `BenchmarkServiceTypedMetadataMutation`
+measure core and service admission/publication separately on the existing typed
+fixtures, including WAL payload, row assets and request JSON bytes. These are
+bounded local diagnostics (`-benchtime=10x -count=3`), not serving-throughput
+qualification. Setup/ingestion is untimed; no new benchmark driver is required.
+
+`TestTypedMetadataUpdatePublicLifecycle` exercises the public service shape and
+exact matched/modified counts without vector input.
+`TestTypedMetadataUpdateGoldenBoundsAndRegistry` pins command 68/v1, the bounded
+strict JSON request, sections 142/143, independent capability advertisement,
+and LocalOnly deterministic-entry rejection. Python unit/integration tests pin
+one HTTP or negotiated native request, no fallback, no vector carrier,
+structured ambiguous/recovery errors, and unchanged content/vector retrieval.
+
+`TestProductionRetrievalSourceAndACLFilterLifecycle4765` is the parent graph's
+small integrated service/HTTP acceptance fixture: literal filtered AND BM25,
+selected SQ8 plus packed canonical reranking, default vector-free responses,
+atomic source shrink, ACL-filter visibility changes without vector input, and
+reopen. BM25, dense and hybrid agree on the caller-filtered live set; stale chunks
+do not return. This proves metadata eligibility filtering, not an independent
+server-side authorization policy. Small selective allow-sets retain their
+truthful typed-exact route.
+This fixture lives with the final metadata child, not in a separate harness PR.
+
+
+Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These checks establish the source codec, not whole-path boundedness. Public import and paged producer coverage is mapped separately; whole-path memory, failure cleanup and performance acceptance remain required by #4808.
+## Sparse catalog runtime
+
+| Invariant | Test / harness |
+| --- | --- |
+| Nonvoting, storage-free ingress reaches production durable remote ownership without wrong-group mutation | `TestSparseCatalogNonVoterIngressRoutesWithVerifiedProofV1` |
+| More than 32 inventory nodes do not enlarge catalog voting or local hosting | `TestSparseCatalogConfigAcceptsMoreThan32NodesWithThreeVotersV1` |
+| Oversized inventory/metadata/local hosting refuses before stores open | `TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1` |
+| Stable cluster identity never waives exact persisted topology | `TestSparseCatalogExplicitIdentityRequiresExactReopenV1` |
+| Missing, conflicting, future and stale metadata refuse; consumer publication/read authority refuses; epoch refresh reacquires authority | `TestSparseCatalogConsumerRejectsTamperedRouteV1` |
+| Nonvoting data owner survives exact restart/catalog leader failover, then refuses fresh writes after authority loss | `TestSparseCatalogNonVoterDataOwnerFailoverAndAuthorityLossV1` |
+| Global client admission is independent and bounded | `TestSparseCatalogClientAdmissionIsBoundedAndIndependentV1` |
+| Saturated ingress/forward capacity cannot force nested authoritative read RPCs | `TestSparseCatalogSaturationPreservesAuthoritativeReadProgressV1` |
+| Closing a runtime interrupts an already accepted idle Raft connection without waiting for a remote node to close | `TestSparseCatalogRuntimeCloseInterruptsIdleRaftConnectionV1` and sparse catalog race tests |
+| Matched all-voter baseline/candidate and enabled consumer cost with process resources | `BenchmarkSparseCatalogRemoteOwnerCreateV1`, `.github/workflows/sparse-catalog-qualification.yml` |
+
+The 40-node inventory case is configuration/control-plane evidence, not 40 live
+machines. These local cases do not close distributed ANN, authentication, EC2
+failure-domain, or horizontal-scaling qualification in #4805/#4250/#3983.
+
+Source-map V2 pure token/coverage/codec checks live in `internal/sourcepartition`; `raftplacement` separately checks every referenced group against its resolved catalog. `TestSourceShardMapCanonicalCodecAndPriorDigestV2` freezes the pre-extraction V2 digest and refuses unknown, duplicate, changed or noncanonical encoded content. Collection-side validation of a map is not publication or source-root authority.
+
+
+Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. The immutable source seal and paged source session consume this durable progress. Full acceptance still requires current-head hosted success and measured public owner-only build/open bounds.
+
+
+Draft incremental source-directory coverage adds `TestVectorPartitionSourceImportUsesIncrementalDirectoryV2` (actual public-path semantic red before implementation), `TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2`, `TestVectorPartitionSourceImportBoundsBeforeWALV2`, `TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2`, and `TestCollectionSourceImportCompleteCommandBudgetV2`. Persistent proof nodes and SCL2 rows are compared with an independent complete test tree across partial/power-of-two shapes. `BenchmarkVectorPartitionSourceImportDirectoryV2` uses the same public import with 32 versus 1024 prior chunks, reports allocation and actual directory/fallback record reads, and must not be interpreted as EC2 qualification. Directory reads alone do not establish whole-call resource bounds; public owner-load/build, source/graph lifetime and failure cleanup have separate gates.
+
+
+`TestVectorPartitionSourceImportRetainedSealAndGCV2` exercises a completed source reader held across another source revision, checkpoint, immutable seal reopen and destructive asset GC. The V2 lifecycle reader verifies the retained source directory before asset reclamation; platforms without stable relative namespaces refuse destructive GC while retaining reader/reopen coverage. `BenchmarkVectorPartitionSourceImportDirectoryV2` now reports source leaf bytes/rows, directory and fallback reads, selected DPM stream bytes/items, encoded dependency bytes and whole-call allocations. Existing logarithmic COW work and full retained dependency serialization must be analyzed separately; no constant whole-call or distributed readiness claim follows from constant directory reads.
+
+
+The opt-in `dependency_directory_v2` required format feature activates a third
+COW B-tree for physical descriptors and globally keyed logical obligations on
+new stores. `TestDependencyDirectoryV2RequiredFeature*` covers populated-V1 and
+dirty-WAL refusal, feature removal refusal, and read-write/read-only/no-lock
+reopen. `TestDependencyDirectoryV2UnknownRequiredFeaturePrecedesStorageDecode`
+requires unsupported-feature refusal before malformed root or WAL decoding,
+including `IgnoreFormatConfig`. Selected-root page bounds and ordinary page
+checksums protect directory traversal; the directory is not a Merkle commitment.
+
+`TestVectorPartitionSourceImportDependencyEncodingDoesNotScaleWithHistoryV2`
+requires persisted DPM2 and nonzero changed-record-byte and COW-page counters
+across public import plus checkpoint at 32 and 1024 prior chunks, including
+reopen and coalesced imports. Changed-record bytes include changed keys/values
+and deletion keys, not all descriptor comparison or binding work. No-op
+publication leaves mutation/page counters unchanged. Allocation, CPU and
+retained-memory comparisons remain separate performance gates.
+
+`TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback`,
+`TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation` and
+`TestDependencyDirectoryV2RebuildPreservesBothSlots` cover streaming recovery,
+both fallback slots, retained readers and shared-page reachability.
+`TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity` covers
+V1 and DPM2 staged snapshot rebinding: only fixed-width physical identity values
+change in the validated private copy; logical keys, page layout, both slots and
+lineage remain intact and affected page checksums are recomputed.
+
+## Authenticated fixed-peer transport and operations (#4813)
+
+- `TreeDB/nativewire/peer_*_test.go`, `fixed_peer_security_v1_test.go` and
+  `vector_partition_global_connection_budget_v1_test.go`: actual TLS/control,
+  Raft, snapshot, native/shard boundaries; identity/group denial; bounded sockets,
+  bytes and proposal/snapshot lifetimes; hot-group/cold-group progress; cancellation;
+  quorum-backed readiness, drain, immutable configuration and paired-root loss.
+- `cmd/treedb-fixed-peer/operations_test.go`: plaintext refuses by default and
+  executable identity mismatch refuses before stores/network work.
+- `scripts/treedb_peer_ec2_test.py`: failure-domain/capacity/cost refusal,
+  provider inventory checks, exact plan/change-set execution, wrong-tag refusal,
+  partial-provision cleanup and idempotence. Fake-provider contract tests do not
+  establish live AWS service acceptance.
+- `.github/workflows/peer-security-qualification.yml`: exact-head focused/race
+  gates, existing retained M8 resources, replicated TLS writes/shutdown, and
+  equivalent public plaintext/TLS allocation/process-resource measurements.
+- [Fixed-peer operations](../operations/fixed-peer-ec2.md) and
+  [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
+  conformance from #4250 multi-host performance and #3983 fault evidence.

@@ -47,6 +47,9 @@ func columnPhysicalAssetEncodedUpperBound(input columnPhysicalAssetEncodeInput) 
 		}
 	}
 	for _, row := range input.Rows {
+		if row.Preserved != nil && !add(32) {
+			return 0, errColumnPhysicalAssetBound
+		}
 		if !add(8 + int64(len(row.ID)) + 1) {
 			return 0, errColumnPhysicalAssetBound
 		}
@@ -59,7 +62,10 @@ func columnPhysicalAssetEncodedUpperBound(input columnPhysicalAssetEncodeInput) 
 		if row.Deleted || len(row.Values) != len(input.Columns) {
 			return 0, errColumnPhysicalAssetBound
 		}
-		for _, value := range row.Values {
+		for i, value := range row.Values {
+			if row.Preserved != nil && !columnMetadataStoredColumn(input.Columns[i]) {
+				continue
+			}
 			if value.Type != ColumnStoreValueString || value.Null || !value.Present {
 				return 0, errColumnPhysicalAssetBound
 			}

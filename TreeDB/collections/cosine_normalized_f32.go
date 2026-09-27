@@ -23,23 +23,13 @@ func normalizeCosineNormalizedF32V1(input []float32, dimensions int) ([]float32,
 }
 
 func normalizeCosineNormalizedF32V1Into(canonical, input []float32, dimensions int) error {
-	if dimensions <= 0 || len(input) != dimensions {
-		return fmt.Errorf("collections: normalized cosine vector dimensions=%d want %d", len(input), dimensions)
-	}
 	if len(canonical) != dimensions {
 		return fmt.Errorf("collections: normalized cosine destination dimensions=%d want %d", len(canonical), dimensions)
 	}
-	var squaredNorm float64
-	for dimension, value := range input {
-		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return fmt.Errorf("collections: normalized cosine vector component %d is non-finite", dimension)
-		}
-		squaredNorm += float64(value) * float64(value)
+	invNorm, err := cosineNormalizedF32V1InputInvNorm(input, dimensions)
+	if err != nil {
+		return err
 	}
-	if squaredNorm == 0 || math.IsNaN(squaredNorm) || math.IsInf(squaredNorm, 0) {
-		return errors.New("collections: normalized cosine vector has invalid norm")
-	}
-	invNorm := 1 / math.Sqrt(squaredNorm)
 	for dimension, value := range input {
 		canonical[dimension] = float32(float64(value) * invNorm)
 		if math.IsNaN(float64(canonical[dimension])) || math.IsInf(float64(canonical[dimension]), 0) {
@@ -47,6 +37,23 @@ func normalizeCosineNormalizedF32V1Into(canonical, input []float32, dimensions i
 		}
 	}
 	return nil
+}
+
+func cosineNormalizedF32V1InputInvNorm(input []float32, dimensions int) (float64, error) {
+	if dimensions <= 0 || len(input) != dimensions {
+		return 0, fmt.Errorf("collections: normalized cosine vector dimensions=%d want %d", len(input), dimensions)
+	}
+	var squaredNorm float64
+	for dimension, value := range input {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return 0, fmt.Errorf("collections: normalized cosine vector component %d is non-finite", dimension)
+		}
+		squaredNorm += float64(value) * float64(value)
+	}
+	if squaredNorm == 0 || math.IsNaN(squaredNorm) || math.IsInf(squaredNorm, 0) {
+		return 0, errors.New("collections: normalized cosine vector has invalid norm")
+	}
+	return 1 / math.Sqrt(squaredNorm), nil
 }
 
 // validateCosineNormalizedF32V1Canonical validates bytes decoded from trusted

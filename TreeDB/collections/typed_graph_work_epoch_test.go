@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -56,6 +57,7 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 	}
 	var deleted int
 	var columnBytesCeiling int64
+	var ceilingBreaches int
 	for cycle := 0; cycle < 8; cycle++ {
 		// This small fixture disables background pruning. Exercise existing
 		// caller-owned native maintenance; renewal itself never calls Prune.
@@ -88,9 +90,16 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 		if cycle == 1 {
 			columnBytesCeiling = stats.Columns.BytesRetained
 		} else if cycle > 1 && stats.Columns.BytesRetained > columnBytesCeiling {
-			// Recovery-root retirement can release extra segments; shrinking is
-			// valid, while later generations must not exceed the warm ceiling.
-			t.Fatalf("equal-width generation column storage grew: %d exceeds %d", stats.Columns.BytesRetained, columnBytesCeiling)
+			// A publication owner can pin an otherwise unreachable segment
+			// between GC planning and deletion, retaining it for one pass;
+			// shrinking is always valid and a transient exceed is tolerated,
+			// but sustained growth over the warm ceiling is a leak.
+			ceilingBreaches++
+			if ceilingBreaches > 1 {
+				t.Fatalf("equal-width generation column storage grew: %d exceeds %d for %d consecutive cycles", stats.Columns.BytesRetained, columnBytesCeiling, ceilingBreaches)
+			}
+		} else {
+			ceilingBreaches = 0
 		}
 		t.Logf("cycle=%d native_bytes=%d entries=%d pager_pages=%d reusable=%d column_deleted=%d retained=%d", cycle, stats.Native.Bytes, stats.Native.Entries, stats.Pager.TotalPages, stats.Pager.FreelistReclaimable, stats.Columns.SegmentsDeleted, stats.Columns.BytesRetained)
 		if cycle >= 3 {
@@ -349,6 +358,98 @@ func TestTypedGraphWorkEpochCleanupFailure(t *testing.T) {
 	}
 	if _, err := col.renewTypedGraphWorkEpoch(context.Background(), typedGraphTestWorkEpochLimits()); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestTypedGraphWorkEpochRetriesFreshPlanAfterRecoverableRootAdvance(t *testing.T) {
+	for _, continuous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuous=%t", continuous), func(t *testing.T) {
+			requireColumnAssetExactDestructiveGCTest(t)
+			col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+			if err := base.Close(); err != nil {
+				t.Fatal(err)
+			}
+			cold := typedGraphOverlapLimits().Cold
+			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 32, Tombstones: 32, ValueSlots: 128, OwnedBytes: 1 << 20, EncodedOutputBytes: 1 << 20}, cold); err != nil {
+				t.Fatal(err)
+			}
+			limits := typedGraphTestWorkEpochLimits()
+			if _, err := col.renewTypedGraphWorkEpoch(context.Background(), limits); err != nil {
+				t.Fatalf("configure: %v", err)
+			}
+			if err := col.foldTypedGraph(context.Background(), cold, 128, typedGraphFoldTestAssetLimits(), nil); err != nil {
+				t.Fatal(err)
+			}
+			advanceColumnAssetDurableFallbackM15C(t, col.db)
+
+			manager := NewCollectionManager(col.db)
+			if _, err := manager.CreateCollection(&CollectionMeta{
+				Name:    "work_epoch_retry_witness",
+				Options: CollectionOptions{DisableIndexedWriteMemtables: true},
+				Indexes: []IndexDefinition{{
+					Name: "value", Field: "value", ValueType: IndexValueString,
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			other, err := manager.OpenCollection("work_epoch_retry_witness")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := col.db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			coord := col.collectionSchemaCoordinator()
+			beforeEpoch, beforeDebt, beforeAttempts := coord.typedGraphWorkEpoch, coord.typedGraphCandidateBytes, coord.typedGraphCandidateAttempts
+			advanced, hookCalls := false, 0
+			restore := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+				hookCalls++
+				if advanced && !continuous {
+					return
+				}
+				before := col.db.State().CommitSeq
+				advanced = true
+				if _, err := other.Insert([]byte(fmt.Sprintf("advance-%d", hookCalls)), []byte(`{"value":"one"}`)); err != nil {
+					t.Fatal(err)
+				}
+				if after := col.db.State().CommitSeq; after <= before {
+					t.Fatalf("witness insert did not advance commit sequence: before=%d after=%d", before, after)
+				}
+			})
+			defer restore()
+			stats, err := col.renewTypedGraphWorkEpoch(context.Background(), limits)
+			if continuous {
+				if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || stats.Columns.SegmentsDeleted != 0 || stats.Epoch != 0 {
+					t.Fatalf("exhausted retry changed maintenance state: stats=%+v err=%v", stats, err)
+				}
+				// Root capture or pinning can reject an attempt before the late
+				// post-plan hook. It observes a subset, not the retry count; the
+				// shared predicate's exact eight-attempt budget is tested separately.
+				if !advanced || hookCalls < 1 || hookCalls > columnAssetGCRecoverableRootAttempts {
+					t.Fatalf("post-plan hook calls=%d want an observed injection within %d attempts", hookCalls, columnAssetGCRecoverableRootAttempts)
+				}
+				if coord.typedGraphWorkEpoch != beforeEpoch || coord.typedGraphCandidateBytes != beforeDebt || coord.typedGraphCandidateAttempts != beforeAttempts {
+					t.Fatal("exhausted retry credited epoch or candidate debt")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("renew after recoverable-root advance: %v", err)
+			}
+			if !advanced {
+				t.Fatal("test did not advance the recoverable-root basis")
+			}
+			if stats.Columns.SegmentsDeleted == 0 {
+				logTypedGraphWorkEpochRetention(t, col)
+				t.Fatalf("fresh retry reclaimed no retired segment: %+v", stats.Columns)
+			}
+			if hookCalls < 2 {
+				t.Fatalf("post-plan hook calls=%d want at least 2 to prove a fresh retry", hookCalls)
+			}
+			if stats.Epoch != 2 {
+				t.Fatalf("work epoch=%d want 2", stats.Epoch)
+			}
+		})
 	}
 }
 

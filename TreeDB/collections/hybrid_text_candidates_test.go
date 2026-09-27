@@ -70,6 +70,38 @@ func TestSearchHybridTextCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 	}
 }
 
+func TestSearchHybridTextCandidatesLexicalOptions4766(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
+	if _, err := col.InsertBatch([][]byte{[]byte("both"), []byte("refund"), []byte("policy")}, [][]byte{
+		[]byte(`{"body":"refund and policy"}`),
+		[]byte(`{"body":"refund"}`),
+		[]byte(`{"body":"policy"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	andResult, err := col.SearchHybridTextCandidates(HybridTextQuery{
+		IndexName: "lexical", Query: "refund policy", Operator: TextSearchOperatorAND, CandidateLimit: 10,
+	})
+	if err != nil || len(andResult.Candidates) != 1 || string(andResult.Candidates[0].ID) != "both" {
+		t.Fatalf("AND candidates=%+v err=%v want both", andResult, err)
+	}
+	literal, err := col.SearchHybridTextCandidates(HybridTextQuery{
+		IndexName: "lexical", Query: `("refund") and policy`, QueryMode: TextSearchQueryModeLiteral, Operator: TextSearchOperatorAND, CandidateLimit: 10,
+	})
+	if err != nil || len(literal.Candidates) != 1 || string(literal.Candidates[0].ID) != "both" {
+		t.Fatalf("literal candidates=%+v err=%v want both", literal, err)
+	}
+	bounded, err := col.SearchHybridTextCandidates(HybridTextQuery{
+		IndexName: "lexical", Query: "refund policy", Operator: TextSearchOperatorAND, CandidateLimit: 10, MaxPostingsScanned: 1,
+	})
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || len(bounded.Candidates) != 0 || bounded.Stats.TextPostingsScanned > 1 || bounded.Stats.FailClosed != 1 {
+		t.Fatalf("bounded candidates=%+v err=%v want fail closed at one posting", bounded, err)
+	}
+}
+
 func TestSearchHybridTextCandidatesUnsupportedAndUnavailableFailClosed2503(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()

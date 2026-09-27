@@ -16,20 +16,20 @@ deterministic encoding, benchmark labels, or observability keys MUST update this
 document, the roadmap, relevant codec/golden tests, and benchmark documentation
 in the same change.
 
-### Reserved normalized-cosine v4 contract
+### Normalized-cosine v4 contract
 
-Native command64/v4 is reserved for the opt-in
+Native command64/v4 implements the opt-in
 `cosine_normalized_f32_v1` representation specified in
-[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Q1 defines the
-capability boundary but adds no command implementation. Until Q3, Go/Python v4
-stages are `NOT_IMPLEMENTED`; a v1/v2/v3 request for the representation fails
-closed instead of using legacy score semantics.
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Go and Python
+clients negotiate v4 explicitly. A v1/v2/v3 request for this representation
+fails closed before search instead of using legacy score semantics.
 
-The future v4 envelope carries framing, bounds, negotiated score contract,
+The v4 production envelope carries framing, bounds, negotiated score contract,
 captured owner/generation, IDs/scores, and projected documents. It carries no
 full score-plane proof unless diagnostic mode was requested. With
-`return_embedding=false` it carries no embedding bytes; true returns canonical
-normalized vectors. Current command versions remain unchanged below.
+`return_embedding=false` it performs and carries no output embedding work;
+true returns canonical normalized vectors. Legacy command versions remain
+unchanged below.
 
 ## 1. Decision
 
@@ -798,8 +798,8 @@ are:
 126 vector_search_response
 127 vector_fast_evidence
 128 vector_status
-137 vector_insert_request
-138 vector_insert_response
+144 vector_insert_request
+145 vector_insert_response
 ```
 
 The request carries float32 query values, generation, metric, search budgets,
@@ -812,7 +812,7 @@ retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
 
 `vector_insert` is the narrow LocalOnly public mutation route. It requires the
-generic `deadline` section and `vector_insert_request` (137). The request binds
+generic `deadline` section and `vector_insert_request` (144). The request binds
 one mutation-attempt idempotency key, exact document ID, generation, FP32
 routing vector, JSON document, and deadline. The exact document ID must be
 valid UTF-8 so the same identity can be returned in the visibility proof. The
@@ -821,7 +821,7 @@ lifecycle, router, document/vector, and leader proofs at that owner, then lowers
 the mutation to the existing deterministic insert-batch entry for the owning
 Raft group. Command 66 is never itself encoded as a replicated entry.
 
-On success, `vector_insert_response` (138) returns generation, partition and
+On success, `vector_insert_response` (145) returns generation, partition and
 owner, commit term/index, applied index, production-consensus proof, live
 revision, visible ID, and route/forward/commit/replication/apply/visibility
 counters. Any failure after submission may have committed and MUST surface as
@@ -940,6 +940,57 @@ return-embedding is true. When that embedding is present, consumers recompute
 the FP32 cosine score and require it to match the result-envelope score within
 `1e-6` absolute tolerance.
 
+#### Canonical normalized production envelope (64/v4)
+
+Version 4 is disjoint from the legacy v2/v3 typed envelopes. It requires
+`deadline` (4), `dense_search_request` (129), and critical
+`dense_search_normalized_options` (137). The options payload is version `1`,
+representation tag `1` (`cosine_normalized_f32_v1`), mode tag `1` (exact) or
+`2` (scalar-u8 rerank), a bounded quantized-index name, and `R`. Exact requires
+an empty name and `R=0`; scalar-u8 rerank requires a nonempty declared name and
+`R >= top-K`. Both modes require positive generation and `E`; omitted defaults
+are resolved from caller-held generation-bound index metadata before encoding.
+The optional critical `dense_search_diagnostics` section (139), whose payload
+is exactly version `1`, enables diagnostics. Missing v4 negotiation, an older
+command version, unknown tags, malformed options, or a representation mismatch
+fails before search.
+
+Production responses contain exactly ordered IDs (102), requested JSON
+documents (103), `dense_search_response` (130), and critical
+`dense_search_route_identity` (138). Section 130 is version `1`, result count,
+then one little-endian float64 score per result. Section 138 version `1` binds
+the representation, requested mode, executed empty/exact/HNSW route, optional
+scalar-u8 identity, request flags, captured schema/manifest owner, E/R/top-K,
+result count, candidate-code reads, FP32 scoring reads, packed-batch work, and
+embedding projection work. Its owner identities and byte/count products are
+validated independently by the service and client. Nonempty results require
+positive FP32 scoring work; scalar-u8 HNSW also requires positive candidate-code
+work. Packed counters cover live base rows only: one batch if any remain, zero
+if shadow suppression leaves only mutable suffix results. Suffix rows are
+separately exact-scored by the packed strided FP32 kernel. For scalar-u8,
+FP32 score calls equal packed base candidates plus exact suffix calls; an
+unchanged base/current manifest permits no suffix work. IDs/documents/metadata
+have flags zero; route and
+diagnostic sections have exactly the critical flag. Unknown flags or sections,
+duplicate sections, invalid counts, non-finite/out-of-range scores, invalid IDs,
+unordered results, and document/request-shape mismatches fail closed.
+
+Diagnostic v4 adds critical `dense_search_work` (134). Scalar-u8 diagnostic
+responses also add critical `dense_search_score_plane_proof` (136) using wire
+version `2`, which appends packed-batch calls/candidates/bytes and the forbidden
+stable-scorer count to the v1 proof. Diagnostic observation cannot change IDs or
+scores. Production constructs and serializes neither proof and performs no
+diagnostic-only work accounting.
+
+Version-4 clients decode each returned document once. With
+`return_embedding=false` the document must omit `embedding`, and route identity
+must prove zero output embedding reads, bytes, and encoded bytes. With true, the
+document contains the stored canonical normalized vector with the declared
+dimension and finite components. V4 never recomputes result scores from returned
+embeddings. Go result ID/document slices borrow the client response buffer until
+the next call; route identity and optional proofs are owned values. Python owns
+the converted result models.
+
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 
 | Positions (zero-based) | Values |
@@ -992,10 +1043,15 @@ logical peaks. Other work fields count actual producer work,
 including prefixes before an error. No per-request process snapshot is taken.
 
 The existing FrameError may also carry these critical sections beside its
-unchanged error section (2), for 64/v2 and 64/v3 respectively. Pre-service
-failures may omit unavailable evidence. A later native encoding failure
-preserves completed service/graph/output and score-plane prefixes. This
-completion does not certify wire delivery.
+unchanged error section (2), for legacy 64/v2 and 64/v3 and diagnostic 64/v4.
+Production v4 errors carry no diagnostic proof. Pre-service failures may omit
+unavailable evidence. A later native encoding failure preserves completed
+service/graph/output and score-plane prefixes. Quantized clients bind the
+request-bearing score plane and captured generation before retaining the remote
+error. Dense-work v1 has no query/index/filter-value digest, so an exact v4
+error proof is retained only as debugging detail and the error is reclassified
+as consistency-unavailable rather than treated as request-authenticated.
+Completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
 result documents; `WireError.DenseWork` is optional owned error detail. If
@@ -1076,6 +1132,56 @@ an implied wire `synced` or Raft acknowledgment. Initial graph build and
 admission remain explicit separate operations. Versions 50/v1 and 64/v1,v2 are
 unchanged. Dispatch identity does not certify measured indexed-JSON counters.
 
+### Typed source replacement (67/v1, LocalOnly)
+
+`typed_source_replace` exposes the existing atomic explicit-ID source primitive;
+it is not a discovery, chunking, embedding, or client-composed mutation. Hello
+advertises `typed_source_replace_versions=1` only for a configured standalone
+document service. Cluster submission and deterministic-entry encoding reject
+the command. Command 66 remains reserved by the vector-insert work in #4734.
+
+Required sections are deadline (4), live IDs (102), live residual documents
+(103), typed carrier request (131), and explicit delete IDs
+`source_delete_ids` (140). Sections 102, 103, and 131 retain the 65/v1 positive
+row encoding. Delete-only and fully empty requests use the canonical empty live
+carrier: positive generation followed by row count 0, dimensions 0, and string
+column count 0; sections 102 and 103 are empty byte vectors. Command 65 continues
+to reject zero rows. Section 140 uses the existing bounded byte-vector encoding.
+
+IDs must be unique within each set. Cross-set overlap is valid and insertion
+wins. One request calls `ReplaceTypedSourceByID` once. Positive live rows publish
+the existing typed source payload (format 12); delete-only uses the existing
+source payload (format 10). A fully admitted empty request emits no WAL frame.
+There is no automatic retry after an ambiguous result.
+
+Response section `source_replace_response` (141) contains three uvarints:
+generation, deleted count, and inserted count. Deleted count is the number of
+previously present delete IDs, including rows reinserted by overlap; inserted
+count equals the accepted live row count. No IDs are echoed.
+
+### Typed metadata update (68/v1, LocalOnly)
+
+`typed_metadata_update` is the capability-negotiated metadata-only mutation.
+Hello advertises `typed_metadata_update_versions=1` only for a configured
+standalone document service. Cluster submission and deterministic-entry
+encoding reject it; clients fail closed without HTTP fallback.
+
+Required sections are deadline (4) and `typed_metadata_update_request` (142).
+Section 142 is one bounded UTF-8 JSON object with exactly `index`, positive
+`expected_generation`, non-empty unique `ids`, `set`, and `unset`. Unknown
+fields, trailing JSON, non-`meta.*` paths, duplicate or ancestor/descendant path
+conflicts, non-JSON values, and protected or invalid schema paths fail closed.
+Raw invalid UTF-8 and unpaired JSON surrogate escapes are rejected before
+decoding, including nested string values and object keys.
+Declared metadata scalars require string values and cannot be unset. Missing IDs
+are skipped. The request has no vector or content field.
+
+Response section `typed_metadata_update_response` (143) contains three
+uvarints: generation, matched count, and modified count. Modified is at most
+matched, and matched is at most the request ID count. A fully admitted no-op
+returns matched/zero without a WAL or publication advance. Commit-ambiguous and
+recovery-required errors remain structured non-retry outcomes.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:
@@ -1150,6 +1256,12 @@ response construction fails, the server returns `commit_ambiguous`,
 `retryable=false` unless a durable idempotency record makes replay safe, and
 `commit_state=committed_or_unknown_after_commit`. The server must not report
 `not_committed` after a complete command frame may be recovered and replayed.
+
+If the backend instead reports that recovery is required, the native response
+uses `durability_unavailable` for v1 compatibility but MUST set
+`retryable=false`. The client must reopen and reconcile the database before
+issuing another mutation; it must not replay the failed request from the wire
+retry hint.
 
 If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
 logical mutation committed but the requested barrier failed, the error must
@@ -1516,3 +1628,18 @@ encode/decode/dispatch nanoseconds.
    and future cluster routing.
 5. Whether `visible` should remain the standalone default once native clients
    move beyond benchmark and compatibility work.
+
+## Fixed-peer catalog consumers
+
+The separate [private fixed-peer HTTP/TCP adapter](fixed-peer-tcp-runtime-v1.md)
+allows configured ingress/data nodes outside the catalog voting group. Its
+internal `catalog-route` and `catalog-validate` operations run a fresh catalog
+leader quorum fence; they do not add public native-wire command IDs, sections,
+wire versions, mutation kinds, or acknowledgement policies. Existing command
+matrices and generated wire registries are unchanged.
+
+The actual deterministic command remains bound to collection route metadata at
+ingress and at the local owner. The owner validates current catalog proof before
+production Raft submission. Pre-send admission refusals remain definite;
+post-send lost mutation responses retain commit ambiguity. Catalog status from
+a consumer carries no local applied-progress or readiness claim.

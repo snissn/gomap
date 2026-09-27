@@ -274,7 +274,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
-	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4, 16}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
+	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4, 16}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterScoreBudget: 1024, Seed: 1}
 	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	reports := make([]m8ProductionReportV1, 0, 3)
 	for _, variant := range []struct {
@@ -324,7 +324,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	shortfallReports := append([]m8ProductionReportV1(nil), reports...)
 	shortfallReports[0].Rows = append([]m8ProductionRowV1(nil), reports[0].Rows...)
-	shortfallReports[0].Rows[1].Status = "candidate_coverage_shortfall"
+	shortfallReports[0].Rows[1].Status = m8ProductionCandidateCoverageShortfallV1
 	shortfallMatrix, err := m8BuildProductionMatrixV1(cfg, fixture, shortfallReports)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	for i, comparison := range shortfallMatrix.Comparison {
 		if comparison.VariantID == shortfallReports[0].Variant.VariantID && comparison.Probes == shortfallReports[0].Rows[1].Probes && comparison.EfSearch == shortfallReports[0].Rows[1].EfSearch && comparison.Concurrency == shortfallReports[0].Rows[1].Concurrency {
 			shortfallAt = i
-			if comparison.Status != "candidate_coverage_shortfall" {
+			if comparison.Status != m8ProductionCandidateCoverageShortfallV1 {
 				t.Fatalf("shortfall comparison status=%q", comparison.Status)
 			}
 		}
@@ -1077,7 +1077,7 @@ func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	oldDigest := strings.Repeat("a", 64)
 	trustedDigest := strings.Repeat("b", 64)
-	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles", "-m8-truth-cache-sha256", oldDigest, "positional"}
+	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles", "-m8-truth-cache-sha256", oldDigest, "-m8-membership-probes", "2", "-m8-membership-pack-limit=4", "positional"}
 	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles", trustedDigest)
 	if err != nil {
 		t.Fatal(err)
@@ -1087,7 +1087,7 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 		t.Fatalf("child args=%v want prefix=%v", got, wantPrefix)
 	}
 	for _, arg := range got {
-		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" || arg == oldDigest {
+		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || strings.HasPrefix(arg, "-m8-membership-") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" || arg == oldDigest {
 			t.Fatalf("child args retained matrix/old-profile argument: %v", got)
 		}
 	}
@@ -1122,7 +1122,7 @@ func TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
-	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
+	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterScoreBudget: 1024, Seed: 1}
 	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	// Ten rows at ratio .2 request two overlap memberships; the graph variant
 	// realizes one useful replica and leaves the rest of the budget unspent.
@@ -1291,7 +1291,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },
 		"router config branch":   func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.BranchFactor++ },
 		"router config leaf":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.LeafSize++ },
-		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativesPerPartition++ },
+		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativeBudget++ },
 		"router config depth":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDepth-- },
 		"router config iterations": func(variants []m3VariantDescriptorV1) {
 			variants[2].RouterConfig.MaxIterations--
@@ -1341,7 +1341,11 @@ func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
 		d.OverlapRequested = int(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
 		d.OverlapRealized, d.OverlapUseful, d.OverlapMemberships = d.OverlapRequested, d.OverlapRequested, d.OverlapRequested
 		d.OverlapRejected = 0
-		d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows) - d.OverlapRealized
+		totalCapacity, err := m3TotalMembershipCapacityV1(d.Capacity, int(d.Partitions), d.ShardPlan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.OverlapUnusedCapacity = int(totalCapacity) - int(d.SourceRows) - d.OverlapRealized
 		// Loads must total the realized memberships and stay inside capacity.
 		loads := make([]int, d.Partitions)
 		for i := 0; i < int(d.SourceRows)+d.OverlapRealized; i++ {
@@ -1357,7 +1361,7 @@ func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
 	// A different but equally valid envelope: same partition count and same
 	// capacity, larger per-pack membership budget.
 	wider, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		Vectors: 8, Dimensions: 2, LogicalDomains: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
 		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {

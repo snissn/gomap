@@ -23,6 +23,9 @@ func (c VectorPartitionLifecycleCoordinatorV1) BeginBuildV1(ctx context.Context,
 	if err := c.validateConfiguredV1(); err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
 	}
+	if identity.SourceFormat == 2 {
+		return c.Submit(ctx, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: required, PreviousActiveGeneration: previousGeneration, MutationEpoch: mutationEpoch})
+	}
 	if r, ok := c.Authority.VectorPartitionLifecycleRecordV1(identity); ok && r.State != VectorPartitionLifecycleAbsentV1 {
 		canonicalRequired, err := canonicalVectorPartitionLifecycleGroupsV1(required)
 		if err != nil {

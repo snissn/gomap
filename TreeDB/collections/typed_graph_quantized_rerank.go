@@ -236,8 +236,10 @@ func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOver
 		stats.Base.CandidateFetches++
 		stats.Base.FP32ScoreCalls++
 		stats.DeltaScored++
-		proof.ExactSuffixVectorBytesRead += vectorBytes
-		proof.ExactSuffixScoreCalls++
+		if proof != nil {
+			proof.ExactSuffixVectorBytesRead += vectorBytes
+			proof.ExactSuffixScoreCalls++
+		}
 		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
 		return nil
 	})
@@ -306,8 +308,10 @@ func typedGraphCanonicalPackedAppendDelta(ctx context.Context, v *typedGraphOver
 	stats.Base.FP32ScoreCalls += count64
 	recordColumnVectorGraphScoreBatchStats(&stats.Base, count, status.Optimized, status.Fallback)
 	stats.DeltaScored += count
-	proof.ExactSuffixVectorBytesRead += bytesRead
-	proof.ExactSuffixScoreCalls += count64
+	if proof != nil {
+		proof.ExactSuffixVectorBytesRead += bytesRead
+		proof.ExactSuffixScoreCalls += count64
+	}
 	return nil
 }
 
@@ -351,28 +355,32 @@ func typedGraphCanonicalPackedAppendExactBase(ctx context.Context, v *typedGraph
 	bytesRead := count * uint64(v.pack.Header.Dimensions) * 4
 	stats.ExactBaseScored += len(ordinals)
 	stats.BaseResultIDs += len(ordinals)
-	proof.ExactBaseVectorBytesRead += bytesRead
 	packedCalls := stats.Base.PackedExactScoreCalls - beforePackedCalls
 	packedCandidates := stats.Base.PackedExactScoreCandidates - beforePackedCandidates
 	packedBytes := stats.Base.PackedExactVectorBytesRead - beforePackedBytes
 	if packedCalls != 1 || packedCandidates != count || packedBytes != bytesRead {
 		return ErrVectorIndexSnapshotMismatch
 	}
-	proof.PackedScoreBatchCalls += packedCalls
-	proof.PackedScoreCandidates += packedCandidates
-	proof.PackedVectorBytesRead += packedBytes
-	if smallFilter {
-		proof.ExactSmallFilterScoreCalls += count
-	} else {
-		proof.ExactBaseRerankScoreCalls += count
-		proof.ActualRerankCandidates += count
+	if proof != nil {
+		proof.ExactBaseVectorBytesRead += bytesRead
+		proof.PackedScoreBatchCalls += packedCalls
+		proof.PackedScoreCandidates += packedCandidates
+		proof.PackedVectorBytesRead += packedBytes
+		if smallFilter {
+			proof.ExactSmallFilterScoreCalls += count
+		} else {
+			proof.ExactBaseRerankScoreCalls += count
+			proof.ActualRerankCandidates += count
+		}
 	}
 	return nil
 }
 
 func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraphOverlaySearch, ordinal int, query []float32, queryInvNorm float64, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork, smallFilter bool) error {
 	if v != nil && v.base != nil && vectorIndexUsesCosineNormalizedF32V1(v.base.reader.def) {
-		proof.ForbiddenStableScoreCalls++
+		if proof != nil {
+			proof.ForbiddenStableScoreCalls++
+		}
 		return ErrVectorIndexSnapshotMismatch
 	}
 	if ordinal < 0 || ordinal >= v.pack.Header.Rows || v.base.reader.typedVectorSource == nil {
@@ -392,7 +400,9 @@ func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraph
 	stats.Base.VectorBytesRead += vectorBytes
 	stats.Base.CandidateFetches++
 	stats.Base.FP32ScoreCalls++
-	proof.ExactBaseVectorBytesRead += vectorBytes
+	if proof != nil {
+		proof.ExactBaseVectorBytesRead += vectorBytes
+	}
 	id, ok := v.pack.documentIDForOrdinal(ordinal)
 	if !ok {
 		return ErrVectorIndexSnapshotMismatch
@@ -404,9 +414,13 @@ func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraph
 	stats.ExactBaseScored++
 	stats.BaseResultIDs++
 	if smallFilter {
-		proof.ExactSmallFilterScoreCalls++
+		if proof != nil {
+			proof.ExactSmallFilterScoreCalls++
+		}
 	} else {
-		proof.ExactBaseRerankScoreCalls++
+		if proof != nil {
+			proof.ExactBaseRerankScoreCalls++
+		}
 	}
 	buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: score})
 	return nil
@@ -439,7 +453,7 @@ func (o *typedGraphReadOwner) validateTypedGraphQuantizedRerankAsset(ctx context
 // path. It deliberately reuses the captured owner, Q1 candidate collector,
 // existing filter plan, raw typed-vector source, and merge routine; it does not
 // open a searcher, reload a code plane, or create an ANN/index lifecycle.
-func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx context.Context, opts VectorIndexSearchOptions, filter *typedGraphPreparedFilter, candidateLimit int, buffer *VectorIndexSearchBuffer) (_ []VectorIndexSearchResult, stats typedGraphOverlaySearchStats, proof ColumnGraphScorePlaneWork, err error) {
+func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx context.Context, opts VectorIndexSearchOptions, filter *typedGraphPreparedFilter, candidateLimit int, buffer *VectorIndexSearchBuffer, includeProof bool) (_ []VectorIndexSearchResult, stats typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -461,7 +475,10 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if err != nil {
 		return nil, stats, proof, err
 	}
-	proof = newTypedGraphQuantizedRerankScorePlane(opts, q)
+	if includeProof {
+		owned := newTypedGraphQuantizedRerankScorePlane(opts, q)
+		proof = &owned
+	}
 	if err := o.attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(ctx, q.Name); err != nil {
 		v.base.reader.populateQuantizedAssetSearchStats(q.Name, &stats.Base)
 		return nil, stats, proof, err
@@ -519,9 +536,11 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if err != nil {
 		return nil, stats, proof, err
 	}
-	proof.NormalizedCandidateWidth = uint64(plan.effectiveEF)
-	proof.RawCandidateWidth = uint64(plan.candidateWidth)
-	proof.RerankCandidateCap = uint64(plan.rerankCap)
+	if proof != nil {
+		proof.NormalizedCandidateWidth = uint64(plan.effectiveEF)
+		proof.RawCandidateWidth = uint64(plan.candidateWidth)
+		proof.RerankCandidateCap = uint64(plan.rerankCap)
+	}
 
 	// Q1 validates the selected code plane even when no traversal follows. This
 	// catches a stale/corrupt nonempty base before any empty or exact shortcut.
@@ -530,17 +549,23 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	needsValidationOnly := v.base.reader.RowCount() > 0 && (opts.TopK == 0 || baseDomain == 0 || (filter != nil && filter.count <= typedGraphScalarExactLimit))
 	if needsValidationOnly {
 		if err := o.validateTypedGraphQuantizedRerankAsset(ctx, scoreQuery, canonicalRepresentation, q, filter, buffer, &stats); err != nil {
-			proof.QuantizedScoreCalls = stats.Base.QuantizedScoreCalls
-			proof.QuantizedCodeBytesRead = stats.Base.QuantizedCodeBytesRead
+			if proof != nil {
+				proof.QuantizedScoreCalls = stats.Base.QuantizedScoreCalls
+				proof.QuantizedCodeBytesRead = stats.Base.QuantizedCodeBytesRead
+			}
 			return nil, stats, proof, err
 		}
-		proof.QuantizedScoreCalls = stats.Base.QuantizedScoreCalls
-		proof.QuantizedCodeBytesRead = stats.Base.QuantizedCodeBytesRead
+		if proof != nil {
+			proof.QuantizedScoreCalls = stats.Base.QuantizedScoreCalls
+			proof.QuantizedCodeBytesRead = stats.Base.QuantizedCodeBytesRead
+		}
 	}
 
 	if opts.TopK == 0 || (filter != nil && filter.count == 0) {
 		stats.Route = "typed_empty"
-		proof.Route = "typed_empty"
+		if proof != nil {
+			proof.Route = "typed_empty"
+		}
 		completed = true
 		return nil, stats, proof, nil
 	}
@@ -548,7 +573,9 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if filter != nil && filter.count <= typedGraphScalarExactLimit {
 		stats.FilteredExact = true
 		stats.Route = "typed_exact"
-		proof.Route = "typed_exact"
+		if proof != nil {
+			proof.Route = "typed_exact"
+		}
 		baseOrdinals := resizeColumnVectorGraphNativeIntScratch(buffer.searchScratch.resultOrdinals, len(filter.exactBaseByID))[:0]
 		for rank, ordinal := range filter.exactBaseByID {
 			if rank&255 == 0 {
@@ -578,17 +605,17 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 			return nil, stats, proof, errTypedGraphSearchBudget
 		}
 		if canonicalRepresentation {
-			if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, baseOrdinals, scoreQuery, buffer, &stats, &proof, true); err != nil {
+			if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, baseOrdinals, scoreQuery, buffer, &stats, proof, true); err != nil {
 				return nil, stats, proof, err
 			}
 		} else {
 			for _, ordinal := range baseOrdinals {
-				if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, &proof, true); err != nil {
+				if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, proof, true); err != nil {
 					return nil, stats, proof, err
 				}
 			}
 		}
-		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
+		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, proof); err != nil {
 			return nil, stats, proof, err
 		}
 		slices.SortFunc(buffer.baseResults, typedGraphQuantizedRerankCompare)
@@ -609,8 +636,10 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	}
 	if baseDomain == 0 {
 		stats.Route = "typed_exact"
-		proof.Route = "typed_exact"
-		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
+		if proof != nil {
+			proof.Route = "typed_exact"
+		}
+		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, proof); err != nil {
 			return nil, stats, proof, err
 		}
 		slices.SortFunc(buffer.deltaResults, typedGraphQuantizedRerankCompare)
@@ -653,9 +682,11 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.Route = "typed_hnsw"
-	proof.Route = "quantized_rerank"
-	proof.QuantizedScoreCalls = baseStats.QuantizedScoreCalls
-	proof.QuantizedCodeBytesRead = baseStats.QuantizedCodeBytesRead
+	if proof != nil {
+		proof.Route = "quantized_rerank"
+		proof.QuantizedScoreCalls = baseStats.QuantizedScoreCalls
+		proof.QuantizedCodeBytesRead = baseStats.QuantizedCodeBytesRead
+	}
 	stats.Base.SearchRouteQuantizedRerank = 1
 	stats.Base.WorkAccountingSearches = 1
 	if err != nil {
@@ -664,7 +695,9 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if len(raw) > plan.candidateWidth {
 		return nil, stats, proof, ErrVectorIndexSnapshotMismatch
 	}
-	proof.RawRetainedCandidates = uint64(len(raw))
+	if proof != nil {
+		proof.RawRetainedCandidates = uint64(len(raw))
+	}
 	// Q1's returned Ordinal is always an immutable base ordinal. Do not inspect
 	// scratch.top here: a cached filtered navigation view leaves that internal
 	// heap in its local ordinal domain.
@@ -701,10 +734,12 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		}
 	}
 	buffer.searchScratch.resultOrdinals = survivors
-	proof.LiveShortlistCandidates = uint64(len(survivors))
+	if proof != nil {
+		proof.LiveShortlistCandidates = uint64(len(survivors))
+	}
 	rerankCount := min(len(survivors), plan.rerankCap)
 	if canonicalRepresentation {
-		if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, survivors[:rerankCount], scoreQuery, buffer, &stats, &proof, false); err != nil {
+		if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, survivors[:rerankCount], scoreQuery, buffer, &stats, proof, false); err != nil {
 			return nil, stats, proof, err
 		}
 	} else {
@@ -714,15 +749,17 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 					return nil, stats, proof, err
 				}
 			}
-			if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, &proof, false); err != nil {
+			if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, proof, false); err != nil {
 				return nil, stats, proof, err
 			}
-			proof.ActualRerankCandidates++
+			if proof != nil {
+				proof.ActualRerankCandidates++
+			}
 			stats.Base.QuantizedRerankCandidates++
 			stats.Base.QuantizedRerankExactScoreCalls++
 		}
 	}
-	if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
+	if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, proof); err != nil {
 		return nil, stats, proof, err
 	}
 	if stats.DeltaScored != deltaEligible {

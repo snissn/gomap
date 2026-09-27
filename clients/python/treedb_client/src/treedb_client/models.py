@@ -39,6 +39,34 @@ def _as_int(value: Any, label: str) -> int:
     return value
 
 
+def _lexical_query_mode(value: Any, label: str) -> str:
+    mode = _as_str(value, label)
+    if mode not in {"boolean", "literal"}:
+        raise ValueError(f"{label} must be 'boolean' or 'literal'")
+    return mode
+
+
+def _lexical_operator(value: Any, label: str) -> str:
+    operator = _as_str(value, label)
+    if operator.lower() not in {"and", "or"}:
+        raise ValueError(f"{label} must be 'and' or 'or'")
+    return operator
+
+
+def _hybrid_vector_query_mode(value: Any, label: str) -> str:
+    mode = _as_str(value, label).strip().lower()
+    if mode not in {"exact", "quantized_rerank"}:
+        raise ValueError(f"{label} must be 'exact' or 'quantized_rerank'")
+    return mode
+
+
+def _non_negative_int(value: Any, label: str) -> int:
+    parsed = _as_int(value, label)
+    if parsed < 0:
+        raise ValueError(f"{label} must be non-negative")
+    return parsed
+
+
 def _as_bool(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{label} must be a boolean")
@@ -380,16 +408,18 @@ class BenchmarkVectorIndexOptions:
     ef_construction: Optional[int] = None
     ef_search: Optional[int] = None
     quantized_indexes: Sequence[QuantizedIndexInfo | Mapping[str, Any]] = field(default_factory=list)
+    representation: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorIndexOptions":
         data = _as_mapping(data, "vector index options")
-        _reject_unknown(data, ["strategy", "m", "ef_construction", "ef_search", "quantized_indexes"], "vector index options")
+        _reject_unknown(data, ["strategy", "representation", "m", "ef_construction", "ef_search", "quantized_indexes"], "vector index options")
         raw_quantized = data.get("quantized_indexes", [])
         if isinstance(raw_quantized, (str, bytes, bytearray)) or not isinstance(raw_quantized, Sequence):
             raise TypeError("vector index options.quantized_indexes must be a sequence")
         return cls(
             strategy=_as_optional_str_default(data.get("strategy"), "vector index options.strategy"),
+            representation=_as_optional_str_default(data.get("representation"), "vector index options.representation"),
             m=None if "m" not in data or data.get("m") is None else _as_int(data.get("m"), "vector index options.m"),
             ef_construction=None
             if "ef_construction" not in data or data.get("ef_construction") is None
@@ -404,6 +434,8 @@ class BenchmarkVectorIndexOptions:
         out: Dict[str, Any] = {}
         if self.strategy:
             out["strategy"] = self.strategy
+        if self.representation:
+            out["representation"] = self.representation
         if self.m is not None:
             out["m"] = _as_int(self.m, "vector index options.m")
         if self.ef_construction is not None:
@@ -491,6 +523,7 @@ class IndexInfo:
     text_field: str = ""
     text_index_name: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
+    vector_representation: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "IndexInfo":
@@ -504,6 +537,7 @@ class IndexInfo:
             "embedding_field",
             "vector_index_name",
             "vector_strategy",
+            "vector_representation",
             "vector_m",
             "vector_ef_construction",
             "vector_ef_search",
@@ -524,6 +558,9 @@ class IndexInfo:
             embedding_field=embedding_field,
             vector_index_name=_as_optional_str_default(data.get("vector_index_name", embedding_field), "index.vector_index_name"),
             vector_strategy=_as_optional_str_default(data.get("vector_strategy", ""), "index.vector_strategy"),
+            vector_representation=_as_optional_str_default(
+                data.get("vector_representation", ""), "index.vector_representation"
+            ),
             vector_m=_as_optional_int_default(data.get("vector_m"), "index.vector_m"),
             vector_ef_construction=_as_optional_int_default(
                 data.get("vector_ef_construction"), "index.vector_ef_construction"
@@ -549,6 +586,7 @@ class IndexInfo:
                 "embedding_field": self.embedding_field,
                 "vector_index_name": self.vector_index_name,
                 "vector_strategy": self.vector_strategy,
+                "vector_representation": self.vector_representation,
                 "vector_m": self.vector_m,
                 "vector_ef_construction": self.vector_ef_construction,
                 "vector_ef_search": self.vector_ef_search,
@@ -583,6 +621,39 @@ class UpsertDocumentsResponse:
             ids=[_as_str(item, "ids[]") for item in data.get("ids", [])],
             compact_embeddings=_as_optional_int_default(data.get("compact_embeddings"), "compact_embeddings"),
         )
+
+
+@dataclass(frozen=True)
+class ReplaceSourceByIDResponse:
+    index: IndexInfo
+    deleted_count: int
+    inserted_count: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ReplaceSourceByIDResponse":
+        data = _as_mapping(data, "source replacement response")
+        deleted = _as_int(data["deleted_count"], "deleted_count")
+        inserted = _as_int(data["inserted_count"], "inserted_count")
+        if deleted < 0 or inserted < 0:
+            raise ValueError("source replacement counts must be non-negative")
+        return cls(index=IndexInfo.from_dict(data["index"]), deleted_count=deleted, inserted_count=inserted)
+
+
+@dataclass(frozen=True)
+class UpdateMetadataByIDResponse:
+    index: IndexInfo
+    matched_count: int
+    modified_count: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "UpdateMetadataByIDResponse":
+        data = _as_mapping(data, "metadata update response")
+        _reject_unknown(data, ["index", "matched_count", "modified_count"], "metadata update response")
+        matched = _as_int(data["matched_count"], "matched_count")
+        modified = _as_int(data["modified_count"], "modified_count")
+        if matched < 0 or modified < 0 or modified > matched:
+            raise ValueError("metadata update counts are inconsistent")
+        return cls(index=IndexInfo.from_dict(data["index"]), matched_count=matched, modified_count=modified)
 
 
 @dataclass(frozen=True)
@@ -635,6 +706,85 @@ class FilterDocumentsResponse:
 
 
 @dataclass(frozen=True)
+class DenseSearchRouteIdentity:
+    version: int
+    representation: str
+    query_mode: str
+    execution_route: str
+    return_embedding: bool
+    diagnostics: bool
+    filter: bool
+    schema_hash: int
+    schema_generation: int
+    base_manifest_generation: int
+    base_manifest_checksum: int
+    current_manifest_generation: int
+    current_manifest_checksum: int
+    current_coverage_lsn: int
+    top_k: int
+    ef_search: int
+    rerank_candidates: int
+    result_count: int
+    fp32_score_calls: int
+    fp32_vector_bytes_read: int
+    embedding_vector_reads: int
+    embedding_vector_bytes: int
+    embedding_output_bytes: int
+    quantized_codec: str = ""
+    quantized_index_name: str = ""
+    quantized_version: int = 0
+    quantized_score_calls: int = 0
+    quantized_code_bytes_read: int = 0
+    packed_score_calls: int = 0
+    packed_score_candidates: int = 0
+    packed_vector_bytes_read: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DenseSearchRouteIdentity":
+        data = _as_mapping(data, "dense route identity")
+        required_ints = (
+            "version", "schema_hash", "schema_generation", "base_manifest_generation",
+            "base_manifest_checksum", "current_manifest_generation", "current_manifest_checksum",
+            "current_coverage_lsn", "top_k", "ef_search", "rerank_candidates", "result_count",
+            "fp32_score_calls", "fp32_vector_bytes_read", "embedding_vector_reads",
+            "embedding_vector_bytes", "embedding_output_bytes",
+        )
+        optional_ints = (
+            "quantized_version", "quantized_score_calls", "quantized_code_bytes_read",
+            "packed_score_calls", "packed_score_candidates", "packed_vector_bytes_read",
+        )
+        required_strings = ("representation", "query_mode", "execution_route")
+        optional_strings = ("quantized_codec", "quantized_index_name")
+        booleans = ("return_embedding", "diagnostics", "filter")
+        allowed = required_ints + optional_ints + required_strings + optional_strings + booleans
+        _reject_unknown(data, allowed, "dense route identity")
+        missing = [name for name in required_ints + required_strings + booleans if name not in data]
+        if missing:
+            raise ValueError("dense route identity fields are missing")
+        values: Dict[str, Any] = {}
+        for name in required_ints + optional_ints:
+            value = _as_int(data.get(name, 0), f"dense route identity.{name}")
+            if not 0 <= value < 1 << 64:
+                raise ValueError(f"dense route identity.{name} must be uint64")
+            values[name] = value
+        for name in required_strings:
+            values[name] = _as_str(data[name], f"dense route identity.{name}")
+        for name in optional_strings:
+            values[name] = _as_optional_str_default(data.get(name), f"dense route identity.{name}")
+        for name in booleans:
+            values[name] = _as_bool(data[name], f"dense route identity.{name}")
+        if (
+            values["version"] != 1
+            or values["representation"] != "cosine_normalized_f32_v1"
+            or values["query_mode"] not in ("exact", "quantized_rerank")
+            or values["execution_route"] not in ("typed_empty", "typed_exact", "typed_hnsw")
+            or values["quantized_version"] > 65535
+        ):
+            raise ValueError("unsupported dense route identity")
+        return cls(**values)
+
+
+@dataclass(frozen=True)
 class DenseVectorSearchResponse:
     index: IndexInfo
     documents: list[Document]
@@ -670,6 +820,7 @@ class DenseVectorSearchResponse:
     document_materialization_rows: int = 0
     visibility_mismatch_count: int = 0
     visibility_retry_count: int = 0
+    route_identity: Optional[DenseSearchRouteIdentity] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
@@ -692,6 +843,11 @@ class DenseVectorSearchResponse:
             out = cls(
                 dense_work=work,
                 score_plane=score_plane,
+                route_identity=(
+                    None
+                    if data.get("route_identity") is None
+                    else DenseSearchRouteIdentity.from_dict(data["route_identity"])
+                ),
                 index=IndexInfo.from_dict(data["index"]),
                 documents=[Document.from_dict(item) for item in data.get("documents", [])],
                 metric=_as_str(data["metric"], "metric"),
@@ -1016,6 +1172,7 @@ class KeywordSearchRequest:
     query: str
     top_k: int
     expected_generation: Optional[int] = None
+    text_query_mode: Optional[str] = None
     operator: Optional[str] = None
     candidate_limit: Optional[int] = None
     max_postings_scanned: Optional[int] = None
@@ -1030,12 +1187,14 @@ class KeywordSearchRequest:
         }
         if self.expected_generation is not None:
             out["expected_generation"] = _as_int(self.expected_generation, "keyword request.expected_generation")
+        if self.text_query_mode is not None:
+            out["text_query_mode"] = _lexical_query_mode(self.text_query_mode, "keyword request.text_query_mode")
         if self.operator is not None:
-            out["operator"] = _as_str(self.operator, "keyword request.operator")
+            out["operator"] = _lexical_operator(self.operator, "keyword request.operator")
         if self.candidate_limit is not None:
-            out["candidate_limit"] = _as_int(self.candidate_limit, "keyword request.candidate_limit")
+            out["candidate_limit"] = _non_negative_int(self.candidate_limit, "keyword request.candidate_limit")
         if self.max_postings_scanned is not None:
-            out["max_postings_scanned"] = _as_int(self.max_postings_scanned, "keyword request.max_postings_scanned")
+            out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "keyword request.max_postings_scanned")
         normalized_filter = _filter_to_dict(self.filter)
         if normalized_filter is not None:
             out["filter"] = normalized_filter
@@ -1195,9 +1354,15 @@ class HybridSearchRequest:
     expected_generation: Optional[int] = None
     query: Optional[str] = None
     query_embedding: Optional[Sequence[float]] = None
+    text_query_mode: Optional[str] = None
+    text_operator: Optional[str] = None
     candidate_limit: Optional[int] = None
     text_candidate_limit: Optional[int] = None
+    max_postings_scanned: Optional[int] = None
     vector_candidate_limit: Optional[int] = None
+    vector_query_mode: Optional[str] = None
+    quantized_index_name: Optional[str] = None
+    quantized_rerank_candidates: Optional[int] = None
     ef_search: Optional[int] = None
     max_chunks_per_parent: Optional[int] = None
     fusion: Any = None
@@ -1215,14 +1380,63 @@ class HybridSearchRequest:
             out["query"] = _as_str(self.query, "hybrid request.query")
         if self.query_embedding is not None:
             out["query_embedding"] = _float_list(self.query_embedding, "hybrid request.query_embedding")
+        if not self.query and (
+            self.text_query_mode is not None
+            or self.text_operator is not None
+            or self.max_postings_scanned is not None
+        ):
+            raise ValueError("hybrid lexical options require query")
+        if self.text_query_mode is not None:
+            out["text_query_mode"] = _lexical_query_mode(self.text_query_mode, "hybrid request.text_query_mode")
+        if self.text_operator is not None:
+            out["text_operator"] = _lexical_operator(self.text_operator, "hybrid request.text_operator")
         if self.candidate_limit is not None:
-            out["candidate_limit"] = _as_int(self.candidate_limit, "hybrid request.candidate_limit")
+            out["candidate_limit"] = _non_negative_int(self.candidate_limit, "hybrid request.candidate_limit")
         if self.text_candidate_limit is not None:
-            out["text_candidate_limit"] = _as_int(self.text_candidate_limit, "hybrid request.text_candidate_limit")
+            out["text_candidate_limit"] = _non_negative_int(self.text_candidate_limit, "hybrid request.text_candidate_limit")
+        if self.max_postings_scanned is not None:
+            out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "hybrid request.max_postings_scanned")
         if self.vector_candidate_limit is not None:
-            out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
+            out["vector_candidate_limit"] = _non_negative_int(
+                self.vector_candidate_limit, "hybrid request.vector_candidate_limit"
+            )
+        vector_query_mode = "exact" if self.vector_query_mode is None else _hybrid_vector_query_mode(
+            self.vector_query_mode, "hybrid request.vector_query_mode"
+        )
+        rerank_candidates = 0
+        if self.quantized_rerank_candidates is not None:
+            rerank_candidates = _non_negative_int(
+                self.quantized_rerank_candidates, "hybrid request.quantized_rerank_candidates"
+            )
+        has_vector_options = (
+            self.vector_candidate_limit is not None
+            or self.vector_query_mode is not None
+            or self.quantized_index_name is not None
+            or self.quantized_rerank_candidates is not None
+            or self.ef_search is not None
+        )
+        if not out.get("query_embedding") and has_vector_options:
+            raise ValueError("hybrid vector options require query_embedding")
+        if vector_query_mode == "exact":
+            if self.quantized_index_name is not None or self.quantized_rerank_candidates is not None:
+                raise ValueError("exact hybrid vector search does not accept quantized options")
+        elif not isinstance(self.quantized_index_name, str) or not self.quantized_index_name:
+            raise ValueError("quantized_rerank hybrid search requires quantized_index_name")
+        if self.vector_query_mode is not None:
+            out["vector_query_mode"] = vector_query_mode
+        if self.quantized_index_name is not None:
+            out["quantized_index_name"] = _as_str(self.quantized_index_name, "hybrid request.quantized_index_name")
+        if self.quantized_rerank_candidates is not None:
+            out["quantized_rerank_candidates"] = rerank_candidates
         if self.ef_search is not None:
-            out["ef_search"] = _as_int(self.ef_search, "hybrid request.ef_search")
+            out["ef_search"] = _non_negative_int(self.ef_search, "hybrid request.ef_search")
+        if vector_query_mode == "quantized_rerank" and rerank_candidates:
+            effective_vector_limit = out.get("vector_candidate_limit") or out.get("candidate_limit") or max(0, out["top_k"] * 4)
+            if rerank_candidates < effective_vector_limit:
+                raise ValueError(
+                    "hybrid request.quantized_rerank_candidates must be zero or at least "
+                    "the effective vector candidate limit"
+                )
         if self.max_chunks_per_parent is not None:
             out["max_chunks_per_parent"] = _as_int(self.max_chunks_per_parent, "hybrid request.max_chunks_per_parent")
         if self.fusion is not None:
@@ -1248,6 +1462,9 @@ class HybridSearchPlan:
     fusion_tie_policy: str = ""
     text_candidate_limit: int = 0
     vector_candidate_limit: int = 0
+    vector_query_mode: str = ""
+    quantized_index_name: str = ""
+    quantized_rerank_candidates: int = 0
     max_chunks_per_parent: int = 0
     final_top_k: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -1264,6 +1481,9 @@ class HybridSearchPlan:
             "fusion_tie_policy",
             "text_candidate_limit",
             "vector_candidate_limit",
+            "vector_query_mode",
+            "quantized_index_name",
+            "quantized_rerank_candidates",
             "max_chunks_per_parent",
             "final_top_k",
         ]
@@ -1282,6 +1502,11 @@ class HybridSearchPlan:
             fusion_tie_policy=_as_optional_str_default(data.get("fusion_tie_policy"), "hybrid plan.fusion_tie_policy"),
             text_candidate_limit=_as_optional_int_default(data.get("text_candidate_limit"), "hybrid plan.text_candidate_limit"),
             vector_candidate_limit=_as_optional_int_default(data.get("vector_candidate_limit"), "hybrid plan.vector_candidate_limit"),
+            vector_query_mode=_as_optional_str_default(data.get("vector_query_mode"), "hybrid plan.vector_query_mode"),
+            quantized_index_name=_as_optional_str_default(data.get("quantized_index_name"), "hybrid plan.quantized_index_name"),
+            quantized_rerank_candidates=_as_optional_int_default(
+                data.get("quantized_rerank_candidates"), "hybrid plan.quantized_rerank_candidates"
+            ),
             max_chunks_per_parent=_as_optional_int_default(
                 data.get("max_chunks_per_parent"), "hybrid plan.max_chunks_per_parent"
             ),
@@ -1332,6 +1557,14 @@ class HybridSearchStats:
     vector_candidates_returned: int = 0
     vector_candidates_examined: int = 0
     vector_edges_visited: int = 0
+    vector_route: Dict[str, Any] = field(default_factory=dict)
+    vector_quantized_score_calls: int = 0
+    vector_quantized_code_bytes_read: int = 0
+    vector_quantized_rerank_candidates: int = 0
+    vector_quantized_rerank_exact_score_calls: int = 0
+    vector_packed_exact_score_calls: int = 0
+    vector_packed_exact_score_candidates: int = 0
+    vector_packed_exact_vector_bytes_read: int = 0
     scalar_prefilter_ids: int = 0
     scalar_filter_lookups: int = 0
     scalar_filter_input_ids: int = 0
@@ -1351,6 +1584,7 @@ class HybridSearchStats:
     candidates_after_filter: int = 0
     documents_fetched: int = 0
     documents_missing: int = 0
+    embedding_output_bytes: int = 0
     full_document_scan_fallbacks: int = 0
     truncated: int = 0
     fail_closed: int = 0
@@ -1369,6 +1603,14 @@ class HybridSearchStats:
             "vector_candidates_returned",
             "vector_candidates_examined",
             "vector_edges_visited",
+            "vector_route",
+            "vector_quantized_score_calls",
+            "vector_quantized_code_bytes_read",
+            "vector_quantized_rerank_candidates",
+            "vector_quantized_rerank_exact_score_calls",
+            "vector_packed_exact_score_calls",
+            "vector_packed_exact_score_candidates",
+            "vector_packed_exact_vector_bytes_read",
             "scalar_prefilter_ids",
             "scalar_filter_lookups",
             "scalar_filter_input_ids",
@@ -1388,6 +1630,7 @@ class HybridSearchStats:
             "candidates_after_filter",
             "documents_fetched",
             "documents_missing",
+            "embedding_output_bytes",
             "full_document_scan_fallbacks",
             "truncated",
             "fail_closed",
@@ -1408,6 +1651,28 @@ class HybridSearchStats:
                 data.get("vector_candidates_examined"), "hybrid stats.vector_candidates_examined"
             ),
             vector_edges_visited=_as_optional_int_default(data.get("vector_edges_visited"), "hybrid stats.vector_edges_visited"),
+            vector_route=dict(_as_mapping(data.get("vector_route", {}), "hybrid stats.vector_route")),
+            vector_quantized_score_calls=_as_optional_int_default(
+                data.get("vector_quantized_score_calls"), "hybrid stats.vector_quantized_score_calls"
+            ),
+            vector_quantized_code_bytes_read=_as_optional_int_default(
+                data.get("vector_quantized_code_bytes_read"), "hybrid stats.vector_quantized_code_bytes_read"
+            ),
+            vector_quantized_rerank_candidates=_as_optional_int_default(
+                data.get("vector_quantized_rerank_candidates"), "hybrid stats.vector_quantized_rerank_candidates"
+            ),
+            vector_quantized_rerank_exact_score_calls=_as_optional_int_default(
+                data.get("vector_quantized_rerank_exact_score_calls"), "hybrid stats.vector_quantized_rerank_exact_score_calls"
+            ),
+            vector_packed_exact_score_calls=_as_optional_int_default(
+                data.get("vector_packed_exact_score_calls"), "hybrid stats.vector_packed_exact_score_calls"
+            ),
+            vector_packed_exact_score_candidates=_as_optional_int_default(
+                data.get("vector_packed_exact_score_candidates"), "hybrid stats.vector_packed_exact_score_candidates"
+            ),
+            vector_packed_exact_vector_bytes_read=_as_optional_int_default(
+                data.get("vector_packed_exact_vector_bytes_read"), "hybrid stats.vector_packed_exact_vector_bytes_read"
+            ),
             scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "hybrid stats.scalar_prefilter_ids"),
             scalar_filter_lookups=_as_optional_int_default(data.get("scalar_filter_lookups"), "hybrid stats.scalar_filter_lookups"),
             scalar_filter_input_ids=_as_optional_int_default(data.get("scalar_filter_input_ids"), "hybrid stats.scalar_filter_input_ids"),
@@ -1433,6 +1698,9 @@ class HybridSearchStats:
             candidates_after_filter=_as_optional_int_default(data.get("candidates_after_filter"), "hybrid stats.candidates_after_filter"),
             documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "hybrid stats.documents_fetched"),
             documents_missing=_as_optional_int_default(data.get("documents_missing"), "hybrid stats.documents_missing"),
+            embedding_output_bytes=_as_optional_int_default(
+                data.get("embedding_output_bytes"), "hybrid stats.embedding_output_bytes"
+            ),
             full_document_scan_fallbacks=_as_optional_int_default(
                 data.get("full_document_scan_fallbacks"), "hybrid stats.full_document_scan_fallbacks"
             ),

@@ -435,7 +435,17 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 }
 
 func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testing.T) {
-	dir := t.TempDir()
+	for _, directory := range []bool{false, true} {
+		name := "v1"
+		if directory {
+			name = "dpm2"
+		}
+		t.Run(name, func(t *testing.T) { testDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t, directory) })
+	}
+}
+
+func testDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testing.T, directory bool) {
+	dir := durableRootFailureFixtureDir(t, directory)
 	database, err := Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
 		t.Fatal(err)
@@ -593,8 +603,19 @@ func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testi
 }
 
 func TestDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		name := "v1"
+		if directory {
+			name = "dpm2"
+		}
+		t.Run(name, func(t *testing.T) { testDurableRootPublicationAcceptedWaitFailureRunsPostWork(t, directory) })
+	}
+}
+
+func testDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T, directory bool) {
+	dir := durableRootFailureFixtureDir(t, directory)
 	database, err := Open(Options{
-		Dir:                    t.TempDir(),
+		Dir:                    dir,
 		Durability:             DurabilityWALOffRelaxed,
 		DisableBackgroundPrune: true,
 	})
@@ -649,7 +670,17 @@ func TestDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T) {
 }
 
 func TestDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T) {
-	dir := t.TempDir()
+	for _, directory := range []bool{false, true} {
+		name := "v1"
+		if directory {
+			name = "dpm2"
+		}
+		t.Run(name, func(t *testing.T) { testDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t, directory) })
+	}
+}
+
+func testDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T, directory bool) {
+	dir := durableRootFailureFixtureDir(t, directory)
 	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
@@ -694,7 +725,18 @@ func TestDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T) {
 }
 
 func TestDurableRootVisibleCandidateAbortFailurePoisonsAndWakesAllocator(t *testing.T) {
-	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	for _, directory := range []bool{false, true} {
+		name := "v1"
+		if directory {
+			name = "dpm2"
+		}
+		t.Run(name, func(t *testing.T) { testDurableRootVisibleCandidateAbortFailurePoisonsAndWakesAllocator(t, directory) })
+	}
+}
+
+func testDurableRootVisibleCandidateAbortFailurePoisonsAndWakesAllocator(t *testing.T, directory bool) {
+	dir := durableRootFailureFixtureDir(t, directory)
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,7 +848,7 @@ func TestCaptureRebuiltIndexDurableResourcesRetainsSelectedImmutableDependencies
 		t.Fatal(err)
 	}
 	defer captured.Release()
-	descriptors := captured.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, captured)
 	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafManifest {
 		t.Fatalf("rebuilt durable descriptors=%+v, want selected immutable manifest", descriptors)
 	}
@@ -1000,5 +1042,85 @@ func TestDurableRootAlternatingSlotsRetireAuxiliaryHistory(t *testing.T) {
 	}
 	if maximum > 128 || maximum-minimum > 16 {
 		t.Fatalf("steady retired inventory min=%d max=%d, want bounded two-slot history", minimum, maximum)
+	}
+}
+
+// Run the same failure and ownership assertions against both durable formats.
+func durableRootFailureFixtureDir(t *testing.T, directory bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	if directory {
+		if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestDependencyDirectoryV2PublicationCutFailureRecovery(t *testing.T) {
+	for _, point := range []durabilitycut.Point{durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite, durabilitycut.BeforeMetaSync} {
+		t.Run(string(point), func(t *testing.T) {
+			dir := durableRootFailureFixtureDir(t, true)
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			registry := database.valueLogIdentityPins
+			ptrs := appendPointersInNewSegment(t, dir, 0, 1, 30_000, 1, func(int) []byte { return []byte("directory cut value") })
+			if err := database.RefreshValueLogSet(); err != nil {
+				t.Fatal(err)
+			}
+			batch := database.NewBatch().(*Batch)
+			if err := batch.SetPointer([]byte("cut"), ptrs[0]); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("directory publication cut")
+			observed := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == point {
+					observed = true
+					return injected
+				}
+				return nil
+			})
+			err = batch.WriteSync()
+			restore()
+			if closeErr := batch.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if !observed || !errors.Is(err, injected) {
+				t.Fatalf("cut observed=%t error=%v", observed, err)
+			}
+			ambiguous := point == durabilitycut.BeforeMetaSync
+			if errors.Is(err, ErrRecoveryRequired) != ambiguous {
+				t.Fatalf("recovery classification: %v", err)
+			}
+			if ambiguous {
+				if err := database.SetSync([]byte("after-cut"), []byte("refuse")); !errors.Is(err, ErrRecoveryRequired) {
+					t.Fatalf("ambiguous handle allowed progress: %v", err)
+				}
+			} else if err := database.Checkpoint(); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if err := database.Close(); err != nil && !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatal(err)
+			}
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("closed publication leaked %d physical pins", got)
+			}
+			reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if reopened.durableRoot.record.Directory.RootPageID == 0 {
+				t.Fatal("recovery lost directory format")
+			}
+			got, err := reopened.Get([]byte("cut"))
+			if err != nil || (got != nil && string(got) != "directory cut value") || (!ambiguous && got == nil) {
+				t.Fatalf("recovered value %q: %v", got, err)
+			}
+		})
 	}
 }

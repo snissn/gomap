@@ -18,6 +18,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -76,6 +77,7 @@ const (
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
+	PeerTransport                   *PeerTransportV1
 	Limits                          iwire.Limits
 	MaxFrameSize                    uint64
 	MaxInFlight                     int
@@ -103,6 +105,7 @@ type ServerOptions struct {
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
+	peerTransport                   *PeerTransportV1
 	limits                          iwire.Limits
 	maxInFlight                     int
 	maxConnections                  int
@@ -317,6 +320,9 @@ func NewServer(opts ServerOptions) *Server {
 	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
 		limits.MaxFrameSize = defaultLimits.MaxFrameSize
+		if opts.PeerTransport != nil {
+			limits.MaxFrameSize = peerNativeDefaultFrameV1
+		}
 	}
 	if limits.MaxHeaderLen == 0 {
 		limits.MaxHeaderLen = defaultLimits.MaxHeaderLen
@@ -332,6 +338,11 @@ func NewServer(opts ServerOptions) *Server {
 	}
 	if limits.MaxByteVectorBytes == 0 {
 		limits.MaxByteVectorBytes = defaultLimits.MaxByteVectorBytes
+	}
+	if opts.PeerTransport != nil {
+		limits.MaxByteVectorBytes = min(limits.MaxByteVectorBytes, limits.MaxFrameSize)
+		limits.MaxSectionLen = min(limits.MaxSectionLen, limits.MaxFrameSize)
+		limits.MaxByteVectorItems = min(limits.MaxByteVectorItems, int(max(1, min(uint64(defaultLimits.MaxByteVectorItems), limits.MaxFrameSize/32))))
 	}
 	maxInFlight := opts.MaxInFlight
 	if maxInFlight <= 0 {
@@ -389,6 +400,7 @@ func NewServer(opts ServerOptions) *Server {
 		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
 	}
 	server := &Server{
+		peerTransport:                   opts.PeerTransport,
 		limits:                          limits,
 		maxInFlight:                     maxInFlight,
 		maxConnections:                  maxConnections,
@@ -464,6 +476,13 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.admission.accept(conn, "native")
+		if err != nil {
+			return err
+		}
+	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
 		return ErrServerClosed
@@ -475,6 +494,13 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	logDebug("serveRegisteredConn")
 	defer s.unregisterConn(conn)
 	defer conn.Close()
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.accept(ctx, conn, "")
+		if err != nil {
+			return err
+		}
+	}
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
 	defer s.killCursorsForOwner(state.id)
@@ -499,8 +525,26 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 				return err
 			}
 		}
-		header, body, err := readFrameInto(conn, s.limits, state.readBody)
+		var work peerWorkLeaseV1
+		var admit func(uint64) error
+		if s.peerTransport != nil {
+			admit = func(uint64) error {
+				if s.limits.MaxFrameSize > 64<<20 {
+					return raftcluster.ErrAdmissionUnavailable
+				}
+				var err error
+				work, err = s.peerTransport.admission.request(ctx, "native", int64(s.limits.MaxFrameSize)*4, peerRequestIngressV1)
+				return err
+			}
+		}
+		header, body, err := readFrameIntoAdmissionV1(conn, s.limits, state.readBody, admit)
 		if err != nil {
+			work.release()
+			if errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_ = s.writeError(conn, header, protocolError(iwire.ErrResourceExhausted, "node request/byte admission unavailable"))
+				return err
+			}
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -514,7 +558,13 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
-		if err := s.handleFrame(ctx, conn, state, header, body); err != nil {
+		requestCtx := ctx
+		if work.ctx != nil {
+			requestCtx = work.ctx
+		}
+		err = s.handleFrame(requestCtx, conn, state, header, body)
+		work.release()
+		if err != nil {
 			if errors.Is(err, errGoaway) {
 				return nil
 			}
@@ -523,7 +573,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
-		if body != nil {
+		if s.peerTransport != nil {
+			state.readBody = nil
+			state.writeBody = retainSmallPayloadScratch(state.writeBody)
+			state.responseBody = retainSmallPayloadScratch(state.responseBody)
+		} else if body != nil {
 			state.readBody = body[:0]
 		}
 	}
@@ -753,7 +807,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	responseBodySet := false
 	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
-	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
+	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || cmd.Header.ID == iwire.CommandTypedSourceReplace || cmd.Header.ID == iwire.CommandTypedMetadataUpdate || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
 	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation && cmd.Header.ID != iwire.CommandVectorInsert {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
@@ -811,6 +865,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			responseBodySet = true
 		case iwire.CommandTypedDocumentUpsert:
 			responseSections, err = s.handleTypedDocumentUpsert(ctx, cmd.Known)
+		case iwire.CommandTypedSourceReplace:
+			responseSections, err = s.handleTypedSourceReplace(ctx, cmd.Known)
+		case iwire.CommandTypedMetadataUpdate:
+			responseSections, err = s.handleTypedMetadataUpdate(ctx, cmd.Known)
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 		case iwire.CommandVectorStatus,
@@ -878,8 +936,14 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		if _, ok := s.registry.LookupCommand(iwire.CommandTypedDocumentUpsert, 1); ok {
 			caps["typed_document_upsert_versions"] = "1"
 		}
+		if _, ok := s.registry.LookupCommand(iwire.CommandTypedSourceReplace, 1); ok {
+			caps["typed_source_replace_versions"] = "1"
+		}
+		if _, ok := s.registry.LookupCommand(iwire.CommandTypedMetadataUpdate, 1); ok {
+			caps["typed_metadata_update_versions"] = "1"
+		}
 		var versions []string
-		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion} {
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
 			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
 				versions = append(versions, strconv.FormatUint(version, 10))
 			}
@@ -942,7 +1006,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	message := wireErrorMessage(code, err)
 	body, sectionErr := iwire.AppendSection(nil, iwire.Section{
 		ID:    iwire.SectionError,
-		Bytes: appendErrorPayload(nil, code, retryableError(code), message),
+		Bytes: appendErrorPayload(nil, code, retryableError(err, code), message),
 	})
 	if sectionErr != nil {
 		return sectionErr
@@ -955,7 +1019,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 			return proofErr
 		}
 		sectionCount := 2
-		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+		if (observed.version == iwire.DenseVectorSearchTypedQuantizedVersion || observed.version == iwire.DenseVectorSearchNormalizedVersion) && observed.scorePlane != nil {
 			sectionCount++
 		}
 		if err := s.checkResponseSectionCount(sectionCount); err != nil {
@@ -971,9 +1035,13 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
 			return err
 		}
-		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+		if (observed.version == iwire.DenseVectorSearchTypedQuantizedVersion || observed.version == iwire.DenseVectorSearchNormalizedVersion) && observed.scorePlane != nil {
 			var proofScratch [2048]byte
-			proof, proofErr := appendDenseScorePlane(proofScratch[:0], *observed.scorePlane, s.limits)
+			if observed.version == iwire.DenseVectorSearchNormalizedVersion {
+				proof, proofErr = appendDenseScorePlaneV2(proofScratch[:0], *observed.scorePlane, s.limits)
+			} else {
+				proof, proofErr = appendDenseScorePlane(proofScratch[:0], *observed.scorePlane, s.limits)
+			}
 			if proofErr != nil {
 				return proofErr
 			}

@@ -8,6 +8,67 @@ and M6 owns transport-neutral coordinator fanout and merged top-k in
 `vector-partition-coordinator-v1.md`. A production remote transport and
 multi-group acceptance remain M8 work.
 
+## Owner-scoped search-plan entrypoint
+
+`NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2` constructs a
+distinct sparse plan for one owner from an already admitted V1 manifest. The
+plan retains only that owner's assets and memberships, preserves original
+source ordinals, and preserves one graph/anchor plus the complete colocated
+chunk set per logical domain. Home membership wins over overlap within a
+domain, exactly as in the V1 domain normalization. Unknown owners, incomplete
+local placement, split domain ownership, and remote partition opens fail.
+
+`NewCollectionVectorPartitionGenerationSourceForOwnerReplicatedLifecycleV2`
+binds that selection to an expected stored manifest integrity digest. Both
+cold loads and warm hits retain replicated lifecycle admission. Local opens
+reuse the production asset/source verifier and generation pins; this API does
+not grant standalone live-recovery or offline-graph authority. The production
+node exposes the opt-in `OwnerScopedSearchPlanV2` option. A different stored
+root is rejected before a logical placement overlay could mask it.
+
+This is intermediate substrate for [#4808](https://github.com/snissn/gomap/issues/4808).
+Cold loads still decode the complete V1 manifest, retain its complete placement
+directory, and use the existing source reader. Input scanning remains global.
+The V1 format, caps and default path are unchanged. This entrypoint does not
+establish paged generation loading, shard-local source storage, resumable
+distributed construction, or the EC2 target contract. Those requirements and
+their public-path allocation/page-read gates remain open under #4808.
+
+The additive `raftplacement.SourceShardMapV2` substrate separates canonical
+document ownership from ANN routing. Its digest binds collection identity,
+map epoch, the explicit token algorithm, stable shard IDs, known groups and
+complete nonoverlapping inclusive token ranges. `DocumentIDTokenV2` is the
+big-endian first 64 bits of SHA-256 over the ASCII prefix
+`gomap/canonical-document-id-token/v2`, one zero byte, the big-endian uint64
+ID-byte length, and the exact ID bytes. IDs are not normalized. A token is only
+a shard selector: exact IDs remain distinct keys, including on token collision.
+Validation owns its lookup state, refuses wrong-shard import IDs and checks
+exact duplicates within a bounded input range; existing durable collection
+uniqueness must also reject duplicates from earlier ranges. This substrate does
+not yet admit source maps into catalog authority, enable V1 token mutation
+routing, bind an authoritative shard snapshot, or atomically persist import
+progress. Those production integrations remain part of #4808.
+
+The draft paged-root codec uses an explicit `vector_partition_paged_manifest_v2`
+discriminant with VPM binary schema 7. Its 64 KiB envelope binds content-addressed
+metadata/source directory roots, source-map epoch/digest, source snapshot-set
+digest, exact placement digest, graph profile and explicitly local counts. Root
+decoding never sizes an allocation from the generation row/domain counts.
+Schema 7 stores a canonical, length-delimited JSON payload; schema 6 keeps its
+existing binary and JSON bytes and hashes. The optional `PagedRootV2` field is
+omitted for schema 6. Mixed inline source/layout state and paged roots fail.
+
+Local prepared construction reads applied BUILD authority and current hosting
+membership together. Source and ANN owner sets are independent; the producer
+requires the complete local scope and refuses unavailable source inputs before
+graph work. Immutable unpublished intent pages prevent a callback from changing
+membership between commitment verification and graph construction. The final
+combined VCP1 Stage is atomic, and selected local domains reuse cold session
+owner verification under generation pins. This local preparation does not
+activate distributed reads: catalog Activate, native Search, legacy publication,
+router and reclaim paths continue to refuse the paged variant. Old binaries
+reject schema 7. A valid root digest or local Stage is not READY evidence.
+
 ## M1 durable lifecycle
 
 Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical
@@ -54,26 +115,42 @@ order is not significant: partitions and source ordinals are canonicalized
 before deterministic hierarchical cosine k-means.
 
 `RouterConfigV1` persists the seed, branch factor, leaf-size stop,
-representative budget per logical domain, maximum depth, maximum Lloyd iterations,
+one global representative budget, maximum depth, maximum Lloyd iterations,
 and vector/dimension/representative/scalar-work/persisted-byte caps. A
 conservative full 64-layer native-pack bound is checked before row or adjacency
 allocation, and the actual encoded length is checked again before append.
-Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
-repaired deterministically by moving the farthest eligible member, with source
-ordinal as the tie break. Each partition stops when its representative budget
-is reached or no eligible leaf remains. The persisted build metrics distinguish
-leaf-size, depth, and no-split stops and record Lloyd iterations and repairs.
-The validator reconstructs root/member totals, parent/depth paths, leaves,
-per-partition representative caps, canonical node/representative order, and
-metric totals; forged hierarchy or build metadata fails closed.
+The scalar-work cap counts every coordinate evaluated by construction cosine
+distances: Lloyd assignment and one medoid pass for every represented level.
+Sampled initialization performs no distance scan, and empty-cluster repair
+reuses the current assignment distance. At each depth memberships are disjoint;
+the sum of split widths cannot exceed the forest's node capacity, each depth is
+fanout-bounded, and every recursive level consumes at least two additional
+nodes. The conservative preflight combines those token, depth, and fanout caps.
+
+Reserve one token per nonempty logical domain, then apportion the global budget
+by population using bounded integer largest remainders with canonical
+domain/node ties. The domain itself is a virtual container: it emits genuine
+depth-zero bucket centroids and contributes no aggregate representative.
+Splitting a retained centroid preserves it and consumes one token per child.
+Residual quota is apportioned only among children eligible under the persisted
+leaf-size and depth controls. Defaults are fanout 64 and leaf size 250.
+Sampled initialization and all distance/ordinal ties are stable. Empty clusters
+are repaired deterministically by moving the farthest eligible member using
+the cached assignment distance, with source ordinal as the tie break. Unusable
+tokens remain unspent rather than creating duplicate centers. Metrics
+distinguish leaf-size, depth, and no-split stops and record Lloyd iterations and
+repairs. The validator reconstructs all domain roots, member totals,
+parent/depth paths, leaves, eligible-only global/subtree quotas, canonical
+node/representative order, and metric totals; forged hierarchy or build
+metadata fails closed.
 
 The router asset is a native TreeDB HNSW search pack, not a sidecar centroid
 file. Every normalized representative vector is accompanied by a strict
-versioned `VKR1` document-ID record containing:
+version-3 `VKR1` document-ID record containing:
 
 - router generation and canonical model SHA-256;
-- partition, source ordinal, leaf, depth, member count, and full root-to-leaf
-  node/member-count path;
+- logical domain, provenance source ordinal, represented node, depth, member
+  count, and full root-to-node path with real node kind and subtree budget;
 - the complete router configuration and build metrics; and
 - the native HNSW `M`, construction-ef, and search-ef values.
 
@@ -84,8 +161,12 @@ Publication is one M1 `building` to `ready` transition. Cancellation or any
 input, append, resource-authority, or publication failure leaves the generation
 non-active and never exposes a partial router. Existing building-manifest
 fields cannot be rewritten during promotion. If M1 already declares
-representative memberships they must exactly match the computed source
-medoids; otherwise the digest-bound READY promotion fills the complete mapping.
+representatives they must exactly match the computed domain/node/provenance
+records; otherwise the digest-bound READY promotion fills the complete mapping.
+Distinct represented nodes may share a source anchor. Manifest version 6 and
+READY-promotion payload version 4 carry the mapping and per-asset graph variant;
+router model, record, and asset identity version 3 distinguish the corrected
+topology. Old router assets require rebuild.
 Every ready generation carries the mapping in both its manifest authority and
 the strict router records; open requires exact agreement.
 
@@ -98,17 +179,17 @@ the HNSW locality row order back to canonical representative order before
 serving and acquires an M1 reader pin in the same barrier. `Close` excludes
 concurrent searches, closes the prepared view, and releases that pin.
 
-Exact routing is the correctness oracle and requires
-`candidate_budget >= representative_count`; it scans all persisted
-representatives. Approximate routing passes its explicit candidate budget as a
-hard distinct layer-0 scoring limit to the native prepared HNSW path. Candidate
-budget and partition-probe count are separate controls. Both paths reduce
-multiple representative hits to the minimum cosine distance per domain and
-return unique domains ordered by `(distance, domain_id)`. A zero/invalid
-budget, non-finite or dimension-mismatched query, malformed asset, stale
-generation, closed handle, or candidate set that cannot supply the requested
-number of unique partitions is an error; no partial partition list is
-returned.
+Search options V3 declare actual centroid-score budget `C` and logical-domain
+probes `P`. Exact routing requires `C>=N`, scores every representative once,
+and returns P domains. Approximate routing requires C to cover every depth-zero
+centroid before scoring, then expands complete sibling groups in best-parent
+distance order while the next whole group fits. It never partially scores a
+group. Both paths reduce scored representatives to the minimum cosine distance
+per domain and return unique domains ordered by `(distance, domain_id)`. A
+zero/invalid budget or probe count, insufficient root budget, non-finite or
+dimension-mismatched query, malformed asset, stale generation, or closed handle
+is an error with no partial partition list or retry. Width/beam and candidate
+coverage remain only in the explicitly selected offline flat-HNSW diagnostic.
 
 The coordinator expands every selected domain to all bound packs before
 placement or dispatch. Public and retained evidence report
@@ -534,12 +615,12 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 4, and bounds
+### V1 API/schema contract, VPM1 wire version 6, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `4`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `6`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
@@ -548,18 +629,26 @@ a whole-record SHA-256 integrity digest covering identity, policy, generations,
 placement, every membership family, and asset descriptors; this is separate
 from the ready-set asset contract. Version 3 adds each asset descriptor's
 optional membership digest. Native partition HNSW assets require it; the digest
-also appears in their pack wire-version-2 header and binds generation,
-partition, ordered authoritative stable IDs, and home/overlap kinds. Version 4
+also appears in their pack header and binds generation, partition, ordered
+authoritative stable IDs, and home/overlap kinds. Version 4
 adds the dense logical-domain count and complete canonical domain-pack mapping;
-both the ready-set and whole-record integrity digests bind that mapping.
+both the ready-set and whole-record integrity digests bind that mapping. Version
+5 extends each representative mapping with a nonzero represented-node ID.
+Version 6 adds an explicit graph variant to every asset descriptor. Router
+assets use an empty variant; partition-local assets require a recognized
+variant. The production
+`connectivity_preserving_vamana_r64_l256_alpha_1_2` variant uses pack version 6
+and fails closed on missing or different identity.
+Representative mappings are canonical by logical domain and node ID; source
+ordinals remain provenance and may repeat for distinct nodes in one domain.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
 | domains | dense logical domain IDs and a complete domain-to-pack mapping | every physical pack appears exactly once and every domain is nonempty |
 | placement | dense physical pack ID to one Raft group, with many packs allowed per group | IDs are exactly `[0, partition_count)` and canonical |
-| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain representatives | ordinal/ID coverage, sorted order, per-vector and per-ID caps; the same ordinal/pack pair cannot be both home and overlap |
-| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each physical pack plus router; native packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
+| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain/node representatives with source-anchor provenance | ordinal/ID coverage, sorted order, per-vector and per-ID caps; represented node IDs are nonzero and unique within each logical domain; the same ordinal/pack pair cannot be both home and overlap |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256, logical asset ID, membership digest, and graph variant for each physical pack plus router | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; partition-local graph variants are recognized explicitly; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical domain-pack mapping, placements, pack assets and router descriptor | mismatches, mixed router/generation, incomplete mapping, or missing pack asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
@@ -671,3 +760,6 @@ GOWORK=off go test ./cmd/treedb_vector_partition_bench ./cmd/treedb_vector_datas
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run 'Test.*(Fixture|Truth|Oracle|Manifest|Deterministic|Malformed|Cap).*' -count=1
 GOWORK=off go test ./TreeDB/internal/vectorpartition ./TreeDB/collections -run 'Test.*(KMeans|Representative|PartitionRouter|HNSW).*' -count=1
 ```
+
+
+Draft local source import V2 uses the existing typed source-replacement root publication and command-WAL boundary to insert one bounded source chunk with its import checkpoint and exact range receipt. Public admission checks the complete structurally validated source map, group, exact document IDs, schema and index identity; no upsert/replacement is provided. Per-document revisions remain independent of snapshot revision and ordinal. The format-14 WAL payload retains explicit original ID order because the existing typed payload sorts document IDs. An exact retry returns durable progress; a changed retry, gap, nonowner ID or existing ID refuses. The Raft caller still must admit the map and bind the local group. This local storage API does not publish canonical source or ANN authority. Immutable source chunk retention/proof retrieval, capability admission and the ordinary paged serving path remain incomplete; schema7 remains gated.

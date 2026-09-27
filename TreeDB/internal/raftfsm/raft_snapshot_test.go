@@ -184,6 +184,7 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 
@@ -220,6 +221,7 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	installRaftSnapshotForTest(t, targetFSM, snapshot)
@@ -378,6 +380,7 @@ func TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplace
 			tampered := rewriteRaftSnapshotArchiveEntriesForTest(t, payload, tt.rewrite)
 			targetDir := filepath.Join(root, strings.ReplaceAll(tt.name, " ", "-"))
 			targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+			defer func() { _ = targetDB.Close() }()
 			targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 			defer func() { _ = targetFSM.Close() }()
 			targetDoc := []byte(`{"_id":"u-large","name":"preserve"}`)
@@ -850,6 +853,7 @@ func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	staleCreate := deterministicCreateCollectionEntry(t, "stale", "fsm:snapshot:stale:create")
@@ -892,6 +896,7 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	targetFormatPath := filepath.Join(raftcluster.MainDBDir(targetDir), raftSnapshotFormatConfigFileV1)
@@ -983,6 +988,7 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	installRaftSnapshotForTest(t, targetFSM, snapshot)
@@ -1026,6 +1032,7 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 	targetRoot := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetRoot, "maindb")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	staleTemplate := filepath.Join(targetRoot, "templatedb")
@@ -1069,6 +1076,7 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	targetRoot := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetRoot, "maindb")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetRoot, true)
 	defer func() { _ = targetFSM.Close() }()
 
@@ -1103,6 +1111,7 @@ func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	raftSentinel := filepath.Join(targetDir, "raftcluster", "nodes", "node-a", "groups", "default", "log", "sentinel")
@@ -1146,6 +1155,7 @@ func TestRaftSnapshotV1InstallDisabledSideStoresDoesNotTouchParentSideStores(t *
 	targetParent := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetParent, "maindb")
 	targetDB := openRaftSnapshotFSMTestDBWithOptions(t, targetDir, false, true)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTestWithOptions(t, targetDB, targetDir, false, true)
 	defer func() { _ = targetFSM.Close() }()
 	parentSideStoreSentinel := filepath.Join(targetParent, "dictdb", "sentinel")
@@ -1492,6 +1502,7 @@ func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 			b.Fatalf("Release snapshot: %v", err)
 		}
 		_ = targetFSM.Close()
+		_ = targetDB.Close()
 	}
 }
 

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"math"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -34,5 +37,32 @@ func TestLocalHNSWAttributionCalibrationV1Build(t *testing.T) {
 	bad[1] = bad[0]
 	if _, err := localHNSWAttributionCalibrationV1Build(source, fixture, bad); err == nil {
 		t.Fatal("expected duplicate calibration ordinal rejection")
+	}
+	fixture.QueryOrdinalOffset = 1000
+	fresh, err := localHNSWAttributionCalibrationV1Build(source, fixture, ordinals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := qualificationQueriesV1(fixture)
+	selected := make([][]float64, len(ordinals))
+	for i, ordinal := range ordinals {
+		selected[i] = queries[ordinal]
+		if !reflect.DeepEqual(fresh.Queries[i], m8Query32V1(queries[ordinal])) || reflect.DeepEqual(fresh.Queries[i], calibration.Queries[i]) {
+			t.Fatalf("offset calibration query %d differs from fixture generation or repeats old query", ordinal)
+		}
+	}
+	truth, err := m8ExactTruthV1(source.collection, source.manifest, selected, 10)
+	if err != nil || !reflect.DeepEqual(truth, fresh.Truth) {
+		t.Fatalf("offset calibration truth mismatch: %v", err)
+	}
+	for _, offset := range []int64{-1, math.MaxInt64} {
+		fixture.QueryOrdinalOffset = offset
+		if _, err := localHNSWAttributionCalibrationV1Build(source, fixture, ordinals); err == nil || !strings.Contains(err.Error(), "query ordinal range") {
+			t.Fatalf("invalid calibration offset %d accepted: %v", offset, err)
+		}
+	}
+	fixture.Generator, fixture.QueryOrdinalOffset = fixtureGenerator, 1
+	if _, err := localHNSWAttributionCalibrationV1Build(source, fixture, ordinals); err == nil || !strings.Contains(err.Error(), "legacy fixture generator") {
+		t.Fatalf("legacy calibration offset accepted: %v", err)
 	}
 }

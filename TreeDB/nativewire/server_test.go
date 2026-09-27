@@ -53,6 +53,34 @@ func TestWriteErrorDebugLogPreservesCommitAmbiguousDetail(t *testing.T) {
 	}
 }
 
+func TestWriteErrorRecoveryRequiredClearsRetryHint(t *testing.T) {
+	err := &documentservice.Error{
+		Code:    documentservice.CodeRecoveryRequired,
+		Message: "source replacement requires database recovery",
+		Err:     errors.Join(collections.ErrRecoveryRequired, context.Canceled),
+	}
+	var frame bytes.Buffer
+	if writeErr := NewServer(ServerOptions{}).writeError(&frame, iwire.Header{RequestID: 18}, err); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	_, body, decodeErr := readFrame(bytes.NewReader(frame.Bytes()), iwire.DefaultLimits())
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	sections, decodeErr := iwire.DecodeSections(body, iwire.DefaultLimits())
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	raw, ok, decodeErr := singletonSection(sections, iwire.SectionError)
+	if decodeErr != nil || !ok {
+		t.Fatalf("error section present=%v err=%v", ok, decodeErr)
+	}
+	code, retryable, _, decodeErr := decodeErrorPayload(raw)
+	if decodeErr != nil || code != iwire.ErrDurabilityUnavailable || retryable {
+		t.Fatalf("wire error code=%d retryable=%v err=%v", code, retryable, decodeErr)
+	}
+}
+
 func servePipe(t testing.TB, server *Server) (*Client, <-chan error) {
 	t.Helper()
 	left, right := net.Pipe()
@@ -102,6 +130,7 @@ func TestServerServeConnNormalizesNilContext(t *testing.T) {
 
 func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, errCh := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -166,6 +195,7 @@ func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 
 func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -186,6 +216,7 @@ func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T)
 
 func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, errCh := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -262,6 +293,7 @@ func TestServerRejectsMalformedHelloBody(t *testing.T) {
 
 func TestServerRejectsCriticalUnknownHelloSection(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: 9000, Flags: iwire.SectionFlagCritical})
 	if err != nil {
@@ -343,6 +375,7 @@ func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
 
 func TestServerRejectsRequestBeforeHello(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -384,6 +417,7 @@ func TestClientDetectsResponseRequestIDMismatch(t *testing.T) {
 
 func TestClientPingAllowsNilContext(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	if err := client.Hello(nil); err != nil {
 		t.Fatalf("Hello nil context: %v", err)

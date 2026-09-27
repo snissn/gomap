@@ -11,10 +11,10 @@ import (
 // reconstruction codec directly, never retained JSON. The returned newest-ID
 // rows are owned; tombstones remain present to shadow immutable base entries.
 func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, maxOwnedBytes int64) ([]columnPhysicalVisibleRow, error) {
-	return suffix.prepareRowsWithAccounting(current, maxOwnedBytes, 0, nil)
+	return suffix.prepareRowsWithAccounting(current, maxOwnedBytes, 0, nil, nil)
 }
 
-func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *CollectionReadView, maxOwnedBytes int64, maxSlots int, accounting *typedGraphPublicationCost) ([]columnPhysicalVisibleRow, error) {
+func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *CollectionReadView, maxOwnedBytes int64, maxSlots int, accounting *typedGraphPublicationCost, metadataGeneration *uint64) ([]columnPhysicalVisibleRow, error) {
 	if current == nil || current.validateOpen() != nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
@@ -34,13 +34,20 @@ func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *Collect
 	// existing decoder allocates its matrix. Source bytes, decoded value/header
 	// working space, and retained payload are distinct accounting terms.
 	var vectorBytes int64
+	vectorRows := 0
+	for _, ref := range suffix.view.TypedColumnPartRefs {
+		if ref.Rows < 0 || ref.Rows > suffix.rows-vectorRows {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		vectorRows += ref.Rows
+	}
 	for _, column := range cfg.Columns {
 		switch column.ValueType {
 		case ColumnStoreValueFloat32Vector:
-			if column.VectorDims <= 0 || (suffix.rows > 0 && int64(column.VectorDims) > (maxOwnedBytes-vectorBytes)/4/int64(suffix.rows)) {
+			if column.VectorDims <= 0 || (vectorRows > 0 && int64(column.VectorDims) > (maxOwnedBytes-vectorBytes)/4/int64(vectorRows)) {
 				return nil, errTypedGraphOverlayFoldNeeded
 			}
-			vectorBytes += int64(column.VectorDims) * 4 * int64(suffix.rows)
+			vectorBytes += int64(column.VectorDims) * 4 * int64(vectorRows)
 		case ColumnStoreValueString:
 		default:
 			return nil, errors.New("collections: typed graph overlay supports declared strings and FP32 vectors only")
@@ -75,7 +82,10 @@ func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *Collect
 		if older && accounting == nil {
 			continue
 		}
-		if !row.Deleted {
+		if row.Preserved != nil && metadataGeneration != nil {
+			*metadataGeneration = max(*metadataGeneration, row.Generation)
+		}
+		if !row.Deleted && row.Preserved == nil {
 			typed, err := current.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(current.snapshot, current.catalog.rootID(collectionColumnManifestRootName(current.catalog.meta.Name)), cfg, row, cache, typedScratch)
 			if err != nil {
 				return nil, err
@@ -88,14 +98,22 @@ func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *Collect
 			mergedScratch = row.Values
 		}
 		if accounting != nil {
-			if len(row.Values) > maxSlots-accounting.slots {
+			slots := len(row.Values)
+			if row.Preserved != nil {
+				for _, value := range row.Values {
+					if value.Type == "" {
+						slots--
+					}
+				}
+			}
+			if slots > maxSlots-accounting.slots {
 				return nil, errTypedGraphOverlayFoldNeeded
 			}
 			accounting.rows++
 			if row.Deleted {
 				accounting.tombstones++
 			}
-			accounting.slots += len(row.Values)
+			accounting.slots += slots
 		}
 		// Charge every retained version before cloning, including overwritten
 		// versions. Row/header/map counts are separately bounded by suffix.rows.
@@ -110,6 +128,9 @@ func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *Collect
 			return nil, errTypedGraphOverlayFoldNeeded
 		}
 		for _, value := range row.Values {
+			if row.Preserved != nil && value.Type == "" {
+				continue
+			}
 			if value.Type != ColumnStoreValueString && value.Type != ColumnStoreValueFloat32Vector {
 				return nil, errors.New("collections: typed graph overlay supports declared strings and FP32 vectors only")
 			}
@@ -120,7 +141,7 @@ func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *Collect
 		if accounting != nil {
 			accounting.bytes = ownedBytes
 		}
-		if older {
+		if older || row.Preserved != nil {
 			continue
 		}
 		row.ID = bytes.Clone(row.ID)

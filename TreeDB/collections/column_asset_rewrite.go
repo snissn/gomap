@@ -506,7 +506,7 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	if out.stableResources == nil {
 		return columnAssetRewriteCopyResult{}, errors.New("collections: column asset rewrite copy returned no stable authority")
 	}
-	descriptors := out.stableResources.Descriptors()
+	descriptors := out.stableResources.PhysicalDescriptors()
 	out.stableDescriptors = uint64(len(descriptors))
 	identities := make(map[rootpublication.StableIdentity]struct{}, len(descriptors))
 	for _, descriptor := range descriptors {

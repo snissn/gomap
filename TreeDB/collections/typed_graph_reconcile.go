@@ -228,7 +228,8 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		return nil
 	}
 	var cost typedGraphPublicationCost
-	rows, err := suffix.prepareRowsWithAccounting(current, min(limits.OwnedBytes, cold.DecodedTermBytes), limits.ValueSlots, &cost)
+	var lastMetadataGeneration uint64
+	rows, err := suffix.prepareRowsWithAccounting(current, min(limits.OwnedBytes, cold.DecodedTermBytes), limits.ValueSlots, &cost, &lastMetadataGeneration)
 	if err != nil {
 		return err
 	}
@@ -239,6 +240,7 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 	def := current.catalog.meta.VectorIndexes[0]
 	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(def)
 	next := &typedGraphPublicationState{catalog: current.catalog, limits: limits, rows: rows, physicalRows: cost.rows, tombstones: cost.tombstones, valueSlots: cost.slots, admittedPayloadBytes: cost.bytes, installedAssetBytes: suffix.bytes}
+	next.lastMetadataGeneration = lastMetadataGeneration
 	if !canonicalRepresentation {
 		next.invNorms = make([]float32, len(rows))
 	}

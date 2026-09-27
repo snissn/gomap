@@ -300,3 +300,18 @@ unreachable.
 - no Raft log truncation;
 - no production node replacement or rejoin protocol;
 - no multi-group routing.
+
+## Sparse catalog participation in the fixed-peer runtime
+
+The [fixed-peer TCP runtime](fixed-peer-tcp-runtime-v1.md) separates deployment
+inventory from group membership. A node need not vote in the catalog to host a
+data group or forward a supported collection command. Only configured members
+open that group's provider, log, snapshot store and transport. Inventory bounds
+do not enlarge any group's voting set. The catalog provider remains the sole
+source of authority apply/install capabilities; consumers have none.
+
+Consumers request a quorum-fenced catalog decision for each route and metadata
+validation. The owner still uses the existing catalog-validated routed
+submitter, production Raft commit evidence and recoverable FSM apply. Exact
+fixed configuration remains mandatory on reopen, including an optional stable
+cluster identity. This does not implement membership changes or replacement.

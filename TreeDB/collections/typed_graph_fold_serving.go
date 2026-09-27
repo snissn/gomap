@@ -13,7 +13,11 @@ func typedGraphStateCost(s *typedGraphPublicationState) typedGraphPublicationCos
 }
 
 func (f *typedGraphFoldServing) prepareNext(before *typedGraphPublicationState, generation uint64, records []columnManifestRecord, meta CollectionMeta, cold typedGraphColdLimits) (*typedGraphPublicationState, error) {
+	if before.lastMetadataGeneration > generation {
+		return nil, ErrConcurrentMutation
+	}
 	next := *before
+	next.lastMetadataGeneration = 0
 	// Same-schema install validation preserves the precomputed control and
 	// manifest/delete encoded bounds: those already use maximal generation,
 	// LSN and mutation-part widths. Do not reset attempted-output counters.

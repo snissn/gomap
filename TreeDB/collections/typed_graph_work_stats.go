@@ -27,6 +27,27 @@ type ColumnGraphQueryWork struct {
 	ScorePlane ColumnGraphScorePlaneWork `json:"-"`
 }
 
+// ColumnGraphRouteReceipt is the small always-on identity needed by service
+// boundaries to fail closed without constructing the optional query proof.
+// It contains no per-edge/per-candidate diagnostic transcript.
+type ColumnGraphRouteReceipt struct {
+	Available                 bool                      `json:"available,omitempty"`
+	Representation            VectorIndexRepresentation `json:"representation,omitempty"`
+	QueryMode                 VectorIndexQueryMode      `json:"query_mode,omitempty"`
+	Route                     string                    `json:"route,omitempty"`
+	SchemaHash                uint64                    `json:"schema_hash,omitempty"`
+	SchemaGeneration          uint64                    `json:"schema_generation,omitempty"`
+	BaseManifestGeneration    uint64                    `json:"base_manifest_generation,omitempty"`
+	BaseManifestChecksum      uint64                    `json:"base_manifest_checksum,omitempty"`
+	CurrentManifestGeneration uint64                    `json:"current_manifest_generation,omitempty"`
+	CurrentManifestChecksum   uint64                    `json:"current_manifest_checksum,omitempty"`
+	CurrentCoverageLSN        uint64                    `json:"current_coverage_lsn,omitempty"`
+	QuantizedIndexName        string                    `json:"quantized_index_name,omitempty"`
+	QuantizedCodec            string                    `json:"quantized_codec,omitempty"`
+	QuantizedVersion          uint16                    `json:"quantized_version,omitempty"`
+	ResultCount               uint64                    `json:"result_count,omitempty"`
+}
+
 // ColumnGraphScorePlaneWork is owner-local evidence for an explicitly selected
 // score plane. It is populated from the captured owner and actual calls, never
 // from request flags or process-wide counters. Version 1 is exposed by the

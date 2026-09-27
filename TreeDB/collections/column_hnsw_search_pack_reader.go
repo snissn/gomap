@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -38,6 +40,52 @@ type columnHNSWSearchPackPreparedLayer struct {
 	Neighbors []uint32
 }
 
+type columnHNSWSearchPackPreparedChunks[T any] struct {
+	values [][]T
+	starts []uint64
+	length uint64
+}
+
+func newColumnHNSWSearchPackPreparedChunks[T any](values [][]T) columnHNSWSearchPackPreparedChunks[T] {
+	out := columnHNSWSearchPackPreparedChunks[T]{values: values, starts: make([]uint64, len(values)+1)}
+	for i := range values {
+		out.length += uint64(len(values[i]))
+		out.starts[i+1] = out.length
+	}
+	return out
+}
+
+func columnHNSWSearchPackPreparedChunkMetadataBytes[T any](chunks columnHNSWSearchPackPreparedChunks[T]) uint64 {
+	return uint64(cap(chunks.values))*uint64(unsafe.Sizeof([]T(nil))) +
+		uint64(cap(chunks.starts))*uint64(unsafe.Sizeof(uint64(0)))
+}
+
+func (c columnHNSWSearchPackPreparedChunks[T]) at(index uint64) (T, bool) {
+	var zero T
+	if index >= c.length || len(c.values) == 0 {
+		return zero, false
+	}
+	chunk := sort.Search(len(c.values), func(i int) bool { return c.starts[i+1] > index })
+	if chunk >= len(c.values) {
+		return zero, false
+	}
+	return c.values[chunk][index-c.starts[chunk]], true
+}
+
+func (c columnHNSWSearchPackPreparedChunks[T]) span(start, end uint64) ([]T, bool) {
+	if end < start || end > c.length {
+		return nil, false
+	}
+	if start == end {
+		return nil, true
+	}
+	chunk := sort.Search(len(c.values), func(i int) bool { return c.starts[i+1] > start })
+	if chunk >= len(c.values) || end > c.starts[chunk+1] {
+		return nil, false
+	}
+	return c.values[chunk][start-c.starts[chunk] : end-c.starts[chunk]], true
+}
+
 type columnHNSWSearchPackPreparedView struct {
 	Header   columnHNSWSearchPackHeader
 	Sections []columnHNSWSearchPackSection
@@ -53,21 +101,35 @@ type columnHNSWSearchPackPreparedView struct {
 	DocumentIDOffsets   []uint64
 	DocumentIDBytes     []byte
 
-	manager *mappedresource.Manager
-	handle  *mappedresource.Handle
-	source  mappedresource.Source
-	status  columnHNSWSearchPackPreparedStatus
+	normalizedVectorChunks  columnHNSWSearchPackPreparedChunks[float32]
+	levelChunks             columnHNSWSearchPackPreparedChunks[uint16]
+	adjacencyOffsetChunks   []columnHNSWSearchPackPreparedChunks[uint64]
+	adjacencyNeighborChunks []columnHNSWSearchPackPreparedChunks[uint32]
+	rowRefGenerationChunks  columnHNSWSearchPackPreparedChunks[int64]
+	rowRefPartIDChunks      columnHNSWSearchPackPreparedChunks[int64]
+	rowRefRowIndexChunks    columnHNSWSearchPackPreparedChunks[int64]
+	rowRefAppliedLSNChunks  columnHNSWSearchPackPreparedChunks[int64]
+	documentIDOffsetChunks  columnHNSWSearchPackPreparedChunks[uint64]
+	documentIDByteChunks    columnHNSWSearchPackPreparedChunks[byte]
+
+	manager      *mappedresource.Manager
+	handle       *mappedresource.Handle
+	handles      []*mappedresource.Handle
+	sectionBytes map[columnHNSWSearchPackSectionKey][]byte
+	source       mappedresource.Source
+	status       columnHNSWSearchPackPreparedStatus
 	// Process-local derived adjacency views borrow vectors from another pinned
 	// pack, so they intentionally have no mapped-resource handle.
 	ephemeralHeap bool
 
-	openNanos     uint64
-	mappedBytes   uint64
-	heapCopyBytes uint64
-	activeHandles int64
-	closeOnce     sync.Once
-	closeErr      error
-	closed        atomic.Bool
+	openNanos      uint64
+	mappedBytes    uint64
+	heapCopyBytes  uint64
+	chunkMetaBytes uint64
+	activeHandles  int64
+	closeOnce      sync.Once
+	closeErr       error
+	closed         atomic.Bool
 }
 
 func (c *Collection) openColumnHNSWSearchPackPreparedViewForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, uint64, error) {
@@ -209,14 +271,8 @@ func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Contex
 	if len(raw) == 0 {
 		return nil, errors.New("collections: hnsw_search_pack_v1 prepared view has empty bytes")
 	}
-	if key := handle.Key(); key.Checksum != 0 {
-		got, err := columnHNSWSearchPackChecksumWithContext(ctx, raw)
-		if err != nil {
-			return nil, err
-		}
-		if got != uint32(key.Checksum) {
-			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", got, uint32(key.Checksum))
-		}
+	if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, handle); err != nil {
+		return nil, err
 	}
 	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeWithContext(ctx, raw, opts)
 	if err != nil {
@@ -232,7 +288,7 @@ func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Contex
 	switch view.source {
 	case mappedresource.SourceMapped:
 		view.status = columnHNSWSearchPackPreparedStatusDirect
-		view.mappedBytes = uint64(len(raw))
+		view.mappedBytes = uint64(handle.AccountedBytes())
 		view.activeHandles = 1
 	case mappedresource.SourceHeapCopy:
 		view.status = columnHNSWSearchPackPreparedStatusHeap
@@ -244,6 +300,7 @@ func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Contex
 	if err := view.prepareSectionViewsWithContext(ctx, raw, opts); err != nil {
 		return nil, err
 	}
+	view.bindFlatChunkAccessors()
 	if err := view.validateTopologyLive(); err != nil {
 		return nil, err
 	}
@@ -256,6 +313,449 @@ func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Contex
 		return nil, err
 	}
 	return view, nil
+}
+
+func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx context.Context, manager *mappedresource.Manager, root *mappedresource.Handle, sections map[columnHNSWSearchPackSectionKey][]*mappedresource.Handle, opts columnHNSWSearchPackDecodeOptions) (*columnHNSWSearchPackPreparedView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if manager == nil || root == nil || root.Released() {
+		return nil, errColumnHNSWSearchPackPreparedViewStale
+	}
+	raw := root.Bytes()
+	if len(raw) < columnHNSWSearchPackHeaderSizeV2 {
+		return nil, errors.New("collections: chunked hnsw_search_pack_v1 root is truncated")
+	}
+	if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, root); err != nil {
+		return nil, err
+	}
+	totalLength := hnswPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset)
+	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx, raw, totalLength, opts, false)
+	if err != nil {
+		return nil, err
+	}
+	if pack.Header.Version != columnHNSWSearchPackVersionV6 && pack.Header.Version != columnHNSWSearchPackVersionV7 {
+		return nil, errors.New("collections: chunked hnsw_search_pack_v1 version")
+	}
+	if err := validateColumnHNSWSearchPackChunkedGeometry(raw, pack); err != nil {
+		return nil, err
+	}
+	allHandles := make([]*mappedresource.Handle, 0)
+	view := &columnHNSWSearchPackPreparedView{
+		Header: pack.Header, Sections: append([]columnHNSWSearchPackSection(nil), pack.Sections...),
+		manager: manager, handle: root, source: root.Source(),
+	}
+	allMapped := view.source == mappedresource.SourceMapped
+	sectionChunks := make(map[columnHNSWSearchPackSectionKey][][]byte, len(pack.Sections))
+	expectedSections := make(map[columnHNSWSearchPackSectionKey]struct{}, len(pack.Sections))
+	for _, section := range pack.Sections {
+		key := columnHNSWSearchPackSectionKey{kind: section.Kind, index: section.Index}
+		expectedSections[key] = struct{}{}
+		handles := sections[key]
+		var length uint64
+		var checksum uint32
+		for _, h := range handles {
+			if h == nil || h.Released() || len(h.Bytes()) == 0 || uint64(len(h.Bytes())) > section.Length-length {
+				return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 section %s[%d] extent", section.Kind, section.Index)
+			}
+			if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, h); err != nil {
+				return nil, err
+			}
+			bytes := h.Bytes()
+			length += uint64(len(bytes))
+			checksum = internalcrc.Update(checksum, bytes)
+			sectionChunks[key] = append(sectionChunks[key], bytes)
+			allHandles = append(allHandles, h)
+			if h.Source() == mappedresource.SourceMapped {
+				view.mappedBytes += uint64(h.AccountedBytes())
+			} else if h.Source() == mappedresource.SourceHeapCopy {
+				view.heapCopyBytes += uint64(len(bytes))
+				allMapped = false
+			} else {
+				return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 unsupported source %q", h.Source())
+			}
+		}
+		if length != section.Length || checksum != section.Checksum {
+			return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 section %s[%d] exact cover", section.Kind, section.Index)
+		}
+	}
+	for key, handles := range sections {
+		if _, ok := expectedSections[key]; !ok && len(handles) != 0 {
+			return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 foreign section %s[%d]", key.kind, key.index)
+		}
+	}
+	view.handles = allHandles
+	if view.source == mappedresource.SourceMapped {
+		view.mappedBytes += uint64(root.AccountedBytes())
+	} else if view.source == mappedresource.SourceHeapCopy {
+		view.heapCopyBytes += uint64(len(raw))
+		allMapped = false
+	} else {
+		return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 unsupported root source %q", view.source)
+	}
+	view.activeHandles = int64(len(allHandles) + 1)
+	if allMapped {
+		view.status = columnHNSWSearchPackPreparedStatusDirect
+	} else {
+		view.status = columnHNSWSearchPackPreparedStatusHeap
+		view.source = mappedresource.SourceHeapCopy
+	}
+	if err := view.prepareChunkedVamanaSectionViewsWithContext(ctx, sectionChunks, opts); err != nil {
+		return nil, err
+	}
+	view.chunkMetaBytes = view.retainedChunkMetadataBytes()
+	if err := view.validateLive(); err != nil {
+		return nil, err
+	}
+	return view, ctx.Err()
+}
+
+func validateColumnHNSWSearchPackHandleChecksumWithContext(ctx context.Context, handle *mappedresource.Handle) error {
+	key := handle.Key()
+	if key.Checksum == 0 {
+		return nil
+	}
+	got, err := columnHNSWSearchPackChecksumWithContext(ctx, handle.Bytes())
+	if err != nil {
+		return err
+	}
+	if got != uint32(key.Checksum) {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", got, uint32(key.Checksum))
+	}
+	return nil
+}
+
+func (v *columnHNSWSearchPackPreparedView) retainedChunkMetadataBytes() uint64 {
+	if v == nil {
+		return 0
+	}
+	bytes := uint64(cap(v.Sections))*uint64(unsafe.Sizeof(columnHNSWSearchPackSection{})) +
+		uint64(cap(v.handles))*uint64(unsafe.Sizeof((*mappedresource.Handle)(nil))) +
+		uint64(len(v.handles)+1)*mappedresource.ConservativeHandleMetadataBytes() +
+		uint64(cap(v.AdjacencyLayers))*uint64(unsafe.Sizeof(columnHNSWSearchPackPreparedLayer{})) +
+		uint64(cap(v.adjacencyOffsetChunks))*uint64(unsafe.Sizeof(columnHNSWSearchPackPreparedChunks[uint64]{})) +
+		uint64(cap(v.adjacencyNeighborChunks))*uint64(unsafe.Sizeof(columnHNSWSearchPackPreparedChunks[uint32]{}))
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.normalizedVectorChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.levelChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.rowRefGenerationChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.rowRefPartIDChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.rowRefRowIndexChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.rowRefAppliedLSNChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.documentIDOffsetChunks)
+	bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.documentIDByteChunks)
+	for i := range v.adjacencyOffsetChunks {
+		bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.adjacencyOffsetChunks[i])
+		bytes += columnHNSWSearchPackPreparedChunkMetadataBytes(v.adjacencyNeighborChunks[i])
+	}
+	return bytes
+}
+
+func (v *columnHNSWSearchPackPreparedView) bindFlatChunkAccessors() {
+	if v == nil {
+		return
+	}
+	v.normalizedVectorChunks = newColumnHNSWSearchPackPreparedChunks([][]float32{v.NormalizedVectors})
+	v.levelChunks = newColumnHNSWSearchPackPreparedChunks([][]uint16{v.Levels})
+	v.adjacencyOffsetChunks = make([]columnHNSWSearchPackPreparedChunks[uint64], len(v.AdjacencyLayers))
+	v.adjacencyNeighborChunks = make([]columnHNSWSearchPackPreparedChunks[uint32], len(v.AdjacencyLayers))
+	for i, layer := range v.AdjacencyLayers {
+		v.adjacencyOffsetChunks[i] = newColumnHNSWSearchPackPreparedChunks([][]uint64{layer.Offsets})
+		v.adjacencyNeighborChunks[i] = newColumnHNSWSearchPackPreparedChunks([][]uint32{layer.Neighbors})
+	}
+	v.rowRefGenerationChunks = newColumnHNSWSearchPackPreparedChunks([][]int64{v.RowRefGenerations})
+	v.rowRefPartIDChunks = newColumnHNSWSearchPackPreparedChunks([][]int64{v.RowRefPartIDs})
+	v.rowRefRowIndexChunks = newColumnHNSWSearchPackPreparedChunks([][]int64{v.RowRefRowIndexes})
+	v.rowRefAppliedLSNChunks = newColumnHNSWSearchPackPreparedChunks([][]int64{v.RowRefAppliedLSNs})
+	v.documentIDOffsetChunks = newColumnHNSWSearchPackPreparedChunks([][]uint64{v.DocumentIDOffsets})
+	v.documentIDByteChunks = newColumnHNSWSearchPackPreparedChunks([][]byte{v.DocumentIDBytes})
+}
+
+func columnHNSWSearchPackTypedChunks[T any](chunks [][]byte, name string, view func([]byte) ([]T, error)) ([][]T, error) {
+	values := make([][]T, len(chunks))
+	for i, chunk := range chunks {
+		if len(chunk) == 0 {
+			return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 %s chunk=%d is empty", name, i)
+		}
+		var err error
+		values[i], err = view(chunk)
+		if err != nil {
+			return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 %s chunk=%d direct view: %w", name, i, err)
+		}
+	}
+	return values, nil
+}
+
+func (v *columnHNSWSearchPackPreparedView) prepareChunkedVamanaSectionViewsWithContext(ctx context.Context, chunks map[columnHNSWSearchPackSectionKey][][]byte, opts columnHNSWSearchPackDecodeOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if v == nil || (v.Header.Version != columnHNSWSearchPackVersionV6 && v.Header.Version != columnHNSWSearchPackVersionV7) || v.Header.ExternalNormalizedVectors || v.Header.HasAuxiliaryNavigation {
+		return errors.New("collections: chunked hnsw_search_pack_v1 requires an embedded-vector Vamana pack")
+	}
+	rows := uint64(v.Header.Rows)
+	vectorCount, ok := checkedHNSWPackMulOK(rows, uint64(v.Header.VectorStride))
+	if !ok {
+		return errors.New("collections: chunked hnsw_search_pack_v1 normalized vector count overflows uint64")
+	}
+	sectionChunks := func(kind columnHNSWSearchPackSectionKind, index uint16) [][]byte {
+		return chunks[columnHNSWSearchPackSectionKey{kind: kind, index: index}]
+	}
+
+	if _, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0, vectorCount, 4); err != nil {
+		return err
+	}
+	vectors, err := columnHNSWSearchPackTypedChunks(sectionChunks(columnHNSWSearchPackSectionNormalizedVectors, 0), "normalized_vectors", mappedresource.Float32View)
+	if err != nil {
+		return err
+	}
+	v.normalizedVectorChunks = newColumnHNSWSearchPackPreparedChunks(vectors)
+	if v.normalizedVectorChunks.length != vectorCount {
+		return errors.New("collections: chunked hnsw_search_pack_v1 normalized_vectors count mismatch")
+	}
+	if len(vectors) == 1 {
+		v.NormalizedVectors = vectors[0]
+	}
+	for _, chunk := range vectors {
+		if len(chunk)%v.Header.VectorStride != 0 {
+			return errors.New("collections: chunked hnsw_search_pack_v1 normalized vector row crosses a chunk")
+		}
+		for i, value := range chunk {
+			if i&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				return errors.New("collections: chunked hnsw_search_pack_v1 normalized vector is not finite")
+			}
+		}
+	}
+
+	if _, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionLevels, 0, rows, 2); err != nil {
+		return err
+	}
+	levels, err := columnHNSWSearchPackTypedChunks(sectionChunks(columnHNSWSearchPackSectionLevels, 0), "levels", mappedresource.Uint16View)
+	if err != nil {
+		return err
+	}
+	v.levelChunks = newColumnHNSWSearchPackPreparedChunks(levels)
+	if v.levelChunks.length != rows {
+		return errors.New("collections: chunked hnsw_search_pack_v1 levels count mismatch")
+	}
+	if len(levels) == 1 {
+		v.Levels = levels[0]
+	}
+	for ordinal := uint64(0); ordinal < rows; ordinal++ {
+		level, ok := v.levelChunks.at(ordinal)
+		if !ok || int(level) > v.Header.MaxLayer {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 invalid level ordinal=%d", ordinal)
+		}
+	}
+
+	v.AdjacencyLayers = make([]columnHNSWSearchPackPreparedLayer, v.Header.AdjacencyLayerCount)
+	v.adjacencyOffsetChunks = make([]columnHNSWSearchPackPreparedChunks[uint64], v.Header.AdjacencyLayerCount)
+	v.adjacencyNeighborChunks = make([]columnHNSWSearchPackPreparedChunks[uint32], v.Header.AdjacencyLayerCount)
+	for layer := 0; layer < v.Header.AdjacencyLayerCount; layer++ {
+		if _, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, uint16(layer), rows+1, 8); err != nil {
+			return err
+		}
+		neighborSection, err := columnHNSWSearchPackFindSection(v.Sections, columnHNSWSearchPackSectionAdjacencyNeighbors, uint16(layer))
+		if err != nil {
+			return err
+		}
+		if neighborSection.Length%4 != 0 || neighborSection.Count != neighborSection.Length/4 || neighborSection.Count > opts.MaxNeighbors {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d neighbors shape", layer)
+		}
+		offsets, err := columnHNSWSearchPackTypedChunks(sectionChunks(columnHNSWSearchPackSectionAdjacencyOffsets, uint16(layer)), fmt.Sprintf("adjacency_offsets[%d]", layer), mappedresource.Uint64View)
+		if err != nil {
+			return err
+		}
+		neighbors, err := columnHNSWSearchPackTypedChunks(sectionChunks(columnHNSWSearchPackSectionAdjacencyNeighbors, uint16(layer)), fmt.Sprintf("adjacency_neighbors[%d]", layer), mappedresource.Uint32View)
+		if err != nil {
+			return err
+		}
+		v.adjacencyOffsetChunks[layer] = newColumnHNSWSearchPackPreparedChunks(offsets)
+		v.adjacencyNeighborChunks[layer] = newColumnHNSWSearchPackPreparedChunks(neighbors)
+		if v.adjacencyOffsetChunks[layer].length != rows+1 || v.adjacencyNeighborChunks[layer].length != neighborSection.Count {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d count mismatch", layer)
+		}
+		if len(offsets) == 1 {
+			v.AdjacencyLayers[layer].Offsets = offsets[0]
+		}
+		if len(neighbors) == 1 {
+			v.AdjacencyLayers[layer].Neighbors = neighbors[0]
+		}
+		if err := v.validateChunkedAdjacencyWithContext(ctx, layer); err != nil {
+			return err
+		}
+	}
+
+	if v.Header.Version != columnHNSWSearchPackVersionV7 {
+		loadInt64 := func(kind columnHNSWSearchPackSectionKind, name string) (columnHNSWSearchPackPreparedChunks[int64], []int64, error) {
+			if _, err := columnHNSWSearchPackRequireSection(v.Sections, kind, 0, rows, 8); err != nil {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+			}
+			values, err := columnHNSWSearchPackTypedChunks(sectionChunks(kind, 0), name, mappedresource.Int64View)
+			if err != nil {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+			}
+			prepared := newColumnHNSWSearchPackPreparedChunks(values)
+			if prepared.length != rows {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 %s count mismatch", name)
+			}
+			if len(values) == 1 {
+				return prepared, values[0], nil
+			}
+			return prepared, nil, nil
+		}
+		if v.rowRefGenerationChunks, v.RowRefGenerations, err = loadInt64(columnHNSWSearchPackSectionRowRefGeneration, "row_ref_generation"); err != nil {
+			return err
+		}
+		if v.rowRefPartIDChunks, v.RowRefPartIDs, err = loadInt64(columnHNSWSearchPackSectionRowRefPartID, "row_ref_part_id"); err != nil {
+			return err
+		}
+		if v.rowRefRowIndexChunks, v.RowRefRowIndexes, err = loadInt64(columnHNSWSearchPackSectionRowRefRowIndex, "row_ref_row_index"); err != nil {
+			return err
+		}
+		if v.rowRefAppliedLSNChunks, v.RowRefAppliedLSNs, err = loadInt64(columnHNSWSearchPackSectionRowRefAppliedLSN, "row_ref_applied_lsn"); err != nil {
+			return err
+		}
+		for ordinal := uint64(0); ordinal < rows; ordinal++ {
+			generation, gok := v.rowRefGenerationChunks.at(ordinal)
+			partID, pok := v.rowRefPartIDChunks.at(ordinal)
+			rowIndex, rok := v.rowRefRowIndexChunks.at(ordinal)
+			appliedLSN, aok := v.rowRefAppliedLSNChunks.at(ordinal)
+			if !gok || !pok || !rok || !aok || generation <= 0 || partID <= 0 || rowIndex < 0 || appliedLSN <= 0 || uint64(generation) > v.Header.BaseManifestGeneration {
+				return fmt.Errorf("collections: chunked hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+			}
+		}
+
+	}
+
+	if _, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0, rows+1, 8); err != nil {
+		return err
+	}
+	docOffsets, err := columnHNSWSearchPackTypedChunks(sectionChunks(columnHNSWSearchPackSectionDocumentIDOffsets, 0), "document_id_offsets", mappedresource.Uint64View)
+	if err != nil {
+		return err
+	}
+	v.documentIDOffsetChunks = newColumnHNSWSearchPackPreparedChunks(docOffsets)
+	if v.documentIDOffsetChunks.length != rows+1 {
+		return errors.New("collections: chunked hnsw_search_pack_v1 document_id_offsets count mismatch")
+	}
+	if len(docOffsets) == 1 {
+		v.DocumentIDOffsets = docOffsets[0]
+	}
+	docBytesSection, err := columnHNSWSearchPackFindSection(v.Sections, columnHNSWSearchPackSectionDocumentIDBytes, 0)
+	if err != nil {
+		return err
+	}
+	if docBytesSection.Count != docBytesSection.Length || docBytesSection.Length > opts.MaxDocumentIDBytes {
+		return errors.New("collections: chunked hnsw_search_pack_v1 document_id_bytes shape")
+	}
+	docBytes := sectionChunks(columnHNSWSearchPackSectionDocumentIDBytes, 0)
+	v.documentIDByteChunks = newColumnHNSWSearchPackPreparedChunks(docBytes)
+	if v.documentIDByteChunks.length != docBytesSection.Length {
+		return errors.New("collections: chunked hnsw_search_pack_v1 document_id_bytes count mismatch")
+	}
+	if len(docBytes) == 1 {
+		v.DocumentIDBytes = docBytes[0]
+	}
+	return v.validateChunkedDocumentIDsWithContext(ctx, rows)
+}
+
+func (v *columnHNSWSearchPackPreparedView) validateChunkedDocumentIDsWithContext(ctx context.Context, rows uint64) error {
+	first, ok := v.documentIDOffsetChunks.at(0)
+	if !ok || first != 0 {
+		return errors.New("collections: chunked hnsw_search_pack_v1 document id first offset is not zero")
+	}
+	for ordinal := uint64(0); ordinal < rows; ordinal++ {
+		start, sok := v.documentIDOffsetChunks.at(ordinal)
+		end, eok := v.documentIDOffsetChunks.at(ordinal + 1)
+		if !sok || !eok || end <= start || end > v.documentIDByteChunks.length {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 document id row=%d bounds", ordinal)
+		}
+		if _, ok := v.documentIDByteChunks.span(start, end); !ok {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 document id row=%d crosses a chunk", ordinal)
+		}
+	}
+	last, ok := v.documentIDOffsetChunks.at(rows)
+	if !ok || last != v.documentIDByteChunks.length {
+		return errors.New("collections: chunked hnsw_search_pack_v1 document id trailing bytes")
+	}
+	return ctx.Err()
+}
+
+func (v *columnHNSWSearchPackPreparedView) validateChunkedAdjacencyWithContext(ctx context.Context, layer int) error {
+	if layer < 0 || layer >= len(v.adjacencyOffsetChunks) || layer >= len(v.adjacencyNeighborChunks) {
+		return errors.New("collections: chunked hnsw_search_pack_v1 adjacency layer unavailable")
+	}
+	offsets := v.adjacencyOffsetChunks[layer]
+	neighbors := v.adjacencyNeighborChunks[layer]
+	first, ok := offsets.at(0)
+	if !ok || first != 0 {
+		return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d first offset", layer)
+	}
+	for row := 0; row < v.Header.Rows; row++ {
+		if row&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		start, sok := offsets.at(uint64(row))
+		end, eok := offsets.at(uint64(row + 1))
+		if !sok || !eok || end < start || end > neighbors.length {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d row=%d bounds", layer, row)
+		}
+		current, ok := neighbors.span(start, end)
+		if !ok {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d row=%d crosses a chunk", layer, row)
+		}
+		if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 && len(current) > vectorPartitionVamanaDegreeV1 {
+			return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d exceeds degree=%d", row, vectorPartitionVamanaDegreeV1)
+		}
+		for i, neighbor := range current {
+			if int(neighbor) >= v.Header.Rows {
+				return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d row=%d neighbor=%d outside rows", layer, row, neighbor)
+			}
+			if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 {
+				if int(neighbor) == row {
+					return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has self edge", row)
+				}
+				for _, earlier := range current[:i] {
+					if earlier == neighbor {
+						return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has duplicate neighbor=%d", row, neighbor)
+					}
+				}
+			}
+		}
+	}
+	last, ok := offsets.at(uint64(v.Header.Rows))
+	if !ok || last != neighbors.length {
+		return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d final offset", layer)
+	}
+	if (v.Header.Version != columnHNSWSearchPackVersionV6 && v.Header.Version != columnHNSWSearchPackVersionV7) || layer != 0 || v.Header.Rows == 0 {
+		return nil
+	}
+	seen := make([]bool, v.Header.Rows)
+	queue := make([]uint32, 1, v.Header.Rows)
+	seen[0] = true
+	for head := 0; head < len(queue); head++ {
+		current, err := v.adjacencyLayerForOrdinal(int(queue[head]), layer, nil)
+		if err != nil {
+			return err
+		}
+		for _, neighbor := range current {
+			if !seen[neighbor] {
+				seen[neighbor] = true
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+	if len(queue) != v.Header.Rows {
+		return fmt.Errorf("collections: connectivity-preserving partition Vamana entry reaches %d of %d rows", len(queue), v.Header.Rows)
+	}
+	return nil
 }
 
 func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, columnHNSWSearchPackDecodeOptions, error) {
@@ -285,10 +785,13 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: bad hnsw_search_pack_v1 magic=%q", string(raw[:8]))
 	}
 	version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset)
+	if (version == columnHNSWSearchPackVersionV7) != opts.SourceV2 || (opts.SourceV2 && (opts.ExpectedMembershipDigest == ([sha256.Size]byte{}) || opts.ExpectedBaseIdentity != (columnHNSWSearchPackBaseIdentity{}))) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: search pack source binding mode mismatch")
+	}
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6, columnHNSWSearchPackVersionV7:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -346,6 +849,19 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	if ef := hnswPackU32(raw, columnHNSWSearchPackHeaderEfSearchOffset); ef == 0 || uint64(ef) > uint64(math.MaxInt) {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 ef_search=%d must be positive", ef)
 	}
+	if version == columnHNSWSearchPackVersionV5 &&
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnHNSWCanonicalPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition hnsw graph parameters mismatch")
+	}
+	if (version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7) &&
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaConnectivityPreservingPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaConnectivityPreservingPartitionL ||
+			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderMaxLayerOffset) != 0 ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderAdjacencyLayerCount) != 1) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: connectivity-preserving partition Vamana graph parameters mismatch")
+	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {
 			return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 empty pack must use no-entry/no-layer sentinels")
@@ -364,7 +880,11 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 		ManifestChecksum:   hnswPackU64(raw, columnHNSWSearchPackHeaderBaseChecksumOffset),
 		SchemaHash:         hnswPackU64(raw, columnHNSWSearchPackHeaderBaseSchemaHashOffset),
 	}
-	if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
+	if opts.SourceV2 {
+		if baseIdentity != (columnHNSWSearchPackBaseIdentity{}) {
+			return columnHNSWSearchPack{}, opts, errors.New("collections: source-V2 pack carries legacy base identity")
+		}
+	} else if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
 		return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 missing base manifest identity")
 	}
 	if err := validateColumnHNSWSearchPackExpectedBaseIdentity(baseIdentity, opts.ExpectedBaseIdentity); err != nil {
@@ -372,7 +892,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
@@ -392,6 +912,9 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	dataLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset)
 	sectionCount32 := hnswPackU32(raw, columnHNSWSearchPackHeaderSectionCountOffset)
 	expectedSectionCount := uint32(8 + 2*layerCount32)
+	if opts.SourceV2 {
+		expectedSectionCount -= 4
+	}
 	if externalVectors {
 		expectedSectionCount--
 	}
@@ -680,6 +1203,11 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		if err := validateColumnHNSWSearchPackAdjacencyWithContext(ctx, layer, rows, offsets, neighbors); err != nil {
 			return err
 		}
+		if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 {
+			if err := validateColumnVamanaPartitionGraphV1(ctx, offsets, neighbors); err != nil {
+				return err
+			}
+		}
 		v.AdjacencyLayers[layer] = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
 	}
 	if v.Header.HasAuxiliaryNavigation {
@@ -726,31 +1254,34 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		}
 		v.AuxiliaryNavigation = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
 	}
-	if v.RowRefGenerations, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
-		return err
-	}
-	if v.RowRefPartIDs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
-		return err
-	}
-	if v.RowRefRowIndexes, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
-		return err
-	}
-	if v.RowRefAppliedLSNs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
-		return err
-	}
-	for ordinal := 0; ordinal < v.Header.Rows; ordinal++ {
-		if ordinal&1023 == 0 {
-			if err := ctx.Err(); err != nil {
-				return err
+	if v.Header.Version != columnHNSWSearchPackVersionV7 {
+		if v.RowRefGenerations, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
+			return err
+		}
+		if v.RowRefPartIDs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
+			return err
+		}
+		if v.RowRefRowIndexes, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
+			return err
+		}
+		if v.RowRefAppliedLSNs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
+			return err
+		}
+		for ordinal := 0; ordinal < v.Header.Rows; ordinal++ {
+			if ordinal&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if v.RowRefGenerations[ordinal] <= 0 || v.RowRefPartIDs[ordinal] <= 0 || v.RowRefAppliedLSNs[ordinal] <= 0 || v.RowRefRowIndexes[ordinal] < 0 {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+			}
+			if uint64(v.RowRefGenerations[ordinal]) > v.Header.BaseManifestGeneration {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", v.RowRefGenerations[ordinal], v.Header.BaseManifestGeneration)
 			}
 		}
-		if v.RowRefGenerations[ordinal] <= 0 || v.RowRefPartIDs[ordinal] <= 0 || v.RowRefAppliedLSNs[ordinal] <= 0 || v.RowRefRowIndexes[ordinal] < 0 {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
-		}
-		if uint64(v.RowRefGenerations[ordinal]) > v.Header.BaseManifestGeneration {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", v.RowRefGenerations[ordinal], v.Header.BaseManifestGeneration)
-		}
 	}
+
 	docOffsetsSection, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0, rows+1, 8)
 	if err != nil {
 		return err
@@ -865,8 +1396,40 @@ func (v *columnHNSWSearchPackPreparedView) int64DirectView(raw []byte, kind colu
 	return view, nil
 }
 
+func validateColumnHNSWSearchPackChunkedGeometry(root []byte, pack columnHNSWSearchPack) error {
+	wantRoot := columnHNSWSearchPackHeaderSizeV2 + len(pack.Sections)*columnHNSWSearchPackSectionEntrySize
+	if len(root) != wantRoot {
+		return errors.New("collections: chunked hnsw_search_pack_v1 root geometry")
+	}
+	wantDataOffset, ok := alignColumnHNSWSearchPackUint64(uint64(wantRoot), uint64(columnHNSWSearchPackAlignment))
+	if !ok || pack.Header.DataOffset != wantDataOffset {
+		return errors.New("collections: chunked hnsw_search_pack_v1 data offset geometry")
+	}
+	cursor := pack.Header.DataOffset
+	for _, section := range pack.Sections {
+		offset, ok := alignColumnHNSWSearchPackUint64(cursor, uint64(section.Alignment))
+		if !ok || section.Offset != offset || section.Length > ^uint64(0)-section.Offset {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 section %s[%d] geometry", section.Kind, section.Index)
+		}
+		cursor = section.Offset + section.Length
+	}
+	if cursor != pack.Header.TotalLength {
+		return errors.New("collections: chunked hnsw_search_pack_v1 trailing geometry")
+	}
+	return nil
+}
+
 func (v *columnHNSWSearchPackPreparedView) sectionDirectBytes(raw []byte, section columnHNSWSearchPackSection, elemBytes uintptr, typeName string) ([]byte, error) {
-	sectionBytes := columnHNSWSearchPackSectionBytes(raw, section)
+	var sectionBytes []byte
+	if v != nil && v.sectionBytes != nil {
+		var ok bool
+		sectionBytes, ok = v.sectionBytes[columnHNSWSearchPackSectionKey{kind: section.Kind, index: section.Index}]
+		if !ok || uint64(len(sectionBytes)) != section.Length {
+			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 missing chunk %s[%d]", section.Kind, section.Index)
+		}
+	} else {
+		sectionBytes = columnHNSWSearchPackSectionBytes(raw, section)
+	}
 	alignment := elemBytes
 	if v != nil && v.source == mappedresource.SourceMapped {
 		alignment = uintptr(section.Alignment)
@@ -897,6 +1460,11 @@ func (v *columnHNSWSearchPackPreparedView) fastStatus(defaultStatus columnHNSWSe
 	if v.handle == nil || v.handle.Released() {
 		return columnHNSWSearchPackPreparedStatusStale
 	}
+	for _, handle := range v.handles {
+		if handle == nil || handle.Released() {
+			return columnHNSWSearchPackPreparedStatusStale
+		}
+	}
 	switch v.status {
 	case columnHNSWSearchPackPreparedStatusDirect, columnHNSWSearchPackPreparedStatusHeap, columnHNSWSearchPackPreparedStatusInvalid, columnHNSWSearchPackPreparedStatusStale, columnHNSWSearchPackPreparedStatusClosed, columnHNSWSearchPackPreparedStatusMissing:
 		return v.status
@@ -909,9 +1477,9 @@ func (v *columnHNSWSearchPackPreparedView) validateLive() error {
 	if err := v.validateTopologyLive(); err != nil {
 		return err
 	}
-	wantVectors := v.Header.Rows * v.Header.VectorStride
-	if len(v.NormalizedVectors) != wantVectors {
-		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared vector length=%d want rows*stride=%d", len(v.NormalizedVectors), wantVectors)
+	wantVectors := uint64(v.Header.Rows) * uint64(v.Header.VectorStride)
+	if v.normalizedVectorChunks.length != wantVectors {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared vector length=%d want rows*stride=%d", v.normalizedVectorChunks.length, wantVectors)
 	}
 	return nil
 }
@@ -930,6 +1498,7 @@ func (v *columnHNSWSearchPackPreparedView) bindExternalNormalizedVectors(state c
 			}
 		}
 		v.NormalizedVectors = nil
+		v.normalizedVectorChunks = newColumnHNSWSearchPackPreparedChunks[float32](nil)
 		return v.validateLive()
 	}
 	var normalized columnVectorIndexStateAssetSnapshot
@@ -965,6 +1534,7 @@ func (v *columnHNSWSearchPackPreparedView) bindExternalNormalizedVectors(state c
 		return err
 	}
 	v.NormalizedVectors = prepared.values
+	v.normalizedVectorChunks = newColumnHNSWSearchPackPreparedChunks([][]float32{v.NormalizedVectors})
 	return v.validateLive()
 }
 
@@ -1000,11 +1570,21 @@ func (v *columnHNSWSearchPackPreparedView) validateTopologyLive() error {
 	if v.handle == nil || v.handle.Released() || v.handle.Bytes() == nil {
 		return errColumnHNSWSearchPackPreparedViewStale
 	}
+	for _, handle := range v.handles {
+		if handle == nil || handle.Released() || handle.Bytes() == nil {
+			return errColumnHNSWSearchPackPreparedViewStale
+		}
+	}
 	if v.Header.Rows < 0 || v.Header.Dimensions <= 0 || v.Header.VectorStride < v.Header.Dimensions {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared view invalid header rows/dims/stride=(%d,%d,%d)", v.Header.Rows, v.Header.Dimensions, v.Header.VectorStride)
 	}
-	if len(v.Levels) != v.Header.Rows || len(v.RowRefGenerations) != v.Header.Rows || len(v.RowRefPartIDs) != v.Header.Rows || len(v.RowRefRowIndexes) != v.Header.Rows || len(v.RowRefAppliedLSNs) != v.Header.Rows || len(v.DocumentIDOffsets) != v.Header.Rows+1 {
-		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared view section lengths vectors=%d levels=%d rowrefs=(%d,%d,%d,%d) doc_offsets=%d rows=%d stride=%d", len(v.NormalizedVectors), len(v.Levels), len(v.RowRefGenerations), len(v.RowRefPartIDs), len(v.RowRefRowIndexes), len(v.RowRefAppliedLSNs), len(v.DocumentIDOffsets), v.Header.Rows, v.Header.VectorStride)
+	rows := uint64(v.Header.Rows)
+	rowRefs := rows
+	if v.Header.Version == columnHNSWSearchPackVersionV7 {
+		rowRefs = 0
+	}
+	if v.levelChunks.length != rows || v.rowRefGenerationChunks.length != rowRefs || v.rowRefPartIDChunks.length != rowRefs || v.rowRefRowIndexChunks.length != rowRefs || v.rowRefAppliedLSNChunks.length != rowRefs || v.documentIDOffsetChunks.length != rows+1 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared view section lengths vectors=%d levels=%d rowrefs=(%d,%d,%d,%d) doc_offsets=%d rows=%d stride=%d", v.normalizedVectorChunks.length, v.levelChunks.length, v.rowRefGenerationChunks.length, v.rowRefPartIDChunks.length, v.rowRefRowIndexChunks.length, v.rowRefAppliedLSNChunks.length, v.documentIDOffsetChunks.length, v.Header.Rows, v.Header.VectorStride)
 	}
 	if len(v.AdjacencyLayers) != v.Header.AdjacencyLayerCount {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared adjacency layers=%d want %d", len(v.AdjacencyLayers), v.Header.AdjacencyLayerCount)
@@ -1018,7 +1598,15 @@ func (v *columnHNSWSearchPackPreparedView) validateTopologyLive() error {
 // Metadata providers borrow the same validated mapping; they never own or
 // certify its slices as separate TCIM views.
 func (v *columnHNSWSearchPackPreparedView) metadataAlive() bool {
-	return v != nil && !v.closed.Load() && v.handle != nil && !v.handle.Released()
+	if v == nil || v.closed.Load() || v.handle == nil || v.handle.Released() {
+		return false
+	}
+	for _, handle := range v.handles {
+		if handle == nil || handle.Released() {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *columnHNSWSearchPackPreparedView) Close() error {
@@ -1027,10 +1615,18 @@ func (v *columnHNSWSearchPackPreparedView) Close() error {
 	}
 	v.closeOnce.Do(func() {
 		v.closed.Store(true)
+		errs := []error{v.closeErr}
+		for _, handle := range v.handles {
+			if handle != nil {
+				errs = append(errs, handle.Release())
+			}
+		}
+		v.handles = nil
 		if v.handle != nil {
-			v.closeErr = v.handle.Release()
+			errs = append(errs, v.handle.Release())
 			v.handle = nil
 		}
+		v.closeErr = errors.Join(errs...)
 		v.activeHandles = 0
 	})
 	return v.closeErr

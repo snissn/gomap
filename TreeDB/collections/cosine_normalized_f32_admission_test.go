@@ -549,6 +549,47 @@ func TestCosineNormalizedF32V1ExactAndSQ8MatchExhaustivePackedTruth(t *testing.T
 	} else if err != nil {
 		t.Fatal(err)
 	}
+	servingStats, available := col.ColumnGraphServingSnapshot()
+	if !available || !servingStats.ServingReady || !servingStats.PublicationUnchanged {
+		t.Fatalf("normalized serving inventory unavailable: available=%t stats=%+v", available, servingStats)
+	}
+	var normalized, topology, codes *ColumnGraphServingAssetStats
+	inverseNorms := 0
+	for i := range servingStats.VectorAssets {
+		asset := &servingStats.VectorAssets[i]
+		switch asset.Role {
+		case columnVectorIndexStateAssetRoleNormalizedVectors:
+			if normalized != nil {
+				t.Fatal("normalized serving inventory contains a second FP32 plane")
+			}
+			normalized = asset
+		case columnVectorIndexStateAssetRoleHNSWSearchPack:
+			topology = asset
+		case columnVectorIndexStateAssetRoleQuantizedCodes:
+			codes = asset
+		case columnVectorIndexStateAssetRoleInverseNorm:
+			inverseNorms++
+		}
+	}
+	if normalized == nil || normalized.Rows != len(ids) || normalized.LogicalPayloadBytes != int64(len(ids)*8*4) ||
+		normalized.AssetID != columnVectorIndexStateNormalizedVectorsAssetID ||
+		normalized.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32Vector {
+		t.Fatalf("normalized serving inventory FP32 asset=%+v", normalized)
+	}
+	if topology == nil || topology.AssetID != columnVectorIndexStateHNSWTopologyPackAssetID ||
+		topology.PhysicalEncoding != columnVectorIndexStateEncodingHNSWSearchPackV2 || codes == nil || inverseNorms != 0 {
+		t.Fatalf("normalized serving inventory topology=%+v codes=%+v inverse_norms=%d", topology, codes, inverseNorms)
+	}
+	sharedTypedAuthority := false
+	for _, part := range servingStats.TypedColumnParts {
+		if part.Ref == normalized.Ref {
+			sharedTypedAuthority = true
+			break
+		}
+	}
+	if !sharedTypedAuthority {
+		t.Fatalf("normalized serving asset does not share its typed-column authority: normalized=%+v parts=%+v", normalized.Ref, servingStats.TypedColumnParts)
+	}
 
 	query := []float32{7, 7e-4, 0, 0, 0, 0, 0, 0}
 	canonicalQuery, err := normalizeCosineNormalizedF32V1Reference(query, len(query))
@@ -569,7 +610,7 @@ func TestCosineNormalizedF32V1ExactAndSQ8MatchExhaustivePackedTruth(t *testing.T
 		t.Helper()
 		opts := VectorIndexSearchOptions{
 			IndexName: "embedding_graph", Query: query, QueryMode: mode,
-			TopK: len(ids), EfSearch: len(ids), StatsMode: VectorIndexSearchStatsModeMinimal,
+			TopK: len(ids), EfSearch: len(ids), StatsMode: VectorIndexSearchStatsModeProduction,
 		}
 		if mode == VectorIndexQueryModeQuantizedRerank {
 			opts.QuantizedIndexName = "embedding.scalar_u8.legacy"
@@ -733,7 +774,7 @@ func TestCosineNormalizedF32V1PublicSQ8UsesPackedCanonicalRerank(t *testing.T) {
 		QuantizedRerankCandidates: len(ids),
 		TopK:                      2,
 		EfSearch:                  len(ids),
-		StatsMode:                 VectorIndexSearchStatsModeMinimal,
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
 	}
 	var buffer VectorIndexSearchBuffer
 	response, view, err := col.SearchVectorIndexWithBufferReadView(opts, &buffer)
@@ -863,7 +904,7 @@ func TestCosineNormalizedF32V1MutableFoldPinProjectionAndReopen(t *testing.T) {
 			QuantizedRerankCandidates: 3,
 			TopK:                      3,
 			EfSearch:                  3,
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
+			StatsMode:                 VectorIndexSearchStatsModeProduction,
 		}, &buffer)
 		if err != nil || view == nil {
 			t.Fatalf("selected search response=%+v view=%v err=%v", response, view, err)

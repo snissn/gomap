@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -450,6 +451,9 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 }
 
 func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionSourceImportV2 {
+		return replayCollectionSourceImportV2(db, env)
+	}
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedSourcePayload(env.Payload)
 		if err != nil {
@@ -509,6 +513,27 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 }
 
 func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedMetadataByIDV1 {
+		payload, err := commitlog.DecodeCollectionTypedMetadataPayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		workstats.Replay.TypedRowsDecoded.Add(uint64(len(payload.Documents)))
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		if err != nil {
+			return err
+		}
+		ids := make([][]byte, len(payload.Documents))
+		for i, row := range payload.Documents {
+			ids[i] = row.ID
+		}
+		_, err = collection.updateTypedMetadataByID(ids, nil, nil, 0, &payload, intent)
+		return err
+	}
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedBatchPayload(env.Payload)
 		if err != nil {

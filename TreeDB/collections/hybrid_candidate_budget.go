@@ -46,10 +46,15 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
 	if filterAllowSet != nil && len(filterAllowSet) == 0 {
+		if plan.text != nil {
+			if err := c.validateHybridTextCandidateQueryAtReadView(*plan.text, plan.readView); err != nil {
+				return nil, HybridSearchStats{}, hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
+			}
+		}
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone
-		if mode != hybridCandidateBudgetPolicyFixed {
+		if mode != hybridCandidateBudgetPolicyFixed && !hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 			if _, fallbackReason, ok := hybridCandidateBudgetRRFParamsForPlan(plan); ok {
 				policy = HybridCandidateBudgetPolicyAdaptiveRRF
 				stop = HybridCandidateBudgetStopReasonEmptyScalarAllowSet
@@ -62,6 +67,17 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		return nil, stats, nil
 	}
 	if mode == hybridCandidateBudgetPolicyFixed {
+		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
+	}
+	// Selected quantized traversal changes its shortlist as K/E/R change, so the
+	// exact-prefix proof used by adaptive RRF does not apply.
+	if hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
+		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
+	}
+	// An explicit postings cap is one request-wide guardrail. Adaptive retries
+	// would restart lower-level accounting, so capped text requests execute once
+	// with the declared source budgets.
+	if plan.text != nil && plan.text.MaxPostingsScanned > 0 {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
 	}
 	// Exact top-k budget proofs do not prove enough distinct chunk parents for
@@ -494,6 +510,9 @@ func hybridCandidateBudgetAccumulateAttemptWork(dst *HybridSearchStats, src Hybr
 	dst.TextPhraseCandidatesMatched += src.TextPhraseCandidatesMatched
 	dst.VectorCandidatesExamined += src.VectorCandidatesExamined
 	dst.VectorEdgesVisited += src.VectorEdgesVisited
+	dst.VectorPackedExactScoreCalls += src.VectorPackedExactScoreCalls
+	dst.VectorPackedExactScoreCandidates += src.VectorPackedExactScoreCandidates
+	dst.VectorPackedExactVectorBytesRead += src.VectorPackedExactVectorBytesRead
 	dst.ScalarFilterRejected += src.ScalarFilterRejected
 	dst.DocumentsFetched += src.DocumentsFetched
 	dst.DocumentsMissing += src.DocumentsMissing
@@ -521,6 +540,9 @@ func hybridCandidateBudgetApplyAccumulatedWork(stats *HybridSearchStats, work Hy
 	stats.TextPhraseCandidatesMatched = work.TextPhraseCandidatesMatched
 	stats.VectorCandidatesExamined = work.VectorCandidatesExamined
 	stats.VectorEdgesVisited = work.VectorEdgesVisited
+	stats.VectorPackedExactScoreCalls = work.VectorPackedExactScoreCalls
+	stats.VectorPackedExactScoreCandidates = work.VectorPackedExactScoreCandidates
+	stats.VectorPackedExactVectorBytesRead = work.VectorPackedExactVectorBytesRead
 	stats.ScalarFilterRejected = work.ScalarFilterRejected
 	stats.DocumentsFetched = work.DocumentsFetched
 	stats.DocumentsMissing = work.DocumentsMissing

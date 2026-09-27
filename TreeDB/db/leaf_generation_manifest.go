@@ -426,16 +426,32 @@ func (db *DB) queueLeafGenerationWritableFileIDAtCommit(fileID uint32, commitSeq
 }
 
 func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []leafGenerationPendingFile {
+	pending, _ := db.snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID, -1)
+	return pending
+}
+
+func (db *DB) snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID uint32, maxPending int) ([]leafGenerationPendingFile, error) {
 	if db == nil || db.leafGenerationManifest == nil {
-		return nil
+		return nil, nil
 	}
 	currentRawFileID, _ := rawLeafGenerationFileID(currentFileID)
 	db.leafGenerationPendingMu.Lock()
 	defer db.leafGenerationPendingMu.Unlock()
-	if len(db.leafGenerationPendingFileIDs) == 0 && currentRawFileID == 0 {
-		return nil
+	// Registration does not hold the ordered publication lock. Reject under
+	// the owner lock before allocating the pending-ID snapshot.
+	pendingCount := len(db.leafGenerationPendingFileIDs)
+	if currentRawFileID != 0 {
+		if _, exists := db.leafGenerationPendingSet[currentRawFileID]; !exists {
+			pendingCount++
+		}
 	}
-	out := make([]leafGenerationPendingFile, 0, len(db.leafGenerationPendingFileIDs)+1)
+	if maxPending >= 0 && pendingCount > maxPending {
+		return nil, fmt.Errorf("treedb: pending leaf-generation IDs exceed prepared publication limit %d", maxPending)
+	}
+	if len(db.leafGenerationPendingFileIDs) == 0 && currentRawFileID == 0 {
+		return nil, nil
+	}
+	out := make([]leafGenerationPendingFile, 0, pendingCount)
 	for _, rawFileID := range db.leafGenerationPendingFileIDs {
 		out = append(out, leafGenerationPendingFile{
 			rawFileID: rawFileID,
@@ -447,7 +463,7 @@ func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []leafG
 			out = append(out, leafGenerationPendingFile{rawFileID: currentRawFileID})
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
@@ -592,11 +608,32 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 }
 
 func (db *DB) stagedLeafGenerationManifestWithPendingResult(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64) (stagedLeafGenerationManifestResult, error) {
+	return db.stagedLeafGenerationManifestWithPendingResultAndLimit(base, currentFileID, commitSeq, nil)
+}
+
+func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64, limits *PreparedRootPublicationLimits) (stagedLeafGenerationManifestResult, error) {
 	result := stagedLeafGenerationManifestResult{manifest: base}
 	if db == nil || base == nil {
 		return result, nil
 	}
-	pending := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
+	maxPending := -1
+	if limits != nil {
+		maxPending = limits.MaxPendingLeafFileIDs
+		fileIDs := 0
+		for i := range base.Generations {
+			if len(base.Generations[i].FileIDs) > limits.MaxLeafGenerationFileIDs-fileIDs {
+				return result, errors.New("treedb: prepared leaf generation manifest exceeds admission limits")
+			}
+			fileIDs += len(base.Generations[i].FileIDs)
+		}
+		if len(base.Generations) > limits.MaxLeafGenerations {
+			return result, errors.New("treedb: prepared leaf generation manifest exceeds admission limits")
+		}
+	}
+	pending, err := db.snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID, maxPending)
+	if err != nil {
+		return result, err
+	}
 	if len(pending) == 0 {
 		return result, nil
 	}

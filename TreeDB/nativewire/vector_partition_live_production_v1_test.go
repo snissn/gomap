@@ -134,7 +134,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 			Query:                 query, Metric: VectorPartitionShardSearchMetricCosineV1,
-			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), PartitionProbes: 1,
 			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -150,7 +150,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	}
 
 	initial := search("initial", []float32{1, 0})
-	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 2 || initial.Counters.LiveDomainsSearched != 2 {
+	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 1 || initial.Counters.LiveDomainsSearched != 1 {
 		t.Fatalf("initial response=%+v", initial)
 	}
 	initialRequests := dispatcher.requests("initial")
@@ -164,7 +164,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		}
 		liveAssignments++
 	}
-	if len(initialRequests) != 2 || liveAssignments != 2 {
+	if len(initialRequests) != 1 || liveAssignments != 1 {
 		t.Fatalf("initial request assignments=%+v", initialRequests)
 	}
 	initialStats := []CollectionVectorPartitionGenerationCacheStatsV1{sources[0].Stats(), sources[1].Stats()}
@@ -227,6 +227,38 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	inserted := search("insert", []float32{1, 0})
 	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 2 || inserted.Counters.LiveDomainsSearched != 2 {
 		t.Fatalf("insert response=%+v", inserted)
+	}
+	insertLiveAssignments := 0
+	for _, request := range dispatcher.requests("insert") {
+		if len(request.LiveDomainIDs) == 0 {
+			continue
+		}
+		measured, err := services[request.TargetGroupID].Search(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var baseScoreCalls uint64
+		for _, partial := range measured.Partials {
+			baseScoreCalls += partial.ScoreCalls
+		}
+		if measured.ScoreCalls <= baseScoreCalls {
+			t.Fatalf("live score calls=%d want greater than immutable partial sum=%d", measured.ScoreCalls, baseScoreCalls)
+		}
+		exactBudget := request
+		exactBudget.ScoreCallsLimit = measured.ScoreCalls
+		if response, err := services[request.TargetGroupID].Search(t.Context(), exactBudget); err != nil || response.ScoreCalls != measured.ScoreCalls {
+			t.Fatalf("exact live score budget response=%+v err=%v want score calls=%d", response, err, measured.ScoreCalls)
+		}
+		exactBudget.ScoreCallsLimit--
+		if _, err := services[request.TargetGroupID].Search(t.Context(), exactBudget); err == nil {
+			t.Fatal("under-budget live search succeeded")
+		} else {
+			assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
+		}
+		insertLiveAssignments++
+	}
+	if insertLiveAssignments != 1 {
+		t.Fatalf("insert live assignments=%d", insertLiveAssignments)
 	}
 	for i, source := range sources {
 		if got := source.Stats(); got.GenerationMisses != initialStats[i].GenerationMisses || got.PartitionMisses != initialStats[i].PartitionMisses {
@@ -342,7 +374,7 @@ func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T)
 		Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 		Query:                 []float32{.9, .1}, Metric: VectorPartitionShardSearchMetricCosineV1,
-		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 2, PartitionProbes: 1,
 		Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 		TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 		ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -390,7 +422,7 @@ func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
 			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 			Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
-			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), PartitionProbes: 1,
 			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -524,7 +556,7 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 				Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 				IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 				Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
-				RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+				RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), PartitionProbes: 1,
 				Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 				TopK: 4, EfSearch: 16, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 				ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 8,
@@ -621,6 +653,22 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 }
 
 func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLiveProductionFixtureV1 {
+	return newVectorPartitionLiveNativewireDocumentsV1(t, []vectorPartitionLiveDocumentV1{
+		{id: "a", vector: []float32{1, 0}, home: 0, overlap: true},
+		{id: "b", vector: []float32{.8, .2}, home: 1},
+		{id: "c", vector: []float32{0, 1}, home: 2},
+		{id: "d", vector: []float32{.2, .8}, home: 2},
+	}, nil)
+}
+
+type vectorPartitionLiveDocumentV1 struct {
+	id      string
+	vector  []float32
+	home    uint32
+	overlap bool
+}
+
+func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
@@ -633,8 +681,15 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
-	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 2}}}}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
+	dimensions := len(documents[0].vector)
+	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
+	if len(documents) > 4 {
+		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
+	}
+	if columns == nil {
+		columns = &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}
+	}
+	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: columns}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
 	manager := collections.NewCollectionManager(database)
 	if _, err := manager.CreateCollection(&meta); err != nil {
 		database.Close()
@@ -645,16 +700,10 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		database.Close()
 		t.Fatal(err)
 	}
-	for _, document := range []struct {
-		id     string
-		vector []float32
-	}{
-		{id: "a", vector: []float32{1, 0}},
-		{id: "b", vector: []float32{.8, .2}},
-		{id: "c", vector: []float32{0, 1}},
-		{id: "d", vector: []float32{.2, .8}},
-	} {
+	byID := make(map[string]vectorPartitionLiveDocumentV1, len(documents))
+	for _, document := range documents {
 		insertVectorPartitionLiveDocumentV1(t, collection, document.id, document.vector)
+		byID[document.id] = document
 	}
 	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
 		database.Close()
@@ -672,20 +721,15 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		Generation: source.Generation + 100, PartitionCount: 3, DomainCount: 2,
 		DomainPacks:   []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
 		BalancePolicy: "disjoint_v1",
-		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}},
+		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}},
 	}
 	parts := []internalrouter.RouterPartitionV1{{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}}
 	for _, row := range rows {
-		id := string(row.DocumentID)
-		home := uint32(2)
-		if id == "a" {
-			home = 0
-		} else if id == "b" {
-			home = 1
-		}
+		document := byID[string(row.DocumentID)]
+		home := document.home
 		manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: home})
 		parts[home].Vectors = append(parts[home].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(collections.VectorPartitionMembershipHomeV1)})
-		if id == "a" {
+		if document.overlap {
 			manifest.OverlapMemberships = append(manifest.OverlapMemberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: 1})
 			parts[1].Vectors = append(parts[1].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(collections.VectorPartitionMembershipOverlapV1)})
 		}
@@ -708,9 +752,9 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		t.Fatal(err)
 	}
 	cfg := internalrouter.DefaultRouterConfigV1()
-	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativesPerPartition = 2, 1, 1
-	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, 8
-	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = 8, 32, 1_000_000
+	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget = 2, 1, len(parts)
+	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, max(8, len(documents)*2)
+	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = max(8, dimensions), 32, 100_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, parts, collections.VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 9102, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
 		database.Close()
 		t.Fatal(err)
@@ -726,33 +770,45 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		database.Close()
 		t.Fatal(err)
 	}
-	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: definition.Name, IndexDefinitionDigest: ready.IndexDefinitionDigest, SourceGeneration: ready.SourceGeneration, SourceChecksum: ready.SourceChecksum, SourceSchemaHash: ready.SourceSchemaHash, SourceRowCount: ready.SourceRowCount, PartitionGeneration: ready.Generation, PartitionCount: ready.PartitionCount, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}}}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: definition.Name, IndexDefinitionDigest: ready.IndexDefinitionDigest, SourceGeneration: ready.SourceGeneration, SourceChecksum: ready.SourceChecksum, SourceSchemaHash: ready.SourceSchemaHash, SourceRowCount: ready.SourceRowCount, PartitionGeneration: ready.Generation, PartitionCount: ready.PartitionCount, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}}}
 	return vectorPartitionLiveProductionFixtureV1{dir: dir, database: database, collection: collection, definition: definition, manifest: ready, catalog: catalog, placement: placement}
 }
 
 func vectorPartitionLiveCoordinatorTopologyV1(f vectorPartitionLiveProductionFixtureV1) VectorPartitionCoordinatorTopologyV1 {
-	return VectorPartitionCoordinatorTopologyV1{Database: "default", Catalog: "default", Collection: "docs", CollectionGroupID: "group-a", IndexName: f.definition.Name, IndexDefinitionDigest: f.manifest.IndexDefinitionDigest, SourceGeneration: f.manifest.SourceGeneration, SourceChecksum: f.manifest.SourceChecksum, SourceSchemaHash: f.manifest.SourceSchemaHash, SourceRowCount: f.manifest.SourceRowCount, PartitionGeneration: f.manifest.Generation, Groups: []VectorPartitionCoordinatorTopologyGroupV1{{ID: "group-a", Members: []string{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []string{"node-b"}, LeaderHint: "node-b"}}, Partitions: []VectorPartitionCoordinatorTopologyPartitionV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}}}
+	group, err := f.catalog.Resolve(f.placement.Collection)
+	if err != nil {
+		panic(err) // All callers construct a validated fixture catalog.
+	}
+	topology := VectorPartitionCoordinatorTopologyV1{Database: "default", Catalog: "default", Collection: f.manifest.Collection, CollectionGroupID: string(group), IndexName: f.definition.Name, IndexDefinitionDigest: f.manifest.IndexDefinitionDigest, SourceGeneration: f.manifest.SourceGeneration, SourceChecksum: f.manifest.SourceChecksum, SourceSchemaHash: f.manifest.SourceSchemaHash, SourceRowCount: f.manifest.SourceRowCount, PartitionGeneration: f.manifest.Generation}
+	for _, group := range f.catalog.Groups {
+		members := make([]string, len(group.Members))
+		for i, member := range group.Members {
+			members[i] = string(member)
+		}
+		topology.Groups = append(topology.Groups, VectorPartitionCoordinatorTopologyGroupV1{ID: string(group.ID), Members: members, LeaderHint: string(group.LeaderHint)})
+	}
+	for _, partition := range f.placement.Partitions {
+		topology.Partitions = append(topology.Partitions, VectorPartitionCoordinatorTopologyPartitionV1{PartitionID: partition.PartitionID, GroupID: string(partition.GroupID)})
+	}
+	return topology
 }
 
 func newVectorPartitionLiveProductionServicesV1(t testing.TB, fixture vectorPartitionLiveProductionFixtureV1) (map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1, []*CollectionVectorPartitionGenerationSourceV1) {
 	t.Helper()
 	services := make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1, 2)
 	sources := make([]*CollectionVectorPartitionGenerationSourceV1, 0, 2)
-	for _, group := range []struct {
-		id   raftcluster.GroupID
-		node raftcluster.NodeID
-	}{{"group-a", "node-a"}, {"group-b", "node-b"}} {
+	for _, group := range fixture.catalog.Groups {
 		source, err := NewCollectionVectorPartitionGenerationSourceV1(fixture.collection)
 		if err != nil {
 			t.Fatal(err)
 		}
 		read := &fakeVectorPartitionReadCoordinatorV1{
-			proof:    raftcluster.ReadIndexProof{NodeID: group.node, GroupID: group.id, Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
-			progress: raftcluster.AppliedProgress{NodeID: group.node, GroupID: group.id, Term: 1, Index: 1, HasApplied: true},
+			proof:    raftcluster.ReadIndexProof{NodeID: group.LeaderHint, GroupID: group.ID, Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
+			progress: raftcluster.AppliedProgress{NodeID: group.LeaderHint, GroupID: group.ID, Term: 1, Index: 1, HasApplied: true},
 		}
 		service, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
-			Catalog: fixture.catalog, Placement: fixture.placement, LocalNodeID: group.node,
-			LocalGroupID: group.id, ReadCoordinator: read, GenerationSource: source,
+			Catalog: fixture.catalog, Placement: fixture.placement, LocalNodeID: group.LeaderHint,
+			LocalGroupID: group.ID, ReadCoordinator: read, GenerationSource: source,
 		})
 		if err != nil {
 			_ = source.Close()
@@ -761,7 +817,7 @@ func newVectorPartitionLiveProductionServicesV1(t testing.TB, fixture vectorPart
 			}
 			t.Fatal(err)
 		}
-		services[group.id] = service
+		services[group.ID] = service
 		sources = append(sources, source)
 	}
 	return services, sources
@@ -783,7 +839,7 @@ func vectorPartitionLiveProductionStorageBytesV1(root string) (uint64, error) {
 
 func insertVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.Collection, id string, vector []float32) {
 	t.Helper()
-	document, err := json.Marshal(map[string]any{"embedding": vector})
+	document, err := json.Marshal(map[string]any{"embedding": vector, "time_us": 1})
 	if err != nil {
 		t.Fatal(err)
 	}

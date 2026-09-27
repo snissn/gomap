@@ -15,7 +15,7 @@ import (
 
 func TestDenseTypedVersionCapability(t *testing.T) {
 	registry := iwire.MustV1Registry()
-	for _, version := range []uint64{1, 2, 3} {
+	for _, version := range []uint64{1, 2, 3, 4} {
 		schema, ok := registry.LookupCommand(iwire.CommandDenseVectorSearch, version)
 		if !ok || !schema.LocalOnly || schema.Replicated || schema.Kind != iwire.CommandKindRead {
 			t.Fatalf("dense version %d must be registered as a local read: %+v", version, schema)

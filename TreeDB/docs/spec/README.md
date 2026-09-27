@@ -249,6 +249,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Design Proposals (Non-Normative)
 
+- [Distributed partition EC2 target](distributed-partition-ec2-target.md)
+  - target architecture for #4805: canonical source ownership, derived ANN
+    visibility, bounded many-group Raft, recovery and EC2 qualification;
+    proposed behavior, not an implemented deployment or performance claim.
+
 - `TreeDB/docs/spec/delete-range-spans-design-2711.md`
   - issue #2711 design gate for cached TreeDB `DeleteRange` range spans,
     covering point reads, iteration, snapshots, command-WAL replay,

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -31,13 +33,14 @@ func byteBoundedShardPlanConfigV1() config {
 // not from an operator-declared partition count.
 func TestByteBoundedShardPlanDerivesPartitionsBeforeConstructionV1(t *testing.T) {
 	for _, tc := range []struct {
-		name                  string
-		vectors               int
-		wantPartitions        int
-		contradictingPartions int
+		name              string
+		vectors           int
+		wantPartitions    int
+		explicitDomains   int
+		wantExplicitPacks int
 	}{
-		{"100k", 100_000, 16, 40},
-		{"250k", 250_000, 40, 16},
+		{"100k", 100_000, 16, 40, 40},
+		{"250k", 250_000, 40, 16, 48},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := byteBoundedShardPlanConfigV1()
@@ -56,12 +59,13 @@ func TestByteBoundedShardPlanDerivesPartitionsBeforeConstructionV1(t *testing.T)
 			if plan.HomeCapacity > plan.MaxMembershipsPerPack || plan.TargetHotBytes != vectorpartition.DefaultTargetHotBytesV1 {
 				t.Fatalf("plan home=%d target=%d", plan.HomeCapacity, plan.TargetHotBytes)
 			}
-			// A declared count that contradicts the budget must fail before any
-			// artifact, pack, or router asset is allocated.
-			contradicting := cfg
-			contradicting.partitions = tc.contradictingPartions
-			if _, err := applyByteBoundedShardPlanV1(contradicting, fixture); err == nil || !strings.Contains(err.Error(), "contradicts the byte-bounded plan") {
-				t.Fatalf("accepted -partitions %d against the %d-partition plan: %v", tc.contradictingPartions, tc.wantPartitions, err)
+			// An explicit count selects logical graph domains. The planner then
+			// derives enough physical packs for every domain's membership bound.
+			explicit := cfg
+			explicit.partitions = tc.explicitDomains
+			explicitPlan, err := applyByteBoundedShardPlanV1(explicit, fixture)
+			if err != nil || explicitPlan.shardPlan.LogicalDomains != tc.explicitDomains || explicitPlan.partitions != tc.wantExplicitPacks || explicitPlan.partition.Partitions != tc.explicitDomains {
+				t.Fatalf("domains=%d packs=%d graph=%d err=%v", explicitPlan.shardPlan.LogicalDomains, explicitPlan.partitions, explicitPlan.partition.Partitions, err)
 			}
 		})
 	}
@@ -150,13 +154,97 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 	}
 }
 
+func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
+	summaries := []vectorpartition.ShardPackSummaryV1{
+		{Partition: 0, Rows: 2, Bytes: 100},
+		{Partition: 1, Rows: 1, Bytes: 80},
+	}
+	assets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 1, Bytes: 80},
+		{PartitionID: 0, Bytes: 99},
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, summaries, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
+		"over":      func(a []collections.VectorPartitionAssetV1) { a[0].Bytes++ },
+		"zero":      func(a []collections.VectorPartitionAssetV1) { a[1].Bytes = 0 },
+		"duplicate": func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]collections.VectorPartitionAssetV1(nil), assets...)
+			mutate(candidate)
+			if err := m3ValidateActualShardPackBytesV1(candidate, summaries, 1, false); err == nil {
+				t.Fatal("accepted pack bytes outside the planned envelope")
+			}
+		})
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries, 1, false); err == nil {
+		t.Fatal("accepted incomplete pack coverage")
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, nil, 1, false); err != nil {
+		t.Fatalf("unplanned packs rejected: %v", err)
+	}
+	domainSummaries := []vectorpartition.ShardPackSummaryV1{
+		{Partition: 0, Bytes: 40}, {Partition: 1, Bytes: 60},
+		{Partition: 2, Bytes: 30}, {Partition: 3, Bytes: 50},
+	}
+	domainAssets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 0, Bytes: 20}, {PartitionID: 0, Bytes: 80},
+		{PartitionID: 2, Bytes: 80},
+	}
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2, true); err != nil {
+		t.Fatalf("domain chunks rejected: %v", err)
+	}
+	domainAssets[0].PartitionID = 1
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2, true); err == nil {
+		t.Fatal("accepted a chunk on a non-anchor pack")
+	}
+
+	perPack := []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 40}, {PartitionID: 1, Bytes: 60}, {PartitionID: 2, Bytes: 30}, {PartitionID: 3, Bytes: 50}}
+	if err := m3ValidateActualShardPackBytesV1(perPack, domainSummaries, 2, false); err != nil {
+		t.Fatalf("offline per-pack assets rejected: %v", err)
+	}
+	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
+		"missing":     func(a []collections.VectorPartitionAssetV1) { a[3] = a[2] },
+		"duplicate":   func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 0 },
+		"nonexistent": func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 4 },
+		"oversized":   func(a []collections.VectorPartitionAssetV1) { a[1].Bytes++ },
+	} {
+		t.Run("offline "+name, func(t *testing.T) {
+			candidate := append([]collections.VectorPartitionAssetV1(nil), perPack...)
+			mutate(candidate)
+			if err := m3ValidateActualShardPackBytesV1(candidate, domainSummaries, 2, false); err == nil {
+				t.Fatal("accepted invalid offline per-pack assets")
+			}
+		})
+	}
+}
+
+func TestM3ServingPartitionsCoalescePhysicalDomainPacksV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 4, DomainCount: 2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+			{DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3},
+		},
+	}
+	partitions, members, err := m3ServingPartitionsV1(manifest, [][]int{{3, 1}, {2, 1}, {5}, {4}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(partitions, []uint32{0, 2}) || !reflect.DeepEqual(members, [][]int{{1, 2, 3}, {4, 5}}) {
+		t.Fatalf("serving partitions=%v members=%v", partitions, members)
+	}
+}
+
 // TestM3ShardGenerationDescriptorPersistsAndReopensV1 covers the retained
 // artifact itself: a byte-bounded build must leave a shard-generation record
 // that reopens under its bound digest, must refuse to overwrite it, and must
 // refuse a row ratio outside the planned envelope.
 func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
+		Vectors: 4, Dimensions: 2, LogicalDomains: 1, OverlapRatio: .5, Imbalance: 0,
 		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
@@ -172,7 +260,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		},
 		Loads: []int{3, 2}, Capacity: plan.OverlapCapacity,
 	}
-	raw, digest, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio, overlap)
+	raw, digest, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio, overlap, nil)
 	if err != nil || len(raw) == 0 || !m8SHA256V1(digest) {
 		t.Fatalf("record bytes=%d digest=%q err=%v", len(raw), digest, err)
 	}
@@ -205,7 +293,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	if err := m3WriteShardGenerationRecordV1(dir, raw, digest); err == nil {
 		t.Fatal("overwrote immutable shard generation record")
 	}
-	if _, _, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio+.1, overlap); err == nil {
+	if _, _, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio+.1, overlap, nil); err == nil {
 		t.Fatal("encoded a row ratio outside the planned envelope")
 	}
 	// A variant may materialize less than the planned envelope so comparison
@@ -219,11 +307,11 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		},
 		Loads: []int{2, 2}, Capacity: plan.OverlapCapacity,
 	}
-	if _, _, err := m3ShardGenerationRecordV1(plan, 0, disjoint); err != nil {
+	if _, _, err := m3ShardGenerationRecordV1(plan, 0, disjoint, nil); err != nil {
 		t.Fatalf("disjoint variant rejected on a shared envelope: %v", err)
 	}
 	// A record holding replicas may not relabel itself as disjoint.
-	if _, _, err := m3ShardGenerationRecordV1(plan, 0, overlap); err == nil {
+	if _, _, err := m3ShardGenerationRecordV1(plan, 0, overlap, nil); err == nil {
 		t.Fatal("accepted replicas under a ratio that requests none")
 	}
 	// A record from another variant that shares this plan must not be accepted
@@ -232,9 +320,25 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		ShardPlan: plan, ShardGenerationDigest: digest, OverlapRatio: plan.OverlapRatio,
 		Capacity: plan.OverlapCapacity, PartitionLoads: []int{3, 2},
 		OverlapRealized: 1, OverlapMemberships: 1, SourceRows: uint64(plan.Vectors),
+		PartitionHNSWM: 32, PartitionHNSWEfC: 256,
 	}
 	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 		t.Fatalf("matching record rejected: %v", err)
+	}
+	assets := []collections.VectorPartitionAssetV1{{
+		PartitionID: 0,
+		Bytes:       got.PackSummaries[0].Bytes + got.PackSummaries[1].Bytes,
+	}}
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err != nil {
+		t.Fatalf("matching retained pack bytes rejected: %v", err)
+	}
+	legacyPerPack := append(append([]collections.VectorPartitionAssetV1(nil), assets...), collections.VectorPartitionAssetV1{PartitionID: 1, Bytes: got.PackSummaries[1].Bytes})
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, legacyPerPack); err == nil {
+		t.Fatal("accepted legacy per-pack materialization for a domain graph")
+	}
+	assets[0].Bytes++
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err == nil {
+		t.Fatal("retained admission accepted a pack above its encoded byte envelope")
 	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 		"ratio":       func(c *m3VariantDescriptorV1) { c.OverlapRatio = 0 },
@@ -244,6 +348,9 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		"realized":    func(c *m3VariantDescriptorV1) { c.OverlapRealized = 0 },
 		"memberships": func(c *m3VariantDescriptorV1) { c.OverlapMemberships = 0 },
 		"source rows": func(c *m3VariantDescriptorV1) { c.SourceRows++ },
+		"missing home receipt": func(c *m3VariantDescriptorV1) {
+			c.KaHIPAdapterSHA256 = kahipHomePackingAdapterSHA256
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := descriptor
@@ -255,7 +362,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		})
 	}
 	// -shard-plan off retains no record rather than an unbound one.
-	if raw, digest, err := m3ShardGenerationRecordV1(vectorpartition.ShardPlanV1{}, 0, overlap); err != nil || raw != nil || digest != "" {
+	if raw, digest, err := m3ShardGenerationRecordV1(vectorpartition.ShardPlanV1{}, 0, overlap, nil); err != nil || raw != nil || digest != "" {
 		t.Fatalf("unplanned build produced a record bytes=%d digest=%q err=%v", len(raw), digest, err)
 	}
 }
@@ -266,6 +373,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 // must still be rejected against what materialized the packs.
 func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 	record := vectorpartition.ShardGenerationDescriptorV1{
+		Plan: vectorpartition.ShardPlanV1{PacksPerDomain: 1},
 		Memberships: []vectorpartition.Membership{
 			{VectorOrdinal: 0, Partition: 0, Home: true},
 			{VectorOrdinal: 1, Partition: 0, Home: true},
@@ -294,6 +402,7 @@ func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 	// every (vector, partition) pair, every pack row count, and the overlap
 	// total, so the home/overlap classification has to be bound too.
 	flipped := vectorpartition.ShardGenerationDescriptorV1{
+		Plan: vectorpartition.ShardPlanV1{PacksPerDomain: 1},
 		Memberships: []vectorpartition.Membership{
 			{VectorOrdinal: 0, Partition: 0, Home: true},
 			{VectorOrdinal: 1, Partition: 0},

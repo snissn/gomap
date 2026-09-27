@@ -31,9 +31,14 @@ type m8ProductionMultiGroupAssetsV1 struct {
 	groups          []string
 	assetSetDigests map[string]string
 	descriptor      *m3VariantDescriptorV1
+	graphVariant    collections.VectorPartitionLocalGraphVariantV1
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return newM8ProductionMultiGroupAssetsWithRouterV2(vectors, groups, partitions, vectorpartition.DefaultRouterConfigV1())
+}
+
+func newM8ProductionMultiGroupAssetsWithRouterV2(vectors [][]float64, groups []string, partitions int, routerConfig vectorpartition.RouterConfigV1) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if len(vectors) == 0 || len(vectors[0]) == 0 || len(groups) < 2 || partitions < 4 {
 		return nil, errors.New("M8 production assets require vectors, two groups, and four partitions")
 	}
@@ -122,7 +127,7 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 	if err = h.collection.PublishVectorPartitionManifestV1(h.manifest, nil); err != nil {
 		return nil, err
 	}
-	if _, err = h.collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), h.manifest, routerParts, collections.VectorPartitionRouterBuildOptionsV1{Config: vectorpartition.DefaultRouterConfigV1(), AssetFileID: 5002, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128}); err != nil {
+	if _, err = h.collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), h.manifest, routerParts, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: 5002, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128}); err != nil {
 		return nil, err
 	}
 	if h.router, _, err = h.collection.OpenVectorPartitionRouterV1(partitionHNSWIndex); err != nil {
@@ -135,6 +140,7 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation {
 		return nil, fmt.Errorf("M8 router status=%+v", h.status)
 	}
+	h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	for _, group := range groups {
 		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
 	}
@@ -169,6 +175,10 @@ func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 // of its manifest with only group placements relabeled; local pack files and
 // the retained source lifecycle stay unchanged.
 func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, groups, partitions, fixture, vectors, false)
+}
+
+func openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64, allowOfflineGraphVariant bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if dir == "" || len(groups) < 2 {
 		return nil, errors.New("M8 existing assets require a directory and two groups")
 	}
@@ -186,7 +196,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		return nil, err
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1)); statErr == nil {
-		if err = m8BindRetainedM3DescriptorV1(h, fixture); err != nil {
+		if err = m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, allowOfflineGraphVariant); err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -198,6 +208,9 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)
 	if err != nil {
 		return nil, err
+	}
+	if h.graphVariant == "" {
+		h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	}
 	for _, group := range groups {
 		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
@@ -225,26 +238,39 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 }
 
 func m8RetainedOracleDomainCountsV1(cfg config) ([]int, error) {
+	domains, _, err := m8RetainedOracleShapesV1(cfg)
+	return domains, err
+}
+
+// Read both shapes under the same validated retained owner. Opening the same
+// database again merely to count representatives wastes I/O and can mix states.
+func m8RetainedOracleShapesV1(cfg config) ([]int, []int, error) {
 	dirs := cfg.m8VariantDBs
 	if cfg.m8ExistingDB != "" {
 		dirs = []string{cfg.m8ExistingDB}
 	}
 	counts := make([]int, 0, len(dirs))
+	representativeCounts := make([]int, 0, len(dirs))
 	for _, dir := range dirs {
 		assets, err := openM8ProductionExistingAssetSetV1(dir)
 		if err != nil {
-			return nil, fmt.Errorf("open retained M8 manifest for work planning: %w", err)
+			return nil, nil, fmt.Errorf("open retained M8 manifest for work planning: %w", err)
 		}
 		partitions, domains := assets.manifest.PartitionCount, assets.manifest.DomainCount
+		representatives := assets.status.Representatives
 		if err := assets.Close(); err != nil {
-			return nil, fmt.Errorf("close retained M8 manifest after work planning: %w", err)
+			return nil, nil, fmt.Errorf("close retained M8 manifest after work planning: %w", err)
 		}
 		if uint64(partitions) != uint64(cfg.partitions) || domains < 1 || domains > partitions {
-			return nil, errors.New("retained M8 manifest does not match configured physical packs or logical domains")
+			return nil, nil, errors.New("retained M8 manifest does not match configured physical packs or logical domains")
+		}
+		if representatives < uint64(domains) || representatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) {
+			return nil, nil, errors.New("retained M8 representative count is outside the admitted model bounds")
 		}
 		counts = append(counts, int(domains))
+		representativeCounts = append(representativeCounts, int(representatives))
 	}
-	return counts, nil
+	return counts, representativeCounts, nil
 }
 
 func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
@@ -284,6 +310,7 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 	}
 	h.status = h.router.Status()
 	h.manifest = h.status.Manifest
+	h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	return h, nil
 }
 
@@ -454,6 +481,38 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 	return m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, false)
 }
 
+func m8RetainedGraphVariantV1(manifest collections.VectorPartitionManifestV1, def collections.VectorIndexDefinition, descriptor m3VariantDescriptorV1, allowOffline bool) (collections.VectorPartitionLocalGraphVariantV1, bool, error) {
+	var retained collections.VectorPartitionLocalGraphVariantV1
+	for _, asset := range manifest.Assets {
+		if asset.GraphVariant == "" {
+			continue
+		}
+		variant := collections.VectorPartitionLocalGraphVariantV1(asset.GraphVariant)
+		if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+			return "", false, errors.New("retained M8 manifest has an unknown local graph variant")
+		}
+		if retained != "" && retained != variant {
+			return "", false, errors.New("retained M8 manifest mixes local graph variants")
+		}
+		retained = variant
+	}
+	if retained == "" {
+		return "", false, errors.New("retained M8 manifest has no local graph variant")
+	}
+	m, efConstruction, err := collections.VectorPartitionLocalGraphVariantParametersV1(def, retained)
+	if err != nil || m != descriptor.PartitionHNSWM || efConstruction != m3DescriptorPartitionHNSWEfCV1(descriptor) {
+		return "", false, errors.New("retained M8 descriptor local graph parameters do not match its graph variant")
+	}
+	offline := retained != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	if offline && !allowOffline {
+		return "", false, errors.New("retained M8 descriptor local graph construction is not production-selected")
+	}
+	if offline && (retained != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || m != 16 || efConstruction != 128) {
+		return "", false, errors.New("retained M8 offline graph is not the final M16/eFC128 control")
+	}
+	return retained, offline, nil
+}
+
 func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest, allowOfflineGraphVariant bool) error {
 	if h == nil || h.collection == nil || h.router == nil {
 		return errors.New("retained M8 assets are not open")
@@ -473,9 +532,14 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, h.status.Manifest.Assets); err != nil {
+		return fmt.Errorf("validate retained M8 shard packs: %w", err)
+	}
+	var indexDefinition collections.VectorIndexDefinition
 	var indexDefinitionDigest string
 	for _, index := range h.collection.MetaView().VectorIndexes {
 		if index.Name == partitionHNSWIndex {
+			indexDefinition = index
 			indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
 			break
 		}
@@ -491,19 +555,9 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err != nil || digest != descriptor.SourceOrdinalDigest {
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
-	offlineGraphVariant := false
-	var retainedGraphVariant collections.VectorPartitionLocalGraphVariantV1
-	retainedGraphVariant, err = m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+	retainedGraphVariant, offlineGraphVariant, err := m8RetainedGraphVariantV1(h.manifest, indexDefinition, descriptor, allowOfflineGraphVariant)
 	if err != nil {
-		if !allowOfflineGraphVariant {
-			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
-		}
-		var offlineErr error
-		retainedGraphVariant, offlineErr = m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
-		if offlineErr != nil {
-			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
-		}
-		offlineGraphVariant = true
+		return err
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {
@@ -520,17 +574,46 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != expectedStaleAssets {
 		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
 	}
-	for _, asset := range h.manifest.Assets {
-		searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
-		if openErr != nil {
-			return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+	anchors, err := m8RetainedDomainGraphAnchorsV1(h.manifest, retainedGraphVariant)
+	if err != nil {
+		return err
+	}
+	if anchors != nil {
+		for _, anchor := range anchors {
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), h.manifest.IndexName, h.manifest.Generation, anchor)
+			if openErr != nil {
+				return fmt.Errorf("retained M8 domain graph anchor %d: %w", anchor, openErr)
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return fmt.Errorf("close retained M8 domain graph anchor %d: %w", anchor, closeErr)
+			}
 		}
-		if closeErr := searcher.Close(); closeErr != nil {
-			return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
+	} else {
+		for _, asset := range h.manifest.Assets {
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
+			if openErr != nil {
+				return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
+			}
 		}
 	}
+	h.graphVariant = retainedGraphVariant
 	h.descriptor = &descriptor
 	return nil
+}
+
+func m8RetainedDomainGraphAnchorsV1(manifest collections.VectorPartitionManifestV1, variant collections.VectorPartitionLocalGraphVariantV1) ([]uint32, error) {
+	if variant != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 || manifest.DomainCount >= manifest.PartitionCount {
+		return nil, nil
+	}
+	for _, asset := range manifest.Assets {
+		if strings.Contains(asset.ID, "/section/") {
+			return m8ServingPartitionsV1(manifest, true)
+		}
+	}
+	return nil, errors.New("retained M8 multi-pack Vamana assets require domain graph rematerialization")
 }
 
 // m8ValidateExistingAssetsFixtureV1 prevents a retained M3 corpus from being
@@ -610,8 +693,21 @@ func m8RelabelTopologyManifestV1(local collections.VectorPartitionManifestV1, gr
 	}
 	cloned := local
 	cloned.Placements = append([]collections.VectorPartitionPlacementV1(nil), local.Placements...)
+	packDomains := make([]uint32, local.PartitionCount)
+	seenPacks := make([]bool, local.PartitionCount)
+	for _, mapping := range local.DomainPacks {
+		if mapping.PackID >= local.PartitionCount || mapping.DomainID >= local.DomainCount || seenPacks[mapping.PackID] {
+			return collections.VectorPartitionManifestV1{}, errors.New("M8 topology has an invalid domain-pack mapping")
+		}
+		packDomains[mapping.PackID] = mapping.DomainID
+		seenPacks[mapping.PackID] = true
+	}
 	for i := range cloned.Placements {
-		cloned.Placements[i].GroupID = groups[int(cloned.Placements[i].PartitionID)%len(groups)]
+		partition := cloned.Placements[i].PartitionID
+		if partition >= local.PartitionCount || !seenPacks[partition] {
+			return collections.VectorPartitionManifestV1{}, errors.New("M8 topology placement has no logical domain")
+		}
+		cloned.Placements[i].GroupID = groups[int(packDomains[partition])%len(groups)]
 	}
 	cloned.Canonicalize()
 	if err := cloned.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {

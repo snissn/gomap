@@ -204,6 +204,18 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 			s, err := r.Status(ctx)
 			return err == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
 		})
+		if r.reopened {
+			// State=Leader is observational: restart can expose it before the
+			// leader hint/current-term apply prefix is ready. The restored
+			// data group already has a durable command, so require the real
+			// catalog/group readiness barriers before the one-shot assertions.
+			// This retries reads only; no mutation is replayed or weakened.
+			fixedPeerWaitV1(t, ctx, func() bool {
+				report, err := r.ReadinessV1(ctx)
+				return err == nil && report.Ready
+			})
+		}
+
 		return r
 	}
 	r := open()
@@ -520,7 +532,7 @@ func fixedPeerPersistentBytesV1(t testing.TB, configs []FixedPeerTCPConfigV1) in
 }
 
 func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
-	for _, name := range []string{"duplicate-node", "duplicate-address", "duplicate-raft", "feature-floor", "missing-bootstrap", "overlapping-roots", "missing-listen", "rpc-listen-mismatch", "raft-listen-mismatch", "orphan-node"} {
+	for _, name := range []string{"duplicate-node", "duplicate-address", "duplicate-raft", "feature-floor", "missing-bootstrap", "overlapping-roots", "missing-listen", "rpc-listen-mismatch", "raft-listen-mismatch", "unknown-peer"} {
 		t.Run(name, func(t *testing.T) {
 			c := fixedPeerTestConfigsV1(t)[0]
 			switch name {
@@ -542,8 +554,8 @@ func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
 				c.ListenAddress = c.Nodes[1].Address
 			case "raft-listen-mismatch":
 				c.RaftListen[c.Catalog.ID] = c.Catalog.Peers[1].Address
-			case "orphan-node":
-				c.Catalog.Peers = c.Catalog.Peers[:2]
+			case "unknown-peer":
+				c.Catalog.Peers[2].ID = "unknown"
 			}
 			if client, err := NewFixedPeerTCPClientV1(c); err == nil {
 				client.Close()

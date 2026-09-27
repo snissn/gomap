@@ -323,6 +323,16 @@ Public typed legacy scalar-u8 rerank is the separate LocalOnly 64/v3 contract;
 it requires the typed capability and sibling score-plane proof and does not
 alter the distributed/deterministic command model.
 
+Typed source replacement is the separate LocalOnly 67/v1 mutation. It wraps one
+existing collection source command-WAL publication and is rejected by generic
+cluster submission/deterministic-entry encoding. It does not alter command 66's
+special vector-insert routed mutation boundary.
+
+Typed metadata update is the separate LocalOnly 68/v1 mutation. It carries
+explicit IDs and metadata-only set/unset values, lowers to the partial typed
+metadata command-WAL format, and is rejected by deterministic Raft entry
+encoding.
+
 Implement richer single-node reads only after the core read/write and cursor
 model is stable:
 

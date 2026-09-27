@@ -321,7 +321,7 @@ func (c *Collection) bindColumnSegmentOwnership(ctx context.Context, view column
 		}
 	}()
 	root := backenddb.RecoverableRoot{CommitSeq: token.CommitSeq, UserRootPageID: token.RootPageID, SystemRootPageID: token.SystemRootPageID, AppliedCommandLSN: token.AppliedCommandLSN, MaxEntryRevision: uint64(token.MaxEntryRevision)}
-	input.ownedSegments = make(map[uint32]rootpublication.StableResourceDescriptor, len(markers))
+	input.ownedSegments = make(map[uint32]rootpublication.StableResourcePhysicalDescriptor, len(markers))
 	for id, marker := range markers {
 		selector, err := marker.selector()
 		if err != nil {
@@ -331,7 +331,7 @@ func (c *Collection) bindColumnSegmentOwnership(ctx context.Context, view column
 		if err != nil {
 			return nil, err
 		}
-		descriptors := resources.Descriptors()
+		descriptors := resources.PhysicalDescriptors()
 		resources.Release() // The captured root retains the physical pin through planning.
 		if len(descriptors) != 1 || descriptors[0].Frontier().Bytes < marker.Frontier {
 			return nil, errors.New("collections: segment ownership resource frontier mismatch")

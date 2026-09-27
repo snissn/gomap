@@ -217,11 +217,22 @@ func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedG
 		} else if !doc.declaredValuesReady {
 			return cost, ErrVectorIndexSnapshotMismatch
 		}
-		if len(values) > limits.ValueSlots-cost.slots {
+		slots := len(values)
+		if input.metadataOnly {
+			for _, value := range values {
+				if value.Type == "" {
+					slots--
+				}
+			}
+		}
+		if slots > limits.ValueSlots-cost.slots {
 			return cost, errTypedGraphOverlayFoldNeeded
 		}
-		cost.slots += len(values)
+		cost.slots += slots
 		for _, value := range values {
+			if input.metadataOnly && value.Type == "" {
+				continue
+			}
 			if value.Type != ColumnStoreValueString && value.Type != ColumnStoreValueFloat32Vector {
 				return cost, ErrHybridSearchUnsupported
 			}
@@ -234,6 +245,7 @@ func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedG
 }
 
 type typedGraphPublicationState struct {
+	lastMetadataGeneration   uint64
 	servingBase              *typedGraphServingBaseMetadata
 	servingMaterializer      columnPhysicalScanSnapshotView
 	servingRefs              []ColumnAssetRef
@@ -271,12 +283,13 @@ func (s *typedGraphPublicationState) matches(catalog *collectionCatalog) bool {
 }
 
 type typedGraphPublicationCandidate struct {
-	coord       *collectionSchemaCoordinator
-	before      *typedGraphPublicationState
-	next        *typedGraphPublicationState
-	receipts    []*typedGraphPublicationReceipt
-	ownReceipt  bool
-	reconciling bool
+	metadataOnly bool
+	coord        *collectionSchemaCoordinator
+	before       *typedGraphPublicationState
+	next         *typedGraphPublicationState
+	receipts     []*typedGraphPublicationReceipt
+	ownReceipt   bool
+	reconciling  bool
 }
 
 // The existing typed projection and generic extractor produce owning values;
@@ -323,6 +336,22 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 	next.tombstones += tombstones
 	next.admittedPayloadBytes += payload
 	next.valueSlots += slots
+	if input.metadataOnly {
+		// Metadata cannot shadow a scoring row. Current secondary roots handle
+		// eligibility; final materialization follows the latest row locator.
+		receipts := input.typedReceipts
+		ownReceipt := len(receipts) == 0
+		if ownReceipt {
+			receipt, err := c.reserveTypedGraphPublication(cost)
+			if err != nil {
+				return nil, err
+			}
+			receipts = []*typedGraphPublicationReceipt{receipt}
+		} else if err := validateTypedGraphReceiptInput(coord, input, cost); err != nil {
+			return nil, err
+		}
+		return &typedGraphPublicationCandidate{coord: coord, before: before, next: &next, receipts: receipts, ownReceipt: ownReceipt, metadataOnly: true}, nil
+	}
 	changed := make([]columnPhysicalVisibleRow, 0, count)
 	for i, d := range input.sourceDeleteDocuments {
 		changed = append(changed, columnPhysicalVisibleRow{ID: bytes.Clone(d.ID), Deleted: true, Operation: ColumnPublishOperationDelete, RowIndex: i, PartID: columnPhysicalRowAssetPartID})
@@ -542,6 +571,9 @@ func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames 
 		return
 	}
 	p.next.catalog = cloneCatalogWithRootUpdates(p.before.catalog, meta, rootNames, rootIDs)
+	if p.metadataOnly {
+		p.next.lastMetadataGeneration = plan.UpdatedActiveManifest.Generation
+	}
 	for _, asset := range plan.PreparedAssets {
 		p.next.installedAssetBytes = saturatingAddNonNegativeInt64(p.next.installedAssetBytes, asset.Bytes)
 	}

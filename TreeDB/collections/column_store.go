@@ -1153,13 +1153,17 @@ func validateColumnManifestIdentityFor(label string, identity ColumnManifestIden
 	if identity.Format == "" {
 		identity.Format = columnManifestFormatTCS1
 	}
-	if identity.Format != columnManifestFormatTCS1 {
+	if identity.Format != columnManifestFormatTCS1 && identity.Format != columnSourceDirectoryFormatV2 {
 		return fmt.Errorf("collections: unsupported %s column manifest format %q", label, identity.Format)
 	}
 	if identity.Version == 0 {
 		return fmt.Errorf("collections: %s column manifest version is required", label)
 	}
-	if identity.Version != columnManifestIdentityVersion {
+	wantVersion := columnManifestIdentityVersion
+	if identity.Format == columnSourceDirectoryFormatV2 {
+		wantVersion = 2
+	}
+	if identity.Version != wantVersion {
 		return fmt.Errorf("collections: unsupported %s column manifest version %d", label, identity.Version)
 	}
 	if identity.Checksum == 0 {

@@ -13,11 +13,15 @@ import (
 func TestLeafGenerationGC_CachedModeCheckpointsBeforeDryRun(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
+		Dir:                              dir,
+		Durability:                       treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog:       true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			// Only the explicit maintenance call may checkpoint this fixture.
+			Generational: treedb.ValueLogGenerationConfig{Policy: treedb.ValueLogGenerationOff},
 		},
 	})
 	if err != nil {

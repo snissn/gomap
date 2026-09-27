@@ -1347,6 +1347,105 @@ type Manager struct {
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
 }
 
+// PreparedReadProfile reports the configuration that bounds value-log reads
+// made while planning and publishing a prepared ordered-root mutation. It is
+// allocation-free; callers must account for both encoded and decoded record
+// scratch before entering a read path.
+type PreparedReadProfile struct {
+	RegisteredFiles              uint64
+	MaxRecordBytes               int64
+	HasDictionaryLookup          bool
+	HasTemplateLookup            bool
+	TemplateMaxDecodedBytes      int
+	TemplateDefinitionCacheSize  int
+	GroupedFrameCacheEntries     int
+	GroupedFrameCacheMaxRawBytes int
+	GroupedFrameCacheMaxBytes    int64
+}
+
+// PreparedRecordDictionaryID inspects the record prefix needed to decide
+// whether reading ptr could invoke the configured dictionary callback. It does
+// not read or allocate the record payload. Prepared publishers use this before
+// every leaf-log read so an installed-but-unused callback is admissible while a
+// dictionary-compressed source record is rejected before lookup or codec-cache
+// allocation.
+func (m *Manager) PreparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
+	if m == nil {
+		return 0, errors.New("valuelog: nil manager")
+	}
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return 0, err
+	}
+	return f.preparedRecordDictionaryID(ptr)
+}
+
+func (f *File) preparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
+	if f == nil || f.File == nil || ptr.Offset < valueLogRecordCRCPrefixBytes {
+		return 0, ErrCorrupt
+	}
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
+		return 0, err
+	}
+	start := int64(ptr.Offset - valueLogRecordCRCPrefixBytes)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return 0, err
+	}
+	if header[4] != Version {
+		return 0, ErrCorrupt
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	if !page.ValuePtrRecordLengthHintMatches(ptr, uint32(headerWithoutCRC)+valueLen) {
+		return 0, ErrCorrupt
+	}
+	if header[5]&recordFlagGrouped == 0 {
+		if page.ValuePtrIsGrouped(ptr) {
+			return 0, ErrCorrupt
+		}
+		return 0, nil
+	}
+	if !page.ValuePtrIsGrouped(ptr) || valueLen < FrameHeaderSize {
+		return 0, ErrCorrupt
+	}
+	var frame [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frame[:], start+HeaderSize); err != nil {
+		return 0, err
+	}
+	if frame[0] != FrameVersion || frame[2] == 0 || frame[2] > MaxFrameK {
+		return 0, ErrCorrupt
+	}
+	if frame[1]&FrameFlagCompressed == 0 {
+		return 0, nil
+	}
+	return binary.LittleEndian.Uint64(frame[4:12]), nil
+}
+
+func (m *Manager) PreparedReadProfile() PreparedReadProfile {
+	var profile PreparedReadProfile
+	if m == nil {
+		return profile
+	}
+	m.mu.RLock()
+	profile.RegisteredFiles = uint64(len(m.files))
+	profile.HasDictionaryLookup = m.dictLookup != nil
+	profile.HasTemplateLookup = m.templateLookup != nil
+	profile.TemplateMaxDecodedBytes = m.templateDecodeOpts.MaxDecodedBytes
+	profile.TemplateDefinitionCacheSize = m.templateDecodeOpts.DefCacheSize
+	profile.GroupedFrameCacheEntries = m.groupedFrameCacheEntries
+	profile.GroupedFrameCacheMaxRawBytes = m.groupedFrameCacheMaxRaw
+	profile.GroupedFrameCacheMaxBytes = m.groupedFrameCacheMaxBytes
+	m.mu.RUnlock()
+	// MaxRecordSize is a process configuration variable rather than Manager
+	// state. Production sets it before opening DBs; concurrent mutation is not
+	// supported by the record readers themselves.
+	profile.MaxRecordBytes = limits.MaxRecordSize
+	return profile
+}
+
 func NewManager(dir string) (*Manager, error) {
 	return NewManagerWithStableResourcePinRegistry(dir, nil)
 }
@@ -1999,6 +2098,51 @@ func (m *Manager) CurrentSetNoRefresh() *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.currentSetLocked()
+}
+
+// RegisteredFileCountNoRefresh includes zombie entries because a later
+// CurrentSetNoRefresh still walks the complete registered-file table.
+func (m *Manager) RegisteredFileCountNoRefresh() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.files)
+}
+
+// CurrentSetNoRefreshWithMaxFiles has the same membership and pinning semantics
+// as CurrentSetNoRefresh, but rejects before allocating a snapshot when the
+// registered file table exceeds maxFiles. The count and snapshot are protected
+// by the same lock, including when registrations race with this call.
+func (m *Manager) CurrentSetNoRefreshWithMaxFiles(maxFiles int) (*Set, error) {
+	if maxFiles < 0 {
+		return nil, fmt.Errorf("value log snapshot: negative file limit %d", maxFiles)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.files) > maxFiles {
+		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), maxFiles)
+	}
+	return m.currentSetLocked(), nil
+}
+
+// CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.
+// Unrelated registrations cannot enlarge this snapshot. The caller releases it
+// through Release, just like CurrentSetNoRefresh.
+func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	files := make(map[uint32]*File, len(ids))
+	for id := range ids {
+		if f := m.files[id]; f != nil && !f.IsZombie.Load() {
+			files[id] = f
+			f.RefCount.Add(1)
+		}
+	}
+	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum}
+	set.RefCount.Store(1)
+	return set
 }
 
 // currentSetLocked builds a ref-counted snapshot.

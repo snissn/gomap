@@ -133,6 +133,7 @@ type columnRetainedPayloadStorageDocuments struct {
 	semanticStreamPrepareMetrics columnRetainedSemanticStreamV1PrepareMetrics
 	declaredRows                 []columnDeclaredRow
 	declaredRowsReady            bool
+	declaredStringBackingBytes   int64
 }
 
 func prepareColumnRetainedPayloadStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
@@ -437,6 +438,7 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 			if !values[i].Present {
 				continue
 			}
+			recordEmbeddingVectorMaterialization(stats, col, values[i])
 			if strings.Contains(col.Path, ".") {
 				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
 					return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
@@ -453,6 +455,7 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 				Value:   raw,
 				Present: values[i].Present,
 			}
+			recordEmbeddingVectorMaterialization(stats, col, values[i])
 			if !values[i].Present {
 				continue
 			}
@@ -474,6 +477,14 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 type columnReconstructedDeclaredValue struct {
 	Value   any
 	Present bool
+}
+
+func recordEmbeddingVectorMaterialization(stats *DocumentMaterializationStats, col ColumnStoreColumn, value columnDeclaredValue) {
+	if stats == nil || col.Path != "embedding" || !value.Present || value.Null || value.Type != ColumnStoreValueFloat32Vector {
+		return
+	}
+	stats.EmbeddingVectorReads++
+	stats.EmbeddingVectorBytes += uint64(len(value.Float32Vector)) * 4
 }
 
 func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue) ([]byte, error) {
@@ -525,8 +536,12 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 			if !declared[i].Present {
 				continue
 			}
+			before := len(arena)
 			if err := writeField(col.Path, declared[i].Value); err != nil {
 				return arena, err
+			}
+			if stats != nil && col.Path == "embedding" {
+				stats.EmbeddingOutputBytes += uint64(len(arena) - before)
 			}
 			written[col.Path] = struct{}{}
 		}
@@ -538,8 +553,12 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 			if !declared[i].Present {
 				continue
 			}
+			before := len(arena)
 			if err := writeField(col.Path, declared[i].Value); err != nil {
 				return arena, err
+			}
+			if stats != nil && col.Path == "embedding" {
+				stats.EmbeddingOutputBytes += uint64(len(arena) - before)
 			}
 			written[col.Path] = struct{}{}
 		}
