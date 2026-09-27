@@ -233,27 +233,40 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
 		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
+		var unionCount int
+		var err error
+		var previous *DurableRootTransaction
+		durable := len(candidate.durableRootGroup().members) != 0
 		for _, entry := range c.pending {
+			if durable {
+				previous, err = validatePhysicalDurabilityMember(previous, entry.candidate)
+				if err != nil {
+					break
+				}
+			}
 			if set := entry.candidate.resourceSet(); set != nil {
 				sets = append(sets, set)
 			}
 		}
 		sets = append(sets, candidateSet)
-		var unionCount int
-		var err error
-		if len(candidate.durableRootGroup().members) != 0 {
-			members := make([]*PreparedRootCandidate, 0, len(c.pending)+1)
-			for _, pending := range c.pending {
-				members = append(members, pending.candidate)
+		if err == nil && durable {
+			_, err = validatePhysicalDurabilityMember(previous, candidate)
+		}
+		if err == nil {
+			if durable && len(c.pending) == 0 {
+				// Preflight admitted this single owned transaction. A frozen set
+				// already reconciles its own physical identities, so counting it
+				// requires no borrowed publication view or pin accounting.
+				if owner := candidateSet.Owner(); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+					err = ErrResourceOwnership
+				} else {
+					unionCount = candidateSet.Len()
+				}
+			} else if durable {
+				unionCount, err = physicalDurabilityCount(sets)
+			} else {
+				unionCount, err = validatedStableResourceUnionCount(sets...)
 			}
-			members = append(members, candidate)
-			var physical *StableResourceSet
-			physical, err = physicalDurabilityUnion(members)
-			if err == nil {
-				unionCount = physical.Len()
-			}
-		} else {
-			unionCount, err = validatedStableResourceUnionCount(sets...)
 		}
 		if err != nil {
 			c.rejectedCandidates++

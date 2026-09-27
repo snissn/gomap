@@ -1123,6 +1123,9 @@ const (
 	stableResourceViewValidatedCount
 	// Physical-only unions never export logical authority.
 	stableResourceViewPhysicalPinned
+	// Admission only: borrow immutable physical metadata for compatibility/count.
+	// Never expose this transient result as a publication or ownership view.
+	stableResourceViewPhysicalCount
 )
 
 func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryLookup, incoming stableResourceEntry, mode stableResourceViewMode, work *StableResourceClosureWork) error {
@@ -1160,12 +1163,12 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
-		if mode != stableResourceViewPhysicalPinned {
+		if mode != stableResourceViewPhysicalPinned && mode != stableResourceViewPhysicalCount {
 			if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 				return err
 			}
 		}
-		if mode != stableResourceViewValidatedCount {
+		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
 			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
 			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 			for field := range incoming.reachability {
@@ -1194,6 +1197,8 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 	}
 	if mode == stableResourceViewValidatedCount {
 		*entries = append(*entries, stableResourceEntry{token: incoming.token, logicalObligations: incoming.logicalObligations})
+	} else if mode == stableResourceViewPhysicalCount {
+		*entries = append(*entries, stableResourceEntry{token: incoming.token, frontier: incoming.frontier})
 	} else {
 		*entries = append(*entries, cloneStableResourceEntry(incoming))
 	}
@@ -1228,12 +1233,12 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
-		if mode != stableResourceViewPhysicalPinned {
+		if mode != stableResourceViewPhysicalPinned && mode != stableResourceViewPhysicalCount {
 			if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 				return err
 			}
 		}
-		if mode != stableResourceViewValidatedCount {
+		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
 			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
 			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 			for field := range incoming.reachability {
@@ -1261,6 +1266,8 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 	}
 	if mode == stableResourceViewValidatedCount {
 		*entries = append(*entries, stableResourceEntry{token: incoming.token, logicalObligations: incoming.logicalObligations})
+	} else if mode == stableResourceViewPhysicalCount {
+		*entries = append(*entries, stableResourceEntry{token: incoming.token, frontier: incoming.frontier})
 	} else {
 		*entries = append(*entries, cloneStableResourceEntry(incoming))
 	}
@@ -2507,9 +2514,6 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 }
 
 type StableResourceSet struct {
-	// physicalOnly is an explicit durability/reachability capability. It carries
-	// no complete logical metadata and cannot be used for publication proofs.
-	physicalOnly        bool
 	physicalDirectories []*DependencyDirectoryV2
 	// Empty directories have no physical token to own their root lease.
 	emptyDirectory            *DependencyDirectoryV2
@@ -2519,6 +2523,9 @@ type StableResourceSet struct {
 	logicalMembershipEvidence map[ResourceKind]stableLogicalMembershipEvidence
 	pinHighWater              map[ResourceKind]uint64
 	owner                     atomic.Uint32
+	// physicalOnly is an explicit durability/reachability capability. It carries
+	// no complete logical metadata and cannot be used for publication proofs.
+	physicalOnly bool
 }
 
 func (set *StableResourceSet) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -4233,7 +4240,8 @@ func singleStableResourceSet(sets []*StableResourceSet) *StableResourceSet {
 }
 
 func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourceSet) (*StableResourceSet, error) {
-	view := &StableResourceSet{physicalOnly: mode == stableResourceViewPhysicalPinned}
+	physicalOnly := mode == stableResourceViewPhysicalPinned || mode == stableResourceViewPhysicalCount
+	view := &StableResourceSet{physicalOnly: physicalOnly}
 	view.owner.Store(uint32(ResourceOwnerView))
 	single := singleStableResourceSet(sets)
 	lookup := stableResourceEntryLookup{}
@@ -4244,7 +4252,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			continue
 		}
 		set.mu.Lock()
-		if set.physicalOnly && mode != stableResourceViewPhysicalPinned {
+		if set.physicalOnly && !physicalOnly {
 			set.mu.Unlock()
 			return nil, ErrResourceOwnership
 		}
@@ -4252,7 +4260,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			// V1 flat metadata remains immutable diagnostic evidence after its
 			// producer releases ownership. Directory reads and physical union
 			// capabilities instead depend on a live lease, even for empty roots.
-			requiresLease := mode == stableResourceViewPhysicalPinned || set.emptyDirectory != nil || len(set.physicalDirectories) != 0
+			requiresLease := physicalOnly || set.emptyDirectory != nil || len(set.physicalDirectories) != 0
 			set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 				requiresLease = requiresLease || entry.logicalObligations.directory != nil
 				return !requiresLease
@@ -4262,7 +4270,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 				return nil, ErrResourceOwnership
 			}
 		}
-		if mode != stableResourceViewPhysicalPinned {
+		if !physicalOnly {
 			compatible := func(directory *DependencyDirectoryV2) bool {
 				if directory == nil {
 					return true
@@ -4279,7 +4287,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 				return nil, ErrResourceConflict
 			}
 		}
-		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalPinned {
+		if mode != stableResourceViewValidatedCount && !physicalOnly {
 			evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
 		}
 		// Frozen kind views and prior flat unions are already canonical. Keep
@@ -4319,7 +4327,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			return nil, mergeErr
 		}
 	}
-	if mode == stableResourceViewValidatedCount {
+	if mode == stableResourceViewValidatedCount || mode == stableResourceViewPhysicalCount {
 		return view, nil
 	}
 	sortStableResourceEntries(view.entries)

@@ -4,36 +4,68 @@ package rootpublication
 // callback. Original candidate sets retain ownership through success, retry,
 // or recovery retention. This capability cannot answer logical metadata APIs.
 func physicalDurabilityUnion(candidates []*PreparedRootCandidate) (*StableResourceSet, error) {
+	sets, err := physicalDurabilityMemberSets(candidates)
+	if err != nil {
+		return nil, err
+	}
+	return unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
+}
+
+// physicalDurabilityCount is admission bookkeeping only. The frozen members
+// retain their own leases; no logical authority, pins or durable frontier union
+// escapes this call. Every member must first pass validatePhysicalDurabilityMember.
+// Compatibility checks share the publication merge primitive.
+func physicalDurabilityCount(sets []*StableResourceSet) (int, error) {
+	count, err := unionStableResourceSets(stableResourceViewPhysicalCount, sets...)
+	if err != nil {
+		return 0, err
+	}
+	return len(count.entries), nil
+}
+
+func physicalDurabilityMemberSets(candidates []*PreparedRootCandidate) ([]*StableResourceSet, error) {
 	if len(candidates) == 0 {
 		return nil, ErrDurableRootLineage
 	}
 	var previous *DurableRootTransaction
 	sets := make([]*StableResourceSet, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate == nil {
-			return nil, ErrDurableRootLineage
-		}
-		group := candidate.durableRootGroup()
-		if len(group.members) == 0 {
-			return nil, ErrDurableRootLineage
-		}
-		for _, transaction := range group.members {
-			if transaction == nil || transaction.Lineage() == (DurableRootLineageID{}) {
-				return nil, ErrDurableRootLineage
-			}
-			if previous != nil {
-				if err := validateConsecutiveDurableRootTransactions(previous, transaction); err != nil {
-					return nil, err
-				}
-			}
-			previous = transaction
-		}
-		if previous.Sequence() != candidate.frontier.commitSeq {
-			return nil, ErrDurableRootLineage
+		var err error
+		previous, err = validatePhysicalDurabilityMember(previous, candidate)
+		if err != nil {
+			return nil, err
 		}
 		sets = append(sets, candidate.resourceSet())
 	}
-	return unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
+	return sets, nil
+}
+
+// validatePhysicalDurabilityMember extends one exact consecutive lineage. The
+// caller retains all candidate leases and must validate every member before
+// using their sets for physical admission counting or publication.
+func validatePhysicalDurabilityMember(previous *DurableRootTransaction, candidate *PreparedRootCandidate) (*DurableRootTransaction, error) {
+	if candidate == nil {
+		return nil, ErrDurableRootLineage
+	}
+	group := candidate.durableRootGroup()
+	if len(group.members) == 0 {
+		return nil, ErrDurableRootLineage
+	}
+	for _, transaction := range group.members {
+		if transaction == nil || transaction.Lineage() == (DurableRootLineageID{}) {
+			return nil, ErrDurableRootLineage
+		}
+		if previous != nil {
+			if err := validateConsecutiveDurableRootTransactions(previous, transaction); err != nil {
+				return nil, err
+			}
+		}
+		previous = transaction
+	}
+	if previous.Sequence() != candidate.frontier.commitSeq {
+		return nil, ErrDurableRootLineage
+	}
+	return previous, nil
 }
 
 // ClonePhysicalReachabilityUnion independently pins physical storage and every

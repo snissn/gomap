@@ -114,9 +114,15 @@ func TestPhysicalDurabilityUnionDirectoryRemovalRetryAndSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, invalid := range [][]*PreparedRootCandidate{{one.candidate, one.candidate}, {two.candidate, one.candidate}, {one.candidate, candidate(t, 3, 1)}} {
+		if _, err := testPhysicalDurabilityCount(invalid); !errors.Is(err, ErrDurableRootLineage) {
+			t.Fatalf("invalid count group accepted: %v", err)
+		}
 		if _, err := physicalDurabilityUnion(invalid); !errors.Is(err, ErrDurableRootLineage) {
 			t.Fatalf("invalid physical group accepted: %v", err)
 		}
+	}
+	if count, err := testPhysicalDurabilityCount([]*PreparedRootCandidate{one.candidate, two.candidate}); err != nil || count != 1 {
+		t.Fatalf("directory-backed count=%d error=%v", count, err)
 	}
 	var sealed *StableResourceSet
 	attempts := 0
@@ -281,6 +287,9 @@ func TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer(t *testin
 					return true
 				})
 			}
+			if count, err := testPhysicalDurabilityCount([]*PreparedRootCandidate{one.candidate, two.candidate}); count != 0 || !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("physical conflict count=%d error=%v", count, err)
+			}
 			if union, err := physicalDurabilityUnion([]*PreparedRootCandidate{one.candidate, two.candidate}); union != nil || !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("physical conflict union=%v error=%v", union, err)
 			}
@@ -289,4 +298,46 @@ func TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer(t *testin
 			}
 		})
 	}
+}
+
+func TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority(t *testing.T) {
+	for _, mode := range []string{"lineage", "sequence", "released"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newDurableRootTransactionFixture(t, durableLineage(1), 2)
+			want := ErrDurableRootLineage
+			switch mode {
+			case "lineage":
+				fixture.tx.input.Lineage = DurableRootLineageID{}
+			case "sequence":
+				fixture.candidate.frontier.commitSeq++
+			case "released":
+				fixture.resources.releaseFrom(ResourceOwnerCandidate)
+				want = ErrResourceOwnership
+			}
+			coordinator, err := New(Options{Clock: NewFakeClock(time.Unix(1, 0)), Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+				return PublishResult{Outcome: PublishAmbiguous, Err: errors.New("unexpected publish")}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, coordinator)
+			if err := coordinator.Enqueue(context.Background(), fixture.candidate); !errors.Is(err, want) {
+				t.Fatalf("enqueue=%v want %v", err, want)
+			}
+			if fixture.tx.Owner() != ResourceOwnerCandidate || fixture.activates.Load() != 0 || coordinator.Stats().PendingCommits != 0 {
+				t.Fatal("rejected singleton transferred or activated")
+			}
+			if err := fixture.candidate.Abandon(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func testPhysicalDurabilityCount(candidates []*PreparedRootCandidate) (int, error) {
+	sets, err := physicalDurabilityMemberSets(candidates)
+	if err != nil {
+		return 0, err
+	}
+	return physicalDurabilityCount(sets)
 }
