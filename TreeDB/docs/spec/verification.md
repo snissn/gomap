@@ -2205,11 +2205,24 @@ cases; whole-process RSS and heap observations include it.
 
 Process RSS improves in 34 of 36 cells, but warmed search with 32 local rows
 and 1024 remote entries consistently rises from a 50344 KiB median to 62392
-KiB. Post-GC live heap is effectively unchanged; this does not clear the
-process-peak regression. That observation remains under causal investigation,
-with the original matrix retained. Current-head platform checks also remain
-pending; these small-fixture results do not establish P2 readiness or
-distributed capacity.
+KiB (+24%). This real process-peak increase remains in the original matrix.
+Three paired phase diagnostics locate the excess during the second fixture's
+import, before its changed build/open paths: live heap and heap-in-use are
+essentially equal, while anonymous resident memory differs. File-backed
+residency is similar, and queries add approximately 127 KiB in both arms.
+The candidate has lower RSS in all three single-fixture runs. These observations
+support sensitivity to preceding fixture allocation/GC history; they do not
+isolate the complete page-residency mechanism or establish a long-running RSS
+plateau. No forced GC or fixture-lifetime adjustment replaces the original
+measurement.
+
+Component performance review accepts the build/open gains with this measured
+RSS limitation; it makes no universal resident-memory improvement claim. The
+unchanged-production phase packet retains 74 authenticated receipts and 18
+successful exits at `growth-rss2` under the P2 evidence root, with manifest
+`4317f88aef8cd4d8f63f19a7c4c669cb05fde701350c8480861e035dc189ef0b`.
+Current-head platform checks and mature review remain required. These
+small-fixture results do not establish P2 readiness or distributed capacity.
 
 `TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
 `TestSourceShardMapBoundImmutableLookupV2` and

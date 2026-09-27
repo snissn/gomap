@@ -177,8 +177,10 @@ func TestBatchDeleteRangeValueLogPointerRefsAndGC(t *testing.T) {
 	if err := seed.SetPointer([]byte("k3"), ptrKeep); err != nil {
 		t.Fatalf("seed k3: %v", err)
 	}
-	if err := seed.Write(); err != nil {
-		t.Fatalf("seed Write: %v", err)
+	// Establish separate durable generations: relaxed writes may coalesce and
+	// leave the seed in a fallback slot after the later slot advance.
+	if err := seed.WriteSync(); err != nil {
+		t.Fatalf("seed WriteSync: %v", err)
 	}
 	_ = seed.Close()
 
@@ -189,8 +191,8 @@ func TestBatchDeleteRangeValueLogPointerRefsAndGC(t *testing.T) {
 	if err := b.SetPointer([]byte("k2"), ptrNewReplace); err != nil {
 		t.Fatalf("SetPointer replacement: %v", err)
 	}
-	if err := b.Write(); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
 	}
 	_ = b.Close()
 
