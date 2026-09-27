@@ -157,12 +157,32 @@ the remaining bytes are one canonical JSON `VectorPartitionManifestV1`
 envelope with format `vector_partition_paged_manifest_v2` and non-nil
 `PagedRootV2`. The entire record is capped at 64 KiB. Inline source identity,
 row/pack/domain counts, balance policy and membership/layout/asset lists must
-be empty or zero; their actual global identity and counts are in the paged
-root. The root binds placement/source-map epochs, map/snapshot-set/profile
-SHA-256 digests and two content-addressed page-directory assets. Root asset
-frames are capped at 1 MiB. JSON keys/order/whitespace and nil empty-list
-representation must match canonical re-encoding; mixed formats, unknown
-fields, truncated/trailing records and digest changes are refused.
+be empty or zero. Global BUILD source-map/snapshot-set/graph-profile identity
+is separate from local physical projection. The root binds exact placement
+SHA-256 digest (there is no separate placement epoch), canonical independent `SourceOwners`/`ANNOwners`
+sets (at most 128 each), and explicitly local source-shard, source-row,
+ANN-domain, physical-pack and membership counts. Memberships include overlap;
+they are not the source-row count. Source-only and ANN-only projections use a
+zero asset and zero counts for the absent directory side. There is one combined
+projection per collection/index/generation for all locally hosted groups.
+
+The two immutable directory assets and every physical descendant are local
+durable dependencies. VDP2 pages have magic `VDP2`, big-endian payload length,
+and canonical version-2 JSON; each page is at most 64 KiB with at most 128
+records or child references and fewer than 16 levels. Children bind generation,
+strictly ordered first/last keys, exact descendant record count, and ordinary
+asset SHA-256/checksum references. Source leaves retain sealed shard snapshot
+descriptors; metadata leaves retain source-scoped membership identities and
+graph asset references. Source identity preserves owner, shard, snapshot
+revision/digest, ordinal and document revision. This adds no semantic Merkle
+authority: local opens stream the complete canonical owner descriptor sequence
+against the owner aggregate committed in BUILD before exposing selected rows.
+
+Stage, snapshots and GC walk the entire local physical closure; owner scope
+never filters reclamation. Prefix selection is only an open optimization.
+Root/page JSON keys/order/whitespace and nil empty-list representation must
+match canonical re-encoding; mixed formats, unknown fields, truncated/trailing
+records, wrong child ranges/counts and digest changes are refused.
 
 The schema-7 integrity digest is SHA-256 of the canonical envelope JSON with
 its `IntegrityDigest` empty. Its ready digest binds format, collection/index

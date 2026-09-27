@@ -42,7 +42,7 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				t.Fatal(err)
 			}
 			ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: meta.Name}
-			catalogInput := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-c", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b"}}}
+			catalogInput := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}, {ID: "group-c", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b"}}}
 			catalogInput.Features.Required = append(catalogInput.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 			catalog, err := raftplacement.Validate(catalogInput)
 			if err != nil {
@@ -92,6 +92,7 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 			}
 			first := importRow("first")
 			identity := raftplacement.VectorPartitionLifecycleIdentityV1{SourceFormat: 2, Generation: 1, Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding", IndexDefinitionDigest: definitionHex}, SourceV2: raftplacement.VectorPartitionLifecycleSourceIdentityV2{SourceMapEpoch: 1, SourceMapDigest: rawMap.Digest, GraphProfileDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64)}}
+			var appliedAuthority *raftplacement.CatalogMetaAuthorityV1
 			selected := first.Snapshot
 			duplicate, omit := false, false
 			owner := VectorPartitionOwnerSourceInputV2{GroupID: "group-a", Collection: c, Walk: func(ctx context.Context, visit func(collections.VectorPartitionSourceSnapshotV2) error) error {
@@ -159,6 +160,18 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 					t.Fatalf("conflated source/ANN owners: %+v", record)
 				}
 				identity = record.Identity
+				appliedAuthority = harness.LeaderAuthority()
+				staged, err := BuildAndStagePreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-a", ownership, []VectorPartitionOwnerSourceInputV2{owner})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if staged.State != "building" || staged.PagedRootV2.LocalSourceShardCount != 1 || len(staged.PagedRootV2.ANNOwners) != 0 {
+					t.Fatalf("source-only stage=%+v", staged)
+				}
+				if _, err := BuildAndStagePreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}); err == nil {
+					t.Fatal("ANN-only node staged partial source projection")
+				}
+
 			}
 			root, err := raftplacement.VectorPartitionSourceOwnerSetDigestV2(aggregates)
 			if err != nil {
@@ -173,6 +186,17 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				t.Fatal(err)
 			}
 			owner.Collection = c
+			if appliedAuthority != nil {
+				session, err := OpenPreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-a", ownership, c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				row, readErr := session.ReadSourceRowV2(t.Context(), collections.VectorPartitionSourceRowIdentityV2{SourceOwner: "group-a", ShardID: selected.ShardID, SnapshotRevision: selected.SnapshotRevision, SnapshotDigest: selected.Digest, Ordinal: 1, DocumentRevision: 23})
+				closeErr := session.Close()
+				if readErr != nil || closeErr != nil || !strings.HasPrefix(string(row.DocumentID), "second-") {
+					t.Fatalf("prepared reopen row=%+v read=%v close=%v", row, readErr, closeErr)
+				}
+			}
 			reopened, err := prepare()
 			if err != nil {
 				t.Fatal(err)

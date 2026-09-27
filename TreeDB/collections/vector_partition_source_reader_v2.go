@@ -20,13 +20,14 @@ import (
 // commitment. Each read verifies actual local row bytes against expected; no
 // source-group quorum or distributed serving authority is inferred here.
 type VectorPartitionSourceReaderV2 struct {
-	mu         sync.RWMutex
-	snap       *backenddb.Snapshot
-	root       uint64
-	prefix     string
-	expected   vectorpartition.SourceSnapshotV2
-	commitment VectorPartitionSourceCommitmentV2
-	owner      sourcepartition.SourceShardV2
+	mu          sync.RWMutex
+	snap        *backenddb.Snapshot
+	ownSnapshot bool
+	root        uint64
+	prefix      string
+	expected    vectorpartition.SourceSnapshotV2
+	commitment  VectorPartitionSourceCommitmentV2
+	owner       sourcepartition.SourceShardV2
 }
 
 // VectorPartitionSourceCommitmentV2 identifies a locally committed immutable
@@ -100,15 +101,30 @@ func (c *Collection) OpenVectorPartitionSourceSnapshotV2(expected VectorPartitio
 	if c == nil || c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	sealed, err := vectorpartition.SealSourceSnapshotV2(expected, expected.MerkleRoot)
-	if err != nil || expected.Digest == ([sha256.Size]byte{}) || sealed != expected {
-		return nil, errors.New("collections: unsealed expected source snapshot")
-	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
-	fail := func(err error) (*VectorPartitionSourceReaderV2, error) { _ = snap.Close(); return nil, err }
+	reader, err := c.openVectorPartitionSourceSnapshotAtSnapshotV2(expected, indexName, snap)
+	if err != nil {
+		return nil, errors.Join(err, snap.Close())
+	}
+	reader.ownSnapshot = true
+	return reader, nil
+}
+
+// A pinned paged-generation session reuses one immutable DB snapshot across
+// source descriptors. Each temporary reader borrows that snapshot; closing it
+// does not release the session's root or accumulate per-shard reader handles.
+func (c *Collection) openVectorPartitionSourceSnapshotAtSnapshotV2(expected VectorPartitionSourceSnapshotV2, indexName string, snap *backenddb.Snapshot) (*VectorPartitionSourceReaderV2, error) {
+	sealed, err := vectorpartition.SealSourceSnapshotV2(expected, expected.MerkleRoot)
+	if err != nil || expected.Digest == ([sha256.Size]byte{}) || sealed != expected {
+		return nil, errors.New("collections: unsealed expected source snapshot")
+	}
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	fail := func(err error) (*VectorPartitionSourceReaderV2, error) { return nil, err }
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return fail(err)
@@ -197,7 +213,10 @@ func (r *VectorPartitionSourceReaderV2) Close() error {
 	}
 	snap := r.snap
 	r.snap = nil
-	return snap.Close()
+	if r.ownSnapshot {
+		return snap.Close()
+	}
+	return nil
 }
 
 func (r *VectorPartitionSourceReaderV2) ReadChunk(index uint64) (VectorPartitionSourceChunkReadV2, error) {

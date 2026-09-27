@@ -171,3 +171,36 @@ func TestVectorPartitionSourcePreparationV2SnapshotRejectsUnknownOwner(t *testin
 		t.Fatalf("foreign owner restore: %v", err)
 	}
 }
+
+func TestVectorPartitionLocalPreparationV2ExactHostedScope(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	identity, owners := sourcePreparationFixtureV2(t, catalog)
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}, PrepareSourceV2: func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error) {
+		return slices.Clone(owners), nil
+	}}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-b"}, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		node        raftcluster.NodeID
+		source, ann []string
+	}{
+		{"node-a", []string{"group-a"}, nil},
+		{"node-b", []string{"group-b"}, []string{"group-b"}},
+		{"node-c", []string{"group-a", "group-b"}, []string{"group-b"}},
+	} {
+		record, source, ann, err := authority.VectorPartitionLocalPreparationV2(t.Context(), identity, tc.node)
+		if err != nil || !slices.Equal(source, tc.source) || !slices.Equal(ann, tc.ann) || record.Identity != identity {
+			t.Fatalf("node=%s source=%v ann=%v err=%v", tc.node, source, ann, err)
+		}
+		record.SourceOwners[0].GroupID = "mutated-copy"
+	}
+	stale := identity
+	stale.Index.CatalogEpoch++
+	if _, _, _, err := authority.VectorPartitionLocalPreparationV2(t.Context(), stale, "node-a"); !errors.Is(err, ErrCatalogMetaStaleEpoch) {
+		t.Fatalf("stale proof: %v", err)
+	}
+	if _, _, _, err := authority.VectorPartitionLocalPreparationV2(t.Context(), identity, "foreign"); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("foreign node: %v", err)
+	}
+}

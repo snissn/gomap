@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
+	source "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
 // VectorPartitionOwnerSourceInputV2 is node-owned local preparation input.
@@ -53,10 +54,8 @@ func PrepareVectorPartitionOwnerSourceV2(ctx context.Context, identity raftplace
 	if expected == 0 {
 		return raftplacement.VectorPartitionSourceOwnerPreparationV2{}, raftplacement.ErrVectorPartitionLifecycleIdentity
 	}
-	semantic, completion := sha256.New(), sha256.New()
-	sourcePreparationHashStringV2(semantic, "treedb/owner-snapshot-set/v2")
+	semantic, completion := source.NewOwnerSnapshotSetHashV2(string(owner.GroupID)), sha256.New()
 	sourcePreparationHashStringV2(completion, "treedb/owner-local-completion/v2")
-	sourcePreparationHashStringV2(semantic, string(owner.GroupID))
 	sourcePreparationHashStringV2(completion, string(owner.GroupID))
 	var previous string
 	var count uint64
@@ -78,12 +77,10 @@ func PrepareVectorPartitionOwnerSourceV2(ctx context.Context, identity raftplace
 		if err = reader.Close(); err != nil {
 			return err
 		}
-		sourcePreparationHashStringV2(semantic, snapshot.ShardID)
+		source.WriteOwnerSnapshotIdentityV2(semantic, snapshot)
 		sourcePreparationHashStringV2(completion, snapshot.ShardID)
 		var revision [8]byte
 		binary.BigEndian.PutUint64(revision[:], snapshot.SnapshotRevision)
-		semantic.Write(revision[:])
-		semantic.Write(snapshot.Digest[:])
 		completion.Write(revision[:])
 		completion.Write(snapshot.Digest[:])
 		binary.BigEndian.PutUint64(revision[:], commitment.DirectoryGeneration)

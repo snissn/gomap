@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -23,16 +24,18 @@ func testVectorPartitionPagedRootV2(t testing.TB) VectorPartitionManifestV1 {
 		IndexDefinitionDigest: legacy.IndexDefinitionDigest,
 		Generation:            legacy.Generation,
 		PagedRootV2: &VectorPartitionPagedRootV2{
-			PlacementEpoch:          11,
 			SourceMapEpoch:          3,
 			SourceMapDigest:         strings.Repeat("c", 64),
 			SourceSnapshotSetDigest: strings.Repeat("d", 64),
 			GraphProfileDigest:      strings.Repeat("e", 64),
-			DomainCount:             4,
-			PhysicalPackCount:       16,
-			SourceRowCount:          1 << 40,
-			MetadataDirectory:       metadata,
-			SourceShardDirectory:    source,
+			LocalDomainCount:        4,
+			LocalMembershipCount:    16,
+			LocalSourceShardCount:   1,
+			SourceOwners:            []string{"source-a"}, ANNOwners: []string{"ann-b"}, PlacementDigest: strings.Repeat("f", 64),
+			LocalPhysicalPackCount: 16,
+			LocalSourceRowCount:    1 << 40,
+			MetadataDirectory:      metadata,
+			SourceShardDirectory:   source,
 		},
 	}
 	if err := m.canonicalizeWithContextV1(t.Context()); err != nil {
@@ -54,7 +57,7 @@ func TestVectorPartitionPagedRootCodecV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PagedRootV2 == nil || *got.PagedRootV2 != *m.PagedRootV2 || got.IntegrityDigest != m.IntegrityDigest || len(got.Memberships) != 0 || got.SourceRowCount != 0 {
+	if got.PagedRootV2 == nil || !reflect.DeepEqual(got.PagedRootV2, m.PagedRootV2) || got.IntegrityDigest != m.IntegrityDigest || len(got.Memberships) != 0 || got.SourceRowCount != 0 {
 		t.Fatalf("paged identity or invented legacy rows: %+v", got)
 	}
 	again, err := EncodeVectorPartitionManifestV1(got)
@@ -81,11 +84,13 @@ func TestVectorPartitionPagedRootBindsIdentityAndRejectsMixedV2(t *testing.T) {
 		change func(*VectorPartitionManifestV1)
 	}{
 		{"missing root", func(m *VectorPartitionManifestV1) { m.PagedRootV2 = nil }},
+		{"missing source directory", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceShardDirectory = VectorPartitionAssetV1{} }},
+		{"missing metadata directory", func(m *VectorPartitionManifestV1) { m.PagedRootV2.MetadataDirectory = VectorPartitionAssetV1{} }},
 		{"legacy format", func(m *VectorPartitionManifestV1) { m.Format = VectorPartitionManifestFormatV1 }},
 		{"legacy rows", func(m *VectorPartitionManifestV1) { m.SourceRowCount = 1 }},
 		{"legacy ordinal", func(m *VectorPartitionManifestV1) { m.Memberships = []VectorPartitionMembershipV1{{}} }},
 		{"legacy placement", func(m *VectorPartitionManifestV1) { m.Placements = []VectorPartitionPlacementV1{{}} }},
-		{"placement epoch", func(m *VectorPartitionManifestV1) { m.PagedRootV2.PlacementEpoch++ }},
+		{"placement digest", func(m *VectorPartitionManifestV1) { m.PagedRootV2.PlacementDigest = strings.Repeat("a", 64) }},
 		{"source map epoch", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceMapEpoch++ }},
 		{"source map digest", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceMapDigest = strings.Repeat("a", 64) }},
 		{"source revisions", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceSnapshotSetDigest = strings.Repeat("a", 64) }},
@@ -94,7 +99,7 @@ func TestVectorPartitionPagedRootBindsIdentityAndRejectsMixedV2(t *testing.T) {
 		{"source directory", func(m *VectorPartitionManifestV1) {
 			m.PagedRootV2.SourceShardDirectory.Checksum = strings.Repeat("a", 64)
 		}},
-		{"count", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceRowCount++ }},
+		{"count", func(m *VectorPartitionManifestV1) { m.PagedRootV2.LocalSourceRowCount++ }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testVectorPartitionPagedRootV2(t)
@@ -155,7 +160,7 @@ func TestVectorPartitionPagedRootDecodeAllocationGrowthV2(t *testing.T) {
 	// budgets remain required before the runtime admission gate can be enabled.
 	measure := func(rows uint64) int64 {
 		m := testVectorPartitionPagedRootV2(t)
-		m.PagedRootV2.SourceRowCount = rows
+		m.PagedRootV2.LocalSourceRowCount = rows
 		raw, err := EncodeVectorPartitionManifestV1(m)
 		if err != nil {
 			t.Fatal(err)
@@ -172,5 +177,65 @@ func TestVectorPartitionPagedRootDecodeAllocationGrowthV2(t *testing.T) {
 	small, large := measure(1<<10), measure(1<<40)
 	if large > small+2048 {
 		t.Fatalf("root decode allocates by corpus row count: %d versus %d B/op", small, large)
+	}
+}
+
+func TestVectorPartitionPagedRootV2LocalScopeAndEmptySide(t *testing.T) {
+	for _, sourceOnly := range []bool{false, true} {
+		m := testVectorPartitionPagedRootV2(t)
+		r := m.PagedRootV2
+		if sourceOnly {
+			r.ANNOwners = nil
+			r.LocalDomainCount = 0
+			r.LocalPhysicalPackCount = 0
+			r.LocalMembershipCount = 0
+			r.MetadataDirectory = VectorPartitionAssetV1{}
+		} else {
+			r.SourceOwners = nil
+			r.LocalSourceShardCount = 0
+			r.LocalSourceRowCount = 0
+			r.SourceShardDirectory = VectorPartitionAssetV1{}
+		}
+		if err := m.canonicalizeWithContextV1(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := EncodeVectorPartitionManifestV1(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+		if err != nil || !reflect.DeepEqual(got.PagedRootV2, r) {
+			t.Fatalf("local side roundtrip: %v", err)
+		}
+		if sourceOnly {
+			m.State = "ready"
+			if err := m.canonicalizeWithContextV1(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			m.RouterGeneration = m.Generation
+			m.RouterAsset = testVectorPartitionManifestV1().RouterAsset
+			if err := m.canonicalizeWithContextV1(t.Context()); err == nil {
+				t.Fatal("source-only router admitted")
+			}
+		}
+	}
+	for _, change := range []func(*VectorPartitionPagedRootV2){
+		func(r *VectorPartitionPagedRootV2) { r.SourceOwners = []string{"source-a", "source-a"} },
+		func(r *VectorPartitionPagedRootV2) { r.ANNOwners = []string{"z", "a"} },
+		func(r *VectorPartitionPagedRootV2) { r.SourceOwners = nil },
+		func(r *VectorPartitionPagedRootV2) { r.PlacementDigest = "" },
+	} {
+		m := testVectorPartitionPagedRootV2(t)
+		change(m.PagedRootV2)
+		if err := m.canonicalizeWithContextV1(t.Context()); err == nil {
+			t.Fatal("malformed local scope admitted")
+		}
+	}
+	m := testVectorPartitionPagedRootV2(t)
+	clone := cloneVectorPartitionManifestForCheckpointV1(m)
+	clone.PagedRootV2.SourceOwners[0] = "changed-source"
+	clone.PagedRootV2.ANNOwners[0] = "changed-ann"
+	if m.PagedRootV2.SourceOwners[0] == "changed-source" || m.PagedRootV2.ANNOwners[0] == "changed-ann" {
+		t.Fatal("checkpoint scope alias")
 	}
 }

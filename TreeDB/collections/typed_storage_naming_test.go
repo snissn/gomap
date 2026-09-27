@@ -331,6 +331,12 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Owner preparation and paged build/session consume the retained public schema API.
+	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_source_session_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_build_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/nativewire/vector_partition_source_preparation_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
+	{path: "TreeDB/collections/vector_partition_paged_source_session_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Source directories and import/reader paths use the retained public
 	// configuration and value types; these are compatibility names.
 	{path: "TreeDB/collections/column_source_directory_gc_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},

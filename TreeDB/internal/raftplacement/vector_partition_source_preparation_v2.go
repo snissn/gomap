@@ -2,10 +2,10 @@ package raftplacement
 
 import (
 	"cmp"
-	"encoding/json"
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	source "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
 // VectorPartitionLifecycleSourceIdentityV2 is comparable and contains only
@@ -63,23 +63,11 @@ func VectorPartitionSourceOwnerSetDigestV2(owners []VectorPartitionSourceOwnerPr
 	if err != nil {
 		return "", err
 	}
-	type semanticOwner struct {
-		GroupID           raftcluster.GroupID `json:"group_id"`
-		ShardCount        uint64              `json:"shard_count"`
-		SnapshotSetDigest string              `json:"snapshot_set_digest"`
-	}
-	semantic := make([]semanticOwner, len(owners))
+	semantic := make([]source.SourceOwnerCommitmentV2, len(owners))
 	for i, o := range owners {
-		semantic[i] = semanticOwner{o.GroupID, o.ShardCount, o.SnapshotSetDigest}
+		semantic[i] = source.SourceOwnerCommitmentV2{GroupID: string(o.GroupID), ShardCount: o.ShardCount, SnapshotSetDigest: o.SnapshotSetDigest}
 	}
-	raw, err := json.Marshal(struct {
-		Domain string          `json:"domain"`
-		Owners []semanticOwner `json:"owners"`
-	}{"treedb/source-owner-set/v2", semantic})
-	if err != nil {
-		return "", err
-	}
-	return sha256HexVectorPartitionLifecycleV1(raw), nil
+	return source.SourceOwnerSetDigestV2(semantic)
 }
 
 func canonicalSourceOwnerPreparationsV2(input []VectorPartitionSourceOwnerPreparationV2) ([]VectorPartitionSourceOwnerPreparationV2, error) {
