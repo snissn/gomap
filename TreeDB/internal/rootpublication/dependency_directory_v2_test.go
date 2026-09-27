@@ -64,7 +64,7 @@ func TestDependencyDirectoryV2ExactIdentityAndCanonicalRecords(t *testing.T) {
 }
 
 func TestDependencyDirectoryV2PinnedPointAndStreamingChecks(t *testing.T) {
-	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 4096)
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed(t *testing.
 		{"corrupt-page", key, canonical, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 4096)
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -4244,9 +4244,23 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			continue
 		}
 		set.mu.Lock()
-		if (set.physicalOnly && mode != stableResourceViewPhysicalPinned) || set.Owner() == ResourceOwnerReleased || set.Owner() == ResourceOwnerTransferred {
+		if set.physicalOnly && mode != stableResourceViewPhysicalPinned {
 			set.mu.Unlock()
 			return nil, ErrResourceOwnership
+		}
+		if owner := set.Owner(); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+			// V1 flat metadata remains immutable diagnostic evidence after its
+			// producer releases ownership. Directory reads and physical union
+			// capabilities instead depend on a live lease, even for empty roots.
+			requiresLease := mode == stableResourceViewPhysicalPinned || set.emptyDirectory != nil || len(set.physicalDirectories) != 0
+			set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+				requiresLease = requiresLease || entry.logicalObligations.directory != nil
+				return !requiresLease
+			})
+			if requiresLease {
+				set.mu.Unlock()
+				return nil, ErrResourceOwnership
+			}
 		}
 		if mode != stableResourceViewPhysicalPinned {
 			compatible := func(directory *DependencyDirectoryV2) bool {

@@ -233,7 +233,7 @@ func TestDependencyDirectoryV2RebuildPreservesBothSlots(t *testing.T) {
 	defer bound.Release()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.db")
-	p, err := pager.Open(path, 4096)
+	p, err := pager.Open(path, 65536)
 	if err != nil {
 		t.Fatal(err)
 	}

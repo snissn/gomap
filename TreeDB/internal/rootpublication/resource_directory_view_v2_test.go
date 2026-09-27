@@ -43,7 +43,7 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 	if err != nil || physical != 1 || logical != 2 || len(records) != 3 {
 		t.Fatalf("initial delta: %d %d %d %v", physical, logical, len(records), err)
 	}
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 4096)
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,13 +263,16 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 	}
 	candidate.Release()
 	bound.Release()
+	if union, err := UnionStableResourceSets(bound); union != nil || !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("released directory granted metadata authority: %v", err)
+	}
 	if releases != 1 {
 		t.Fatalf("directory lease release count=%d", releases)
 	}
 }
 
 func TestDependencyDirectoryV2EmptyClosureLease(t *testing.T) {
-	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 4096)
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +309,17 @@ func TestDependencyDirectoryV2EmptyClosureLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound.Release()
+	if union, err := UnionStableResourceSets(bound); union != nil || !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("released empty directory granted metadata authority: %v", err)
+	}
+	if union, err := ClonePhysicalReachabilityUnion(source); err != nil {
+		t.Fatal(err)
+	} else {
+		union.Release()
+		if retry, err := ClonePhysicalReachabilityUnion(union); retry != nil || !errors.Is(err, ErrResourceOwnership) {
+			t.Fatalf("released physical capability reacquired: %v", err)
+		}
+	}
 	if releases != 0 {
 		t.Fatal("empty clone lost root lease")
 	}

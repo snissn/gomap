@@ -16,7 +16,7 @@ import (
 
 func bindPhysicalUnionTestDirectory(t *testing.T, source *StableResourceSet, release func()) *StableResourceSet {
 	t.Helper()
-	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 4096)
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 	if err != nil {
 		t.Fatal(err)
 	}
