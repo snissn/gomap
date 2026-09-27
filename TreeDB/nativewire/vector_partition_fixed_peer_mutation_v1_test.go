@@ -597,7 +597,7 @@ func fixedPeerVectorSeedV1(t testing.TB) fixedPeerVectorSeedFixtureV1 {
 		t.Fatal(err)
 	}
 	routerConfig := internalrouter.DefaultRouterConfigV1()
-	routerConfig.BranchFactor, routerConfig.LeafSize, routerConfig.RepresentativesPerPartition = 2, 1, 1
+	routerConfig.BranchFactor, routerConfig.LeafSize, routerConfig.RepresentativeBudget = 2, 1, 1
 	routerConfig.MaxDepth, routerConfig.MaxIterations, routerConfig.MaxVectors = 4, 8, 8
 	routerConfig.MaxDimensions, routerConfig.MaxRepresentatives, routerConfig.MaxScalarWork = 8, 32, 1_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, []internalrouter.RouterPartitionV1{partition}, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: 4702, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
@@ -964,7 +964,7 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
 			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRowCount: 1,
 			PartitionCount: 1, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-b"}},
-			Representatives: []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
+			Representatives: []collections.VectorPartitionRepresentativeV2{{PartitionID: 0, NodeID: 1}},
 		},
 		catalog: raftplacement.CatalogV1{
 			Features: raftplacement.DefaultFeatureSet(),
@@ -1026,7 +1026,7 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			c.Vector.RequestBase.RouterScoreBudget = limits.MaxRouterScoreCalls + 1
 		},
 		"request_exact_budget_shortfall": func(c *FixedPeerTCPConfigV1) {
-			c.Vector.Manifest.Representatives = append(c.Vector.Manifest.Representatives, collections.VectorPartitionMembershipV1{VectorOrdinal: 1, PartitionID: 0})
+			c.Vector.Manifest.Representatives = append(c.Vector.Manifest.Representatives, collections.VectorPartitionRepresentativeV2{VectorOrdinal: 1, PartitionID: 0, NodeID: 2})
 		},
 		"request_stats_mode":           func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.StatsMode = "invalid" },
 		"collection_incarnation":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CollectionIncarnation = 0 },
