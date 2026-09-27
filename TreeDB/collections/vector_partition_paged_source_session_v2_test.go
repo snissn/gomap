@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -118,5 +119,44 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 	defer opened.Close()
 	if row, err := opened.ReadSourceRowV2(t.Context(), identity); err != nil || string(row.DocumentID) != "b" {
 		t.Fatalf("staged reopen=%+v err=%v", row, err)
+	}
+	refs, _, err := c.vectorPartitionReachabilityRefsV1(nil)
+	if err != nil || len(refs) != 1 || refs[0] != staged.PagedRootV2.SourceShardDirectory.Ref {
+		t.Fatalf("complete source-only GC closure=%+v err=%v", refs, err)
+	}
+	if err := ValidateVectorPartitionSnapshotNamespaceV1(d.Dir()); err != nil {
+		t.Fatalf("source-only snapshot closure: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref := staged.PagedRootV2.SourceShardDirectory.Ref
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0}, ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := c.OpenVectorPartitionPagedSourceSessionV2(t.Context(), prepared, ownership); err == nil {
+		_ = broken.Close()
+		t.Fatal("corrupt source page exposed a prepared session")
+	}
+	if _, _, err := c.vectorPartitionReachabilityRefsV1(nil); err == nil {
+		t.Fatal("corrupt source page admitted by GC closure")
+	}
+	if err := ValidateVectorPartitionSnapshotNamespaceV1(d.Dir()); err == nil {
+		t.Fatal("corrupt source page admitted by snapshot closure")
+	}
+	if pins := vectorPartitionReaderPinCountV1(d.Dir(), c.name, input.IndexName, prepared.Generation); pins != 0 {
+		t.Fatalf("failed open leaked generation pins: %d", pins)
 	}
 }
