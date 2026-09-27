@@ -64,6 +64,18 @@ def stamp(value):
     return result
 
 
+def inspected_ingress(node, config, peer_ports):
+    listeners = collections.defaultdict(set)
+    groups = {g["ID"]: g for g in [config["Catalog"]] + config["Groups"]}
+    endpoints = [(config["ListenAddress"], [n["ID"] for n in config["Nodes"]])]
+    endpoints += [(address, [p["ID"] for p in groups[group]["Peers"]]) for group, address in config["RaftListen"].items()]
+    for address, sources in endpoints:
+        endpoint = address.split(":")
+        require(len(endpoint) == 2 and endpoint[0] == node["private_ip"] and int(endpoint[1]) in peer_ports, "peer endpoint differs from inventory")
+        listeners[int(endpoint[1])].update(source for source in sources if source != node["node_id"])
+    return [{"port": port, "sources": sorted(sources)} for port, sources in sorted(listeners.items())]
+
+
 def inspect_artifacts(spec, binary):
     require(binary, "plan requires the exact production --binary")
     actual = hashlib.sha256()
@@ -83,11 +95,7 @@ def inspect_artifacts(spec, binary):
         require(identity["Authenticated"] and identity["NodeID"] == node["node_id"] and identity["LocalSHA256"] == node["config_sha256"] and identity["SharedSHA256"] == spec["shared_config_sha256"], "config identity mismatch")
         require(identity["ResourceLimits"]["InflightBytes"] == node["inflight_bytes"], "admission reservation differs from inventory")
         require(config["DataRoot"] == node["data_root"] and config["RaftRoot"] == node["raft_root"], "persistent mount/config mismatch")
-        endpoint = config["ListenAddress"].split(":")
-        require(len(endpoint) == 2 and endpoint[0] == node["private_ip"] and int(endpoint[1]) in spec["peer_ports"], "control endpoint differs from inventory")
-        for address in config["RaftListen"].values():
-            endpoint = address.split(":")
-            require(len(endpoint) == 2 and endpoint[0] == node["private_ip"] and int(endpoint[1]) in spec["peer_ports"], "Raft endpoint differs from inventory")
+        node["inspected_ingress"] = inspected_ingress(node, config, spec["peer_ports"])
         actual_groups = {g["ID"]: sorted(p["ID"] for p in g["Peers"]) for g in [config["Catalog"]] + config["Groups"]}
         require(actual_groups == {g["group_id"]: sorted(g["voters"]) for g in spec["groups"]}, "voter inventory differs from production config")
         node["inspected_config_identity"] = identity
@@ -144,6 +152,10 @@ def make_plan(spec, now=None):
         total += node["all_in_hourly_usd"] * spec["duration_hours"]
         require(len(node["user_data"].encode()) <= 16 << 10, "user data exceeds EC2 limit")
     require(total <= spec["max_cost_usd"], "declared price estimate exceeds approved budget")
+    for node in nodes:
+        require(node.get("inspected_ingress"), "inspected peer listeners required; regenerate plan")
+        for listener in node["inspected_ingress"]:
+            require(listener["port"] in spec["peer_ports"] and all(source in by_id for source in listener["sources"]), "inspected listener outside packet inventory")
     require(spec["groups"] and len(spec["groups"]) <= 129, "catalog and data voter inventory required")
     names = set()
     for group in spec["groups"]:
@@ -218,6 +230,8 @@ def stage(aws, plan):
     account_check(aws, plan)
     s = plan["inventory"]
     require(stamp(s["expires_at"]) > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5), "plan expired")
+    known_ips = {n["private_ip"] for n in s["nodes"]}
+    known_groups = {g for n in s["nodes"] for g in n["security_group_ids"]}
     # Validate the live subnet/AZ, instance capacity, image and all-traffic flow
     # log before CloudFormation is allowed to create any compute resources.
     for n in s["nodes"]:
@@ -231,14 +245,21 @@ def stage(aws, plan):
         require(images[0]["Architecture"] == {"amd64": "x86_64", "arm64": "arm64"}[s["binary_architecture"]] and images[0]["Architecture"] in kinds[0]["ProcessorInfo"]["SupportedArchitectures"], "AMI/binary architecture not supported")
         groups = aws.call("ec2", "describe-security-groups", {"GroupIds": n["security_group_ids"]})["SecurityGroups"]
         require(len(groups) == len(n["security_group_ids"]) and all(g["VpcId"] == subnet[0]["VpcId"] for g in groups), "security group VPC mismatch")
+        covered = set()
         for g in groups:
             for rule in g["IpPermissions"]:
                 require(rule.get("IpProtocol") == "tcp" and rule.get("FromPort") == rule.get("ToPort") and rule.get("FromPort") in s["peer_ports"], "only declared TCP peer ports may enter")
                 require(not rule.get("Ipv6Ranges") and not rule.get("PrefixListIds"), "unbounded ingress source refused")
-                known_ips = {n["private_ip"] for n in s["nodes"]}
-                known_groups = {g for n in s["nodes"] for g in n["security_group_ids"]}
                 require(all(x["CidrIp"] in {ip + "/32" for ip in known_ips} for x in rule.get("IpRanges", [])), "ingress CIDR must identify an inventory host")
                 require(all(x["GroupId"] in known_groups and x.get("UserId", s["account"]) == s["account"] for x in rule.get("UserIdGroupPairs", [])), "ingress group outside deployment inventory")
+                cidrs = {x["CidrIp"] for x in rule.get("IpRanges", [])}
+                source_groups = {x["GroupId"] for x in rule.get("UserIdGroupPairs", [])}
+                for source in s["nodes"]:
+                    if source["private_ip"] + "/32" in cidrs or source_groups.intersection(source["security_group_ids"]):
+                        covered.add((rule["FromPort"], source["node_id"]))
+        require(n.get("inspected_ingress"), "inspected peer listeners required; regenerate plan")
+        required_ingress = {(listener["port"], source) for listener in n["inspected_ingress"] for source in listener["sources"]}
+        require(required_ingress <= covered, "security groups omit required peer listener/source ingress for " + n["node_id"])
         flows = aws.call("ec2", "describe-flow-logs", {"FlowLogIds": [s["flow_log_id"]]})["FlowLogs"]
         require(len(flows) == 1 and flows[0]["ResourceId"] == subnet[0]["VpcId"] and flows[0]["TrafficType"] == "ALL" and flows[0]["FlowLogStatus"] == "ACTIVE", "active all-traffic VPC flow log required")
         required = {"${bytes}", "${az-id}", "${flow-direction}", "${interface-id}", "${srcaddr}", "${dstaddr}", "${pkt-srcaddr}", "${pkt-dstaddr}", "${log-status}"}

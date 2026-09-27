@@ -18,6 +18,8 @@ def spec():
                           vcpus=2, gomaxprocs=2, memory_bytes=8 << 30, go_memory_limit_bytes=6 << 30, inflight_bytes=256 << 20,
                           data_gib=32, raft_gib=16, required_data_bytes=8 << 30, required_raft_bytes=1 << 30, temp_bytes=1 << 30, required_temp_bytes=1 << 30,
                           data_root='/mnt/data', raft_root='/mnt/raft', temp_root='/mnt/temp', config_sha256='c'*64, all_in_hourly_usd=1, user_data='#!/bin/sh\nexit 0\n'))
+    for node in nodes:
+        node['inspected_ingress'] = [dict(port=port, sources=[n['node_id'] for n in nodes if n != node]) for port in (7100, 7200)]
     return dict(schema_version=1, account='123456789012', region='us-east-1', run_id='fixture-12345678', binary_architecture='amd64', binary_sha256='b'*64, shared_config_sha256='d'*64,
                 source_revision='a'*40, expires_at=(now + dt.timedelta(hours=1)).isoformat(), duration_hours=2, max_cost_usd=10,
                 network_reserve_usd=1, retained_storage_reserve_usd=1, price_checked_at=now.isoformat(), expiry_role_arn='arn:aws:iam::123456789012:role/treedb-expiry',
@@ -51,6 +53,8 @@ class LiveInventoryAWS(FakeAWS):
         super().__init__(plan)
         self.bad_az = False
         self.missing_flow_fields = False
+        self.ingress = [dict(IpProtocol='tcp', FromPort=port, ToPort=port, UserIdGroupPairs=[dict(GroupId='sg-123',UserId='123456789012')]) for port in (7100,7200)]
+        self.security_groups = None
 
     def call(self, service, operation, value):
         if operation == 'describe-subnets':
@@ -61,7 +65,7 @@ class LiveInventoryAWS(FakeAWS):
         if operation == 'describe-images':
             return dict(Images=[dict(State='available', OwnerId='123456789012', Architecture='x86_64')])
         if operation == 'describe-security-groups':
-            return dict(SecurityGroups=[dict(VpcId='vpc-123', IpPermissions=[dict(IpProtocol='tcp', FromPort=7100, ToPort=7100, UserIdGroupPairs=[dict(GroupId='sg-123',UserId='123456789012')])])])
+            return dict(SecurityGroups=self.security_groups if self.security_groups is not None else [dict(VpcId='vpc-123', IpPermissions=self.ingress)])
         if operation == 'describe-flow-logs':
             fields='${bytes} ${az-id} ${flow-direction} ${interface-id} ${srcaddr} ${dstaddr} ${pkt-srcaddr} ${pkt-dstaddr} ${log-status}'
             return dict(FlowLogs=[dict(ResourceId='vpc-123', TrafficType='ALL', FlowLogStatus='ACTIVE', DeliverLogsStatus='SUCCESS', LogFormat='' if self.missing_flow_fields else fields)])
@@ -72,6 +76,39 @@ class LiveInventoryAWS(FakeAWS):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_inspected_listener_sources_follow_control_and_group_membership(self):
+        node = spec()['nodes'][0]
+        config = dict(ListenAddress='10.0.0.10:7100', Nodes=[dict(ID=x) for x in ('node-a','node-b','node-c')],
+                      RaftListen={'catalog':'10.0.0.10:7200','data':'10.0.0.10:7300'},
+                      Catalog=dict(ID='catalog',Peers=[dict(ID=x) for x in ('node-a','node-b','node-c')]),
+                      Groups=[dict(ID='data',Peers=[dict(ID=x) for x in ('node-a','node-b')])])
+        self.assertEqual(deploy.inspected_ingress(node, config, [7100,7200,7300]),
+                         [dict(port=7100,sources=['node-b','node-c']),dict(port=7200,sources=['node-b','node-c']),dict(port=7300,sources=['node-b'])])
+
+    def test_stage_requires_every_listener_source_before_mutation(self):
+        for missing in ('empty','port','source'):
+            plan=deploy.make_plan(spec());aws=LiveInventoryAWS(plan)
+            if missing == 'empty': aws.ingress=[]
+            if missing == 'port': aws.ingress=aws.ingress[:1]
+            if missing == 'source':
+                for rule in aws.ingress:
+                    rule.pop('UserIdGroupPairs')
+                    rule['IpRanges']=[dict(CidrIp='10.0.0.11/32')]
+            with self.subTest(missing=missing),self.assertRaisesRegex(deploy.Refused,'omit required peer listener/source'):
+                deploy.stage(aws,plan)
+            self.assertFalse(aws.mutations)
+
+    def test_stage_unions_attached_groups_and_cidr_sources(self):
+        inventory=spec()
+        for node in inventory['nodes']: node['security_group_ids']=['sg-123','sg-456']
+        plan=deploy.make_plan(inventory);aws=LiveInventoryAWS(plan)
+        cidrs=[dict(CidrIp=n['private_ip']+'/32') for n in inventory['nodes']]
+        aws.security_groups=[dict(VpcId='vpc-123',IpPermissions=[dict(IpProtocol='tcp',FromPort=7100,ToPort=7100,UserIdGroupPairs=[dict(GroupId='sg-123')]),
+                                                              dict(IpProtocol='tcp',FromPort=7200,ToPort=7200,IpRanges=cidrs[:1])]),
+                             dict(VpcId='vpc-123',IpPermissions=[dict(IpProtocol='tcp',FromPort=7200,ToPort=7200,IpRanges=cidrs[1:])])]
+        deploy.stage(aws,plan)
+        self.assertEqual([m[0] for m in aws.mutations],['create-change-set'])
+
     def test_cli_malformed_json_has_single_line_error(self):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / 'inventory.json'

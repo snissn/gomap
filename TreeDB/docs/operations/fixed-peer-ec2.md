@@ -53,6 +53,10 @@ access is needed. Operations use the existing SSM/private management channel;
 SSM, object artifacts, PKI and telemetry need explicitly allowed VPC endpoints
 and least-privilege roles/endpoint policies. The plan adapter checks peer ingress,
 not your entire VPC/IAM/egress policy; review those concrete existing resources.
+The offline plan records control listeners and each locally hosted Raft group's
+peer sources from the inspected configs. Staging requires the combined attached
+security groups to cover every required listener/source pair before creating a
+change set. Regenerate older plans that lack these inspected relationships.
 TLS identity/group/proof checks remain necessary inside the VPC.
 
 Rotate trust with an overlap window: distribute old+new CA trust, restart and
