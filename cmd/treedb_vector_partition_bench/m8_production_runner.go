@@ -4786,6 +4786,11 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if !ok {
 		return errors.New("invalid M8 logical-domain pack layout")
 	}
+	domainGraphs := report.Config.GraphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) && domainCount < report.Config.Partitions
+	boundaryPartitions := report.Config.Partitions
+	if domainGraphs {
+		boundaryPartitions = domainCount
+	}
 	if err := validateM3FixtureWithCaps(report.Dataset, maxVectors, maxFixtureBytes); err != nil {
 		return fmt.Errorf("dataset: %w", err)
 	}
@@ -4861,7 +4866,6 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			row.LocalScoreCalls > uint64(row.Samples)*uint64(report.Config.LocalScoreBudget) || row.MaxLocalScoreCalls > uint64(report.Config.LocalScoreBudget) {
 			return errors.New("M8 search work exceeds its explicit score-call budget")
 		}
-		domainGraphs := report.Config.GraphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) && domainCount < report.Config.Partitions
 		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes, packsPerDomain, domainGraphs)
 		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes, packsPerDomain, domainGraphs)
 		if row.ElapsedNanos < row.MaxTotalNanos {
@@ -4934,11 +4938,11 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		return errors.New("incomplete or forged M8 resource-limit evidence")
 	}
 	if !report.Failure.Passed || report.Failure.Error == "" || report.Failure.ReturnedNeighbors != 0 || report.Failure.ReturnedGroups != 0 ||
-		report.UntimedBoundary.SelectedPartitions != report.Config.Partitions || report.UntimedBoundary.EfSearch < report.Config.TopK ||
+		report.UntimedBoundary.SelectedPartitions != boundaryPartitions || report.UntimedBoundary.EfSearch < report.Config.TopK ||
 		report.UntimedBoundary.WallClockNanos == 0 || report.UntimedBoundary.Maxima.Requests == 0 ||
 		report.UntimedBoundary.Maxima.RPCs == 0 || report.UntimedBoundary.Maxima.RequestBytes == 0 ||
 		report.UntimedBoundary.Maxima.ShardPartitions == 0 || report.UntimedBoundary.Maxima.ShardRequestBytes == 0 ||
-		report.Failure.ResourceBoundary.SelectedPartitions != report.Config.Partitions || report.Failure.ResourceBoundary.EfSearch != 4096 ||
+		report.Failure.ResourceBoundary.SelectedPartitions != boundaryPartitions || report.Failure.ResourceBoundary.EfSearch != 4096 ||
 		report.Failure.ResourceBoundary.WallClockNanos == 0 || report.Failure.ResourceBoundary.Maxima.Requests == 0 ||
 		report.Failure.ResourceBoundary.Maxima.RPCs == 0 || report.Failure.ResourceBoundary.Maxima.RequestBytes == 0 ||
 		report.Failure.ResourceBoundary.Maxima.ShardPartitions == 0 || report.Failure.ResourceBoundary.Maxima.ShardRequestBytes == 0 ||

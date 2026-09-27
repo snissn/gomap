@@ -340,6 +340,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	multiPack.Config.DomainCount = 1
 	multiPack.Config.PacksPerDomain = []int{4}
 	multiPack.Config.Probes = []int{1}
+	multiPack.UntimedBoundary.SelectedPartitions = 1
+	multiPack.Failure.ResourceBoundary.SelectedPartitions = 1
 	domainRows := uint64(0)
 	for _, load := range loads {
 		domainRows += load
@@ -352,15 +354,31 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries)
 	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{1}, fixture.Queries)
 	multiPack.GateLedger = m8ProductionGateLedgerForReportV1(multiPack)
+	testM8CompleteResourceLimitsV1(t, &multiPack)
 	if multiPack.GateLedger.ExhaustiveParity != "pass" {
 		t.Fatalf("logical-domain exhaustive row ledger=%+v", multiPack.GateLedger)
 	}
 	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
 		t.Fatalf("one-domain/four-pack report rejected: %v", err)
 	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"untimed_physical_pack_count": func(r *m8ProductionReportV1) { r.UntimedBoundary.SelectedPartitions = 4 },
+		"fault_physical_pack_count":   func(r *m8ProductionReportV1) { r.Failure.ResourceBoundary.SelectedPartitions = 4 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := multiPack
+			mutate(&invalid)
+			testM8CompleteResourceLimitsV1(t, &invalid)
+			if err := testM8ValidateProductionReportV1(invalid); err == nil {
+				t.Fatal("accepted physical pack count as selected logical domains")
+			}
+		})
+	}
 	offline := multiPack
 	offline.Variant = nil
 	offline.Config.GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	offline.UntimedBoundary.SelectedPartitions = 4
+	offline.Failure.ResourceBoundary.SelectedPartitions = 4
 	offline.PackDiagnostics = diagnostics(loads)
 	offline.Rows = append([]m8ProductionRowV1(nil), multiPack.Rows...)
 	offline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 4
@@ -368,6 +386,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	offline.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries) * 4
 	offline.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
 	offline.GateLedger = m8ProductionGateLedgerForReportV1(offline)
+	testM8CompleteResourceLimitsV1(t, &offline)
 	if err := testM8ValidateProductionReportV1(offline); err != nil {
 		t.Fatalf("one-domain/four-pack offline report rejected: %v", err)
 	}

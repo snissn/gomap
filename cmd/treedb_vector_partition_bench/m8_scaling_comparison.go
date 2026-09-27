@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -9,8 +10,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os/exec"
 	"reflect"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -20,10 +24,19 @@ import (
 // prospectively. No best-row selection or historical campaign relaxation.
 type m8ScalingComparisonPlanV1 struct {
 	Reports []struct {
-		Name       string   `json:"name"`
-		ReplayArgs []string `json:"replay_args"`
+		Name       string                    `json:"name"`
+		ReplayArgs []string                  `json:"replay_args"`
+		Runtime    *m8ScalingReplayRuntimeV1 `json:"runtime,omitempty"`
 	} `json:"reports"`
 	Pairs []m8ScalingPairV1 `json:"pairs"`
+}
+
+// Optional only for an explicitly declared cross-runtime comparison. Each
+// frozen producing binary authenticates its own reports and physical layout.
+type m8ScalingReplayRuntimeV1 struct {
+	HeadSHA          string `json:"head_sha"`
+	Executable       string `json:"executable"`
+	ExecutableSHA256 string `json:"executable_sha256"`
 }
 
 type m8ScalingPairV1 struct {
@@ -87,12 +100,27 @@ func runM8ScalingComparisonV1(args []string, stdout io.Writer) error {
 	reports := make(map[string]m8ProductionReportV1, len(plan.Reports))
 	receipts := make(map[string]string, len(plan.Reports))
 	unions := make(map[string]string, len(plan.Reports))
+	crossRuntime := false
+	for _, pair := range plan.Pairs {
+		crossRuntime = crossRuntime || pair.Kind == "domain_graph_runtime"
+	}
 	for _, input := range plan.Reports {
 		if input.Name == "" || len(input.Name) > 80 || len(input.ReplayArgs) > 32 {
 			return errors.New("invalid comparison report name/arguments")
 		}
 		if _, exists := reports[input.Name]; exists {
 			return errors.New("duplicate comparison report")
+		}
+		if crossRuntime != (input.Runtime != nil) {
+			return errors.New("domain-graph runtime comparisons require every producing runtime to be pinned; other comparisons forbid runtime overrides")
+		}
+		if crossRuntime {
+			report, receipt, err := m8ReplayScalingRuntimeV1(input.ReplayArgs, *input.Runtime)
+			if err != nil {
+				return fmt.Errorf("%s: %w", input.Name, err)
+			}
+			reports[input.Name], receipts[input.Name] = report, receipt
+			continue
 		}
 		var report m8ProductionReportV1
 		var receipt bytes.Buffer
@@ -118,6 +146,9 @@ func runM8ScalingComparisonV1(args []string, stdout io.Writer) error {
 	results := make([]m8ScalingPairResultV1, 0, len(plan.Pairs))
 	names := map[string]bool{}
 	for _, pair := range plan.Pairs {
+		if crossRuntime && pair.Kind != "domain_graph_runtime" && pair.Kind != "selected_exhaustive" {
+			return errors.New("cross-runtime plans allow only domain_graph_runtime and per-report selected_exhaustive pairs")
+		}
 		if pair.Name == "" || len(pair.Name) > 80 || names[pair.Name] {
 			return errors.New("invalid/duplicate comparison pair name")
 		}
@@ -146,6 +177,10 @@ func runM8ScalingComparisonV1(args []string, stdout io.Writer) error {
 		}
 		reports[name] = report
 	}
+	scope := "same frozen source/runtime, profiled native TCP boundary; five complete blocks at c1/c32, C256/EF96/top10/recall>=.95; all report rows retained, raw attempts in pinned reports; CPU/source-host admission and full F envelope remain external obligations; not predecessor or ordinary-HNSW comparison"
+	if crossRuntime {
+		scope = "individually pinned producing runtimes and source-specific strict replay; identical shard-generation bytes, fixture, host and serving coordinates; per-pack versus per-domain traversal; all five paired windows retained; CPU/resources, chronological isolation and full F qualification remain external obligations"
+	}
 	return json.NewEncoder(stdout).Encode(struct {
 		Status                   string                          `json:"status"`
 		PlanSHA256               string                          `json:"plan_sha256"`
@@ -154,9 +189,51 @@ func runM8ScalingComparisonV1(args []string, stdout io.Writer) error {
 		LogicalMembershipDigests map[string]string               `json:"logical_membership_digests"`
 		Reports                  map[string]m8ProductionReportV1 `json:"report_projections"`
 		Pairs                    []m8ScalingPairResultV1         `json:"pairs"`
-	}{"COMPARISON_REDUCED_NOT_QUALIFICATION", planSHA,
-		"same frozen source/runtime, profiled native TCP boundary; five complete blocks at c1/c32, C256/EF96/top10/recall>=.95; all report rows retained, raw attempts in pinned reports; CPU/source-host admission and full F envelope remain external obligations; not predecessor or ordinary-HNSW comparison",
+	}{"COMPARISON_REDUCED_NOT_QUALIFICATION", planSHA, scope,
 		receipts, unions, reports, results})
+}
+
+func m8ReplayScalingRuntimeV1(args []string, runtime m8ScalingReplayRuntimeV1) (m8ProductionReportV1, string, error) {
+	root, _, pins, report, err := readM8ReportReplayV1(args)
+	if err != nil {
+		return report, "", err
+	}
+	if runtime.HeadSHA != report.HeadSHA || runtime.ExecutableSHA256 != pins.Executable ||
+		len(report.Command) == 0 || runtime.Executable != report.Command[0] ||
+		!m8QualificationCommandExecutableV1(root, runtime.Executable, runtime.HeadSHA, runtime.ExecutableSHA256, m8QualificationBenchmarkExecutableV1) {
+		return report, "", errors.New("comparison runtime differs from the frozen clean producing binary")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, runtime.Executable, append([]string{"replay-m8-report"}, args...)...)
+	cmd.WaitDelay = 5 * time.Second
+	var output m8ScalingReplayOutputV1
+	cmd.Stdout, cmd.Stderr = &output, &output
+	err = cmd.Run()
+	out := output.buffer.String()
+	if err != nil {
+		return report, "", fmt.Errorf("producing runtime replay failed: %w: %.4096s", err, out)
+	}
+	want := fmt.Sprintf("REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=%s rows=%d", pins.Report, len(report.Rows))
+	if strings.TrimSpace(out) != want {
+		return report, "", errors.New("producing runtime did not return the exact replay acceptance receipt")
+	}
+	// Reject a changed report or executable after the source-specific replay.
+	_, _, _, reread, err := readM8ReportReplayV1(args)
+	if err != nil || !reflect.DeepEqual(report, reread) || !m8QualificationCommandExecutableV1(root, runtime.Executable, runtime.HeadSHA, runtime.ExecutableSHA256, m8QualificationBenchmarkExecutableV1) {
+		return report, "", errors.New("comparison inputs changed during producing-runtime replay")
+	}
+	return report, out, nil
+}
+
+// Replay has a single short receipt. Bound diagnostic output as well as time.
+type m8ScalingReplayOutputV1 struct{ buffer bytes.Buffer }
+
+func (b *m8ScalingReplayOutputV1) Write(p []byte) (int, error) {
+	if len(p) > 4096-b.buffer.Len() {
+		return 0, errors.New("producing runtime exceeded replay receipt limit")
+	}
+	return b.buffer.Write(p)
 }
 
 func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8ProductionReportV1, baselineUnion, candidateUnion string) (m8ScalingPairResultV1, error) {
@@ -169,7 +246,8 @@ func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8Producti
 			return result, errors.New("comparison requires complete five-block C256/EF96/top10/c1,c32/recall>=.95 reports")
 		}
 	}
-	if !reflect.DeepEqual(baseline.Dataset, candidate.Dataset) || baseline.TruthCache.Identity != candidate.TruthCache.Identity || baseline.TruthCache.ArtifactSHA256 != candidate.TruthCache.ArtifactSHA256 || baseline.Host != candidate.Host || baseline.GoVersion != candidate.GoVersion || baseline.GOOS != candidate.GOOS || baseline.GOARCH != candidate.GOARCH || baseline.GOMAXPROCS != candidate.GOMAXPROCS || baseline.GoMemoryLimitBytes != candidate.GoMemoryLimitBytes || baseline.LogicalCPUs != candidate.LogicalCPUs || baseline.BaseSHA != candidate.BaseSHA || baseline.HeadSHA != candidate.HeadSHA || baseline.ExecutableSHA256 != candidate.ExecutableSHA256 {
+	sameSource := baseline.BaseSHA == candidate.BaseSHA && baseline.HeadSHA == candidate.HeadSHA && baseline.ExecutableSHA256 == candidate.ExecutableSHA256
+	if !reflect.DeepEqual(baseline.Dataset, candidate.Dataset) || baseline.TruthCache.Identity != candidate.TruthCache.Identity || baseline.TruthCache.ArtifactSHA256 != candidate.TruthCache.ArtifactSHA256 || baseline.Host != candidate.Host || baseline.GoVersion != candidate.GoVersion || baseline.GOOS != candidate.GOOS || baseline.GOARCH != candidate.GOARCH || baseline.GOMAXPROCS != candidate.GOMAXPROCS || baseline.GoMemoryLimitBytes != candidate.GoMemoryLimitBytes || baseline.LogicalCPUs != candidate.LogicalCPUs || (!sameSource && pair.Kind != "domain_graph_runtime") {
 		return result, errors.New("comparison fixture/truth/host/runtime/source mismatch")
 	}
 	bv, cv := baseline.Variant, candidate.Variant
@@ -185,6 +263,16 @@ func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8Producti
 	bc, cc := baseline.Config, candidate.Config
 	bc.Probes, cc.Probes = nil, nil // Only explicitly named probe coordinates may differ.
 	switch pair.Kind {
+	case "domain_graph_runtime":
+		if baseline.HeadSHA == candidate.HeadSHA || !m8QualificationGitSHAV1(baseline.HeadSHA) || !m8QualificationGitSHAV1(candidate.HeadSHA) ||
+			!m8SHA256V1(baseline.ExecutableSHA256) || !m8SHA256V1(candidate.ExecutableSHA256) ||
+			bv.ShardPlan != cv.ShardPlan || bv.ShardPlan.PacksPerDomain <= 1 || bv.Partitions != cv.Partitions ||
+			bv.OverlapRatio != 0 || cv.OverlapRatio != 0 || bc.Overlap[0] != 0 || cc.Overlap[0] != 0 ||
+			!m8SHA256V1(bv.ArtifactSHA256) || bv.ArtifactSHA256 != cv.ArtifactSHA256 ||
+			!m8SHA256V1(bv.ShardGenerationDigest) || bv.ShardGenerationDigest != cv.ShardGenerationDigest ||
+			pair.BaselineProbes != pair.CandidateProbes {
+			return result, errors.New("domain graph comparison requires distinct frozen runtimes and identical disjoint multi-pack shard generations, parent artifact and probes")
+		}
 	case "selected_exhaustive":
 		if pair.Baseline != pair.Candidate || baseline.ExecutionID != candidate.ExecutionID || pair.BaselineProbes != bc.DomainCount || pair.CandidateProbes >= pair.BaselineProbes {
 			return result, errors.New("selected/exhaustive must be two coordinates of the same report")
@@ -222,6 +310,10 @@ func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8Producti
 				return result, err
 			}
 			b, c := baseline.Rows[bi], candidate.Rows[ci]
+			if pair.Kind == "domain_graph_runtime" && b.Status == "pass" && c.Status == "pass" && (!m8LocalSearchFanoutValidV1(b.Attribution.LocalHNSWSearchesByQuery, b.Attribution.LocalHNSWSearches, b.Samples, b.Probes, baseline.Config.PacksPerDomain, false) ||
+				!m8LocalSearchFanoutValidV1(c.Attribution.LocalHNSWSearchesByQuery, c.Attribution.LocalHNSWSearches, c.Samples, c.Probes, candidate.Config.PacksPerDomain, true)) {
+				return result, errors.New("domain graph comparison does not demonstrate per-pack to per-domain traversal")
+			}
 			quality := func(r m8ProductionRowV1, n int, target float64) bool {
 				return r.Status == "pass" && r.Accounting != nil && r.Samples == n && r.Accounting.Summary.Succeeded == n && r.Accounting.Summary.ServiceRecall >= target && r.RecallAtK >= target && r.QPS > 0 && r.P95Nanos > 0
 			}

@@ -929,7 +929,7 @@ untrusted report:
   > /retained/comparison-result.json
 ```
 
-Only four pair kinds are admitted:
+Five pair kinds are admitted:
 
 - `selected_exhaustive`: two coordinates in the same execution, with all
   logical domains as baseline and fewer selected domains as candidate.
@@ -948,10 +948,26 @@ Only four pair kinds are admitted:
   new producer fails the unchanged builder/serving provenance gate.
   It changes neither packs searched nor serving settings and does not replace
   the independent one-pack `logical_packing` gate.
+- `domain_graph_runtime`: the pre-domain-graph runtime versus the landed
+  domain-graph runtime, with identical disjoint multi-pack shard-generation
+  bytes, parent artifact, adapter, source ordinals, router and serving settings.
+  Every named report must additionally pin its producing runtime as
+  `"runtime": {"head_sha": "<40 hex>", "executable": "/retained/bin/benchmark",
+  "executable_sha256": "<64 hex>"}`. The comparer verifies the binary's clean
+  Go build identity and executes that binary's complete `replay-m8-report`
+  with the seven external pins, serially, with a 20-minute deadline and 4 KiB
+  combined output limit per report.
+  It requires the exact acceptance receipt and rechecks the inputs afterward.
+  No old database is relabeled, rebound, or opened by the new runtime. Successful
+  paired rows must show per-pack baseline traversals and one candidate traversal
+  per selected domain. Only same-report `selected_exhaustive` controls may
+  accompany this kind. Runtime overrides are forbidden in other plans.
 
 All pairs require the selected Vamana profile, C256/EF96, top 10, at least 95%
-recall, five complete repetitions at c1/c32, and equal fixture/truth, source
-build, observable host/mount and runtime identities. Source graph, partitioner,
+recall, five complete repetitions at c1/c32, and equal fixture/truth,
+observable host/mount and Go execution settings. Source build and executable
+identities must also match except for the explicit `domain_graph_runtime`
+comparison, whose two source identities are independently pinned. Source graph, partitioner,
 ordinary source-index definition and router configuration must also match.
 Record hostname, isolation/admission and competing jobs externally: equality
 of CPU/memory/kernel/mount fields alone does not uniquely identify a machine.
@@ -965,7 +981,8 @@ fields; raw attempt arrays stay in the externally pinned original reports.
 Its status is `COMPARISON_REDUCED_NOT_QUALIFICATION`. The original fourfold
 probe-reduction gate, storage/build costs, domain/scale axes and final supported
 envelope are still independent obligations. A retained-open timing is not a
-fresh asset-build cost. Predecessor and ordinary-reference joins are excluded.
+fresh asset-build cost. Arbitrary predecessor and ordinary-reference joins are
+excluded; `domain_graph_runtime` admits only the declared traversal transition.
 Matching repetition indices does not prove interleaved execution: publish
 actual collection order and host admission separately, and do not present
 sequential cross-report windows as order-balanced causal evidence.
