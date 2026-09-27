@@ -749,6 +749,9 @@ type DurableRootRecordV1 struct {
 	FreelistFreeCount    uint64
 	FreelistRetiredCount uint64
 	Manifest             DependencyManifestRefV1
+	// Directory is the explicit V2 alternative to the V1 contiguous manifest.
+	// Its root belongs to this record's index generation and allocator extent.
+	Directory DependencyDirectoryRefV2
 
 	ParentRecordPageID   uint64
 	ParentCommitSeq      uint64
@@ -761,8 +764,14 @@ func (record DurableRootRecordV1) validate(pageID uint64) error {
 		record.TotalPages <= pageID || record.UserRootPageID >= record.TotalPages || record.SystemRootPageID >= record.TotalPages ||
 		record.Freelist.HeaderPageID < 2 || record.Freelist.GenerationID == 0 || record.Freelist.CommitSeq != record.CommitSeq ||
 		record.Freelist.HighWater <= record.Freelist.HeaderPageID || record.Freelist.HighWater > record.TotalPages || record.Freelist.Digest == [32]byte{} ||
-		record.Manifest.FirstPageID < 2 || record.Manifest.PageCount == 0 || record.Manifest.ByteLength < 16 || record.Manifest.Digest == [32]byte{} ||
-		record.Manifest.FirstPageID+uint64(record.Manifest.PageCount) > record.TotalPages || record.MetaProjectionDigest == [32]byte{} {
+		record.MetaProjectionDigest == [32]byte{} {
+		return ErrDurableRootRecordFormat
+	}
+	if record.Directory != (DependencyDirectoryRefV2{}) {
+		if record.Manifest != (DependencyManifestRefV1{}) || record.Directory.RootPageID < 2 || record.Directory.RootPageID >= record.TotalPages || record.Directory.PhysicalCount > ^uint64(0)-record.Directory.LogicalCount {
+			return ErrDurableRootRecordFormat
+		}
+	} else if record.Manifest.FirstPageID < 2 || record.Manifest.PageCount == 0 || record.Manifest.ByteLength < 16 || record.Manifest.Digest == [32]byte{} || record.Manifest.FirstPageID >= record.TotalPages || uint64(record.Manifest.PageCount) > record.TotalPages-record.Manifest.FirstPageID {
 		return ErrDurableRootRecordFormat
 	}
 	if record.ParentRecordPageID == 0 {
@@ -806,6 +815,13 @@ func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, e
 	binary.LittleEndian.PutUint32(image[192:196], record.Manifest.EntryCount)
 	binary.LittleEndian.PutUint32(image[196:200], record.Manifest.PageCount)
 	copy(image[200:232], record.Manifest.Digest[:])
+	if record.Directory != (DependencyDirectoryRefV2{}) {
+		binary.LittleEndian.PutUint16(image[24:26], 2)
+		clear(image[176:232])
+		binary.LittleEndian.PutUint64(image[176:184], record.Directory.RootPageID)
+		binary.LittleEndian.PutUint64(image[184:192], record.Directory.PhysicalCount)
+		binary.LittleEndian.PutUint64(image[192:200], record.Directory.LogicalCount)
+	}
 	binary.LittleEndian.PutUint64(image[232:240], record.ParentRecordPageID)
 	binary.LittleEndian.PutUint64(image[240:248], record.ParentCommitSeq)
 	copy(image[248:280], record.ParentRecordDigest[:])
@@ -824,8 +840,9 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 		return DurableRootRecordV1{}, ErrDurableRootRecordChecksum
 	}
 	header := page.DecodeHeader(image)
+	version := binary.LittleEndian.Uint16(image[24:26])
 	if header.PageID != pageID || page.PageType(header.Flags) != page.PageTypeDurableRootRecord || header.Count != 0 ||
-		!bytes.Equal(image[16:24], durableRootRecordMagicV1[:]) || binary.LittleEndian.Uint16(image[24:26]) != 1 ||
+		!bytes.Equal(image[16:24], durableRootRecordMagicV1[:]) || (version != 1 && version != 2) ||
 		binary.LittleEndian.Uint16(image[26:28]) != durableRootRecordHeaderV1 || !allZeroV1(image[28:32]) ||
 		!allZeroV1(image[344:durableRootRecordHeaderV1]) || !allZeroV1(image[durableRootRecordHeaderV1:]) {
 		return DurableRootRecordV1{}, ErrDurableRootRecordFormat
@@ -852,6 +869,20 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 	}
 	copy(record.Freelist.Digest[:], image[128:160])
 	copy(record.Manifest.Digest[:], image[200:232])
+	if version == 2 {
+		if !allZeroV1(image[200:232]) {
+			return DurableRootRecordV1{}, ErrDurableRootRecordFormat
+		}
+		record.Manifest = DependencyManifestRefV1{}
+		record.Directory = DependencyDirectoryRefV2{
+			RootPageID:    binary.LittleEndian.Uint64(image[176:184]),
+			PhysicalCount: binary.LittleEndian.Uint64(image[184:192]),
+			LogicalCount:  binary.LittleEndian.Uint64(image[192:200]),
+		}
+		if record.Directory.RootPageID == 0 {
+			return DurableRootRecordV1{}, ErrDurableRootRecordFormat
+		}
+	}
 	copy(record.ParentRecordDigest[:], image[248:280])
 	copy(record.MetaProjectionDigest[:], image[280:312])
 	if err := record.validate(pageID); err != nil {
