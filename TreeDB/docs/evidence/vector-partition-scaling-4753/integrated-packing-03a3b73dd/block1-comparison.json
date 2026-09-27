@@ -1,7 +1,7 @@
 {
   "status": "COMPARISON_REDUCED_NOT_QUALIFICATION",
   "plan_sha256": "97904e24570e326a0e2154fff846b5c38c85d9480af5f36f1714d28b27b71bfe",
-  "scope": "same frozen source/runtime, profiled native TCP boundary; five complete blocks at c1/c32, C256/EF96/top10/recall>=.95; all report rows retained, raw attempts in pinned reports; CPU/source-host admission and full F envelope remain external obligations; not predecessor or ordinary-HNSW comparison",
+  "scope": "same frozen source/runtime, profiled native TCP boundary; five internal repetitions in external block 1 at c1/c32, C256/EF96/top10/recall>=.95; all report rows retained, raw attempts in pinned reports; CPU/source-host admission and full F envelope remain external obligations; not predecessor or ordinary-HNSW comparison",
   "replay_receipts": {
     "multi": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850 rows=20\n",
     "one": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c rows=20\n"
