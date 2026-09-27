@@ -105,6 +105,29 @@ func (directory *DependencyDirectoryV2) LookupPhysical(key []byte) (DependencyMa
 	return DecodeDependencyPhysicalV2(key, value)
 }
 
+// matchesPhysicalRecordV2 compares against bytes just produced by
+// EncodeDependencyPhysicalV2; key must come from that same entry. Equality
+// proves the persisted record has that
+// exact canonical descriptor without allocating a second decoded copy. A
+// different record is still decoded and validated before reporting mismatch.
+func (directory *DependencyDirectoryV2) matchesPhysicalRecordV2(key, canonical []byte) (bool, error) {
+	if err := directory.Retain(); err != nil {
+		return false, err
+	}
+	defer directory.Release()
+	value, err := directory.tree.GetAppend(key, nil)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(value, canonical) {
+		return true, nil
+	}
+	if _, err := DecodeDependencyPhysicalV2(key, value); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // Walk validates and streams the complete directory with iterator-height plus
 // one-record scratch space. Startup cost is O(records * log(physical records)):
 // each logical record verifies its exact physical owner/frontier. The visitor

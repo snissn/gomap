@@ -221,3 +221,70 @@ func TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles(t *test
 		})
 	}
 }
+
+func TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed(t *testing.T) {
+	entry := DependencyManifestEntryV1{Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "one", DiagnosticPath: "columns/one", Identity: StableIdentity{Platform: "unix", ObjectID: [16]byte{1}, Generation: 1}, Generation: 1, Frontier: DurableFrontier{Bytes: 4096}, Reachability: []ReachabilityField{ReachabilityColumnManifest}}
+	key := DependencyPhysicalKeyV2(entry)
+	canonical, err := EncodeDependencyPhysicalV2(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := entry
+	changed.Frontier.Bytes++
+	different, err := EncodeDependencyPhysicalV2(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := entry
+	other.ResourceID = "other"
+	wrongOwner, err := EncodeDependencyPhysicalV2(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                     string
+		storedKey, value         []byte
+		corruptPage, match, fail bool
+	}{
+		{"exact", key, canonical, false, true, false},
+		{"different-valid", key, different, false, false, false},
+		{"malformed-value", key, canonical[:len(canonical)-1], false, false, true},
+		{"wrong-owner-key", key, wrongOwner, false, false, true},
+		{"missing-owner", DependencyPhysicalKeyV2(other), canonical, false, false, true},
+		{"corrupt-page", key, canonical, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if err := p.GrowTo(3); err != nil {
+				t.Fatal(err)
+			}
+			image := make([]byte, page.PageSize)
+			n := node.NewNode(image)
+			n.SetPageID(2)
+			n.SetType(page.PageTypeLeaf)
+			if err := n.AddLeafEntry(tc.storedKey, tc.value, node.FlagInline, page.ValuePtr{}); err != nil {
+				t.Fatal(err)
+			}
+			n.UpdateChecksum()
+			if tc.corruptPage {
+				image[len(image)-1] ^= 1
+			}
+			if err := p.Write(2, image); err != nil {
+				t.Fatal(err)
+			}
+			directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: 1}, p.PageCount(), func() {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer directory.Release()
+			matched, err := directory.matchesPhysicalRecordV2(key, canonical)
+			if matched != tc.match || (err != nil) != tc.fail {
+				t.Fatalf("comparison matched=%t error=%v", matched, err)
+			}
+		})
+	}
+}

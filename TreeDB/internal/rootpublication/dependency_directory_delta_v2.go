@@ -27,7 +27,7 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 	owners := make(map[string]struct{})
 	// The map contains only this publication's additions, not retained keys.
 	additions := make(map[string]struct{})
-	var added, removed uint64
+	var added, removed, retainedPhysical uint64
 	source.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		physicalEntry := *entry
 		physicalEntry.logicalObligations = stableLogicalObligationView{}
@@ -51,11 +51,10 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 		}
 		changed := true
 		if base != nil {
-			previous, lookupErr := base.LookupPhysical(owner)
+			matched, lookupErr := base.matchesPhysicalRecordV2(owner, encoded)
 			if lookupErr == nil {
-				var previousBytes []byte
-				previousBytes, err = EncodeDependencyPhysicalV2(previous)
-				changed = !bytes.Equal(previousBytes, encoded)
+				retainedPhysical++
+				changed = !matched
 			} else if !errors.Is(lookupErr, tree.ErrKeyNotFound) {
 				err = lookupErr
 			}
@@ -140,14 +139,6 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 	}
 	// No scan is needed when every predecessor physical owner remains. This
 	// is the ordinary source-import append path.
-	retainedPhysical := uint64(0)
-	for owner := range owners {
-		if _, lookupErr := base.LookupPhysical([]byte(owner)); lookupErr == nil {
-			retainedPhysical++
-		} else if !errors.Is(lookupErr, tree.ErrKeyNotFound) {
-			return 0, 0, lookupErr
-		}
-	}
 	if retainedPhysical != base.ref.PhysicalCount {
 		err = base.Walk(func(key, value []byte) error {
 			owner := key

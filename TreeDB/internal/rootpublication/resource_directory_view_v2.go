@@ -76,18 +76,17 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 		physicalEntry.logicalObligations = stableLogicalObligationView{}
 		descriptor := dependencyManifestEntryV1FromStableResourceEntry(physicalEntry)
 		key := DependencyPhysicalKeyV2(descriptor)
-		actual, err := directory.LookupPhysical(key)
-		if err != nil {
-			bindErr = err
-			return false
-		}
 		wantBytes, err := EncodeDependencyPhysicalV2(descriptor)
 		if err != nil {
 			bindErr = err
 			return false
 		}
-		gotBytes, err := EncodeDependencyPhysicalV2(actual)
-		if err != nil || !bytes.Equal(wantBytes, gotBytes) {
+		matched, err := directory.matchesPhysicalRecordV2(key, wantBytes)
+		if err != nil {
+			bindErr = err
+			return false
+		}
+		if !matched {
 			bindErr = fmt.Errorf("%w: directory physical descriptor differs from candidate", ErrResourceConflict)
 			return false
 		}
