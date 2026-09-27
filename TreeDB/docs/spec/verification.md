@@ -2638,4 +2638,31 @@ Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public 
 Draft incremental source-directory coverage adds `TestVectorPartitionSourceImportUsesIncrementalDirectoryV2` (actual public-path semantic red before implementation), `TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2`, `TestVectorPartitionSourceImportBoundsBeforeWALV2`, `TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2`, and `TestCollectionSourceImportCompleteCommandBudgetV2`. Persistent proof nodes and SCL2 rows are compared with an independent complete test tree across partial/power-of-two shapes. `BenchmarkVectorPartitionSourceImportDirectoryV2` uses the same public import with 32 versus 1024 prior chunks, reports allocation and actual directory/fallback record reads, and must not be interpreted as EC2 qualification. Remote-page refusal, page/source lifecycle, canonical authority and complete public owner-load/build bounds remain open.
 
 
-`TestVectorPartitionSourceImportRetainedSealAndGCV2` exercises a completed source reader held across another source revision, checkpoint, immutable seal reopen and destructive asset GC. Its initial local runtime failure was the legacy-only GC reader refusal; the explicit V2 lifecycle reader is the proposed repair. `BenchmarkVectorPartitionSourceImportDirectoryV2` now reports source leaf bytes/rows, directory and fallback reads, selected DPM stream bytes/items, encoded dependency bytes and whole-call allocations. Existing logarithmic COW work and full retained dependency serialization must be analyzed separately; no constant whole-call or distributed readiness claim follows from constant directory reads.
+`TestVectorPartitionSourceImportRetainedSealAndGCV2` exercises a completed source reader held across another source revision, checkpoint, immutable seal reopen and destructive asset GC. The V2 lifecycle reader verifies the retained source directory before asset reclamation; platforms without stable relative namespaces refuse destructive GC while retaining reader/reopen coverage. `BenchmarkVectorPartitionSourceImportDirectoryV2` now reports source leaf bytes/rows, directory and fallback reads, selected DPM stream bytes/items, encoded dependency bytes and whole-call allocations. Existing logarithmic COW work and full retained dependency serialization must be analyzed separately; no constant whole-call or distributed readiness claim follows from constant directory reads.
+
+
+The opt-in `dependency_directory_v2` required format feature activates a third
+COW B-tree for physical descriptors and globally keyed logical obligations on
+new stores. `TestDependencyDirectoryV2RequiredFeature*` covers populated-V1 and
+dirty-WAL refusal, feature removal refusal, and read-write/read-only/no-lock
+reopen. `TestDependencyDirectoryV2UnknownRequiredFeaturePrecedesStorageDecode`
+requires unsupported-feature refusal before malformed root or WAL decoding,
+including `IgnoreFormatConfig`. Selected-root page bounds and ordinary page
+checksums protect directory traversal; the directory is not a Merkle commitment.
+
+`TestVectorPartitionSourceImportDependencyEncodingDoesNotScaleWithHistoryV2`
+requires persisted DPM2 and nonzero changed-record-byte and COW-page counters
+across public import plus checkpoint at 32 and 1024 prior chunks, including
+reopen and coalesced imports. Changed-record bytes include changed keys/values
+and deletion keys, not all descriptor comparison or binding work. No-op
+publication leaves mutation/page counters unchanged. Allocation, CPU and
+retained-memory comparisons remain separate performance gates.
+
+`TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback`,
+`TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation` and
+`TestDependencyDirectoryV2RebuildPreservesBothSlots` cover streaming recovery,
+both fallback slots, retained readers and shared-page reachability.
+`TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity` covers
+V1 and DPM2 staged snapshot rebinding: only fixed-width physical identity values
+change in the validated private copy; logical keys, page layout, both slots and
+lineage remain intact and affected page checksums are recomputed.
