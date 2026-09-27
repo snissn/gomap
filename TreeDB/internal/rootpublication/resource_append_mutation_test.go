@@ -1849,13 +1849,13 @@ func TestStableLogicalObligationFlatUnionEvidenceFailsClosed4371(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer complete.Release()
-	evidence := complete.logicalMembershipEvidence[ResourceColumnAsset]
+	evidence := complete.logicalMembershipEvidenceLocked()[ResourceColumnAsset]
 	evidence.logicalMembershipCount--
-	complete.logicalMembershipEvidence[ResourceColumnAsset] = evidence
+	complete.logicalMembershipEvidenceLocked()[ResourceColumnAsset] = evidence
 	if _, certified, err := CertifyStableLogicalObligationAppendMutation(complete, producer, mutation); err != nil || certified {
 		t.Fatalf("inconsistent union evidence certified=%t err=%v", certified, err)
 	}
-	delete(complete.logicalMembershipEvidence, ResourceColumnAsset)
+	delete(complete.logicalMembershipEvidenceLocked(), ResourceColumnAsset)
 	if _, certified, err := CertifyStableLogicalObligationAppendMutation(complete, producer, mutation); err != nil || certified {
 		t.Fatalf("missing union evidence certified=%t err=%v", certified, err)
 	}
@@ -1867,7 +1867,7 @@ func TestStableLogicalObligationFlatUnionEvidenceFailsClosed4371(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer multiKind.Release()
-	delete(multiKind.logicalMembershipEvidence, ResourceValueLog)
+	delete(multiKind.logicalMembershipEvidenceLocked(), ResourceValueLog)
 	if _, certified, err := CertifyStableLogicalObligationAppendMutation(multiKind, producer, mutation); err != nil || certified {
 		t.Fatalf("partially missing union evidence certified=%t err=%v", certified, err)
 	}

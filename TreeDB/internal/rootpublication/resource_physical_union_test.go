@@ -410,8 +410,8 @@ func TestPhysicalReachabilityUnionFailedDirectoryRetainCleansOwnedLeases(t *test
 		empty.Release()
 		defer sources[i].Release()
 	}
-	good := sources[0].directoryLeases.empty
-	saturated := sources[1].directoryLeases.empty
+	good := sources[0].extras.empty
+	saturated := sources[1].extras.empty
 	prior := saturated.refs.Load()
 	// Retain must refuse overflow without consuming either source or leaking
 	// any independently retained roots accumulated before the failed retain.

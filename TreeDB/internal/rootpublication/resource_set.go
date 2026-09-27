@@ -1659,7 +1659,7 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	}
 	child.entries = nil
 	emptyDirectory := child.emptyDependencyDirectoryLocked()
-	child.directoryLeases = nil
+	child.extras = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
 	if emptyDirectory != nil {
@@ -2513,37 +2513,44 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 	})
 }
 
-// stableResourceDirectoryLeases is allocated only when a set owns directory
-// roots beyond its physical tokens. Owned clones have independent sidecars;
+// stableResourceSetExtras holds optional logical evidence and directory leases.
+// Ordinary physical sets need neither. Owned clones have independent sidecars;
 // immutable references remain diagnostic after the one ownership release.
-type stableResourceDirectoryLeases struct {
-	empty    *DependencyDirectoryV2
-	physical []*DependencyDirectoryV2
+type stableResourceSetExtras struct {
+	logicalMembershipEvidence map[ResourceKind]stableLogicalMembershipEvidence
+	empty                     *DependencyDirectoryV2
+	physical                  []*DependencyDirectoryV2
 }
 
 // These accessors require the set lock or exclusive unpublished ownership.
 func (set *StableResourceSet) emptyDependencyDirectoryLocked() *DependencyDirectoryV2 {
-	if set.directoryLeases == nil {
+	if set.extras == nil {
 		return nil
 	}
-	return set.directoryLeases.empty
+	return set.extras.empty
 }
 
 func (set *StableResourceSet) physicalDependencyDirectoriesLocked() []*DependencyDirectoryV2 {
-	if set.directoryLeases == nil {
+	if set.extras == nil {
 		return nil
 	}
-	return set.directoryLeases.physical
+	return set.extras.physical
+}
+
+func (set *StableResourceSet) logicalMembershipEvidenceLocked() map[ResourceKind]stableLogicalMembershipEvidence {
+	if set.extras == nil {
+		return nil
+	}
+	return set.extras.logicalMembershipEvidence
 }
 
 type StableResourceSet struct {
-	directoryLeases           *stableResourceDirectoryLeases
-	mu                        sync.Mutex
-	entries                   []stableResourceEntry
-	kindViews                 map[ResourceKind]stableResourceKindView
-	logicalMembershipEvidence map[ResourceKind]stableLogicalMembershipEvidence
-	pinHighWater              map[ResourceKind]uint64
-	owner                     atomic.Uint32
+	extras       *stableResourceSetExtras
+	mu           sync.Mutex
+	entries      []stableResourceEntry
+	kindViews    map[ResourceKind]stableResourceKindView
+	pinHighWater map[ResourceKind]uint64
+	owner        atomic.Uint32
 	// physicalOnly is an explicit durability/reachability capability. It carries
 	// no complete logical metadata and cannot be used for publication proofs.
 	physicalOnly bool
@@ -2606,7 +2613,7 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 			source.mu.Unlock()
 			return nil, true, ErrResourceOwnership
 		}
-		set := &StableResourceSet{directoryLeases: &stableResourceDirectoryLeases{empty: source.emptyDependencyDirectoryLocked()}}
+		set := &StableResourceSet{extras: &stableResourceSetExtras{empty: source.emptyDependencyDirectoryLocked()}}
 		set.owner.Store(uint32(ResourceOwnerBuilder))
 		source.mu.Unlock()
 		return set, true, nil
@@ -2968,7 +2975,7 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 				if len(source.entries) == 0 {
 					return true
 				}
-				admissible, complete, err := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidence, source.pinHighWater, entry, nil, excludedKinds, work)
+				admissible, complete, err := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidenceLocked(), source.pinHighWater, entry, nil, excludedKinds, work)
 				matchErr = err
 				return err == nil && complete && admissible
 			}
@@ -2980,7 +2987,7 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 			if predecessorToken.physicalIdentityKey() != producerToken.physicalIdentityKey() {
 				return false
 			}
-			admissible, complete, err := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidence, source.pinHighWater, entry, predecessor, excludedKinds, work)
+			admissible, complete, err := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidenceLocked(), source.pinHighWater, entry, predecessor, excludedKinds, work)
 			matchErr = err
 			return err == nil && complete && admissible
 		}
@@ -4184,7 +4191,7 @@ func appendStableLogicalMembershipEvidenceCandidates(target map[ResourceKind][]s
 		}
 		return target
 	}
-	for kind, evidence := range set.logicalMembershipEvidence {
+	for kind, evidence := range set.logicalMembershipEvidenceLocked() {
 		if evidence.logicalObligationCount != 0 && stableLogicalMembershipEvidenceComplete(evidence) {
 			if target == nil {
 				target = make(map[ResourceKind][]stableLogicalMembershipEvidence)
@@ -4287,7 +4294,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			// V1 flat metadata remains immutable diagnostic evidence after its
 			// producer releases ownership. Directory reads and physical union
 			// capabilities instead depend on a live lease, even for empty roots.
-			requiresLease := physicalOnly || set.directoryLeases != nil
+			requiresLease := physicalOnly || set.emptyDependencyDirectoryLocked() != nil || len(set.physicalDependencyDirectoriesLocked()) != 0
 			set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 				requiresLease = requiresLease || entry.logicalObligations.directory != nil
 				return !requiresLease
@@ -4359,7 +4366,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 	}
 	sortStableResourceEntries(view.entries)
 	if len(evidenceCandidates) != 0 {
-		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+		view.extras = &stableResourceSetExtras{logicalMembershipEvidence: stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)}
 	}
 	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil

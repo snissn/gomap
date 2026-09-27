@@ -113,10 +113,10 @@ func ClonePhysicalReachabilityUnion(sources ...*StableResourceSet) (*StableResou
 			owned.Release()
 			return nil, err
 		}
-		if owned.directoryLeases == nil {
-			owned.directoryLeases = &stableResourceDirectoryLeases{}
+		if owned.extras == nil {
+			owned.extras = &stableResourceSetExtras{}
 		}
-		owned.directoryLeases.physical = append(owned.directoryLeases.physical, directory)
+		owned.extras.physical = append(owned.extras.physical, directory)
 	}
 	return owned, nil
 }

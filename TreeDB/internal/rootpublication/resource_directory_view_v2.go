@@ -121,7 +121,7 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 			bound.Release()
 			return nil, ErrResourceOwnership
 		}
-		bound.directoryLeases = &stableResourceDirectoryLeases{empty: directory}
+		bound.extras = &stableResourceSetExtras{empty: directory}
 	}
 	return bound, nil
 }

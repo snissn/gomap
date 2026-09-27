@@ -3735,7 +3735,7 @@ func originalStableResourceUnionForTest(mode stableResourceViewMode, sets ...*St
 	}
 	sortStableResourceEntries(view.entries)
 	if len(evidenceCandidates) != 0 {
-		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+		view.extras = &stableResourceSetExtras{logicalMembershipEvidence: stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)}
 	}
 	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil
@@ -3765,7 +3765,7 @@ func assertSingleStableResourceUnionParity(t *testing.T, source *StableResourceS
 
 func assertStableResourceViewParity(t *testing.T, got, want *StableResourceSet) {
 	t.Helper()
-	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidence, want.logicalMembershipEvidence) {
+	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidenceLocked(), want.logicalMembershipEvidenceLocked()) {
 		t.Fatal("single union changed flat entry, pin or evidence representation")
 	}
 	for i := range got.entries {
@@ -3876,4 +3876,35 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 		t.Fatalf("flat fallback: %v/%v", err, wantErr)
 	}
 	assertSingleStableResourceUnionParity(t, nil)
+}
+
+func TestStableResourceSetExtrasReleasedEvidence(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "evidence.pack", "x")
+	source := freezeAppendMutationResources(t, appendMutationResourceToken(t, file,
+		ResourceColumnAsset, "source", 1, ReachabilityColumnManifest, appendMutationTestObligation(1)))
+	defer source.Release()
+	if source.extras != nil {
+		t.Fatal("ordinary frozen set allocated optional extras")
+	}
+	// Match the parity helper's warm-cache precondition before cloning views.
+	if _, _, err := source.DependencyManifestV1(); err != nil {
+		t.Fatal(err)
+	}
+	view, err := UnionStableResourceSets(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := view.logicalMembershipEvidenceLocked()
+	if len(evidence) == 0 {
+		t.Fatal("fixture has no logical membership evidence")
+	}
+	// Optional immutable evidence is diagnostic metadata, not a directory lease.
+	// Exercise the released-owner branch with evidence present in the sidecar.
+	source.extras = &stableResourceSetExtras{logicalMembershipEvidence: evidence}
+	source.Release()
+	got, err := UnionStableResourceSets(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStableResourceViewParity(t, got, view)
 }

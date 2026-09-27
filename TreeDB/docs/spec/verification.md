@@ -2173,9 +2173,11 @@ The `TestVectorPartitionPagedPrivateSegmentV2*` cases exercise process-crash
 orphan GC, rebound-child refusal, retained parent-sync debt, constructor failure
 recovery, changed frontiers and colliding write-lock stripes during shutdown.
 The combined graph case checks selected snapshot closure and active-reader GC
-protection, including corrupt transitive graph sections. Full cleanup and
-allocation validation remain pending; no P2 readiness or distributed capacity
-claim follows from codec or small-fixture success.
+protection, including corrupt transitive graph sections. Focused cleanup,
+race, native preparation and storage-name checks passed on the retained
+cleanup6 checkpoint. Allocation gates, complete public-path growth evidence
+and current-head platform checks remain pending; these small-fixture results
+do not establish P2 readiness or distributed capacity.
 
 `TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
 `TestSourceShardMapBoundImmutableLookupV2` and
