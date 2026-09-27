@@ -77,6 +77,17 @@ type rootPublicationVisibleInstallV1 struct {
 	postActivationCompleted     bool
 }
 
+// rootPublicationSealBaseV1 preserves only the publisher-time fields that
+// survive installation. Arrays are value copies; resource/candidate ownership
+// remains with the existing runtime and seal, without consulting newer DB state.
+type rootPublicationSealBaseV1 struct {
+	slotCommit    [2]uint64
+	slotResources [2]*rootpublication.StableResourceSet
+	slotMeta      [2]page.DurableMetaV1
+	slotRecord    [2]rootpublication.DurableRootRecordV1
+	ambiguous     []*durableRootPublishCandidateV1
+}
+
 // rootPublicationSealV1 freezes the exact publisher-time durable base,
 // alternate slot, dependency union, allocator prefix and index authority. A
 // pre-meta retry reuses this object byte-for-byte. If later visible work joins
@@ -86,7 +97,7 @@ type rootPublicationSealV1 struct {
 	latestSequence uint64
 	groupLength    int
 	idx            *indexGen
-	base           durableRootRuntimeV1
+	base           rootPublicationSealBaseV1
 	next           page.MetaPageBody
 	resources      *rootpublication.StableResourceSet
 	manifest       *rootpublication.DependencyManifestV1
@@ -1193,7 +1204,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	preparedOwned = false
 	seal := &rootPublicationSealV1{
 		latestSequence: member.next.CommitSeq, groupLength: group.Len(),
-		idx: runtime.idx, base: base, next: next, resources: resources, manifest: manifest,
+		idx: runtime.idx, base: rootPublicationSealBaseV1{
+			slotCommit: base.slotCommit, slotResources: base.slotResources,
+			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
+		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
 		target: target,
 	}
@@ -1364,17 +1378,16 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 			return 0, fmt.Errorf("published root seal allocator prefix diverged at member %d", i)
 		}
 	}
-	current := seal.base
-	current.meta = seal.meta
-	current.record = seal.record
-	current.manifest = seal.manifest
-	current.slot = seal.target
+	current := durableRootRuntimeV1{
+		meta: seal.meta, record: seal.record, manifest: seal.manifest, slot: seal.target,
+		slotCommit: seal.base.slotCommit, slotResources: seal.base.slotResources,
+		slotMeta: seal.base.slotMeta, slotRecord: seal.base.slotRecord, ambiguous: seal.base.ambiguous,
+	}
 	current.slotCommit[seal.target] = seal.next.CommitSeq
 	current.slotMeta[seal.target] = seal.meta
 	current.slotRecord[seal.target] = seal.record
 	previousResources := current.slotResources[seal.target]
 	current.slotResources[seal.target] = seal.resources
-	current.pending = nil
 	nextCapability, err := db.durableRootReuseCapabilityV1(current)
 	if err != nil {
 		runtime.mu.Unlock()

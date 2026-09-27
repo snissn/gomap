@@ -38,8 +38,8 @@ func (set *StableResourceSet) walkLogicalObligationsLocked(visit func(StableReso
 		}
 		return true
 	})
-	if set.emptyDirectory != nil {
-		directories[set.emptyDirectory] = nil
+	if set.emptyDependencyDirectoryLocked() != nil {
+		directories[set.emptyDependencyDirectoryLocked()] = nil
 	}
 	for directory, owners := range directories {
 		if err := directory.Walk(func(key, value []byte) error {

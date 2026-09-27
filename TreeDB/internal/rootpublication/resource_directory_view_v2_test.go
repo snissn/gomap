@@ -331,6 +331,9 @@ func TestDependencyDirectoryV2EmptyClosureLease(t *testing.T) {
 	if err := builder.Merge(clone); err != nil {
 		t.Fatal(err)
 	}
+	if union, err := UnionStableResourceSets(clone); union != nil || !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("transferred empty directory granted metadata authority: %v", err)
+	}
 	builder.Abandon()
 	clone.Release()
 	if releases != 1 {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -340,4 +341,91 @@ func testPhysicalDurabilityCount(candidates []*PreparedRootCandidate) (int, erro
 		return 0, err
 	}
 	return physicalDurabilityCount(sets)
+}
+
+func TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		name := "flat"
+		if directory {
+			name = "directory"
+		}
+		t.Run(name, func(t *testing.T) {
+			obligation := StableLogicalObligation{Class: "column", Kind: "chunk", Namespace: "main", Generation: 1, FileID: 1, Length: 4, Reachability: ReachabilityColumnManifest, Digest: [32]byte{1}}
+			token := stableTokenFixture(t, t.TempDir(), "segment", 1, 20, ReachabilityColumnManifest, "segment", func(spec *StableResourceSpec) {
+				spec.Kind = ResourceColumnAsset
+				spec.LogicalObligations = []StableLogicalObligation{obligation}
+			})
+			builder := NewStableResourceSetBuilder()
+			if err := builder.Add(token); err != nil {
+				t.Fatal(err)
+			}
+			original, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer original.Release()
+			child := original
+			releases := 0
+			if directory {
+				child = bindPhysicalUnionTestDirectory(t, original, func() { releases++ })
+				defer child.Release()
+			}
+			parent := NewStableResourceSetBuilder()
+			defer parent.Abandon()
+			if err := parent.Merge(child); err != nil {
+				t.Fatal(err)
+			}
+			if union, err := UnionStableResourceSets(child); union != nil || !errors.Is(err, ErrResourceOwnership) {
+				t.Fatalf("consumed metadata union: %v", err)
+			}
+			if union, err := ClonePhysicalReachabilityUnion(child); union != nil || !errors.Is(err, ErrResourceOwnership) {
+				t.Fatalf("consumed reachability union: %v", err)
+			}
+			retained, err := parent.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptors, err := retained.Descriptors()
+			if err != nil || len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 1 {
+				t.Fatalf("transferred metadata lost: %+v %v", descriptors, err)
+			}
+			retained.Release()
+			if directory && releases != 1 {
+				t.Fatalf("directory releases=%d", releases)
+			}
+		})
+	}
+}
+
+func TestPhysicalReachabilityUnionFailedDirectoryRetainCleansOwnedLeases(t *testing.T) {
+	var releases [2]int
+	sources := make([]*StableResourceSet, 2)
+	for i := range sources {
+		empty, err := NewStableResourceSetBuilder().Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		index := i
+		sources[i] = bindPhysicalUnionTestDirectory(t, empty, func() { releases[index]++ })
+		empty.Release()
+		defer sources[i].Release()
+	}
+	good := sources[0].directoryLeases.empty
+	saturated := sources[1].directoryLeases.empty
+	prior := saturated.refs.Load()
+	// Retain must refuse overflow without consuming either source or leaking
+	// any independently retained roots accumulated before the failed retain.
+	saturated.refs.Store(math.MaxInt64)
+	defer saturated.refs.Store(prior)
+	for attempt := 0; attempt < 16; attempt++ {
+		if union, err := ClonePhysicalReachabilityUnion(sources...); union != nil || !errors.Is(err, ErrResourceOwnership) {
+			t.Fatalf("saturated retain: %v", err)
+		}
+		if good.refs.Load() != 1 || releases != [2]int{} {
+			t.Fatalf("failed clone leaked/released source leases: refs=%d releases=%v", good.refs.Load(), releases)
+		}
+	}
+	if clone, err := CloneStableResourceSetExcludingKinds(sources[1]); clone != nil || !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("saturated empty clone: %v", err)
+	}
 }

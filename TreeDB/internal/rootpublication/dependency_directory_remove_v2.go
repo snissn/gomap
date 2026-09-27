@@ -14,7 +14,7 @@ func cloneDirectoryRemovingV2(source *StableResourceSet, mutation StableLogicalO
 	if owner := ResourceOwnerState(source.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return nil, work, true, ErrResourceOwnership
 	}
-	directory := source.emptyDirectory
+	directory := source.emptyDependencyDirectoryLocked()
 	source.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		if entry.logicalObligations.directory != nil {
 			directory = entry.logicalObligations.directory
@@ -123,7 +123,7 @@ func (set *StableResourceSet) hasDependencyDirectoryV2() bool {
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
-	found := set.emptyDirectory != nil
+	found := set.emptyDependencyDirectoryLocked() != nil
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		found = found || entry.logicalObligations.directory != nil
 		return !found

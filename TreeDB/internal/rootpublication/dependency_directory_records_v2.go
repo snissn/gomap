@@ -26,7 +26,7 @@ func WalkDependencyDirectoryRecordsV2(source *StableResourceSet, visit func(key,
 	owners := make(map[string]ownerView)
 	var physicalRecords, additions []record
 	var expectedLogical uint64
-	directory := owned.emptyDirectory
+	directory := owned.emptyDependencyDirectoryLocked()
 	owned.rangeEntries(func(entry *stableResourceEntry) bool {
 		if inherited := entry.logicalObligations.directory; inherited != nil {
 			if directory != nil && directory != inherited {

@@ -115,7 +115,7 @@ func RecoverDependencyDirectoryV2(directory *DependencyDirectoryV2, admit func(D
 			resources.Release()
 			return nil, err
 		}
-		resources.emptyDirectory = directory
+		resources.directoryLeases = &stableResourceDirectoryLeases{empty: directory}
 	}
 	return resources, nil
 }

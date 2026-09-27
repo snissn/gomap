@@ -1658,8 +1658,8 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 		builder.indexed = &stableResourceBuilderIndexedState{lookup: lookup, work: indexedWork}
 	}
 	child.entries = nil
-	emptyDirectory := child.emptyDirectory
-	child.emptyDirectory = nil
+	emptyDirectory := child.emptyDependencyDirectoryLocked()
+	child.directoryLeases = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
 	if emptyDirectory != nil {
@@ -1692,7 +1692,7 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		builder.mu.Unlock()
 		return StableResourceClosureWork{}, ErrResourceOwnership
 	}
-	if child.emptyDirectory != nil {
+	if child.emptyDependencyDirectoryLocked() != nil {
 		child.mu.Unlock()
 		builder.mu.Unlock()
 		return StableResourceClosureWork{}, fmt.Errorf("%w: append-only producer is a retained directory", ErrResourceConflict)
@@ -2513,10 +2513,31 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 	})
 }
 
+// stableResourceDirectoryLeases is allocated only when a set owns directory
+// roots beyond its physical tokens. Owned clones have independent sidecars;
+// immutable references remain diagnostic after the one ownership release.
+type stableResourceDirectoryLeases struct {
+	empty    *DependencyDirectoryV2
+	physical []*DependencyDirectoryV2
+}
+
+// These accessors require the set lock or exclusive unpublished ownership.
+func (set *StableResourceSet) emptyDependencyDirectoryLocked() *DependencyDirectoryV2 {
+	if set.directoryLeases == nil {
+		return nil
+	}
+	return set.directoryLeases.empty
+}
+
+func (set *StableResourceSet) physicalDependencyDirectoriesLocked() []*DependencyDirectoryV2 {
+	if set.directoryLeases == nil {
+		return nil
+	}
+	return set.directoryLeases.physical
+}
+
 type StableResourceSet struct {
-	physicalDirectories []*DependencyDirectoryV2
-	// Empty directories have no physical token to own their root lease.
-	emptyDirectory            *DependencyDirectoryV2
+	directoryLeases           *stableResourceDirectoryLeases
 	mu                        sync.Mutex
 	entries                   []stableResourceEntry
 	kindViews                 map[ResourceKind]stableResourceKindView
@@ -2580,12 +2601,12 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 		source.mu.Unlock()
 		return nil, false, ErrResourceOwnership
 	}
-	if source.emptyDirectory != nil {
-		if err := source.emptyDirectory.Retain(); err != nil {
+	if source.emptyDependencyDirectoryLocked() != nil {
+		if err := source.emptyDependencyDirectoryLocked().Retain(); err != nil {
 			source.mu.Unlock()
 			return nil, true, ErrResourceOwnership
 		}
-		set := &StableResourceSet{emptyDirectory: source.emptyDirectory}
+		set := &StableResourceSet{directoryLeases: &stableResourceDirectoryLeases{empty: source.emptyDependencyDirectoryLocked()}}
 		set.owner.Store(uint32(ResourceOwnerBuilder))
 		source.mu.Unlock()
 		return set, true, nil
@@ -4108,8 +4129,8 @@ func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) {
 	// PinHighWater remains observable after ActivePins falls to zero.
 	entries := append([]stableResourceEntry(nil), set.entries...)
 	views := set.kindViews
-	emptyDirectory := set.emptyDirectory
-	directories := set.physicalDirectories
+	emptyDirectory := set.emptyDependencyDirectoryLocked()
+	directories := set.physicalDependencyDirectoriesLocked()
 	set.mu.Unlock()
 	for _, directory := range directories {
 		directory.Release()
@@ -4256,11 +4277,17 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			set.mu.Unlock()
 			return nil, ErrResourceOwnership
 		}
-		if owner := set.Owner(); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		// Merge consumes and may clear either flat entries or kind views. A
+		// transferred source is never a complete diagnostic metadata snapshot.
+		if set.Owner() == ResourceOwnerTransferred {
+			set.mu.Unlock()
+			return nil, ErrResourceOwnership
+		}
+		if set.Owner() == ResourceOwnerReleased {
 			// V1 flat metadata remains immutable diagnostic evidence after its
 			// producer releases ownership. Directory reads and physical union
 			// capabilities instead depend on a live lease, even for empty roots.
-			requiresLease := physicalOnly || set.emptyDirectory != nil || len(set.physicalDirectories) != 0
+			requiresLease := physicalOnly || set.directoryLeases != nil
 			set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 				requiresLease = requiresLease || entry.logicalObligations.directory != nil
 				return !requiresLease
@@ -4280,7 +4307,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 				}
 				return inheritedDirectory == directory
 			}
-			if !compatible(set.emptyDirectory) || !set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+			if !compatible(set.emptyDependencyDirectoryLocked()) || !set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 				return compatible(entry.logicalObligations.directory)
 			}) {
 				set.mu.Unlock()

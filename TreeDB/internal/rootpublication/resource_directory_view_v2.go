@@ -23,7 +23,7 @@ func (set *StableResourceSet) DependencyDirectoryV2() (*DependencyDirectoryV2, e
 	if owner := ResourceOwnerState(set.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
 	}
-	directory := set.emptyDirectory
+	directory := set.emptyDependencyDirectoryLocked()
 	var err error
 	var entries, bound uint64
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
@@ -121,7 +121,7 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 			bound.Release()
 			return nil, ErrResourceOwnership
 		}
-		bound.emptyDirectory = directory
+		bound.directoryLeases = &stableResourceDirectoryLeases{empty: directory}
 	}
 	return bound, nil
 }
@@ -332,7 +332,7 @@ func (set *StableResourceSet) DependencyDirectoryBaseV2() (*DependencyDirectoryV
 	if set.physicalOnly || set.Owner() == ResourceOwnerReleased || set.Owner() == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
 	}
-	directory := set.emptyDirectory
+	directory := set.emptyDependencyDirectoryLocked()
 	var err error
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		if inherited := entry.logicalObligations.directory; inherited != nil {

@@ -89,10 +89,10 @@ func ClonePhysicalReachabilityUnion(sources ...*StableResourceSet) (*StableResou
 			continue
 		}
 		source.mu.Lock()
-		if source.emptyDirectory != nil {
-			directories[source.emptyDirectory] = struct{}{}
+		if source.emptyDependencyDirectoryLocked() != nil {
+			directories[source.emptyDependencyDirectoryLocked()] = struct{}{}
 		}
-		for _, directory := range source.physicalDirectories {
+		for _, directory := range source.physicalDependencyDirectoriesLocked() {
 			directories[directory] = struct{}{}
 		}
 		source.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
@@ -113,7 +113,10 @@ func ClonePhysicalReachabilityUnion(sources ...*StableResourceSet) (*StableResou
 			owned.Release()
 			return nil, err
 		}
-		owned.physicalDirectories = append(owned.physicalDirectories, directory)
+		if owned.directoryLeases == nil {
+			owned.directoryLeases = &stableResourceDirectoryLeases{}
+		}
+		owned.directoryLeases.physical = append(owned.directoryLeases.physical, directory)
 	}
 	return owned, nil
 }

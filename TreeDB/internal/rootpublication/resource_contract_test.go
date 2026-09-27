@@ -3849,7 +3849,13 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 				t.Fatal("source mutation changed captured metadata")
 			}
 			assertStableResourceViewParity(t, got, want)
-			assertSingleStableResourceUnionParity(t, source)
+			if action == "merge" {
+				if union, err := UnionStableResourceSets(source); union != nil || !errors.Is(err, ErrResourceOwnership) {
+					t.Fatalf("consumed source union: %v", err)
+				}
+			} else {
+				assertSingleStableResourceUnionParity(t, source)
+			}
 		})
 	}
 	sets := duplicatePhysicalStableResourceSets(t, 3)
