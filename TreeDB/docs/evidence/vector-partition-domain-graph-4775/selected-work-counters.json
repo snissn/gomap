@@ -1,0 +1,1686 @@
+{
+  "status": "DERIVED_SELECTED_WORK_COUNTERS_NOT_QUALIFICATION",
+  "scope": "Exact aggregate counters from successful selected P5 rows; per-query values divide totals by samples. Historical hnsw field names carry selected Vamana work. Counters are work estimates, not physical RSS or mapped bytes. Original reports remain in the hashed comparator projections.",
+  "observations": [
+    {
+      "external_block": 1,
+      "asset": "domain",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/result.json",
+      "original_comparison_sha256": "216384a24aa4c4a296b69f56245eb391a7f11aa966f0832cf0e23e9a652810c1",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 1,
+      "asset": "perpack",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/result.json",
+      "original_comparison_sha256": "216384a24aa4c4a296b69f56245eb391a7f11aa966f0832cf0e23e9a652810c1",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 2,
+      "asset": "domain",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/result.json",
+      "original_comparison_sha256": "b815f949f45b1cfa87f63ef452fa4e90b43add9842f1d0d5b4ba35ab6bf6d6f8",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 2,
+      "asset": "perpack",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/result.json",
+      "original_comparison_sha256": "b815f949f45b1cfa87f63ef452fa4e90b43add9842f1d0d5b4ba35ab6bf6d6f8",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 3,
+      "asset": "domain",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/result.json",
+      "original_comparison_sha256": "adc3ae20fbed7a97a03fae9d2bba3e74f9fc1086ca40b1ba63dbbef56bbb16f6",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 3,
+      "asset": "perpack",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/result.json",
+      "original_comparison_sha256": "adc3ae20fbed7a97a03fae9d2bba3e74f9fc1086ca40b1ba63dbbef56bbb16f6",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 4,
+      "asset": "domain",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/result.json",
+      "original_comparison_sha256": "5ef6b7a6665efaaa5cb74e9b3b5d6657e9852ff12781d40a78293ea3c08981f8",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 4,
+      "asset": "perpack",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/result.json",
+      "original_comparison_sha256": "5ef6b7a6665efaaa5cb74e9b3b5d6657e9852ff12781d40a78293ea3c08981f8",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 5,
+      "asset": "domain",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/result.json",
+      "original_comparison_sha256": "efa5caaa5f6586519606575702877b8984f00a37305143e0430992fa9f91bd46",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 6189176,
+            "request_bytes": 6348324,
+            "response_bytes": 1707392,
+            "candidate_bytes": 380378624,
+            "rpcs": 1796,
+            "approximate_partition_local_hnsw_searches": 2560,
+            "approximate_partition_local_hnsw_candidates": 5943416,
+            "approximate_partition_local_hnsw_edges": 15158538
+          }
+        }
+      ]
+    },
+    {
+      "external_block": 5,
+      "asset": "perpack",
+      "original_comparison_path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/result.json",
+      "original_comparison_sha256": "efa5caaa5f6586519606575702877b8984f00a37305143e0430992fa9f91bd46",
+      "rows": [
+        {
+          "selected_row_index": 0,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 1,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 2,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 3,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 4,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 5,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 6,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 7,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 8,
+          "concurrency": 1,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        },
+        {
+          "selected_row_index": 9,
+          "concurrency": 32,
+          "samples": 512,
+          "totals": {
+            "router_score_calls": 131072,
+            "local_score_calls": 13326736,
+            "request_bytes": 7268352,
+            "response_bytes": 4775936,
+            "candidate_bytes": 789996544,
+            "rpcs": 2048,
+            "approximate_partition_local_hnsw_searches": 10240,
+            "approximate_partition_local_hnsw_candidates": 12343696,
+            "approximate_partition_local_hnsw_edges": 58936187
+          }
+        }
+      ]
+    }
+  ]
+}

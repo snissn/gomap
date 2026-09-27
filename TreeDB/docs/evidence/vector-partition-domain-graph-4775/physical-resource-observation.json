@@ -1,0 +1,801 @@
+{
+  "status": "VALIDATED_UNTIMED_CANDIDATE_PHYSICAL_OBSERVATION_NOT_QUALIFICATION",
+  "provenance": {
+    "remote_root": "/home/mikers/gomap-4775-physical-supplement-20260927",
+    "measured_head": "1cde6b84b4a2d94b84394dc5e0d949f20c831298",
+    "collector_head": "9054f7578c5841310c162b80f08dd1d165db4769",
+    "collector_executable_sha256": "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+    "original_launch_manifest_sha256": "7fba617e8737ed141f6e475d6eb57cf2a6dde5fd6ae9a8b8ce2712c8d9116ff0",
+    "implementation_blob_inventory_sha256": "a368dffd0d2190b910534d83354c5ec50a0d300af17700b3d5b6c163e1038fa3",
+    "corrected_reader_executable_sha256": "539d1b68b5856a297121c930df7f120693e5037bcec817aa008e6472c9d83da2",
+    "corrected_reader_source_sha256": "65de4775d2ddf74a58cb76be72e8de2e21037cf136a3c3e4880b7f2d6991d79d",
+    "corrected_reader_launch_sha256": "bf9abab8a0bf2733699d95da059871b812c1c4b7162329d350aecb2675a4f650",
+    "derived_header_sha256": "c9c79635c3e69d2152a2c8ab9728c2b28d23f22f110bfd10325f1e8e89de2aa4",
+    "reader_outcome_inventory_sha256": "d9a5be18d50599f3d8280e77811dab64eeb25ed46cb8bc9dc7552c04256768e9",
+    "post_observation_preservation_inventory_sha256": "e3ad66dc03dac8ad2b6606a7ac7c8d54f7063cf731368e6116f9798aa0f6249d",
+    "correction_publication": "https://github.com/snissn/gomap/issues/4775#issuecomment-5853241493"
+  },
+  "original_failed_reader": {
+    "exit": 1,
+    "log": "=== RUN   TestPhysicalRetained4775\n    physical_consume_test.go:84: physical resource receipt differs from frozen collector/parent/layout or is incomplete\n--- FAIL: TestPhysicalRetained4775 (7.85s)\nFAIL\n",
+    "original_header": {
+      "kind": "physical_resources",
+      "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+      "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+      "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92 rows=20\n",
+      "head_sha": "9054f7578c5841310c162b80f08dd1d165db4769",
+      "executable_sha256": "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+      "source_checkout": "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+      "command": [
+        "/home/mikers/gomap-4775-physical-supplement-20260927/bin/collector",
+        "physical-resources",
+        "-out",
+        "/home/mikers/gomap-4775-physical-supplement-20260927/observation/resources.json",
+        "-source-checkout",
+        "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+        "-head-sha",
+        "9054f7578c5841310c162b80f08dd1d165db4769",
+        "-executable-sha256",
+        "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+        "--",
+        "-root",
+        "/home/mikers",
+        "-report",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block1/vector_partition_m8_1cde6b84b4a2_1f045798aa3f.json",
+        "-report-sha256",
+        "b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92",
+        "-fixture-sha256",
+        "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+        "-command-sha256",
+        "3180c81052b1ed5a4a45d44212173ad9565a49b74b55c959bbd19d1aa09467fc",
+        "-executable-sha256",
+        "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+        "-variant-descriptor-sha256",
+        "8790fef6da1c5defa3d8bf1d25892a8b2958200d9217c2be9fe01fddee288200",
+        "-truth-artifact-sha256",
+        "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+        "-truth-content-sha256",
+        "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+      ],
+      "parent_execution_id": "79f65a8c1187eb27aca5b0fa11a89048",
+      "parent_head_sha": "1cde6b84b4a2d94b84394dc5e0d949f20c831298",
+      "parent_executable_sha256": "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+      "manifest_integrity_digest": "d90b94b9f6fd8b05de538a220087fa1322dbde790ad0195a57650e2145615859",
+      "generation": 1,
+      "domain_graphs": true,
+      "serving_partitions": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28,
+        32,
+        36,
+        40,
+        44,
+        48,
+        52,
+        56,
+        60
+      ],
+      "top_k": 10,
+      "ef_search": [
+        96
+      ],
+      "go_version": "go1.26.0",
+      "goos": "linux",
+      "goarch": "amd64",
+      "page_size": 4096,
+      "host": {
+        "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+        "memory_bytes": 32109105152,
+        "numa_nodes": "0",
+        "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+        "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+        "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+        "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+      }
+    }
+  },
+  "accepted_post_collection_projection": {
+    "Status": "DERIVED_CANDIDATE_PHYSICAL_RESOURCES_NOT_QUALIFICATION",
+    "ParentSHA256": "b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92",
+    "OriginalHeaderSHA256": "01ac87c1ebfddcbadbf7aed4e85082016cbc84c2402be2369c5131ca46734e0c",
+    "ReceiptSHA256": "aaa344e43c99b619f9d531d6a3250a85cd39af9b5638df7a923d274e0d913bea",
+    "ExitSHA256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "RawRetainedManifestDigest": "d90b94b9f6fd8b05de538a220087fa1322dbde790ad0195a57650e2145615859",
+    "DerivedExpectedHeader": {
+      "kind": "physical_resources",
+      "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+      "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+      "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92 rows=20\n",
+      "head_sha": "9054f7578c5841310c162b80f08dd1d165db4769",
+      "executable_sha256": "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+      "source_checkout": "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+      "command": [
+        "/home/mikers/gomap-4775-physical-supplement-20260927/bin/collector",
+        "physical-resources",
+        "-out",
+        "/home/mikers/gomap-4775-physical-supplement-20260927/observation/resources.json",
+        "-source-checkout",
+        "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+        "-head-sha",
+        "9054f7578c5841310c162b80f08dd1d165db4769",
+        "-executable-sha256",
+        "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+        "--",
+        "-root",
+        "/home/mikers",
+        "-report",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block1/vector_partition_m8_1cde6b84b4a2_1f045798aa3f.json",
+        "-report-sha256",
+        "b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92",
+        "-fixture-sha256",
+        "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+        "-command-sha256",
+        "3180c81052b1ed5a4a45d44212173ad9565a49b74b55c959bbd19d1aa09467fc",
+        "-executable-sha256",
+        "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+        "-variant-descriptor-sha256",
+        "8790fef6da1c5defa3d8bf1d25892a8b2958200d9217c2be9fe01fddee288200",
+        "-truth-artifact-sha256",
+        "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+        "-truth-content-sha256",
+        "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+      ],
+      "parent_execution_id": "79f65a8c1187eb27aca5b0fa11a89048",
+      "parent_head_sha": "1cde6b84b4a2d94b84394dc5e0d949f20c831298",
+      "parent_executable_sha256": "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+      "manifest_integrity_digest": "ba64bc5c789c381c9fcf89806982e69f0e1c331ce9522393e265f0f4f4b7da39",
+      "generation": 1,
+      "domain_graphs": true,
+      "serving_partitions": [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        28,
+        32,
+        36,
+        40,
+        44,
+        48,
+        52,
+        56,
+        60
+      ],
+      "top_k": 10,
+      "ef_search": [
+        96
+      ],
+      "go_version": "go1.26.0",
+      "goos": "linux",
+      "goarch": "amd64",
+      "page_size": 4096,
+      "host": {
+        "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+        "memory_bytes": 32109105152,
+        "numa_nodes": "0",
+        "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+        "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+        "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+        "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+      }
+    },
+    "Observation": {
+      "header": {
+        "kind": "physical_resources",
+        "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+        "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+        "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92 rows=20\n",
+        "head_sha": "9054f7578c5841310c162b80f08dd1d165db4769",
+        "executable_sha256": "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+        "source_checkout": "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+        "command": [
+          "/home/mikers/gomap-4775-physical-supplement-20260927/bin/collector",
+          "physical-resources",
+          "-out",
+          "/home/mikers/gomap-4775-physical-supplement-20260927/observation/resources.json",
+          "-source-checkout",
+          "/home/mikers/gomap-4775-physical-supplement-20260927/source",
+          "-head-sha",
+          "9054f7578c5841310c162b80f08dd1d165db4769",
+          "-executable-sha256",
+          "cd4223ffccf8cb3f9a2e2cb8cd340e8bea3e656d1f1e3e9df2424804311f0a44",
+          "--",
+          "-root",
+          "/home/mikers",
+          "-report",
+          "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block1/vector_partition_m8_1cde6b84b4a2_1f045798aa3f.json",
+          "-report-sha256",
+          "b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92",
+          "-fixture-sha256",
+          "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+          "-command-sha256",
+          "3180c81052b1ed5a4a45d44212173ad9565a49b74b55c959bbd19d1aa09467fc",
+          "-executable-sha256",
+          "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+          "-variant-descriptor-sha256",
+          "8790fef6da1c5defa3d8bf1d25892a8b2958200d9217c2be9fe01fddee288200",
+          "-truth-artifact-sha256",
+          "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+          "-truth-content-sha256",
+          "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+        ],
+        "parent_execution_id": "79f65a8c1187eb27aca5b0fa11a89048",
+        "parent_head_sha": "1cde6b84b4a2d94b84394dc5e0d949f20c831298",
+        "parent_executable_sha256": "77d1a9cd1da6d25e6ba9a80f39ef60d1357a9dfd58ef79fd52c699e2e4fe62f5",
+        "manifest_integrity_digest": "ba64bc5c789c381c9fcf89806982e69f0e1c331ce9522393e265f0f4f4b7da39",
+        "generation": 1,
+        "domain_graphs": true,
+        "serving_partitions": [
+          0,
+          4,
+          8,
+          12,
+          16,
+          20,
+          24,
+          28,
+          32,
+          36,
+          40,
+          44,
+          48,
+          52,
+          56,
+          60
+        ],
+        "top_k": 10,
+        "ef_search": [
+          96
+        ],
+        "go_version": "go1.26.0",
+        "goos": "linux",
+        "goarch": "amd64",
+        "page_size": 4096,
+        "host": {
+          "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+          "memory_bytes": 32109105152,
+          "numa_nodes": "0",
+          "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+          "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+        }
+      },
+      "packs": [
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 0,
+            "pack_bytes": 21853024,
+            "mapped_extent_bytes": 21897216,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 4,
+            "pack_bytes": 21917992,
+            "mapped_extent_bytes": 21962752,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 8,
+            "pack_bytes": 21768780,
+            "mapped_extent_bytes": 21811200,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 12,
+            "pack_bytes": 21813084,
+            "mapped_extent_bytes": 21860352,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 16,
+            "pack_bytes": 21841916,
+            "mapped_extent_bytes": 21884928,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 20,
+            "pack_bytes": 5260432,
+            "mapped_extent_bytes": 5308416,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 39900
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 24,
+            "pack_bytes": 21796928,
+            "mapped_extent_bytes": 21839872,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 28,
+            "pack_bytes": 21710120,
+            "mapped_extent_bytes": 21757952,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 32,
+            "pack_bytes": 21796712,
+            "mapped_extent_bytes": 21839872,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 36,
+            "pack_bytes": 21644976,
+            "mapped_extent_bytes": 21692416,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 40,
+            "pack_bytes": 21605980,
+            "mapped_extent_bytes": 21647360,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 44,
+            "pack_bytes": 21831860,
+            "mapped_extent_bytes": 21876736,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 48,
+            "pack_bytes": 21684624,
+            "mapped_extent_bytes": 21729280,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 52,
+            "pack_bytes": 21807124,
+            "mapped_extent_bytes": 21852160,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 56,
+            "pack_bytes": 21806236,
+            "mapped_extent_bytes": 21848064,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        },
+        {
+          "live": {
+            "generation": 1,
+            "partition_id": 60,
+            "pack_bytes": 21747500,
+            "mapped_extent_bytes": 21794816,
+            "heap_copy_bytes": 0,
+            "metadata_bytes_bound": 22560,
+            "stable_id_bytes_bound": 0,
+            "logical_handles": 11,
+            "required_chunks": 10,
+            "opened_chunks": 10,
+            "validated_chunks": 10
+          },
+          "scratch": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 122796
+            }
+          ],
+          "after_close": {
+            "logical_handles": 0,
+            "mapped_extent_bytes": 0,
+            "heap_copy_bytes": 0,
+            "acquires": 11,
+            "releases": 11,
+            "errors": 0
+          }
+        }
+      ],
+      "totals": {
+        "pack_bytes": 331887288,
+        "mapped_extent_bytes": 332603392,
+        "heap_copy_bytes": 0,
+        "metadata_bytes_bound": 360960,
+        "stable_id_bytes_bound": 0,
+        "logical_handles": 176,
+        "required_chunks": 160,
+        "opened_chunks": 160,
+        "validated_chunks": 160,
+        "inventory_scratch_bounds": [
+          {
+            "top_k": 10,
+            "ef_search": 96,
+            "bytes_bound": 1881840
+          }
+        ]
+      },
+      "complete": true
+    }
+  },
+  "whole_observation_command": {
+    "exit": 0,
+    "wall_seconds": 357.33,
+    "cpu_seconds": 361.79,
+    "max_rss_bytes": 2009366528,
+    "cgroup_peak_bytes": 3657601024,
+    "cgroup_limit_bytes": 8589934592,
+    "swap_limit_bytes": 0,
+    "task_swaps": 0,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "scope": {
+    "baseline_mapped_extents_and_logical_handles": "UNKNOWN; historical reader has different mapping semantics; no improvement ratio",
+    "preservation": "Baseline original whole-file inventory verified. Candidate construction-pinned descriptor, shard metadata and manifest-bound serving assets verified through unchanged reader; no original whole-file candidate inventory exists.",
+    "derivation": "Original parent and raw manifest authenticated; unchanged m8RelabelTopologyManifestV1 with original parent group order changes only expected manifest digest. No observed receipt input to derivation.",
+    "limits": "New untimed retained-pack observation; not historical timed M8 process telemetry. Mapped extent is not RSS; logical handles are not OS FDs; chunks are opened/validated, not query touches. Metadata and one-search-per-domain scratch sum are bounds, not measured concurrent heap/peak. Excludes router/native topology; all five CPU/allocation observations per arm remain required."
+  }
+}

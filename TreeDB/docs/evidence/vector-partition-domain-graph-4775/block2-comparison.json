@@ -1,0 +1,333 @@
+{
+  "status": "COMPARISON_REDUCED_NOT_QUALIFICATION",
+  "plan_sha256": "2b97da75c74a1a3a8cbf9858997227a5a7e9abe59b9ae6c4216467d07894591a",
+  "scope": "individually pinned producing runtimes and source-specific strict replay; identical shard-generation bytes, fixture, host and serving coordinates; per-pack versus per-domain traversal; all five paired windows retained; CPU/resources, chronological isolation and full F qualification remain external obligations",
+  "replay_receipts": {
+    "domain": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=23fb507da0782afa7296b74575eb2cd8805de4628a4df39a7519514b97fda604 rows=20\n",
+    "perpack": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=a64124de8d86a3e1f507bcc46669a87254e1d6b3872317fa4269d6fda1b4d275 rows=20\n"
+  },
+  "logical_membership_digests": {},
+  "pairs": [
+    {
+      "pair": {
+        "name": "domain-v-perpack",
+        "kind": "domain_graph_runtime",
+        "baseline": "perpack",
+        "candidate": "domain",
+        "baseline_probes": 5,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 0,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 1.806057148021568,
+          "p95_ratio": 0.6146338211020362
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 1,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.1445112184331676,
+          "p95_ratio": 0.4885670596676013
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 7,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 1.7874365525390723,
+          "p95_ratio": 0.6136103371073308
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 6,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.1226142265501102,
+          "p95_ratio": 0.44063818548199013
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 8,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 1.7819545173813534,
+          "p95_ratio": 0.6347056611193812
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 9,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.160447663439171,
+          "p95_ratio": 0.4831413812389329
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 15,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 1.6688174763337273,
+          "p95_ratio": 0.6732078108964425
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 14,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.0428797815257296,
+          "p95_ratio": 0.5095419892182198
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 16,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 1.7238399854287982,
+          "p95_ratio": 0.6549762514477956
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 17,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.1583885153906954,
+          "p95_ratio": 0.45081106052391684
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    },
+    {
+      "pair": {
+        "name": "perpack-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "perpack",
+        "candidate": "perpack",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.7444552003056852,
+          "p95_ratio": 0.3668753420431666
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.428605911064719,
+          "p95_ratio": 0.38779679382036614
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.758910108562898,
+          "p95_ratio": 0.36760568957737283
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.614873147328525,
+          "p95_ratio": 0.40800648201469714
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.7578969599345675,
+          "p95_ratio": 0.3615524191299993
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.4737293025250193,
+          "p95_ratio": 0.3845017589370412
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.758886880295155,
+          "p95_ratio": 0.3648582250261818
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.5455302541429337,
+          "p95_ratio": 0.38027172138762827
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.759063519530039,
+          "p95_ratio": 0.36424348637732357
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.5311962248676965,
+          "p95_ratio": 0.42690544009954295
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    },
+    {
+      "pair": {
+        "name": "domain-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "domain",
+        "candidate": "domain",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.254693934956396,
+          "p95_ratio": 0.4799562226054078
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.741043943535581,
+          "p95_ratio": 0.3594240935440779
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.2215138633518854,
+          "p95_ratio": 0.4849726790773142
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.8324835704649836,
+          "p95_ratio": 0.3358433983577152
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.21847563395589,
+          "p95_ratio": 0.4965761116222438
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.8056107909377976,
+          "p95_ratio": 0.3617366303815149
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.2274031021785943,
+          "p95_ratio": 0.48877636200686353
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.717623795828907,
+          "p95_ratio": 0.37331590972728246
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.168052332217471,
+          "p95_ratio": 0.5010225014304355
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.811482030987915,
+          "p95_ratio": 0.3558094262794917
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    }
+  ],
+  "retained_original": {
+    "path": "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/result.json",
+    "sha256": "b815f949f45b1cfa87f63ef452fa4e90b43add9842f1d0d5b4ba35ab6bf6d6f8",
+    "omitted_field": "report_projections",
+    "scope": "Exact comparator pair and child receipt values preserved. Large source-report projections remain in the hashed original and source reports."
+  }
+}
