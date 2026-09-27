@@ -523,10 +523,12 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		})
 	}
 
+	searchStarted := time.Now()
 	search, err := client.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("strict production search latency=%s", time.Since(searchStarted))
 	if len(search.Neighbors) == 0 || search.Neighbors[0].ID != "remote-visible" {
 		t.Fatalf("subsequent production search did not observe routed mutation: %+v", search)
 	}
