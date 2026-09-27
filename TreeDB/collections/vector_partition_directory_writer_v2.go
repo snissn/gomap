@@ -135,6 +135,10 @@ func writeVectorPartitionDirectoryV2(ctx context.Context, kind string, generatio
 		if err != nil || !ok {
 			return fmt.Errorf("%w: directory record byte cap", ErrVectorPartitionManifestInvalid)
 		}
+		if record.Domain != nil {
+			v := *record.Domain
+			record.Domain = &v
+		}
 		if record.Snapshot != nil {
 			v := *record.Snapshot
 			record.Snapshot = &v

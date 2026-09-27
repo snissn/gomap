@@ -172,8 +172,11 @@ and canonical version-2 JSON; each page is at most 64 KiB with at most 128
 records or child references and fewer than 16 levels. Children bind generation,
 strictly ordered first/last keys, exact descendant record count, and ordinary
 asset SHA-256/checksum references. Source leaves retain sealed shard snapshot
-descriptors; metadata leaves retain source-scoped membership identities and
-graph asset references. Source identity preserves owner, shard, snapshot
+descriptors; metadata leaves retain explicit logical-domain declarations,
+source-scoped membership identities with home/overlap kind and persisted graph
+ordinal, and graph asset references. Each domain declares one logical pack and
+exact member count; section chunks remain physical assets of that pack. Source
+identity preserves owner, shard, snapshot
 revision/digest, ordinal and document revision. This adds no semantic Merkle
 authority: local opens stream the complete canonical owner descriptor sequence
 against the owner aggregate committed in BUILD before exposing selected rows.
@@ -187,10 +190,16 @@ records, wrong child ranges/counts and digest changes are refused.
 The schema-7 integrity digest is SHA-256 of the canonical envelope JSON with
 its `IntegrityDigest` empty. Its ready digest binds format, collection/index
 identity, generation, complete paged root and router identity in declared
-field order. This codec alone does not enable durable paged publication:
-legacy publication, search/build/router and reclaim APIs refuse it while
-page traversal, shard verification, transitive reachability and capability
-admission remain incomplete. A decoded schema-7 root is not READY evidence.
+field order. The prepared local producer writes unpublished source and ANN intent pages,
+verifies complete committed owner streams and every source reference before
+graph work, builds one bounded domain at a time, and atomically stages the
+combined local roots. The explicit V7 Vamana pack binding omits legacy physical
+row references; ordinal provenance lives in the local metadata directory. A
+pinned local domain open validates the ordinal permutation and exact document
+identity before ordinal-only traversal can return source-scoped results.
+Legacy publication, distributed activation/search, router and reclaim APIs
+continue to refuse schema 7. A decoded root or local Stage is not READY or
+distributed activation evidence.
 Schema-6 encoding and hashes remain unchanged; its nil `PagedRootV2` JSON
 field is omitted. Old binaries refuse schema 7 at their version check.
 

@@ -42,7 +42,7 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				t.Fatal(err)
 			}
 			ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: meta.Name}
-			catalogInput := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}, {ID: "group-c", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b"}}}
+			catalogInput := raftplacement.CatalogV1{Features: raftplacement.DefaultFeatureSet(), Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}, {ID: "group-c", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b"}}}
 			catalogInput.Features.Required = append(catalogInput.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 			catalog, err := raftplacement.Validate(catalogInput)
 			if err != nil {
@@ -93,6 +93,7 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 			first := importRow("first")
 			identity := raftplacement.VectorPartitionLifecycleIdentityV1{SourceFormat: 2, Generation: 1, Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding", IndexDefinitionDigest: definitionHex}, SourceV2: raftplacement.VectorPartitionLifecycleSourceIdentityV2{SourceMapEpoch: 1, SourceMapDigest: rawMap.Digest, GraphProfileDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64)}}
 			var appliedAuthority *raftplacement.CatalogMetaAuthorityV1
+			var combinedIdentity raftplacement.VectorPartitionLifecycleIdentityV1
 			selected := first.Snapshot
 			duplicate, omit := false, false
 			owner := VectorPartitionOwnerSourceInputV2{GroupID: "group-a", Collection: c, Walk: func(ctx context.Context, visit func(collections.VectorPartitionSourceSnapshotV2) error) error {
@@ -179,6 +180,22 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 					t.Fatal("ANN-only node staged partial source projection")
 				}
 
+				combinedIdentity = identity
+				combinedIdentity.Generation++
+				combinedIdentity.SourceV2.GraphProfileDigest = collections.VectorPartitionGraphProfileDigestV2()
+				combinedRecord, err := BeginPreparedVectorPartitionBuildV2(t.Context(), harness.LifecycleCoordinator(), combinedIdentity, ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner}, []raftcluster.GroupID{"group-b"}, 0, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				combinedIdentity = combinedRecord.Identity
+				combined, err := BuildAndStagePreparedVectorPartitionV2(t.Context(), appliedAuthority, combinedIdentity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if combined.PagedRootV2.LocalDomainCount != 1 || combined.PagedRootV2.LocalMembershipCount != 1 || len(combined.PagedRootV2.SourceOwners) != 1 || len(combined.PagedRootV2.ANNOwners) != 1 {
+					t.Fatalf("combined projection: %+v", combined.PagedRootV2)
+				}
+
 			}
 			root, err := raftplacement.VectorPartitionSourceOwnerSetDigestV2(aggregates)
 			if err != nil {
@@ -202,6 +219,24 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				closeErr := session.Close()
 				if readErr != nil || closeErr != nil || !strings.HasPrefix(string(row.DocumentID), "second-") {
 					t.Fatalf("prepared reopen row=%+v read=%v close=%v", row, readErr, closeErr)
+				}
+			}
+			if combinedIdentity.Generation != 0 {
+				session, err := OpenPreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, combinedIdentity, "node-b", ownership, c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				domain, err := session.OpenDomainV2(t.Context(), "group-b", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := session.Close(); err != nil {
+					t.Fatal(err)
+				}
+				results, err := domain.SearchLocalV2(t.Context(), []float32{1, 0}, 1, 16)
+				closeErr := domain.Close()
+				if err != nil || closeErr != nil || len(results) != 1 || results[0].Source.DocumentRevision != 23 || !strings.HasPrefix(string(results[0].DocumentID), "second-") {
+					t.Fatalf("committed build/reopen query: %+v %v %v", results, err, closeErr)
 				}
 			}
 			reopened, err := prepare()

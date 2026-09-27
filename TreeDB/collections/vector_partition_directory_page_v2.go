@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	source "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
@@ -30,11 +31,14 @@ type VectorPartitionSourceRowIdentityV2 = source.ANNSourceRowIdentityV2
 // Exactly one payload is present. Owner is a source owner for snapshots and an
 // ANN placement owner for metadata; these authorities need not have equal sets.
 type VectorPartitionDirectoryRecordV2 struct {
-	Owner    string
-	DomainID uint64
-	Snapshot *VectorPartitionSourceSnapshotV2    `json:",omitempty"`
-	Member   *VectorPartitionSourceRowIdentityV2 `json:",omitempty"`
-	Asset    *VectorPartitionAssetV1             `json:",omitempty"`
+	Owner          string
+	DomainID       uint64
+	Domain         *source.ANNDomainV2                 `json:",omitempty"`
+	MembershipKind string                              `json:",omitempty"`
+	GraphOrdinal   uint64                              `json:",omitempty"`
+	Snapshot       *VectorPartitionSourceSnapshotV2    `json:",omitempty"`
+	Member         *VectorPartitionSourceRowIdentityV2 `json:",omitempty"`
+	Asset          *VectorPartitionAssetV1             `json:",omitempty"`
 }
 
 type VectorPartitionDirectoryChildV2 struct {
@@ -70,6 +74,9 @@ func (r VectorPartitionDirectoryRecordV2) keyV2(kind string) (string, error) {
 		return bad()
 	}
 	n := 0
+	if r.Domain != nil {
+		n++
+	}
 	if r.Snapshot != nil {
 		n++
 	}
@@ -79,7 +86,7 @@ func (r VectorPartitionDirectoryRecordV2) keyV2(kind string) (string, error) {
 	if r.Asset != nil {
 		n++
 	}
-	if n != 1 {
+	if n != 1 || (r.Member == nil && (r.MembershipKind != "" || r.GraphOrdinal != 0)) {
 		return bad()
 	}
 	if kind == "source" {
@@ -93,11 +100,27 @@ func (r VectorPartitionDirectoryRecordV2) keyV2(kind string) (string, error) {
 		}
 		return vectorPartitionDirectoryOwnerPrefixV2(r.Owner) + s.ShardID + "\x00", nil
 	}
-	if kind != "metadata" || r.Snapshot != nil {
+	if kind != "metadata" || r.Snapshot != nil || r.DomainID > math.MaxUint32 {
 		return bad()
 	}
 	prefix := vectorPartitionDirectoryDomainPrefixV2(r.Owner, r.DomainID)
+	if r.Domain != nil {
+		if uint64(r.Domain.DomainID) != r.DomainID {
+			return bad()
+		}
+		a, err := source.NewANNOwnerAccumulatorV2(r.Owner)
+		if err != nil {
+			return bad()
+		}
+		if err := a.BeginDomain(*r.Domain); err != nil {
+			return bad()
+		}
+		return prefix + "0", nil
+	}
 	if r.Member != nil {
+		if r.MembershipKind != "home" && r.MembershipKind != "overlap" {
+			return bad()
+		}
 		m := r.Member
 		if m.SourceOwner == "" || len(m.SourceOwner) > 1024 || strings.ContainsRune(m.SourceOwner, 0) || m.ShardID == "" || len(m.ShardID) > 1024 || strings.ContainsRune(m.ShardID, 0) || m.SnapshotRevision == 0 || m.SnapshotDigest == ([sha256.Size]byte{}) || m.DocumentRevision == 0 {
 			return bad()
@@ -388,7 +411,10 @@ func walkVectorPartitionManifestAssetsV2(ctx context.Context, assetRoot, namespa
 			if rec.Member != nil {
 				return add(&members, 1)
 			}
-			return add(&packs, 1)
+			if rec.Asset != nil {
+				return add(&packs, 1)
+			}
+			return nil
 		})
 		if err != nil {
 			return err

@@ -52,18 +52,22 @@ progress. Those production integrations remain part of #4808.
 The draft paged-root codec uses an explicit `vector_partition_paged_manifest_v2`
 discriminant with VPM binary schema 7. Its 64 KiB envelope binds content-addressed
 metadata/source directory roots, source-map epoch/digest, source snapshot-set
-digest, placement epoch, graph profile and complete-generation counts. Root
+digest, exact placement digest, graph profile and explicitly local counts. Root
 decoding never sizes an allocation from the generation row/domain counts.
 Schema 7 stores a canonical, length-delimited JSON payload; schema 6 keeps its
 existing binary and JSON bytes and hashes. The optional `PagedRootV2` field is
 omitted for schema 6. Mixed inline source/layout state and paged roots fail.
 
-This codec is not runtime admission. Existing publication, materialization,
-search-plan, router and reclaim paths explicitly refuse the paged variant;
-old binaries reject schema 7. Public owner-local page traversal, capability
-negotiation, verified shard snapshots, complete page resource reachability and
-durable publication/recovery must be implemented before this gate is enabled.
-In particular, a valid root digest alone must not become READY evidence.
+Local prepared construction reads applied BUILD authority and current hosting
+membership together. Source and ANN owner sets are independent; the producer
+requires the complete local scope and refuses unavailable source inputs before
+graph work. Immutable unpublished intent pages prevent a callback from changing
+membership between commitment verification and graph construction. The final
+combined VCP1 Stage is atomic, and selected local domains reuse cold session
+owner verification under generation pins. This local preparation does not
+activate distributed reads: catalog Activate, native Search, legacy publication,
+router and reclaim paths continue to refuse the paged variant. Old binaries
+reject schema 7. A valid root digest or local Stage is not READY evidence.
 
 ## M1 durable lifecycle
 

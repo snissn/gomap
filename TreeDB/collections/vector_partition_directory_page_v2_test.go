@@ -11,7 +11,7 @@ import (
 
 func testDirectoryLeafV2(t testing.TB, owner string, ordinal uint64) VectorPartitionDirectoryPageV2 {
 	t.Helper()
-	r := VectorPartitionDirectoryRecordV2{Owner: owner, DomainID: 7, Member: &VectorPartitionSourceRowIdentityV2{SourceOwner: "source-owner", ShardID: "source-a", SnapshotRevision: 3, SnapshotDigest: sha256.Sum256([]byte("snapshot")), Ordinal: ordinal, DocumentRevision: 19}}
+	r := VectorPartitionDirectoryRecordV2{Owner: owner, DomainID: 7, MembershipKind: "home", Member: &VectorPartitionSourceRowIdentityV2{SourceOwner: "source-owner", ShardID: "source-a", SnapshotRevision: 3, SnapshotDigest: sha256.Sum256([]byte("snapshot")), Ordinal: ordinal, DocumentRevision: 19}}
 	key, err := r.keyV2("metadata")
 	if err != nil {
 		t.Fatal(err)

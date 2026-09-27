@@ -33,13 +33,14 @@ type VectorPartitionPreparedInputV2 struct {
 // root. Domain opens reuse this immutable verification; no mutable descriptor
 // callback or corpus-sized snapshot/ordinal map is retained.
 type VectorPartitionPagedSourceSessionV2 struct {
-	mu             sync.RWMutex
-	collection     *Collection
-	manifest       VectorPartitionManifestV1
-	ownership      sourcepartition.ResolvedSourceShardMapV2
-	snapshot       *backenddb.Snapshot
-	generationPin  *VectorPartitionReaderPinV1
-	verifiedOwners []string
+	mu                sync.RWMutex
+	collection        *Collection
+	manifest          VectorPartitionManifestV1
+	ownership         sourcepartition.ResolvedSourceShardMapV2
+	snapshot          *backenddb.Snapshot
+	generationPin     *VectorPartitionReaderPinV1
+	verifiedOwners    []string
+	verifiedANNOwners []string
 }
 
 func (c *Collection) OpenVectorPartitionPagedSourceSessionV2(ctx context.Context, input VectorPartitionPreparedInputV2, ownership sourcepartition.ResolvedSourceShardMapV2) (*VectorPartitionPagedSourceSessionV2, error) {
@@ -70,6 +71,9 @@ func (c *Collection) OpenVectorPartitionPagedSourceSessionV2(ctx context.Context
 	}
 	session := &VectorPartitionPagedSourceSessionV2{collection: c, manifest: m, ownership: ownership, snapshot: snap, generationPin: pin}
 	if err := session.verifyPreparedSourcesV2(ctx, input); err != nil {
+		return nil, errors.Join(err, session.Close())
+	}
+	if err := session.verifyANNIntentV2(ctx, input, m.PagedRootV2.MetadataDirectory); err != nil {
 		return nil, errors.Join(err, session.Close())
 	}
 	return session, nil
@@ -216,6 +220,11 @@ func (s *VectorPartitionPagedSourceSessionV2) ReadSourceRowV2(ctx context.Contex
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.readSourceRowV2(ctx, identity)
+}
+
+// readSourceRowV2 requires the session read lock or an unpublished builder lease.
+func (s *VectorPartitionPagedSourceSessionV2) readSourceRowV2(ctx context.Context, identity VectorPartitionSourceRowIdentityV2) (source.SourceRowV2, error) {
 	if s.snapshot == nil {
 		return source.SourceRowV2{}, backenddb.ErrClosed
 	}
