@@ -48,14 +48,19 @@ func newFixedPeerTCPTransportWithSecurityV1(listen string, advertised net.Addr, 
 }
 
 func newFixedPeerTCPTransportWithAdmissionV1(listen string, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string) (*hraft.NetworkTransport, error) {
+	transport, _, err := newFixedPeerTCPTransportOwnedV1(listen, advertised, timeout, security, peers, admission, scope)
+	return transport, err
+}
+
+func newFixedPeerTCPTransportOwnedV1(listen string, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string) (*hraft.NetworkTransport, *fixedPeerTCPStreamV1, error) {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if admission != nil {
 		listener, err = admission.listener(listener)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,7 +77,7 @@ func newFixedPeerTCPTransportWithAdmissionV1(listen string, advertised net.Addr,
 		}
 		stream.Listener = &peerSecureListenerV1{Listener: listener, security: security, allowed: allowed, admission: admission, scope: scope}
 	}
-	return hraft.NewNetworkTransport(stream, 4, timeout, io.Discard), nil
+	return hraft.NewNetworkTransport(stream, 4, timeout, io.Discard), stream, nil
 }
 
 func (s *fixedPeerTCPStreamV1) Addr() net.Addr { return s.advertised }
@@ -103,7 +108,9 @@ func (s *fixedPeerTCPStreamV1) Accept() (net.Conn, error) {
 
 func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Duration) (net.Conn, error) {
 	if s.security != nil {
+		s.mu.Lock()
 		node := s.peerNodes[address]
+		s.mu.Unlock()
 		if node == "" {
 			return nil, errPeerAuthenticationV1
 		}
@@ -160,4 +167,26 @@ func (s *fixedPeerTCPStreamV1) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// replaceAuthorizedPeersV1 installs an immutable transport identity view only
+// after the runtime has proved the exact committed replacement BEGIN. Existing
+// TLS handshakes retain their original immutable map; no map is mutated in place.
+func (s *fixedPeerTCPStreamV1) replaceAuthorizedPeersV1(peers []raftcluster.Peer) error {
+	nodes := make(map[hraft.ServerAddress]raftcluster.NodeID, len(peers))
+	allowed := make(map[raftcluster.NodeID]bool, len(peers))
+	for _, peer := range peers {
+		nodes[hraft.ServerAddress(peer.Address)] = peer.ID
+		allowed[peer.ID] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return net.ErrClosed
+	}
+	s.peerNodes = nodes
+	if listener, ok := s.Listener.(*peerSecureListenerV1); ok {
+		listener.replaceAllowedV1(allowed)
+	}
+	return nil
 }

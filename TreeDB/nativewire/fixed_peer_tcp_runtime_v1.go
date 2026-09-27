@@ -26,7 +26,6 @@ import (
 	hraft "github.com/hashicorp/raft"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
-	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
@@ -93,12 +92,18 @@ type FixedPeerTCPGroupStatusV1 struct {
 }
 
 type fixedPeerDataV1 struct {
-	db       *backenddb.DB
-	fsm      *raftfsm.FSM
-	provider *raftcluster.HashicorpRaftProvider
+	startErr      error
+	stream        *fixedPeerTCPStreamV1
+	submitter     raftcluster.CommandSubmitterV1
+	replacementID string
+	db            *backenddb.DB
+	fsm           *raftfsm.FSM
+	provider      *raftcluster.HashicorpRaftProvider
 }
 
 type FixedPeerTCPRuntimeV1 struct {
+	groupsMu      sync.RWMutex
+	closeMu       sync.Mutex
 	diagnostics   chan struct{}
 	draining      atomic.Bool
 	closed        atomic.Bool
@@ -438,7 +443,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if client.peerTransport != nil {
 			admission = client.peerTransport.admission
 		}
-		transport, e := newFixedPeerTCPTransportWithAdmissionV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
+		transport, stream, e := newFixedPeerTCPTransportOwnedV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
 		if e != nil {
 			return fail(e)
 		}
@@ -472,29 +477,14 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 			}
 			continue
 		}
-		d := &fixedPeerDataV1{}
+		d, e := r.openDataGroupV1(cfg, providerTransport, raftConfig, bootstrap, admission)
 		r.data[g.ID] = d
-		d.db, e = backenddb.Open(backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true})
 		if e != nil {
 			return fail(e)
 		}
-		d.fsm, e = raftfsm.Open(raftfsm.Options{DB: d.db, Cluster: cfg, StoreOptions: raftapply.DurableApplyStoreOptions{AllowInitialIndexGap: true}})
-		if e != nil {
-			return fail(e)
-		}
-		d.provider, e = raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: d.fsm, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
-		if e != nil {
-			return fail(e)
-		}
-		submitter, e := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{Cluster: cfg, AdmissionProvider: d.provider, CommitSource: d.provider, Preflight: d.fsm, Applier: d.fsm, CatalogVersionProvider: d.fsm})
-		if e != nil {
-			return fail(e)
-		}
-		var bounded raftcluster.CommandSubmitterV1 = submitter
-		if admission != nil {
-			bounded = peerBudgetSubmitterV1{SingleGroupSubmitter: submitter, admission: admission, scope: "raft:" + string(g.ID)}
-		}
-		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: bounded})
+		d.stream = stream
+		r.data[g.ID] = d
+		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: d.submitter})
 	}
 	if len(localEntries) > 0 {
 		registry, e := raftcluster.NewGroupSubmitterRegistryV1(localEntries)
@@ -547,8 +537,17 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 	if r == nil {
 		return nil
 	}
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
 	r.closeOnce.Do(func() {
 		r.BeginDrainV1()
+		r.groupsMu.Lock()
+		data := make([]*fixedPeerDataV1, 0, len(r.data))
+		for _, d := range r.data {
+			data = append(data, d)
+		}
+		transports := slices.Clone(r.transports)
+		r.groupsMu.Unlock()
 		var errs []error
 		ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
 		defer cancel()
@@ -568,21 +567,21 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		} else if r.listener != nil {
 			errs = append(errs, r.listener.Close())
 		}
-		for _, t := range r.transports {
+		for _, t := range transports {
 			errs = append(errs, t.Close())
 			t.CloseStreams()
 		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
 		}
-		for _, d := range r.data {
+		for _, d := range data {
 			if d.provider != nil {
 				errs = append(errs, d.provider.Close())
 			}
 		}
-		for _, d := range r.data {
+		for _, d := range data {
 			if d.fsm != nil {
-				errs = append(errs, d.fsm.Close())
+				_ = d.fsm.Close()
 			}
 			if d.db != nil {
 				errs = append(errs, d.db.Close())
@@ -594,7 +593,17 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		r.closed.Store(true)
 		r.closeErr = errors.Join(errs...)
 	})
-	return r.closeErr
+	// Provider/transport/DB shutdown runs once. Retry only retained FSM cleanup,
+	// including debt left by a provider whose void Release discarded the error.
+	var cleanup []error
+	r.groupsMu.RLock()
+	for _, d := range r.data {
+		if d.fsm != nil {
+			cleanup = append(cleanup, d.fsm.Close())
+		}
+	}
+	r.groupsMu.RUnlock()
+	return errors.Join(r.closeErr, errors.Join(cleanup...))
 }
 
 func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV1, error) {
@@ -612,7 +621,10 @@ func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV
 		s.RecoveryState = "reopened"
 	}
 	for _, g := range r.config.Groups {
-		if d := r.data[g.ID]; d != nil {
+		if d := r.localDataV1(g.ID); d != nil {
+			if d.startErr != nil {
+				return s, d.startErr
+			}
 			status, err := d.provider.RuntimeStatusV1(ctx)
 			if err != nil {
 				return s, err
@@ -746,9 +758,11 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
-	Diagnostics  *FixedPeerDiagnosticsV1     `json:",omitempty"`
-	Readiness    *FixedPeerReadinessV1       `json:",omitempty"`
-	ReadProof    *raftcluster.ReadIndexProof `json:",omitempty"`
+	Replacement  *raftplacement.ReplicaReplacementBeginV1  `json:",omitempty"`
+	Membership   *raftcluster.CommittedRaftConfigurationV1 `json:",omitempty"`
+	Diagnostics  *FixedPeerDiagnosticsV1                   `json:",omitempty"`
+	Readiness    *FixedPeerReadinessV1                     `json:",omitempty"`
+	ReadProof    *raftcluster.ReadIndexProof               `json:",omitempty"`
 	NodeID       raftcluster.NodeID
 	ConfigDigest string
 	Error        string
@@ -786,7 +800,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err != nil {
 			return
 		}
-		if request.URL.Path == "/v1/catalog-publish" {
+		if request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" {
 			allowed := false
 			for _, member := range r.config.Catalog.Peers {
 				allowed = allowed || member.ID == caller
@@ -797,7 +811,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			}
 		}
 	}
-	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish") {
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read") {
 		err = raftcluster.ErrAdmissionUnavailable
 		return
 	}
@@ -817,7 +831,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward":
 		requests = r.forwards
-	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -851,6 +865,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch request.URL.Path {
+	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll":
+		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
 	case "/v1/diagnostics":
@@ -863,8 +879,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		reply.Readiness = &report
 	case "/v1/group-read-proof":
 		group := raftcluster.GroupID(body.Metadata.ClusterRouteGroupID)
-		local := r.data[group]
-		if local == nil {
+		local := r.localDataV1(group)
+		if local == nil || local.startErr != nil {
 			err = raftcluster.ErrRouteTargetUnknown
 			return
 		}
@@ -922,7 +938,9 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		submitter := r.routed
 		if request.URL.Path == "/v1/forward" {
+			r.groupsMu.RLock()
 			submitter = r.local
+			r.groupsMu.RUnlock()
 		}
 		if submitter == nil {
 			err = raftcluster.ErrRouteTargetUnknown
@@ -972,7 +990,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

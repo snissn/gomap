@@ -129,11 +129,21 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 	}
 	var failures []error
 	for _, group := range r.config.Groups {
-		local := r.data[group.ID]
+		local := r.localDataV1(group.ID)
 		if local == nil {
 			continue
 		}
+		if local.startErr != nil {
+			failures = append(failures, local.startErr)
+			continue
+		}
 		item := FixedPeerGroupReadinessV1{GroupID: group.ID}
+		if local.replacementID != "" {
+			item.Error = "replacement snapshot and durable tail are not verified"
+			report.Groups = append(report.Groups, item)
+			failures = append(failures, raftcluster.ErrReadBarrierNotSatisfied)
+			continue
+		}
 		leader, err := r.client.leader(ctx, group)
 		item.LeaderID = leader
 		var proof raftcluster.ReadIndexProof

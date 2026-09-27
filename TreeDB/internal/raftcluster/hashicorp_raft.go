@@ -65,6 +65,7 @@ type HashicorpRaftProvider struct {
 	cluster         ResolvedConfig
 	raft            *hraft.Raft
 	logStore        hraft.LogStore
+	snapshotStore   hraft.SnapshotStore
 	appliedProgress AppliedProgressReader
 	applyTimeout    time.Duration
 	owned           []io.Closer
@@ -134,6 +135,7 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		cluster:         cluster,
 		raft:            r,
 		logStore:        stores.log,
+		snapshotStore:   stores.snapshots,
 		appliedProgress: progressReader,
 		applyTimeout:    applyTimeout,
 		owned:           stores.owned,
