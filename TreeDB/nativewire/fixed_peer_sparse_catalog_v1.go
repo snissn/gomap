@@ -56,6 +56,17 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 		return invalid("local path or address exceeds byte budget")
 	}
 	budget := fixedPeerMaxConfigBytesV1 - 1024 - 6*(len(c.DataRoot)+len(c.RaftRoot)+len(c.ListenAddress)+len(c.NodeID)+len(c.ClusterID))
+	if c.Credentials != nil {
+		if c.ClusterID == "" {
+			return invalid("TLS requires explicit stable cluster identity")
+		}
+		for _, path := range []string{c.Credentials.TrustRootsFile, c.Credentials.CertificateFile, c.Credentials.PrivateKeyFile} {
+			if len(path) == 0 || len(path) > 4096 || !utf8.ValidString(path) {
+				return invalid("TLS credential path exceeds byte budget")
+			}
+			budget -= 128 + 6*len(path)
+		}
+	}
 	spend := func(bytes int) bool {
 		budget -= bytes
 		return budget >= 0
