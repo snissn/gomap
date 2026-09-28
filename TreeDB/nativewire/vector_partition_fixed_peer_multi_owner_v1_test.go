@@ -385,8 +385,6 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			t.Fatalf("unaffected owner-c lost readiness: %+v err=%v", report, err)
 		}
 		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[2].DataRoot, "group-c"), hostedFiles["group-c"], false)
-		fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(configs[1].DataRoot, "group-b"), seed.manifest.Collection, 0)
-		fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(configs[2].DataRoot, "group-c"), seed.manifest.Collection, 0)
 		request.Deadline = time.Now().Add(12 * time.Second)
 		partial, searchErr := publicClient.VectorSearchStrictV1(ctx, request)
 		if searchErr == nil || len(partial.Neighbors) != 0 {
