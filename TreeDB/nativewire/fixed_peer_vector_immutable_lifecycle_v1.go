@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -91,14 +92,14 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 	}
 	record, err := lifecycle.BeginBuildV1(ctx, vector.Identity, owners, 0, mutationEpoch)
 	if err != nil {
-		return zero, err
+		return zero, fmt.Errorf("immutable BUILD: %w", err)
 	}
 	if record.State == raftplacement.VectorPartitionLifecycleActiveV1 {
 		if _, err := r.immutableActiveVectorRecordV1(ctx, owners); err != nil {
 			return zero, err
 		}
 		if err := r.warmImmutableVectorNodesV1(ctx, resolved, owners); err != nil {
-			return zero, err
+			return zero, fmt.Errorf("immutable warm: %w", err)
 		}
 		result, ok := r.authority.Status()
 		if !ok {
@@ -109,7 +110,7 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 	// The router is a local prepared asset too, but it is not a data-group
 	// readiness vote. Its stage must complete before activation.
 	if _, err := r.stageImmutableVectorOnNodeV1(ctx, vector.RouterNodeID); err != nil {
-		return zero, err
+		return zero, fmt.Errorf("immutable router stage: %w", err)
 	}
 	for _, owner := range owners {
 		group, ok := resolved.Group(owner)
@@ -118,7 +119,7 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		}
 		ready, err := r.stageImmutableVectorOnNodeV1(ctx, group.LeaderHint)
 		if err != nil {
-			return zero, err
+			return zero, fmt.Errorf("immutable owner %s stage: %w", owner, err)
 		}
 		if ready == nil || ready.GroupID != owner || ready.AppliedIndex == 0 ||
 			ready.AssetSetDigest != vectorPartitionM8GroupAssetSetDigestV1(string(owner), vector.Manifest) {
@@ -126,19 +127,19 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		}
 		record, err = lifecycle.RecordGroupReadyV1(ctx, vector.Identity, *ready)
 		if err != nil {
-			return zero, err
+			return zero, fmt.Errorf("immutable owner %s ready commit: %w", owner, err)
 		}
 	}
 	if record.State == raftplacement.VectorPartitionLifecycleStagedV1 {
 		record, err = lifecycle.PrepareV1(ctx, vector.Identity)
 		if err != nil {
-			return zero, err
+			return zero, fmt.Errorf("immutable PREPARE: %w", err)
 		}
 	}
 	if record.State == raftplacement.VectorPartitionLifecyclePreparedV1 {
 		record, err = lifecycle.ActivateV1(ctx, vector.Identity)
 		if err != nil {
-			return zero, err
+			return zero, fmt.Errorf("immutable ACTIVE: %w", err)
 		}
 	}
 	if record.State != raftplacement.VectorPartitionLifecycleActiveV1 {
@@ -148,7 +149,7 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		return zero, err
 	}
 	if err := r.warmImmutableVectorNodesV1(ctx, resolved, owners); err != nil {
-		return zero, err
+		return zero, fmt.Errorf("immutable warm: %w", err)
 	}
 	result, ok := r.authority.Status()
 	if !ok {
@@ -167,12 +168,15 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorNodesV1(ctx context.Context, 
 			return ErrFixedPeerVectorWrongOwnerV1
 		}
 		if err := r.warmImmutableVectorOnNodeV1(ctx, group.LeaderHint); err != nil {
-			return err
+			return fmt.Errorf("owner %s: %w", owner, err)
 		}
 	}
 	// Ingress is reported ready only after each owner has opened its shard
 	// listener. Topology construction itself does not connect to the owners.
-	return r.warmImmutableVectorOnNodeV1(ctx, r.config.Vector.RouterNodeID)
+	if err := r.warmImmutableVectorOnNodeV1(ctx, r.config.Vector.RouterNodeID); err != nil {
+		return fmt.Errorf("router: %w", err)
+	}
+	return nil
 }
 
 func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorOnNodeV1(ctx context.Context, node raftcluster.NodeID) error {
@@ -192,6 +196,9 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorLocalV1(ctx context.Context) 
 	if r == nil || r.closed.Load() || r.draining.Load() || r.vector == nil || r.config.Vector == nil ||
 		r.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return ErrFixedPeerVectorUnavailableV1
+	}
+	if err := r.waitForImmutableCatalogStatusV1(ctx); err != nil {
+		return err
 	}
 	_, err := r.vector.ensureImmutableBackendV1(ctx)
 	return err
@@ -228,15 +235,8 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 	// wait for its exact catalog identity before the scoped Stage authority's
 	// fresh before/after fences, rather than mistaking ordinary apply lag for a
 	// stale proof.
-	reply, err := r.catalogConsumerCall(ctx, "catalog-read", fixedPeerRequestV1{})
-	if err != nil {
-		return nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
-	}
-	if reply.Catalog.Epoch != vector.Identity.Index.CatalogEpoch || reply.Catalog.Digest != vector.Identity.Index.CatalogDigest {
-		return nil, ErrFixedPeerVectorProofStaleV1
-	}
-	if err := r.waitForCatalogStatusV1(ctx, reply.Catalog); err != nil {
-		return nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	if err := r.waitForImmutableCatalogStatusV1(ctx); err != nil {
+		return nil, err
 	}
 	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 		return nil, err
@@ -292,4 +292,18 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 		AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(group), vector.Manifest),
 	}
 	return ready, nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) waitForImmutableCatalogStatusV1(ctx context.Context) error {
+	reply, err := r.catalogConsumerCall(ctx, "catalog-read", fixedPeerRequestV1{})
+	if err != nil {
+		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
+	if reply.Catalog.Epoch != r.config.Vector.Identity.Index.CatalogEpoch || reply.Catalog.Digest != r.config.Vector.Identity.Index.CatalogDigest {
+		return ErrFixedPeerVectorProofStaleV1
+	}
+	if err := r.waitForCatalogStatusV1(ctx, reply.Catalog); err != nil {
+		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
+	return nil
 }
