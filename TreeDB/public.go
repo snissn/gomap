@@ -912,6 +912,7 @@ func openResolved(opts Options) (*DB, error) {
 	var templateStore *templatedb.Store
 	if !opts.DisableSideStores {
 		dictOpts := opts
+		dictOpts.PhysicalSnapshotSideStoreCapture = nil
 		dictOpts.Dir = dictdbDir
 		dictOpts.ResolvedProfile = ""
 		dictOpts.DeprecatedProfileAlias = ""
@@ -965,6 +966,7 @@ func openResolved(opts Options) (*DB, error) {
 
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
+		templateOpts.PhysicalSnapshotSideStoreCapture = nil
 		templateOpts.Dir = templatedbDir
 		templateOpts.ResolvedProfile = ""
 		templateOpts.DeprecatedProfileAlias = ""
@@ -1012,6 +1014,41 @@ func openResolved(opts Options) (*DB, error) {
 			return templateStore.GetTemplateDef(context.Background(), templateID)
 		}
 		opts.ValueLog.TemplateDecodeOptions = decodeOpts
+	}
+	previousSideCapture := opts.PhysicalSnapshotSideStoreCapture
+	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
+		switch name {
+		case "dictdb":
+			if dictBackend != nil {
+				if !opts.ReadOnly {
+					if err := dictBackend.Checkpoint(); err != nil {
+						return nil, err
+					}
+				}
+				return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
+			}
+		case "templatedb":
+			if templateDB != nil {
+				if err := templateDB.beginPublicOperation(); err != nil {
+					return nil, err
+				}
+				defer templateDB.lifecycleMu.RUnlock()
+				if !opts.ReadOnly {
+					if templateDB.cached != nil {
+						if err := templateDB.checkpointCachedForPublicCommandWAL(); err != nil {
+							return nil, err
+						}
+					} else if err := templateDB.backend.Checkpoint(); err != nil {
+						return nil, err
+					}
+				}
+				return templateDB.backend.CapturePhysicalSnapshotCutV1(ctx)
+			}
+		}
+		if previousSideCapture != nil {
+			return previousSideCapture(ctx, name)
+		}
+		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)

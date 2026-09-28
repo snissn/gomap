@@ -233,6 +233,7 @@ func (s *peerTransportSecurityV1) dialUsing(ctx context.Context, address string,
 }
 
 type peerSecureListenerV1 struct {
+	allowedMu sync.RWMutex
 	net.Listener
 	security  *peerTransportSecurityV1
 	allowed   map[raftcluster.NodeID]bool
@@ -265,7 +266,10 @@ func (l *peerSecureListenerV1) Accept() (net.Conn, error) {
 				continue
 			}
 		}
-		return l.security.serverConn(conn, l.allowed), nil
+		l.allowedMu.RLock()
+		allowed := l.allowed
+		l.allowedMu.RUnlock()
+		return l.security.serverConn(conn, allowed), nil
 	}
 }
 
@@ -314,4 +318,10 @@ func (c *peerCredentialDeadlineConnV1) SetDeadline(deadline time.Time) error {
 	defer c.mu.Unlock()
 	c.readDeadline, c.writeDeadline = deadline, deadline
 	return c.Conn.SetDeadline(peerEarlierDeadlineV1(deadline, c.expires))
+}
+
+func (l *peerSecureListenerV1) replaceAllowedV1(allowed map[raftcluster.NodeID]bool) {
+	l.allowedMu.Lock()
+	defer l.allowedMu.Unlock()
+	l.allowed = allowed
 }

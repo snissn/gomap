@@ -81,3 +81,37 @@ func TestWireSideStoreLookups_DoesNotPropagateCommandWAL(t *testing.T) {
 		t.Fatal("dictdb inherited command_wal_v1 required feature from main DB options")
 	}
 }
+
+func TestWireSideStoreLookupsLockedReadOnlySnapshotOwners(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"dictdb", "templatedb"} {
+		owner, err := db.Open(db.Options{Dir: filepath.Join(root, name)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.SetSync([]byte("fixture"), []byte("stable")); err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := &Options{ReadOnly: true}
+	cleanup, err := wireSideStoreLookups(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if opts.PhysicalSnapshotSideStoreCapture == nil {
+		t.Fatal("owners did not register capture")
+	}
+	for _, name := range []string{"dictdb", "templatedb"} {
+		cut, err := opts.PhysicalSnapshotSideStoreCapture(context.Background(), name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := cut.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

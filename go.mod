@@ -2,6 +2,8 @@ module github.com/snissn/gomap
 
 go 1.26
 
+replace github.com/hashicorp/raft => ./third_party/hashicorp_raft_v1.7.3
+
 require (
 	github.com/ajroetker/go-highway v0.0.12
 	github.com/akrylysov/pogreb v0.10.2

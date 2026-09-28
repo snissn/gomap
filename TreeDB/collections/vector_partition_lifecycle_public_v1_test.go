@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -352,6 +353,19 @@ func TestVectorPartitionSnapshotEntriesV1SelectsHighestCheckpointAndCurrentTail(
 	entries, err := VectorPartitionSnapshotEntriesV1(dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Exercise cancellation throughout nonempty namespace selection, checkpoint
+	// decoding and tail replay, retaining no partially selected authority.
+	probe := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+	if _, err := VectorPartitionSnapshotEntriesWithContextV1(probe, dir); err != nil {
+		t.Fatal(err)
+	}
+	for check := 1; check <= probe.calls; check++ {
+		got, err := VectorPartitionSnapshotEntriesWithContextV1(&cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}, dir)
+		if !errors.Is(err, context.Canceled) || got != nil {
+			t.Fatalf("cancel check %d: entries=%v err=%v", check, got, err)
+		}
 	}
 	checkpoint, _ := vectorPartitionLifecycleCheckpointNameV1(second.Collection, second.IndexName, 2)
 	delta, _ := vectorPartitionLifecycleDeltaNameV1(second.Collection, second.IndexName, 2, 3)

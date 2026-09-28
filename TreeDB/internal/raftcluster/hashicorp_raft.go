@@ -65,6 +65,7 @@ type HashicorpRaftProvider struct {
 	cluster         ResolvedConfig
 	raft            *hraft.Raft
 	logStore        hraft.LogStore
+	snapshotStore   hraft.SnapshotStore
 	appliedProgress AppliedProgressReader
 	applyTimeout    time.Duration
 	owned           []io.Closer
@@ -134,6 +135,7 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		cluster:         cluster,
 		raft:            r,
 		logStore:        stores.log,
+		snapshotStore:   stores.snapshots,
 		appliedProgress: progressReader,
 		applyTimeout:    applyTimeout,
 		owned:           stores.owned,
@@ -701,6 +703,38 @@ type HashicorpRaftSnapshotResultV1 struct {
 // Snapshot asks HashiCorp Raft to persist an FSM snapshot and compact logs
 // according to the active Raft configuration.
 func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	return p.snapshotV1(ctx, false)
+}
+
+// SnapshotForReplacementV1 keeps the operation's admission through the native
+// snapshot future's actual completion, including its deferred FSM Release.
+// Cancellation prevents subsequent reads/copying but cannot interrupt a native
+// sink or filesystem call. The caller must retain its worker through return.
+func (p *HashicorpRaftProvider) SnapshotForReplacementV1(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	return p.snapshotV1(ctx, true)
+}
+
+// ReplacementSnapshotReadyV1 checks the real TreeDB command snapshot boundary
+// against the latest committed native configuration. HashiCorp's non-batching
+// FSM does not advance its snapshot index for configuration-only logs, so an
+// idle replica cannot snapshot a newer configuration until a real command is
+// durably applied. This check precedes caching a replacement seed worker.
+func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) error {
+	configuration, err := p.CommittedConfigurationV1(ctx)
+	if err != nil {
+		return err
+	}
+	progress, err := p.readIndexAppliedProgressSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if !progress.HasApplied || progress.Index < configuration.ConfigurationIndex {
+		return fmt.Errorf("%w: replacement snapshot needs a TreeDB command after configuration index %d (have %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, progress.Index)
+	}
+	return nil
+}
+
+func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bool) (HashicorpRaftSnapshotResultV1, error) {
 	if p == nil || p.raft == nil || p.logStore == nil {
 		return HashicorpRaftSnapshotResultV1{}, ErrInvalidHashicorpRaftProvider
 	}
@@ -719,8 +753,33 @@ func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnap
 		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastBeforeErr)
 	}
 	future := p.raft.Snapshot()
-	if err := waitHashicorpRaftFuture(ctx, future); err != nil {
-		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	var futureErr error
+	if ownCompletion {
+		// Pinned HashiCorp takeSnapshot releases its FSM carrier before the
+		// user snapshot future responds. A canceled wait alone is not that
+		// completion boundary and could release seed admission too early.
+		if err := future.Error(); err != nil {
+			// This exact pinned-library refusal happens before a native sink is
+			// created. Its FSM carrier must also have finished releasing before
+			// allowing an ordinary retry. All other future errors retain opaque
+			// native ownership because sink.Cancel can discard cleanup errors.
+			carrier, ok := p.appliedProgress.(interface{ SnapshotCarrierReleasedV1() bool })
+			if ok && replacementSnapshotPreCreateConfigRefusalV1(err) && carrier.SnapshotCarrierReleasedV1() {
+				futureErr = errors.Join(ErrReadBarrierNotSatisfied, err, ctx.Err())
+			} else {
+				futureErr = &replacementSnapshotCleanupDebtV1{cause: errors.Join(err, ctx.Err()), future: future}
+			}
+		} else {
+			futureErr = ctx.Err()
+		}
+	} else {
+		futureErr = waitHashicorpRaftFuture(ctx, future)
+	}
+	if futureErr != nil {
+		if ownCompletion && errors.Is(futureErr, ErrReadBarrierNotSatisfied) {
+			return HashicorpRaftSnapshotResultV1{}, futureErr
+		}
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, futureErr)
 	}
 	meta, snapshot, err := future.Open()
 	if err != nil {
@@ -993,15 +1052,20 @@ func hashicorpRaftLogEntryError(err error) error {
 }
 
 func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
-	exporter, ok := f.applier.(RaftSnapshotExporterV1)
-	if !ok {
+	var snapshot RaftSnapshotV1
+	var err error
+	if capturer, ok := f.applier.(RaftSnapshotCapturerV1); ok {
+		snapshot, err = capturer.CaptureRaftSnapshotV1()
+	} else if exporter, ok := f.applier.(RaftSnapshotExporterV1); ok {
+		snapshot, err = exporter.ExportRaftSnapshotV1()
+	} else {
 		return nil, ErrRaftSnapshotUnsupported
 	}
-	snapshot, err := exporter.ExportRaftSnapshotV1()
 	if err != nil {
 		return nil, err
 	}
-	if err := snapshot.Validate(); err != nil {
+	if err := snapshot.validateCapturedV1(); err != nil {
+		_ = snapshot.Release()
 		return nil, err
 	}
 	return hashicorpRaftSnapshotV1{snapshot: snapshot}, nil
@@ -1023,10 +1087,16 @@ type hashicorpRaftSnapshotV1 struct {
 	snapshot RaftSnapshotV1
 }
 
-func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
+func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) (resultErr error) {
 	if sink == nil {
 		return ErrInvalidSnapshotManifest
 	}
+	ready, err := s.snapshot.Materialize()
+	if err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	s.snapshot = ready
 	if err := s.snapshot.Validate(); err != nil {
 		_ = sink.Cancel()
 		return err
@@ -1042,15 +1112,21 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 		_ = sink.Cancel()
 		return err
 	}
-	copyErr := copyHashicorpRaftSnapshotArchiveV1(sink, src)
-	closeSrcErr := src.Close()
-	if copyErr != nil {
+	// Keep the owner reader through sink completion/cancellation. Release can
+	// cancel future reads, but cannot interrupt an arbitrary blocked Sink.Write
+	// or Sink.Close; that operation retains admission until this defer runs.
+	defer func() {
+		if err := src.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("raftcluster: close raft snapshot archive source: %w", err))
+		}
+	}()
+	if err := copyHashicorpRaftSnapshotArchiveV1(sink, src); err != nil {
 		_ = sink.Cancel()
-		return copyErr
+		return err
 	}
-	if closeSrcErr != nil {
+	if _, err := s.snapshot.Materialize(); err != nil {
 		_ = sink.Cancel()
-		return fmt.Errorf("raftcluster: close raft snapshot archive source: %w", closeSrcErr)
+		return err
 	}
 	if err := sink.Close(); err != nil {
 		_ = sink.Cancel()
