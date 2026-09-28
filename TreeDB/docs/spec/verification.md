@@ -2777,7 +2777,7 @@ invalidation separately. Run the focused nativewire selectors on the exact
 candidate with:
 
 ```sh
-GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|MultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|MultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1|MultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
 ```
 
 This bounded profile uses loopback vector listeners with peer credentials;

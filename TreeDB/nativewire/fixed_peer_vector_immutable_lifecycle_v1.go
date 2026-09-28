@@ -83,9 +83,9 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 			if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 				return empty, nil, err
 			}
-			collection, err := r.vector.manager.OpenCollection(vector.Collection.Collection)
-			if err != nil {
-				return empty, nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+			collection, openErr := r.vector.manager.OpenCollection(vector.Collection.Collection)
+			if openErr != nil {
+				return empty, nil, errors.Join(ErrFixedPeerVectorUnavailableV1, openErr)
 			}
 			if err := fixedPeerVectorImmutableDefinitionV1(collection.MetaView(), vector.Identity); err != nil {
 				return empty, nil, err
