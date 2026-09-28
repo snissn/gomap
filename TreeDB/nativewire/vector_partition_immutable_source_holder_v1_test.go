@@ -40,7 +40,11 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	authority, provider := openVectorSourceHolderTestCatalogV1(t, ctx, record)
-	prepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider)
+	dataReads := &fakeVectorPartitionReadCoordinatorV1{
+		proof:    raftcluster.ReadIndexProof{NodeID: "source-meta", GroupID: "group-a", Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
+		progress: raftcluster.AppliedProgress{NodeID: "source-meta", GroupID: "group-a", Term: 1, Index: 1, HasApplied: true},
+	}
+	prepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider, dataReads)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +84,35 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	}
 	wrongLeaf := collection
 	wrongLeaf.Collection = "different"
-	if _, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, wrongLeaf, authority, provider); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+	if _, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, wrongLeaf, authority, provider, dataReads); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
 		t.Fatalf("mismatched local collection accepted at construction: %v", err)
+	}
+	if _, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider, nil); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+		t.Fatalf("missing data read authority accepted: %v", err)
+	}
+	// A copied source on a stale follower cannot certify a prepared generation,
+	// even when its local manifest bytes still match the requested identity.
+	staleReads := &fakeVectorPartitionReadCoordinatorV1{
+		proof:    raftcluster.ReadIndexProof{NodeID: "stale-follower", GroupID: "group-a", Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
+		progress: raftcluster.AppliedProgress{NodeID: "stale-follower", GroupID: "group-a", Term: 1, Index: 1, HasApplied: true},
+	}
+	stalePrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider, staleReads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := stalePrepare(ctx, identity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("stale follower source accepted: %v", err)
+	}
+	unappliedReads := &fakeVectorPartitionReadCoordinatorV1{
+		proof:    raftcluster.ReadIndexProof{NodeID: "source-meta", GroupID: "group-a", Term: 1, Index: 2, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
+		progress: raftcluster.AppliedProgress{NodeID: "source-meta", GroupID: "group-a", Term: 1, Index: 1, HasApplied: true},
+	}
+	unappliedPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider, unappliedReads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := unappliedPrepare(ctx, identity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("unapplied data read index accepted: %v", err)
 	}
 	// These V1 identity fields are absent from both the prepared manifest and
 	// catalog record. The callback deliberately returns only the proven pair
@@ -145,7 +176,7 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 		t.Fatal(err)
 	}
 	tokenAuthority, tokenProvider := openVectorSourceHolderTestCatalogV1(t, ctx, tokenRecord)
-	tokenPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, tokenAuthority, tokenProvider)
+	tokenPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, tokenAuthority, tokenProvider, dataReads)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +201,7 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	nonmemberCtx, stopNonmember := context.WithTimeout(t.Context(), 8*time.Second)
 	defer stopNonmember()
 	nonmemberAuthority, nonmemberProvider := openVectorSourceHolderTestCatalogV1(t, nonmemberCtx, nonmemberRecord)
-	nonmemberPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, nonmemberAuthority, nonmemberProvider)
+	nonmemberPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, nonmemberAuthority, nonmemberProvider, dataReads)
 	if err != nil {
 		t.Fatal(err)
 	}
