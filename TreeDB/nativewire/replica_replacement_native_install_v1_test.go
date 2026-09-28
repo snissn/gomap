@@ -41,6 +41,35 @@ func (t replacementCountSeedSendV1) InstallSnapshot(id hraft.ServerID, target hr
 	return t.Transport.InstallSnapshot(id, target, request, response, reader)
 }
 
+type replacementStalledSeedReaderV1 struct {
+	reader  io.Reader
+	entered chan struct{}
+	release <-chan struct{}
+	first   bool
+}
+
+func (r *replacementStalledSeedReaderV1) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return r.reader.Read(p)
+	}
+	if !r.first {
+		r.first = true
+		close(r.entered)
+		<-r.release
+	}
+	return r.reader.Read(p)
+}
+
+type replacementStalledSeedTransportV1 struct {
+	hraft.Transport
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (t replacementStalledSeedTransportV1) InstallSnapshot(id hraft.ServerID, target hraft.ServerAddress, request *hraft.InstallSnapshotRequest, response *hraft.InstallSnapshotResponse, reader io.Reader) error {
+	return t.Transport.InstallSnapshot(id, target, request, response, &replacementStalledSeedReaderV1{reader: reader, entered: t.entered, release: t.release})
+}
+
 func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		// The durable owner test asserts the explicit unsupported error.
@@ -228,7 +257,44 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	if err := source.InstallReplacementSeedV1(ctx, seed, seedStore, replacementLostSeedReplyV1{Transport: counted}, old.ID, target); !errors.Is(err, raftcluster.ErrCommitAmbiguous) {
+	// The native installer has begun reading the retained seed, but the new
+	// replica is not yet a member. A source command must still commit while
+	// this transfer is stalled, and later arrive in the learner's durable tail.
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	installDone := make(chan error, 1)
+	go func() {
+		installDone <- source.InstallReplacementSeedV1(ctx, seed, seedStore, replacementStalledSeedTransportV1{Transport: replacementLostSeedReplyV1{Transport: counted}, entered: entered, release: release}, old.ID, target)
+	}()
+	select {
+	case <-entered:
+	case err := <-installDone:
+		t.Fatalf("native seed install ended before transfer stall: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := gate.allowEnrollment(); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("stalled prejoin transfer admitted enrollment: %v", err)
+	}
+	writeCtx, cancelWrite := context.WithTimeout(ctx, 2*time.Second)
+	version, known, err := sourceFSM.CurrentCatalogVersion(writeCtx)
+	if err != nil {
+		cancelWrite()
+		t.Fatal(err)
+	}
+	concurrent, err := source.CommitCommandEntryV1(writeCtx, raftcluster.CommitCommandEntryV1Request{NodeID: old.ID, GroupID: sourceConfig.GroupID, EntryBytes: fixedPeerCreateEntryV1(t, "during_seed", version), CurrentCatalogVersion: version, HasCurrentCatalogVersion: known, SyncLocalCommandWAL: true})
+	cancelWrite()
+	if err != nil {
+		t.Fatalf("source apply blocked by stalled replacement transfer: %v", err)
+	}
+	close(release)
+	if err := <-installDone; !errors.Is(err, raftcluster.ErrCommitAmbiguous) {
 		t.Fatalf("lost native response=%v", err)
 	}
 	if sends.Load() != 1 {
@@ -266,6 +332,20 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("native learner absent")
+	}
+	for {
+		progress, err := targetFSM.AppliedProgress(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if progress.Index >= concurrent.Evidence.Index {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	tail := commit("after_seed")
 	for {
