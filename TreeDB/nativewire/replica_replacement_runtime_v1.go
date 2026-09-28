@@ -621,6 +621,9 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 	if err != nil {
 		return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement enrollment leader: %w", err)
 	}
+	if err := c.prepareReplacementSelectedLeaderV1(ctx, leader, raw); err != nil {
+		return raftcluster.CommittedRaftConfigurationV1{}, err
+	}
 	reply, err := c.call(ctx, leader, "replacement-enroll", fixedPeerRequestV1{Entry: raw}, true)
 	if err != nil {
 		return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement enroll: %w", err)
@@ -665,6 +668,15 @@ func (c *FixedPeerTCPClientV1) prepareReplacementPeersV1(ctx context.Context, gr
 		return fmt.Errorf("replacement target prepare: %w", err)
 	}
 	return c.prepareReplacementCurrentPeersV1(ctx, group, command, raw)
+}
+
+// The old voter may be absent during retirement, but a voter selected to
+// change membership must have admitted the exact replacement peer first.
+func (c *FixedPeerTCPClientV1) prepareReplacementSelectedLeaderV1(ctx context.Context, leader raftcluster.NodeID, raw []byte) error {
+	if _, err := c.call(ctx, leader, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
+		return fmt.Errorf("replacement membership leader prepare: %w", err)
+	}
+	return nil
 }
 
 func (c *FixedPeerTCPClientV1) prepareReplacementCurrentPeersV1(ctx context.Context, group FixedPeerTCPGroupV1, command raftplacement.ReplicaReplacementBeginV1, raw []byte) error {

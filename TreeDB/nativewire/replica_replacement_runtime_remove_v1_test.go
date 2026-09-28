@@ -172,6 +172,61 @@ func TestReplacementRequiresSelectedOldSourcePreparationV1(t *testing.T) {
 	}
 }
 
+func TestReplacementRequiresSelectedEnrollmentLeaderPreparationV1(t *testing.T) {
+	begin := replacementReceiverTestBeginV1(t)
+	seed, _, _ := replacementGateSeedForTestV1()
+	state := raftplacement.ReplicaReplacementStateV1{Begin: begin, Phase: raftplacement.ReplicaReplacementAddIntentV1, Seed: &seed}
+	var oldPrepared atomic.Bool
+	var oldPrepares, enrollments atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		id := raftcluster.NodeID(request.Header.Get("X-TreeDB-Node"))
+		reply := fixedPeerReplyV1{NodeID: id, ConfigDigest: begin.ConfigDigest}
+		switch request.URL.Path {
+		case "/v1/replacement-begin":
+		case "/v1/replacement-read":
+			reply.ReplacementState = &state
+		case "/v1/status":
+			reply.Status.CatalogRaft = raftcluster.RuntimeStatusV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID}
+		case "/v1/replacement-prepare":
+			if id == begin.OldNodeID {
+				oldPrepares.Add(1)
+				if !oldPrepared.Load() {
+					reply.Error, reply.ErrorCode = raftcluster.ErrAdmissionUnavailable.Error(), raftcluster.ErrAdmissionUnavailable.Error()
+				}
+			}
+		case "/v1/replacement-allow":
+		case "/v1/replacement-enroll":
+			enrollments.Add(1)
+			reply.Membership = &raftcluster.CommittedRaftConfigurationV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID, ConfigurationIndex: 2, CommitIndex: 2, Members: []raftcluster.RaftMemberV1{{ID: begin.OldNodeID, Address: "127.0.0.1:7001", Voter: true}, {ID: "survivor", Address: "127.0.0.1:7003", Voter: true}, {ID: begin.NewPeer.ID, Address: begin.NewPeer.Address}}}
+		default:
+			t.Errorf("unexpected request %s", request.URL.Path)
+		}
+		if err := json.NewEncoder(w).Encode(reply); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	group := FixedPeerTCPGroupV1{ID: begin.GroupID, Peers: []raftcluster.Peer{{ID: begin.OldNodeID, Address: "127.0.0.1:7001"}, {ID: "survivor", Address: "127.0.0.1:7003"}}}
+	client := &FixedPeerTCPClientV1{config: FixedPeerTCPConfigV1{RequestTimeout: time.Second, Groups: []FixedPeerTCPGroupV1{group}}, digest: begin.ConfigDigest, http: server.Client(), readHTTP: server.Client(), addresses: map[raftcluster.NodeID]string{begin.OldNodeID: address, "survivor": address, begin.NewPeer.ID: address}, calls: make(chan struct{}, 4), readCalls: make(chan struct{}, 4)}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := client.PrepareReplicaReplacementV1(ctx, begin.OldNodeID, begin); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("unprepared selected enrollment leader error = %v", err)
+	}
+	if got := oldPrepares.Load(); got != 2 {
+		t.Fatalf("old peer prepare count = %d, want skipped preflight plus selected leader check", got)
+	}
+	if got := enrollments.Load(); got != 0 {
+		t.Fatalf("enrolled before selected leader preparation: %d", got)
+	}
+	oldPrepared.Store(true)
+	membership, err := client.PrepareReplicaReplacementV1(ctx, begin.OldNodeID, begin)
+	if err != nil || len(membership.Members) != 3 || enrollments.Load() != 1 {
+		t.Fatalf("exact retry membership=%+v enrollments=%d err=%v", membership, enrollments.Load(), err)
+	}
+}
+
 func TestReplacementBeginRefusesUnreconstructablePeerCapabilitiesV1(t *testing.T) {
 	begin := replacementReceiverTestBeginV1(t)
 	defaults := raftcluster.DefaultFeatureSet()

@@ -97,6 +97,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementRemovalIntentV1(ctx context.Context, 
 		return err
 	}
 	raw, _ := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err := r.client.prepareReplacementSelectedLeaderV1(ctx, leader, raw); err != nil {
+		return err
+	}
 	observed, err := r.client.call(ctx, leader, "replacement-removal-proof", fixedPeerRequestV1{Entry: raw}, false)
 	if err != nil {
 		return err
@@ -182,6 +185,9 @@ func (r *FixedPeerTCPRuntimeV1) completeReplacementV1(ctx context.Context, comma
 		return err
 	}
 	raw, _ := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err := r.client.prepareReplacementSelectedLeaderV1(ctx, leader, raw); err != nil {
+		return err
+	}
 	observed, err := r.client.call(ctx, leader, "replacement-remove", fixedPeerRequestV1{Entry: raw}, true)
 	if err != nil {
 		return err

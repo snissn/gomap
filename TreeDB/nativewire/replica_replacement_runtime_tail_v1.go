@@ -167,6 +167,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementPromotionIntentV1(ctx context.Context
 	if err != nil {
 		return err
 	}
+	if err := r.client.prepareReplacementSelectedLeaderV1(ctx, leader, raw); err != nil {
+		return err
+	}
 	observed, err := r.client.call(ctx, leader, "replacement-tail", fixedPeerRequestV1{Entry: raw}, true)
 	if err != nil {
 		return err
@@ -262,6 +265,9 @@ func (r *FixedPeerTCPRuntimeV1) completeReplacementPromotionV1(ctx context.Conte
 	}
 	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
 	if err != nil {
+		return err
+	}
+	if err := r.client.prepareReplacementSelectedLeaderV1(ctx, leader, raw); err != nil {
 		return err
 	}
 	observed, err := r.client.call(ctx, leader, "replacement-promote", fixedPeerRequestV1{Entry: raw}, true)
