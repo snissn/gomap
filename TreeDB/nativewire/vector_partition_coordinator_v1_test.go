@@ -711,7 +711,7 @@ func TestVectorPartitionImmutableCoordinatorRouterSourceV1(t *testing.T) {
 	coordinator.replicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: strings.Repeat("c", 64)}
 	// As with external router wrappers, expose only Open; the constructor's
 	// immutable adapter supplies the explicit no-live-tail capability.
-	coordinator.routerSource = vectorPartitionImmutableCoordinatorRouterSourceV1{struct {
+	coordinator.routerSource = VectorPartitionImmutableCoordinatorRouterSourceV1{struct {
 		VectorPartitionCoordinatorRouterSourceV1
 	}{source}}
 	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))

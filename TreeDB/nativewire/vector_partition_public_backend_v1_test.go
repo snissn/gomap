@@ -140,7 +140,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest)
+		topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest, false)
 		builder := &publicBackendLifecycleBuilderV1{}
 		backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), ReadFence: harness.LeaderFence(), Identity: boundIdentity, RequiredGroups: requiredGroups, Builder: builder, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
 		if err != nil {

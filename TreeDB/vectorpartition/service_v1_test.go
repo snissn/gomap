@@ -174,7 +174,7 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 		response.ProductionConsensus = false
 		return response, nil
 	}
-	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorFailedV1) {
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorCommitAmbiguousV1) {
 		t.Fatalf("incomplete evidence error=%v", err)
 	}
 	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {
@@ -182,7 +182,7 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 		response.Counters.Replications = 0
 		return response, nil
 	}
-	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorFailedV1) {
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorCommitAmbiguousV1) {
 		t.Fatalf("missing replication counter error=%v", err)
 	}
 	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {

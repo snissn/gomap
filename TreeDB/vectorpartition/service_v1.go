@@ -247,7 +247,7 @@ func (s *ServiceV1) Insert(ctx context.Context, request InsertRequestV1) (Insert
 		return InsertResponseV1{}, classifyErrorV1(requestCtx, err)
 	}
 	if err := ValidateInsertResponseV1(request, response); err != nil {
-		return InsertResponseV1{}, err
+		return InsertResponseV1{}, &ErrorV1{Code: ErrorCommitAmbiguousV1, Err: err}
 	}
 	return response, nil
 }
