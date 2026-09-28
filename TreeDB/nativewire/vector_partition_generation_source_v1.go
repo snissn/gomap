@@ -52,6 +52,7 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	offlineGraphVariant  collections.VectorPartitionLocalGraphVariantV1
 	ownerGroupID         raftcluster.GroupID
 	ownerManifestDigest  string
+	scopedOwnerAuthority collections.VectorPartitionScopedOwnerAuthorityV1
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -271,7 +272,16 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pin, err := s.Collection.AcquireVectorPartitionReaderPinWithContextV1(ctx, key.index, key.generation)
+	var pin *collections.VectorPartitionReaderPinV1
+	var scopedManifest collections.VectorPartitionManifestV1
+	var scopedScope collections.VectorPartitionLocalScopeV1
+	var err error
+	if s.scopedOwnerAuthority != nil {
+		scopedManifest, scopedScope, pin, err = s.Collection.AcquireVectorPartitionScopedOwnerPinWithContextV1(
+			ctx, key.index, key.generation, string(s.ownerGroupID), s.scopedOwnerAuthority)
+	} else {
+		pin, err = s.Collection.AcquireVectorPartitionReaderPinWithContextV1(ctx, key.index, key.generation)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
@@ -286,7 +296,9 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}()
 	var manifest collections.VectorPartitionManifestV1
 	var authorityToken collections.VectorPartitionActiveAuthorityTokenV1
-	if s.replicatedLifecycle != nil {
+	if s.scopedOwnerAuthority != nil {
+		manifest = scopedManifest
+	} else if s.replicatedLifecycle != nil {
 		manifest, err = s.Collection.PreparedVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
 	} else {
 		manifest, err = s.Collection.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx, key.index, key.generation)
@@ -300,7 +312,8 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	if manifest.Format == collections.VectorPartitionManifestFormatV2 || manifest.PagedRootV2 != nil {
 		return nil, collections.ErrVectorPartitionPagedRuntimeUnsupportedV2
 	}
-	if s.ownerGroupID != "" && (s.replicatedLifecycle == nil || s.offlineGraphVariant != "" || manifest.IntegrityDigest != s.ownerManifestDigest) {
+	if s.ownerGroupID != "" && (s.replicatedLifecycle == nil || s.offlineGraphVariant != "" ||
+		(s.scopedOwnerAuthority == nil && manifest.IntegrityDigest != s.ownerManifestDigest)) {
 		return nil, fmt.Errorf("%w: owner generation root binding", ErrVectorPartitionShardSearchGenerationMismatch)
 	}
 	replicatedReadySetDigest, err := s.validateReplicatedLifecycle(ctx, key, manifest)
@@ -332,7 +345,9 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	}
 	var openPlan *collections.VectorPartitionGenerationSearchOpenPlanV1
 	var ownerPlan *collections.VectorPartitionGenerationOwnerSearchOpenPlanV2
-	if s.ownerGroupID != "" {
+	if s.scopedOwnerAuthority != nil {
+		ownerPlan, err = collections.NewVectorPartitionScopedOwnerSearchOpenPlanWithContextV1(ctx, manifest, string(s.ownerGroupID))
+	} else if s.ownerGroupID != "" {
 		ownerPlan, err = collections.NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx, manifest, string(s.ownerGroupID))
 	} else if s.replicatedLifecycle == nil {
 		openPlan, err = s.Collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx, manifest)
@@ -363,6 +378,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		liveManifest:   liveManifest,
 		openPlan:       openPlan,
 		ownerPlan:      ownerPlan,
+		scopedScope:    scopedScope,
 		authorityToken: authorityToken,
 		pin:            pin,
 		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
@@ -392,6 +408,11 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context
 	}
 	if entry == nil {
 		return ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if s.scopedOwnerAuthority != nil {
+		if err := s.scopedOwnerAuthority.ValidateVectorPartitionScopedOwnerPairV1(ctx, entry.scopedScope); err != nil {
+			return err
+		}
 	}
 	if s.replicatedLifecycle != nil {
 		readySetDigest, err := s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
@@ -577,6 +598,7 @@ type collectionVectorPartitionGenerationCacheV1 struct {
 	liveManifest   collections.VectorPartitionManifestV1
 	openPlan       *collections.VectorPartitionGenerationSearchOpenPlanV1
 	ownerPlan      *collections.VectorPartitionGenerationOwnerSearchOpenPlanV2
+	scopedScope    collections.VectorPartitionLocalScopeV1
 	authorityToken collections.VectorPartitionActiveAuthorityTokenV1
 	pin            *collections.VectorPartitionReaderPinV1
 
@@ -639,7 +661,11 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 
 		var searcher *collections.VectorPartitionLocalSearcherV1
 		var err error
-		if e.ownerPlan != nil {
+		if source.scopedOwnerAuthority != nil {
+			searcher, err = e.collection.OpenVectorPartitionScopedLocalSearcherForOwnerPlanWithContextV1(
+				ctx, e.index, e.generation, partition, string(source.ownerGroupID),
+				e.scopedScope, e.ownerPlan, e.pin, source.scopedOwnerAuthority)
+		} else if e.ownerPlan != nil {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationOwnerSearchPlanWithContextV2(ctx, e.index, e.generation, partition, string(source.ownerGroupID), e.ownerPlan, e.pin)
 		} else if e.liveManifest.Generation != 0 {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)

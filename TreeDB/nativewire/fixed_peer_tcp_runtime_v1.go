@@ -850,11 +850,12 @@ func (s fixedPeerRemoteSubmitterV1) SubmitCommandEntryV1(ctx context.Context, en
 }
 
 type fixedPeerRequestV1 struct {
-	Entry        []byte
-	Metadata     raftentry.RequestMetadataV1
-	Route        ClusterRouteRequest
-	VectorInsert *VectorPartitionRoutedInsertV1 `json:",omitempty"`
-	VectorSearch *public.SearchRequestV1        `json:",omitempty"`
+	Entry           []byte
+	Metadata        raftentry.RequestMetadataV1
+	Route           ClusterRouteRequest
+	VectorInsert    *VectorPartitionRoutedInsertV1     `json:",omitempty"`
+	VectorSearch    *public.SearchRequestV1            `json:",omitempty"`
+	VectorLifecycle *fixedPeerVectorLifecycleRequestV1 `json:",omitempty"`
 }
 type fixedPeerReplyV1 struct {
 	ReplacementTail      *raftcluster.ReplacementTailV1            `json:",omitempty"`
@@ -877,8 +878,9 @@ type fixedPeerReplyV1 struct {
 	Catalog              raftplacement.CatalogMetaStatusV1
 	Submit               raftcluster.SubmitResultV1
 	Route                ClusterRouteTarget
-	VectorInsert         *public.InsertResponseV1 `json:",omitempty"`
-	VectorSearch         *public.SearchResponseV1 `json:",omitempty"`
+	VectorInsert         *public.InsertResponseV1                            `json:",omitempty"`
+	VectorSearch         *public.SearchResponseV1                            `json:",omitempty"`
+	VectorReady          *raftplacement.VectorPartitionLifecycleGroupReadyV1 `json:",omitempty"`
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -1043,7 +1045,23 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		response, applyErr := r.applyVectorInsertV1(ctx, *body.VectorInsert)
 		reply.VectorInsert, err = &response, applyErr
 	case "/v1/vector-lifecycle":
-		reply.Catalog, err = r.ensureVectorLifecycleLeaderV1(ctx)
+		switch {
+		case body.VectorLifecycle == nil:
+			// The empty-body singleton operation retains its D1 behavior.
+			if r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+				err = ErrFixedPeerVectorUnavailableV1
+				return
+			}
+			reply.Catalog, err = r.ensureVectorLifecycleLeaderV1(ctx)
+		case body.VectorLifecycle.Action == fixedPeerVectorLifecycleEnsureImmutableV1:
+			reply.Catalog, err = r.ensureImmutableVectorLifecycleLeaderV1(ctx)
+		case body.VectorLifecycle.Action == fixedPeerVectorLifecycleStageImmutableV1:
+			reply.VectorReady, err = r.stageImmutableVectorLocalV1(ctx)
+		case body.VectorLifecycle.Action == fixedPeerVectorLifecycleWarmImmutableV1:
+			err = r.warmImmutableVectorLocalV1(ctx)
+		default:
+			err = raftcluster.ErrRouteTargetUnsupported
+		}
 	case "/v1/vector-search":
 		if body.VectorSearch == nil {
 			err = ErrFixedPeerVectorProofMissingV1

@@ -349,6 +349,7 @@ type VectorPartitionShardSearchServiceV1 struct {
 	stats            vectorPartitionShardSearchStatsAccumulatorV1
 	servingSnapshot  *VectorPartitionServingSnapshotPublisherV1
 	strictKey        []byte
+	postSearchGuard  func() error // immutable fixed-peer DB witness after searching cached assets
 
 	// Narrow package-test seams for cancellation and timing at the response boundary.
 	testBeforePartialMaterialization func()
@@ -450,6 +451,13 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return
 		}
 		s.stats.succeed(response, total)
+	}()
+	defer func() {
+		if resultErr == nil && s.postSearchGuard != nil {
+			if err := s.postSearchGuard(); err != nil {
+				resultErr = s.wrapError(errors.Join(ErrVectorPartitionShardSearchGenerationMismatch, err), s.localGroup)
+			}
+		}
 	}()
 
 	ctx, cancel, err := vectorPartitionShardSearchContextV1(ctx, request.DeadlineUnixNano)

@@ -2754,3 +2754,28 @@ lineage remain intact and affected page checksums are recomputed.
 - [Fixed-peer operations](../operations/fixed-peer-ec2.md) and
   [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
   conformance from #4250 multi-host performance and #3983 fault evidence.
+
+## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
+
+`TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1` starts real separate
+source-holder, ingress-router, and two owner-leader processes. It checks a
+multi-chunk domain, disjoint hosted-only files and zero source rows at serving
+nodes, real catalog BUILD/owner Stage/READY/PREPARE/ACTIVE, public strict-search
+IDs and scores against the existing local live coordinator on the same prepared
+generation with no intervening writes, one HNSW traversal per selected domain,
+no partial result when a selected owner is unavailable, and owner restart on
+the same generation. `TestFixedPeerImmutableDefinitionAndMutationRefusalV1`
+checks the durable index epoch/incarnation admission and mutation refusal.
+Current-FSM-DB restore and stale shard-response tests cover bound-handle
+invalidation separately. Run the focused nativewire selectors on the exact
+candidate with:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
+```
+
+This is a co-located source-data/catalog-leader support slice. A distinct
+catalog/data-leader test, stale-ACTIVE and corrupt-owner fault matrix, scoped
+reclaim/reopen breadth, and matched enabled-path latency/CPU/alloc/RSS and
+catalog-RPC measurements remain #4809 acceptance work. Local-vs-TCP ID/score
+parity is not a holdout-recall or throughput result.

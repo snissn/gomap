@@ -23,6 +23,7 @@ type fixedPeerVectorScopedStageAuthorityV1 struct {
 	identity   raftplacement.VectorPartitionLifecycleIdentityV1
 	hosted     raftcluster.GroupID
 	routerOnly bool
+	routerHost bool
 	timeout    time.Duration
 	expected   *raftplacement.CatalogMetaStatusV1
 }
@@ -35,7 +36,8 @@ func newFixedPeerVectorScopedStageAuthorityV1(r *FixedPeerTCPRuntimeV1, hosted r
 	}
 	return &fixedPeerVectorScopedStageAuthorityV1{
 		authority: r.authority, fence: r.catalogFence, identity: r.config.Vector.Identity, hosted: hosted,
-		routerOnly: r.data[hosted] == nil, timeout: r.config.RequestTimeout,
+		routerOnly: r.data[hosted] == nil, routerHost: r.config.NodeID == r.config.Vector.RouterNodeID,
+		timeout: r.config.RequestTimeout,
 	}, nil
 }
 
@@ -74,7 +76,8 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 	if !ok || record.Identity != a.identity || record.Aborted ||
 		(record.State != raftplacement.VectorPartitionLifecycleBuildingV1 &&
 			record.State != raftplacement.VectorPartitionLifecycleStagedV1 &&
-			record.State != raftplacement.VectorPartitionLifecyclePreparedV1) {
+			record.State != raftplacement.VectorPartitionLifecyclePreparedV1 &&
+			record.State != raftplacement.VectorPartitionLifecycleActiveV1) {
 		return ErrFixedPeerVectorProofStaleV1
 	}
 	identity := a.identity
@@ -100,12 +103,36 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 	if !slices.Equal(owners, record.RequiredGroups) {
 		return fmt.Errorf("%w: scoped stage owner set differs from catalog", ErrFixedPeerVectorProofStaleV1)
 	}
-	if a.routerOnly {
-		// A catalog-only ingress may prepare the router, but it cannot claim
-		// data ownership through a scope with no opened data group.
-		if !scope.Router || slices.Contains(owners, a.hosted) {
+	if record.State == raftplacement.VectorPartitionLifecycleActiveV1 {
+		// Recovery may stage a newly elected peer after ACTIVE, but only for
+		// an owner whose exact assets already have a committed READY receipt.
+		// The router has no READY vote, so require the complete owner set.
+		if len(record.ReadyGroups) != len(owners) {
 			return ErrFixedPeerVectorProofStaleV1
 		}
+		for _, owner := range owners {
+			found := false
+			for _, ready := range record.ReadyGroups {
+				if ready.GroupID == owner && ready.AppliedIndex != 0 &&
+					ready.AssetSetDigest == vectorPartitionM8GroupAssetSetDigestV1(string(owner), manifest) {
+					found = true
+				}
+			}
+			if !found {
+				return ErrFixedPeerVectorProofStaleV1
+			}
+		}
+	}
+	if scope.Router {
+		// The configured ingress may have a local non-owner data group or
+		// only the catalog group. Neither makes it a search-domain owner.
+		if !a.routerHost || slices.Contains(owners, a.hosted) {
+			return ErrFixedPeerVectorProofStaleV1
+		}
+	} else if a.routerHost || a.routerOnly || !slices.Contains(owners, a.hosted) {
+		// Data Stage requires an opened group in the committed owner set.
+		// A router host cannot turn its unrelated local group into one.
+		return ErrFixedPeerVectorProofStaleV1
 	}
 	if a.expected == nil {
 		a.expected = &before

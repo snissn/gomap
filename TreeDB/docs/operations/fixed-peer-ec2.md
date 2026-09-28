@@ -30,6 +30,28 @@ traffic admission. A running process, open port, known leader, historical succes
 or ANN capability alone is insufficient. Empty data groups stay unready until
 initialized by a real durable command through their authoritative path.
 
+## Current immutable multi-owner profile
+
+The fixed-peer immutable vector profile uses one catalog/source-holder leader,
+one separate configured ingress router, and whole-domain owners in distinct
+data groups. Serving nodes retain metadata and only their hosted router or graph
+assets; the source holder alone keeps the full builder collection. A successful
+process start or local asset copy is not readiness. The authenticated lifecycle
+control path must commit source-verified BUILD, each owner's staged-byte and
+applied readiness, PREPARE, and ACTIVE before warming listeners. After a restart,
+rerun the authenticated lifecycle control path to re-stage and warm any new
+owner leader. Then check fresh readiness on the router and owners before
+routing search; immutable readiness requires ACTIVE and already-open router or
+shard listeners, and does not warm them itself. Public strict search
+is available only on the configured router; nonrouters and immutable vector
+mutations return typed unavailability. A missing owner or stale authority must
+fail the whole result.
+
+This bounded profile currently requires the catalog and source-data leader on
+the same node. Separate leaders, representative performance, and broader
+recovery/fault qualification remain open under #4809; this document's EC2
+adapter and inventory are not evidence that those gates passed.
+
 SIGTERM/SIGINT begins drain and refuses fresh public/native ingress and fresh
 local outbound work. Already admitted descendants may finish within their
 originating request lifetime. Authenticated inbound shard RPCs, consensus and
