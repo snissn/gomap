@@ -52,3 +52,7 @@ TreeDB.
   - `cmd/unified_bench/main.go` + `cmd/unified_bench/profile_artifact_dir_test.go`
   - `cmd/benchprof/main.go` + `cmd/benchprof/main_test.go`
   - `cmd/unified_bench/README.md` + `cmd/benchprof/README.md`
+- Standalone package benchmarks that do not use the unified-bench database
+  adapters may use a dedicated fresh-process capture script instead. Keep its
+  benchmark names, artifact format, and reproduction command documented in
+  both READMEs; do not label its Go test profiles as benchprof inputs.
