@@ -35,6 +35,9 @@ const (
 // barrier-before-FSM-lock ordering regression deterministic.
 var raftSnapshotAfterExtractForTest func()
 
+// raftSnapshotAfterReplaceForTest observes the destructive install boundary.
+var raftSnapshotAfterReplaceForTest func()
+
 // raftSnapshotBeforeCopyForTest pauses archive streaming, not cut admission.
 var raftSnapshotBeforeCopyForTest func()
 
@@ -240,6 +243,13 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 	if err := f.verifyExtractedRaftSnapshotV1(ctx, header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
 		return err
 	}
+	// Cancellation may refuse an install only while the original stores are
+	// intact. Once they close, finish installing and verifying the new layout
+	// before releasing scratch, even if the caller's lifetime expires.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	finishCtx := context.WithoutCancel(ctx)
 	if err := f.closeForRaftSnapshotRestoreV1(); err != nil {
 		return err
 	}
@@ -251,10 +261,13 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 			return err
 		}
 	}
+	if hook := raftSnapshotAfterReplaceForTest; hook != nil {
+		hook()
+	}
 	// Entry-wise installs can change parent directory identities even though
 	// the dependency files themselves retain their handles across rename. Rebind
 	// once more in the final layout before any restored meta is reopened.
-	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(finishCtx, mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "rebind installed snapshot durable roots: %v", err)
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
@@ -263,7 +276,7 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 	if err := f.reopenAfterRaftSnapshotRestoreV1(); err != nil {
 		return err
 	}
-	return f.verifyInstalledSnapshotManifestWithContextV1Locked(ctx, header.Manifest)
+	return f.verifyInstalledSnapshotManifestWithContextV1Locked(finishCtx, header.Manifest)
 }
 
 func rebindExtractedRaftSnapshotDurableRootsV1(mainDir, sideDir string, disableSideStores bool) error {

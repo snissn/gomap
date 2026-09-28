@@ -184,6 +184,99 @@ func TestRaftSnapshotInstallCloseWaitsForBlockedReaderV1(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotInstallCancellationBoundaryV1(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer sourceDB.Close()
+	source := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer source.Close()
+	doc := []byte(`{"_id":"u-large","payload":"` + strings.Repeat("x", 8192) + `"}`)
+	applySnapshotSourceEntries(t, source, doc)
+	snapshot, err := source.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Release()
+	archive := readRaftSnapshotArchiveForTest(t, snapshot)
+	limits, err := (SnapshotCaptureLimitsV1{}).normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, afterSwap := range []bool{false, true} {
+		name := "before swap"
+		if afterSwap {
+			name = "after swap"
+		}
+		t.Run(name, func(t *testing.T) {
+			targetDir := filepath.Join(root, name)
+			targetDB := openRaftSnapshotFSMTestDB(t, targetDir, true)
+			defer targetDB.Close()
+			target := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+			defer target.Close()
+			stale := []byte(`{"_id":"u-large","payload":"stale"}`)
+			applySnapshotSourceEntries(t, target, stale)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if afterSwap {
+				raftSnapshotAfterReplaceForTest = cancel
+				defer func() { raftSnapshotAfterReplaceForTest = nil }()
+			} else {
+				raftSnapshotAfterExtractForTest = cancel
+				defer func() { raftSnapshotAfterExtractForTest = nil }()
+			}
+			var scratch raftSnapshotScratchDirsV1
+			err := target.installRaftSnapshotV1Locked(ctx, bytes.NewReader(archive), &scratch, limits)
+			if ctx.Err() != context.Canceled {
+				t.Fatal("boundary did not cancel context")
+			}
+			if afterSwap && err != nil {
+				t.Fatal("post-swap cancellation interrupted install", err)
+			}
+			if !afterSwap && err == nil {
+				t.Fatal("pre-swap cancellation installed snapshot")
+			}
+			paths := []string{scratch.main, scratch.side, scratch.apply}
+			if err := scratch.close(); err != nil {
+				t.Fatal("scratch cleanup", err)
+			}
+			for _, path := range paths {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("scratch path survived cleanup", path, err)
+				}
+			}
+			want := stale
+			if afterSwap {
+				want = doc
+				if err := target.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
+					t.Fatal("installed manifest", err)
+				}
+			}
+			assertSnapshotDocument(t, target, "u-large", want)
+			if err := target.Close(); err != nil {
+				t.Fatal("close target", err)
+			}
+			if !afterSwap {
+				if err := targetDB.Close(); err != nil {
+					t.Fatal("close original target DB", err)
+				}
+			}
+			reopenedDB := openRaftSnapshotFSMTestDB(t, targetDir, true)
+			defer reopenedDB.Close()
+			reopened := openRaftSnapshotFSMForTest(t, reopenedDB, targetDir, true)
+			defer reopened.Close()
+			assertSnapshotDocument(t, reopened, "u-large", want)
+			if afterSwap {
+				if err := reopened.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
+					t.Fatal("reopened manifest", err)
+				}
+			}
+		})
+	}
+}
+
 type snapshotInstallBlockingReaderV1 struct {
 	entered, resume chan struct{}
 	once            sync.Once
