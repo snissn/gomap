@@ -935,7 +935,7 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 		IndexedThrough: 1,
 	}
 	config := FixedPeerTCPConfigV1{
-		NodeID: "node", Nodes: []FixedPeerTCPNodeV1{{ID: "node"}}, Vector: vector,
+		NodeID: "node", Nodes: []FixedPeerTCPNodeV1{{ID: "node"}}, Catalog: FixedPeerTCPGroupV1{ID: "meta"}, Vector: vector,
 		Groups: []FixedPeerTCPGroupV1{
 			{ID: "group-a", Peers: []raftcluster.Peer{{ID: "node"}}},
 			{ID: "group-b", Peers: []raftcluster.Peer{{ID: "node"}}},
@@ -943,27 +943,27 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	}
 	config.Vector.Placement.Partitions = nil
 	want := "fixed-peer vector runtime requires exactly one owner group"
-	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{}); err == nil || err.Error() != want {
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true}); err == nil || err.Error() != want {
 		t.Fatalf("zero-owner validation error=%v, want %q", err, want)
 	}
 	config.Vector.Placement.Partitions = []raftplacement.VectorPartitionGroupV1{
 		{PartitionID: 0, GroupID: "group-a"},
 		{PartitionID: 1, GroupID: "group-b"},
 	}
-	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err == nil || err.Error() != want {
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true, "group-a": true, "group-b": true}); err == nil || err.Error() != want {
 		t.Fatalf("multi-owner validation error=%v, want %q", err, want)
 	}
 	config.Vector.Placement.Partitions = []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}}
 	config.Vector.ShardAddresses["group-a"]["node"] = "missing-port"
 	want = `invalid vector shard address for node "node"`
-	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true}); err == nil || err.Error() != want {
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true, "group-a": true}); err == nil || err.Error() != want {
 		t.Fatalf("invalid shard address error=%v, want %q", err, want)
 	}
 	config.Vector.ShardAddresses["group-a"]["node"] = "127.0.0.1:10002"
 	want = "fixed-peer vector runtime requires exactly one local data group"
 	for _, localGroups := range []map[raftcluster.GroupID]bool{
-		{},
-		{"group-a": true, "group-b": true},
+		{"meta": true},
+		{"meta": true, "group-a": true, "group-b": true},
 	} {
 		if err := validateFixedPeerVectorConfigV1(config, localGroups); err == nil || err.Error() != want {
 			t.Fatalf("local data-group validation error=%v, want %q", err, want)
@@ -1003,12 +1003,12 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 		RouterMode:            collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 	}
 	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
-		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{localGroup: true}); err != nil {
+		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true, localGroup: true}); err != nil {
 			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
 		}
 	}
 	config.Vector = nil
-	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err != nil {
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true, "group-a": true, "group-b": true}); err != nil {
 		t.Fatalf("non-vector config rejected: %v", err)
 	}
 }
