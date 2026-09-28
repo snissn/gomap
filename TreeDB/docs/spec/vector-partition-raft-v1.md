@@ -676,14 +676,17 @@ VCP2 checkpoint version 2 while a scoped generation is live. A scoped BUILD
 may skip locally unhosted generations while remaining strictly monotonic;
 VCP3 records canonical skipped-generation ranges even after every local
 generation is deleted. A skipped ID is never mistaken for completed deletion
-or admitted later, and the range count is capped at 4,096. Each scoped
+or admitted later. The range count has a permanent 4,096 cap; another gapped
+scoped BUILD then fails until the stopped node's local partition state is
+rebuilt from trusted source assets and current catalog authority. Restoring
+the capped checkpoint does not reset the limit. Each scoped
 generation carries one canonical VLS1 hosted-group/router flag and exact
 manifest/placement SHA-256 pair; ordinary VCP1 bytes and operation values are
 unchanged. The global VPM1 is retained rather than filtered. Local assets,
 snapshot validation, and reclaim debt derive from the scope and full placement;
 shared foreign-owner segments are invalid. VLS1 is local inventory, not a
 substitute for source-holder validation or fresh catalog authority at READY,
-reopen, and serving admission. Older binaries are not promised to open VCP2.
+reopen, and serving admission. Older binaries are not promised to open VCP2 or VCP3.
 Full-local prepared/store/router reads, ordinary ready staging/status, and
 LOCAL_ACTIVATE reject scoped generations; the scoped prepared read only
 verifies hosted bytes and grants no serving authority.
@@ -693,7 +696,7 @@ verifies hosted bytes and grants no serving authority.
 | Transition | Immutable operation | Observable result |
 | --- | --- | --- |
 | absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
-| absent -> scoped building | scoped BUILD (operation 8) in a new VCP2 checkpoint epoch | complete non-active local generation tied to global manifest and placement |
+| absent -> scoped building | scoped BUILD (operation 8) in a new VCP2 checkpoint epoch, or VCP3 when skipped ranges exist | complete non-active local generation tied to global manifest and placement |
 | building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
 | unscoped ready -> active | LOCAL_ACTIVATE delta | one complete full-local generation is locally active and the activation high water advances |
 | active -> retired | DEACTIVATE delta | generation remains prepared but is not active |

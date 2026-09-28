@@ -128,7 +128,11 @@ group, router-host flag, and exact SHA-256 manifest and placement commitments;
 it does not itself authorize serving. When any live generation has a scope,
 the checkpoint is VCP2 and adds one bounded scope field per generation. VCP3
 adds up to 4,096 skipped-generation ranges and retains them after all scoped
-generations are deleted.
+generations are deleted. There is no in-place range compaction: after 4,096
+non-contiguous scoped BUILDs, another gapped scoped BUILD fails. Retire the
+local generations, stop the node, and rebuild its local partition state from
+trusted source assets and current catalog authority before accepting more
+gapped generations; restoring the same capped checkpoint does not reset it.
 Unscoped checkpoints remain byte-identical VCP1. The scope derives local
 asset and reclaim references from the global placement, and rejects a physical
 segment shared across hosted and foreign owners. A router-only BUILD with no
