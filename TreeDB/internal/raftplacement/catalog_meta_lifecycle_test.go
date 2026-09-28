@@ -58,6 +58,57 @@ func TestCatalogMetaLifecycleFeatureFloorAndExactRetry(t *testing.T) {
 	})
 }
 
+func TestCatalogMetaLifecycleImmutableSameGenerationConflictV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	first := catalogMetaLifecycleTestBeginV1(identity, 0, 10)
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, first), 2); err != nil {
+		t.Fatalf("first immutable begin: %v", err)
+	}
+	changed := identity
+	changed.Immutable.ManifestDigest = strings.Repeat("c", 64)
+	second := catalogMetaLifecycleTestBeginV1(changed, 0, 10)
+	if _, err := authority.applyCommittedCatalogMetaV1(mustEncodeCatalogMetaLifecycleCommandV1(t, second), 3); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("same generation changed manifest err=%v", err)
+	}
+	if _, ok := authority.VectorPartitionLifecycleRecordV1(changed); ok {
+		t.Fatal("conflicting manifest published lifecycle record")
+	}
+	status, ok := authority.Status()
+	if !ok || status.AppliedIndex != 2 {
+		t.Fatalf("conflicting manifest advanced catalog: %+v available=%v", status, ok)
+	}
+	snapshot, err := authority.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatalf("export immutable snapshot: %v", err)
+	}
+	restored := NewCatalogMetaAuthorityV1()
+	if err := restored.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+		t.Fatalf("restore immutable snapshot: %v", err)
+	}
+	if record, ok := restored.VectorPartitionLifecycleRecordV1(identity); !ok || record.Identity != identity {
+		t.Fatalf("immutable identity not retained after restore: %+v available=%v", record, ok)
+	}
+	var outer CatalogMetaSnapshotV1
+	if err := json.Unmarshal(snapshot, &outer); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(outer.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	conflict := lifecycle.Records[0]
+	conflict.Identity = changed
+	lifecycle.Records = append(lifecycle.Records, conflict)
+	outer.VectorPartitionLifecycle = mustJSONCatalogMetaLifecycleV1(t, lifecycle)
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(mustJSONCatalogMetaLifecycleV1(t, outer)); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("snapshot with divergent same-generation manifest err=%v", err)
+	}
+}
+
 func TestCatalogMetaLifecycleRecordReturnsDeepCopy(t *testing.T) {
 	authority := NewCatalogMetaAuthorityV1()
 	identity := VectorPartitionLifecycleIdentityV1{Generation: 7}

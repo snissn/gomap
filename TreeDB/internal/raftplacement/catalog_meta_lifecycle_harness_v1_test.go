@@ -3,6 +3,7 @@ package raftplacement
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,49 @@ func TestCatalogMetaLifecycleHarnessActivatesAndConvergesV1(t *testing.T) {
 	if err := harness.WaitForAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
 		record, ok := authority.VectorPartitionLifecycleRecordV1(identity)
 		return ok && record.State == VectorPartitionLifecycleActiveV1 && record.Identity == identity && record.ReadySetDigest == active.ReadySetDigest
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCatalogMetaLifecycleImmutableIdentitySurvivesReopenV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), realCatalogMetaIntegrationTestTimeoutV1)
+	defer cancel()
+	harness, err := OpenCatalogMetaLifecycleHarnessV1(ctx, CatalogMetaLifecycleHarnessOptionsV1{
+		Catalog: catalogMetaLifecycleCatalogV1(true), Prefix: "immutable-reopen",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	status, ok := harness.LeaderAuthority().Status()
+	if !ok {
+		t.Fatal("catalog authority unavailable")
+	}
+	identity := catalogMetaLifecycleTestIdentityV1(CatalogMetaRecordV1{Epoch: status.Epoch, Digest: status.Digest}, 7, 11)
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	coordinator := harness.LifecycleCoordinator()
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
+		return identity.Immutable, []raftcluster.GroupID{"group-a"}, nil
+	}
+	want, err := coordinator.BeginBuildV1(ctx, identity, []raftcluster.GroupID{"group-a"}, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.WaitForAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
+		got, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+		return ok && got.Identity == want.Identity && got.Revision == want.Revision
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.RestartV1(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.WaitForAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
+		got, ok := authority.VectorPartitionLifecycleRecordV1(identity)
+		return ok && got.Identity == want.Identity && got.Revision == want.Revision && got.State == want.State
 	}); err != nil {
 		t.Fatal(err)
 	}

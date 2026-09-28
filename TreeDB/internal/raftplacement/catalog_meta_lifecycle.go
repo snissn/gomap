@@ -158,7 +158,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	}
 	if command.Kind == VectorPartitionLifecycleBeginBuildV1 {
 		for existing := range a.lifecycle {
-			if (existing.SourceFormat == 2 || command.Identity.SourceFormat == 2) && existing.Index == command.Identity.Index && existing.Generation == command.Identity.Generation && existing != command.Identity {
+			if (existing.SourceFormat == 2 || command.Identity.SourceFormat == 2 ||
+				existing.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) || command.Identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{})) &&
+				existing.Index == command.Identity.Index && existing.Generation == command.Identity.Generation && existing != command.Identity {
 				return CatalogMetaStatusV1{}, ErrVectorPartitionLifecycleConflict
 			}
 		}
@@ -664,7 +666,9 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 			}
 		}
 		for existing := range records {
-			if (existing.SourceFormat == 2 || identity.SourceFormat == 2) && existing.Index == identity.Index && existing.Generation == identity.Generation && existing != identity {
+			if (existing.SourceFormat == 2 || identity.SourceFormat == 2 ||
+				existing.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) || identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{})) &&
+				existing.Index == identity.Index && existing.Generation == identity.Generation && existing != identity {
 				return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
 			}
 		}
