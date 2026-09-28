@@ -64,7 +64,7 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	localServices, localSources := newVectorPartitionLiveProductionServicesV1(t, localFixture)
 	localCoordinator, err := NewVectorPartitionCoordinatorForTopologyV1(
 		vectorPartitionLiveCoordinatorTopologyV1(localFixture),
-		VectorPartitionImmutableCoordinatorRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: seed.collection}},
+		CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: seed.collection},
 		&vectorPartitionLiveProductionDispatcherV1{services: localServices}, VectorPartitionCoordinatorLimitsV1{},
 	)
 	if err != nil {
