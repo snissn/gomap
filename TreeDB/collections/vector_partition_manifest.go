@@ -1157,6 +1157,13 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	if err := preflightVectorPartitionManifestWithContextV1(ctx, m, limits); err != nil {
 		return nil, err
 	}
+	// Canonicalization sorts the manifest's slices in place. Keep the caller's
+	// manifest intact even when cancellation interrupts a merge pass.
+	var err error
+	m, err = cloneVectorPartitionManifestForCheckpointWithContextV1(ctx, m)
+	if err != nil {
+		return nil, err
+	}
 	if err := m.canonicalizeWithContextV1(ctx); err != nil {
 		return nil, err
 	}

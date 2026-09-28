@@ -1704,6 +1704,23 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 	return newCollectionManager(database, collectionManagerOptions{registerBackendHooks: true})
 }
 
+// OpenCollectionForRaftSourceV1 reuses one DB-scoped read manager so repeated
+// source proofs do not register new backend hooks or retain a new write domain
+// per attempt. The caller must keep the database alive for the handle's use.
+func OpenCollectionForRaftSourceV1(database *backenddb.DB, name string) (*Collection, error) {
+	coord := collectionDBSchemaCoordinatorForDB(database)
+	if coord == nil {
+		return nil, backenddb.ErrClosed
+	}
+	coord.sourceMu.Lock()
+	if coord.sourceManager == nil {
+		coord.sourceManager = newCollectionManager(database, collectionManagerOptions{})
+	}
+	manager := coord.sourceManager
+	coord.sourceMu.Unlock()
+	return manager.OpenCollection(name)
+}
+
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {

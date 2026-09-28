@@ -120,6 +120,32 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 	}
 	var manifest VectorPartitionManifestV1
 	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var innerErr error
+		manifest, innerErr = c.PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx, index, generation)
+		return innerErr
+	})
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return manifest, nil
+}
+
+// PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1 is the
+// barrier-held form used by a Raft FSM to bind source capture to its current
+// DB across snapshot replacement. Its caller must already hold that root's
+// non-reentrant vector-partition storage barrier.
+func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	var manifest VectorPartitionManifestV1
+	err := func() error {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -154,7 +180,7 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 			return errors.New("collections: vector partition source identity mismatch")
 		}
 		return ctx.Err()
-	})
+	}()
 	if err != nil {
 		return VectorPartitionManifestV1{}, err
 	}

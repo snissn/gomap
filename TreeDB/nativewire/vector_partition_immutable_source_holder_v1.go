@@ -27,14 +27,46 @@ import (
 // mutation-epoch checks must fence source changes through the BUILD commit.
 // Direct local writes outside that catalog protocol are not covered.
 func NewVectorPartitionImmutableSourceHolderPreparationV1(
-	collection *collections.Collection,
+	runtime *FixedPeerTCPRuntimeV1,
+	collectionRef raftplacement.CollectionRefV1,
+) (func(context.Context, raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error), error) {
+	if runtime == nil || runtime.authority == nil || runtime.meta == nil || runtime.config.NodeID == "" ||
+		runtime.config.Vector == nil || runtime.config.Vector.Collection != collectionRef {
+		return nil, ErrFixedPeerVectorUnavailableV1
+	}
+	return newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(collectionRef, runtime.authority, runtime.meta,
+		func(ctx context.Context, group raftcluster.GroupID, index string, generation uint64) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, collections.VectorPartitionManifestV1, error) {
+			var zero collections.VectorPartitionManifestV1
+			if runtime.closed.Load() {
+				return raftcluster.ReadIndexProof{}, raftcluster.AppliedProgress{}, zero, ErrFixedPeerVectorUnavailableV1
+			}
+			data := runtime.data[group]
+			if data == nil || data.provider == nil || data.fsm == nil {
+				return raftcluster.ReadIndexProof{}, raftcluster.AppliedProgress{}, zero, ErrFixedPeerVectorUnavailableV1
+			}
+			target := raftcluster.ReadIndexBarrier{NodeID: runtime.config.NodeID, GroupID: group}
+			proof, err := data.provider.ReadIndex(ctx, target)
+			if err != nil {
+				return proof, raftcluster.AppliedProgress{}, zero, err
+			}
+			if err := target.Check(proof); err != nil {
+				return proof, raftcluster.AppliedProgress{}, zero, err
+			}
+			progress, manifest, err := data.fsm.PreparedVectorPartitionManifestFromCurrentDBV1(ctx, proof.AppliedIndexBarrier(), collectionRef.Collection, index, generation)
+			return proof, progress, manifest, err
+		})
+}
+
+// The capture seam is private so callers cannot pair an unrelated Collection
+// with a valid data-group read proof. Production capture derives both from the
+// same fixed-peer group and its snapshot-replaceable FSM.
+func newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(
 	collectionRef raftplacement.CollectionRefV1,
 	authority *raftplacement.CatalogMetaAuthorityV1,
 	provider *raftcluster.CatalogMetaRaftProviderV1,
-	dataReads raftcluster.RoutedReadIndexCoordinator,
+	capture func(context.Context, raftcluster.GroupID, string, uint64) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, collections.VectorPartitionManifestV1, error),
 ) (func(context.Context, raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error), error) {
-	if collection == nil || collectionRef.Database == "" || collectionRef.Catalog == "" ||
-		collectionRef.Collection == "" || collection.Name() != collectionRef.Collection || authority == nil || provider == nil || dataReads == nil {
+	if collectionRef.Database == "" || collectionRef.Catalog == "" || collectionRef.Collection == "" || authority == nil || provider == nil || capture == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
 	return func(ctx context.Context, identity raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
@@ -65,13 +97,17 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 		if !ok {
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
 		}
-		dataProof, progress, err := dataReads.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{GroupID: placementMode.GroupID})
+		// Collections in a local data-group DB are addressed by leaf name.
+		// Two full catalog references with that leaf cannot be distinguished
+		// by this V1 local source capture, even with a valid read proof.
+		for _, placed := range record.Catalog.Placements {
+			if placed.Collection != collectionRef && placed.Collection.Collection == collectionRef.Collection {
+				return zero, nil, ErrFixedPeerVectorProofStaleV1
+			}
+		}
+		dataProof, progress, manifest, err := capture(ctx, placementMode.GroupID, identity.Index.IndexName, identity.Generation)
 		if err != nil || (raftcluster.ReadIndexBarrier{GroupID: placementMode.GroupID}).Check(dataProof) != nil ||
 			(dataProof.AppliedIndexBarrier()).Check(progress) != nil || !slices.Contains(collectionGroup.Members, dataProof.NodeID) {
-			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
-		}
-		manifest, err := collection.PreparedVectorPartitionManifestWithContextV1(ctx, identity.Index.IndexName, identity.Generation)
-		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		if manifest.Collection != identity.Index.Collection.Collection || manifest.IndexName != identity.Index.IndexName ||
