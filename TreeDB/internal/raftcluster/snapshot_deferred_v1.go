@@ -19,7 +19,7 @@ type deferredRaftSnapshotV1 struct {
 	mu             sync.Mutex
 	ctx            context.Context
 	cancel         context.CancelFunc
-	materialize    func(context.Context) (RaftSnapshotV1, error)
+	materialize    func(context.Context, uint64, uint64) (RaftSnapshotV1, error)
 	cleanupOnly    bool
 	releaseCapture func() error
 	releaseOwner   func() error
@@ -35,6 +35,18 @@ type deferredRaftSnapshotV1 struct {
 // only after final release/error and the last archive reader closes. Clones and
 // the finalized result share this single ownership lifetime.
 func NewDeferredRaftSnapshotV1(materialize func(context.Context) (RaftSnapshotV1, error), releaseCapture, releaseOwner func() error) (RaftSnapshotV1, error) {
+	if materialize == nil {
+		return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
+	}
+	return NewDeferredRaftSnapshotWithBoundaryV1(func(ctx context.Context, _, _ uint64) (RaftSnapshotV1, error) {
+		return materialize(ctx)
+	}, releaseCapture, releaseOwner)
+}
+
+// NewDeferredRaftSnapshotWithBoundaryV1 binds the native sink's exact Raft
+// boundary before one-shot archive construction. Zero term/index denotes a
+// direct export, whose manifest keeps the captured command boundary.
+func NewDeferredRaftSnapshotWithBoundaryV1(materialize func(context.Context, uint64, uint64) (RaftSnapshotV1, error), releaseCapture, releaseOwner func() error) (RaftSnapshotV1, error) {
 	if materialize == nil || releaseCapture == nil {
 		return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
 	}
@@ -71,7 +83,7 @@ func (s RaftSnapshotV1) RunCleanupWorkV1() error {
 	if d.released || d.materialize == nil {
 		return ErrInvalidSnapshotManifest
 	}
-	_, d.err = d.materialize(d.ctx)
+	_, d.err = d.materialize(d.ctx, 0, 0)
 	d.materialize = nil
 	d.err = errors.Join(d.err, d.ctx.Err())
 	d.cancel()
@@ -82,6 +94,15 @@ func (s RaftSnapshotV1) RunCleanupWorkV1() error {
 // Materialize completes deferred work exactly once. A finalized result keeps
 // its public manifest and archive path while sharing the original owner.
 func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
+	return s.MaterializeWithNativeBoundaryV1(0, 0)
+}
+
+// MaterializeWithNativeBoundaryV1 is called only after the native snapshot
+// store has created a sink and supplied its installed index and term.
+func (s RaftSnapshotV1) MaterializeWithNativeBoundaryV1(term, index uint64) (RaftSnapshotV1, error) {
+	if (term == 0) != (index == 0) {
+		return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
+	}
 	if s.deferred == nil {
 		if s.owner != nil {
 			s.owner.mu.Lock()
@@ -89,6 +110,9 @@ func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
 			if err := s.owner.validateReadyLocked(s); err != nil {
 				return RaftSnapshotV1{}, err
 			}
+		}
+		if index != 0 && (s.Manifest.LastIncludedTerm != term || s.Manifest.LastIncludedIndex != index) {
+			return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
 		}
 		return s, nil
 	}
@@ -102,7 +126,7 @@ func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
 		return RaftSnapshotV1{}, fmt.Errorf("%w: captured snapshot released", ErrInvalidSnapshotManifest)
 	}
 	if d.materialize != nil {
-		d.result, d.err = d.materialize(d.ctx)
+		d.result, d.err = d.materialize(d.ctx, term, index)
 		d.materialize = nil
 		if d.err == nil {
 			d.err = d.ctx.Err()
@@ -126,6 +150,9 @@ func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
 	}
 	if d.err != nil {
 		return RaftSnapshotV1{}, d.err
+	}
+	if index != 0 && (d.result.Manifest.LastIncludedTerm != term || d.result.Manifest.LastIncludedIndex != index) {
+		return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
 	}
 	ready := d.result
 	ready.owner = d

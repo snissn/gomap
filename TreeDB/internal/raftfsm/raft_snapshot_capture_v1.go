@@ -228,12 +228,12 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 		cancel()
 		return raftcluster.RaftSnapshotV1{}, errors.Join(err, fmt.Errorf("raftfsm: snapshot disk admission failed: need=%d available=%d", required, available), files.close())
 	}
-	snapshot, err := raftcluster.NewDeferredRaftSnapshotV1(func(persistCtx context.Context) (raftcluster.RaftSnapshotV1, error) {
+	snapshot, err := raftcluster.NewDeferredRaftSnapshotWithBoundaryV1(func(persistCtx context.Context, nativeTerm, nativeIndex uint64) (raftcluster.RaftSnapshotV1, error) {
 		combined, stop := context.WithCancel(persistCtx)
 		defer stop()
 		stopExpiry := context.AfterFunc(ctx, stop)
 		defer stopExpiry()
-		return materializeCapturedRaftSnapshotV1(combined, files, manifest, progressDigest, options, f.cluster.Layout.SnapshotDir)
+		return materializeCapturedRaftSnapshotV1(combined, files, manifest, nativeTerm, nativeIndex, progressDigest, options, f.cluster.Layout.SnapshotDir)
 	}, files.close, releaseOwner)
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
@@ -252,7 +252,7 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 	return snapshot, nil
 }
 
-func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCapturedFilesV1, manifest raftcluster.SnapshotManifestV1, progressDigest raftapply.LogicalDigestV1, options backenddb.Options, snapshotDir string) (raftcluster.RaftSnapshotV1, error) {
+func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCapturedFilesV1, manifest raftcluster.SnapshotManifestV1, nativeTerm, nativeIndex uint64, progressDigest raftapply.LogicalDigestV1, options backenddb.Options, snapshotDir string) (raftcluster.RaftSnapshotV1, error) {
 	stage, err := os.MkdirTemp(raftSnapshotStagingDirV1(snapshotDir), "treedb-cut-*")
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
@@ -306,6 +306,12 @@ func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCaptu
 		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: captured progress digest differs from staged cut")
 	}
 	manifest.LogicalDigestV1 = digest.Hex()
+	if nativeIndex != 0 {
+		manifest, err = manifest.WithNativeBoundaryV1(nativeTerm, nativeIndex)
+		if err != nil {
+			return raftcluster.RaftSnapshotV1{}, err
+		}
+	}
 	header, err := raftcluster.EncodeRaftSnapshotArchiveHeaderV1(raftcluster.NewRaftSnapshotArchiveHeaderV1(manifest))
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err

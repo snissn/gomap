@@ -59,8 +59,9 @@ func (f *FSM) verifyInstalledSnapshotManifestWithContextV1Locked(ctx context.Con
 	if !ok {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM has no durable applied progress for installed snapshot")
 	}
-	if record.EntryID.Term != manifest.LastIncludedTerm || record.EntryID.Index != manifest.LastIncludedIndex {
-		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest last included %d/%d does not match durable progress %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex, record.EntryID.Term, record.EntryID.Index)
+	commandTerm, commandIndex := manifest.CommandBoundaryV1()
+	if record.EntryID.Term != commandTerm || record.EntryID.Index != commandIndex {
+		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest command boundary %d/%d does not match durable progress %d/%d", commandTerm, commandIndex, record.EntryID.Term, record.EntryID.Index)
 	}
 	if record.AppliedCommandLSN != manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match durable progress %d", manifest.AppliedCommandLSN, record.AppliedCommandLSN)

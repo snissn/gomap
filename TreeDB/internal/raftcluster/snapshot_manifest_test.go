@@ -37,6 +37,41 @@ func TestSnapshotManifestV1RoundTripDeterministicJSON(t *testing.T) {
 	}
 }
 
+func TestSnapshotManifestV1NativeConfigurationGapV2(t *testing.T) {
+	command := validSnapshotManifestV1()
+	manifest, err := command.WithNativeBoundaryV1(5, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	term, index := manifest.CommandBoundaryV1()
+	if manifest.Version != SnapshotManifestVersion2 || manifest.LastIncludedTerm != 5 || manifest.LastIncludedIndex != 11 || term != command.LastIncludedTerm || index != command.LastIncludedIndex {
+		t.Fatalf("native/command boundary: %+v", manifest)
+	}
+	raw, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSnapshotManifestV1(raw, manifest.Scope)
+	if err != nil || decoded != manifest {
+		t.Fatalf("round trip: %+v %v", decoded, err)
+	}
+	for _, mutate := range []func(*SnapshotManifestV1){
+		func(m *SnapshotManifestV1) { m.AppliedCommandIndex = 0 },
+		func(m *SnapshotManifestV1) { m.AppliedCommandIndex = m.LastIncludedIndex },
+		func(m *SnapshotManifestV1) { m.AppliedCommandTerm = m.LastIncludedTerm + 1 },
+		func(m *SnapshotManifestV1) { m.Version = SnapshotManifestVersion1 },
+	} {
+		bad := manifest
+		mutate(&bad)
+		if err := bad.Validate(bad.Scope); !errors.Is(err, ErrInvalidSnapshotManifest) {
+			t.Fatalf("accepted invalid boundary %+v: %v", bad, err)
+		}
+	}
+	if _, err := command.WithNativeBoundaryV1(command.LastIncludedTerm+1, command.LastIncludedIndex); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("same-index changed term accepted: %v", err)
+	}
+}
+
 func TestSnapshotManifestV1ValidationFailsClosed(t *testing.T) {
 	expectedScope := validSnapshotManifestV1().Scope
 	tests := []struct {

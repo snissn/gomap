@@ -1228,6 +1228,13 @@ func (r *Raft) LastIndex() uint64 {
 	return r.getLastIndex()
 }
 
+// InstalledSnapshotBoundary returns the snapshot boundary installed in this
+// Raft instance. Unlike SnapshotStore.List, it does not select a stored but
+// not yet installed snapshot or wait for the configuration goroutine.
+func (r *Raft) InstalledSnapshotBoundary() (uint64, uint64) {
+	return r.getLastSnapshot()
+}
+
 // CommitIndex returns the committed index.
 // This API maybe helpful for server to implement the read index optimization
 // as described in the Raft paper.

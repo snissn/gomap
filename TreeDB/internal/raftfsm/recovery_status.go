@@ -59,9 +59,10 @@ func (f *FSM) RecoveryStatusV1(ctx context.Context, opts RecoveryStatusOptionsV1
 	}
 
 	manifest := *opts.SnapshotManifest
+	_, commandIndex := manifest.CommandBoundaryV1()
 	status.SnapshotManifest = &manifest
-	if opts.TailTargetIndex == 0 || opts.TailTargetIndex < manifest.LastIncludedIndex {
-		opts.TailTargetIndex = manifest.LastIncludedIndex
+	if opts.TailTargetIndex == 0 || opts.TailTargetIndex < commandIndex {
+		opts.TailTargetIndex = commandIndex
 	}
 	status.TailTargetIndex = opts.TailTargetIndex
 
@@ -105,8 +106,9 @@ func (f *FSM) verifyRecoverySnapshotManifestV1Locked(manifest raftcluster.Snapsh
 	if !ok {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM has no durable applied progress for recovery status")
 	}
-	if record.EntryID.Index < manifest.LastIncludedIndex {
-		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest last included index %d is ahead of durable progress %d", manifest.LastIncludedIndex, record.EntryID.Index)
+	commandTerm, commandIndex := manifest.CommandBoundaryV1()
+	if record.EntryID.Index < commandIndex {
+		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest command index %d is ahead of durable progress %d", commandIndex, record.EntryID.Index)
 	}
 	if record.AppliedCommandLSN < manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "snapshot manifest AppliedCommandLSN %d is ahead of durable progress coverage %d", manifest.AppliedCommandLSN, record.AppliedCommandLSN)
@@ -122,20 +124,20 @@ func (f *FSM) verifyRecoverySnapshotManifestV1Locked(manifest raftcluster.Snapsh
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "snapshot manifest AppliedCommandLSN %d is ahead of local coverage %d", manifest.AppliedCommandLSN, localLSN)
 	}
 	boundary, ok, err := f.progress.LookupApplyProgress(raftentry.ApplyEntryID{
-		Term:  manifest.LastIncludedTerm,
-		Index: manifest.LastIncludedIndex,
+		Term:  commandTerm,
+		Index: commandIndex,
 	})
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable progress for snapshot boundary %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex)
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable progress for snapshot command boundary %d/%d", commandTerm, commandIndex)
 	}
 	if boundary.AppliedCommandLSN != manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match boundary progress coverage %d", manifest.AppliedCommandLSN, boundary.AppliedCommandLSN)
 	}
 	if boundary.LogicalDigestV1 == (raftapply.LogicalDigestV1{}) {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable logical digest for snapshot boundary %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex)
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable logical digest for snapshot command boundary %d/%d", commandTerm, commandIndex)
 	}
 	if boundary.LogicalDigestV1.Hex() != manifest.LogicalDigestV1 {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest logical digest %s does not match boundary logical digest %s", manifest.LogicalDigestV1, boundary.LogicalDigestV1.Hex())

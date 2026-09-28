@@ -86,7 +86,8 @@ func EncodeReplicaReplacementStateV1(state ReplicaReplacementStateV1) ([]byte, e
 		return nil, ErrInvalidCatalogMeta
 	}
 	if replacementPhaseOrdinalV1(state.Phase) >= 4 {
-		if state.Tail == nil || state.Tail.Validate() != nil || state.Tail.GroupID != state.Begin.GroupID || state.Tail.Progress.EntryID.Index < state.Seed.Manifest.LastIncludedIndex || state.Tail.ConfigurationIndex <= state.Seed.ConfigurationIndex {
+		_, seedCommandIndex := state.Seed.Manifest.CommandBoundaryV1()
+		if state.Tail == nil || state.Tail.Validate() != nil || state.Tail.GroupID != state.Begin.GroupID || state.Tail.Progress.EntryID.Index < seedCommandIndex || state.Tail.ConfigurationIndex <= state.Seed.ConfigurationIndex {
 			return nil, ErrInvalidCatalogMeta
 		}
 	} else if state.Tail != nil {
