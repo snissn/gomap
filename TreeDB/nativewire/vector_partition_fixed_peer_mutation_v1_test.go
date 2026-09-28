@@ -1111,7 +1111,7 @@ func TestFixedPeerVectorConfigCloneRetainsValidatedSnapshotV1(t *testing.T) {
 	}
 }
 
-func TestFixedPeerVectorConfigPreflightBoundsInventoryAndRejectsUnauthenticatedListenersV1(t *testing.T) {
+func TestFixedPeerVectorConfigPreflightBoundsInventoryAndAuthenticatedListenersV1(t *testing.T) {
 	config := fixedPeerTestConfigsV1(t)[0]
 	config.Vector = &FixedPeerTCPVectorConfigV1{
 		RequestBase: VectorPartitionCoordinatorRequestV1{Query: make([]float32, fixedPeerMaxConfigBytesV1)},
@@ -1122,8 +1122,19 @@ func TestFixedPeerVectorConfigPreflightBoundsInventoryAndRejectsUnauthenticatedL
 	config.Vector.RequestBase.Query = nil
 	config.ClusterID = "vector-security-preflight"
 	config.Credentials = &PeerCredentialsV1{TrustRootsFile: "ca.pem", CertificateFile: "node.pem", PrivateKeyFile: "key.pem"}
-	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "authenticated vector listeners are unsupported") {
-		t.Fatalf("credentialed vector preflight = %v", err)
+	config.Vector.PublicAddresses = map[raftcluster.NodeID]string{"node": "127.0.0.1:10001"}
+	config.Vector.ShardAddresses = map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node": "127.0.0.1:10002"}}
+	if err := preflightFixedPeerConfigV1(config); err != nil {
+		t.Fatalf("loopback-only credentialed vector preflight = %v", err)
+	}
+	config.Vector.PublicAddresses["node"] = "192.168.1.10:10001"
+	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "public listener must be loopback") {
+		t.Fatalf("remote credentialed vector public listener = %v", err)
+	}
+	config.Vector.PublicAddresses["node"] = "127.0.0.1:10001"
+	config.Vector.ShardAddresses["group-a"]["node"] = "192.168.1.10:10002"
+	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "shard listener must be loopback") {
+		t.Fatalf("remote credentialed vector shard listener = %v", err)
 	}
 }
 
