@@ -18,6 +18,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
@@ -669,6 +670,14 @@ type vectorPartitionLiveDocumentV1 struct {
 }
 
 func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig) vectorPartitionLiveProductionFixtureV1 {
+	return newVectorPartitionLiveNativewireDocumentsForOwnersV1(t, documents, columns, [2]string{"group-a", "group-b"}, false)
+}
+
+func newVectorPartitionLiveNativewireDocumentsForOwnersV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL bool) vectorPartitionLiveProductionFixtureV1 {
+	return newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, documents, columns, owners, commandWAL, false)
+}
+
+func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
@@ -677,7 +686,7 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatal(err)
 	}
-	database, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	database, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: commandWAL, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +730,7 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 		Generation: source.Generation + 100, PartitionCount: 3, DomainCount: 2,
 		DomainPacks:   []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
 		BalancePolicy: "disjoint_v1",
-		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}},
+		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: owners[0]}, {PartitionID: 1, GroupID: owners[0]}, {PartitionID: 2, GroupID: owners[1]}},
 	}
 	parts := []internalrouter.RouterPartitionV1{{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}}
 	for _, row := range rows {
@@ -739,7 +748,13 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: manifest.Generation, PartitionID: uint32(partition), Dimensions: definition.Dimensions}
 	}
-	assets, resources, err := collection.MaterializeVectorPartitionLocalSearchAssetsV1(definition.Name, manifest, 9101, inputs)
+	var assets []collections.VectorPartitionAssetV1
+	var resources *rootpublication.StableResourceSet
+	if ownerSeparated {
+		assets, resources, err = collection.MaterializeVectorPartitionOwnerSeparatedLocalSearchAssetsV1(definition.Name, manifest, map[string]uint32{owners[0]: 9101, owners[1]: 9103}, inputs)
+	} else {
+		assets, resources, err = collection.MaterializeVectorPartitionLocalSearchAssetsV1(definition.Name, manifest, 9101, inputs)
+	}
 	if err != nil {
 		database.Close()
 		t.Fatal(err)

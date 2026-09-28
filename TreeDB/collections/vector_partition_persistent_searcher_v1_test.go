@@ -2197,6 +2197,27 @@ func TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1(t *testing.T)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	openAttempt("canceled", canceled, group, true)
+	// The scoped immutable path decodes the same real multi-chunk pack without
+	// opening a local source graph. This only tests pack decoding; catalog and
+	// durable scoped-pin admission are covered by their separate tests.
+	handlesBeforeScoped := mappedresource.GlobalStats().ActiveHandles
+	scoped, err := col.openVectorPartitionLocalSearcherForPreparedAssetsWithSourceModeV1(
+		t.Context(), def.Name, manifest.Generation, 0, manifest.IndexDefinitionDigest,
+		manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount,
+		root, group, members, home, overlap, false, "", false, false, true,
+	)
+	if err != nil {
+		t.Fatalf("scoped real multi-chunk open: %v", err)
+	}
+	if got, err := scoped.Search([]float32{0, 1, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("scoped real multi-chunk search=%+v err=%v", got, err)
+	}
+	if err := scoped.Close(); err != nil {
+		t.Fatalf("scoped real multi-chunk close: %v", err)
+	}
+	if after := mappedresource.GlobalStats().ActiveHandles; after != handlesBeforeScoped {
+		t.Fatalf("scoped real multi-chunk open leaked mapped handles: before=%d after=%d", handlesBeforeScoped, after)
+	}
 	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, manifest.Generation, 1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("non-anchor open err=%v", err)
 	}

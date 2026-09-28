@@ -143,4 +143,40 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	if err := newAdapter(stableFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("late Stage after ACTIVE err=%v", err)
 	}
+	ownerScope := scope
+	ownerScope.HostedGroup = "group-a"
+	ownerScope.Router = false
+	owner := &fixedPeerVectorScopedOwnerAuthorityV1{
+		authority: authority, fence: stableFence, identity: identity, hosted: "group-a",
+		owners: []raftcluster.GroupID{"group-a", "group-b"}, readyDigest: fmt.Sprintf("%064x", 3),
+	}
+	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); err != nil {
+		t.Fatalf("cached ACTIVE owner pair: %v", err)
+	}
+	owner.readyDigest = fmt.Sprintf("%064x", 4)
+	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("changed ready receipt accepted: %v", err)
+	}
+	owner.readyDigest = fmt.Sprintf("%064x", 3)
+	owner.owners = []raftcluster.GroupID{"group-a"}
+	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("changed owner set accepted: %v", err)
+	}
+	owner.owners = []raftcluster.GroupID{"group-a", "group-b"}
+	owner.fence = advancingFence
+	calls = 0
+	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || calls != 2 {
+		t.Fatalf("changed catalog index accepted: err=%v calls=%d", err, calls)
+	}
+	if _, err := coordinator.InvalidateGenerationBeforeRelevantMutationV1(t.Context(), identity, "owner generation changed"); err != nil {
+		t.Fatal(err)
+	}
+	status, ok = authority.Status()
+	if !ok {
+		t.Fatal("invalidated catalog status unavailable")
+	}
+	owner.fence = stableFence
+	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("invalidated owner remained cached: %v", err)
+	}
 }
