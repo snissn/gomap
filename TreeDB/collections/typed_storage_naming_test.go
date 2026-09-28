@@ -412,9 +412,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// The persistent vector-partition searcher consumes the compatibility-retained
 	// public collection configuration solely to reach derived typed-column assets.
 	{path: "TreeDB/collections/vector_partition_persistent_searcher_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
-	// The live-document proof reads the compatibility-retained configuration;
-	// its fixture uses the same public names to construct a typed-column vector.
-	{path: "TreeDB/collections/vector_partition_live_document_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// The live-document proof reads the compatibility-retained configuration
+	// both to establish support and to reconstruct a retained payload.
+	{path: "TreeDB/collections/vector_partition_live_document_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_live_document_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	// #4324 replay uses the compatibility-retained typed-column configuration
 	// and value type names to fold the live carrier into document publication.
@@ -424,9 +424,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// schema names to configure typed-column vector and sorted-scalar sources.
 	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	{path: "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
-	// #4728's fixed-peer mutation fixture uses the same exported compatibility
-	// schema names for its typed-column vector source.
-	{path: "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// #4728's fixed-peer mutation fixtures use the exported compatibility
+	// schema names for typed-column vector and unsupported-payload cases.
+	{path: "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 8},
 	{path: "TreeDB/mongo_gateway/filter_writes_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/column_int64_query.go", classification: typedStorageLegacyDerived, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_int64_values_asset.go", classification: typedStorageLegacyDerived, matchingLines: 10, occurrences: 10},
