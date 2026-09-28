@@ -695,17 +695,19 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 	if len(documents) > 4 {
 		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
 	}
+	if ownerSeparated {
+		// This trusted genesis creates its first index with the collection. The
+		// command-WAL seed cannot issue a later unframed schema mutation, so
+		// persist the initial epoch in the genesis metadata itself.
+		definition.SchemaGeneration = 1
+	}
 	if columns == nil {
 		columns = &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}
 	}
 	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: columns}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
-	if ownerSeparated {
-		// The distributed fixture needs a durable index epoch. Inline indexes in
-		// CreateCollection predate CreateVectorIndex's schema-generation stamp.
-		meta.VectorIndexes = nil
-	}
 	manager := collections.NewCollectionManager(database)
-	if _, err := manager.CreateCollection(&meta); err != nil {
+	created, err := manager.CreateCollection(&meta)
+	if err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
@@ -715,12 +717,14 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 		t.Fatal(err)
 	}
 	if ownerSeparated {
-		indexed, err := collection.CreateVectorIndex(definition)
-		if err != nil || indexed == nil || len(indexed.VectorIndexes) != 1 {
+		persisted := collection.MetaView()
+		if created == nil || len(created.VectorIndexes) != 1 || len(persisted.VectorIndexes) != 1 ||
+			persisted.VectorIndexes[0].SchemaGeneration != definition.SchemaGeneration ||
+			collections.VectorIndexDefinitionDigestV1(persisted.VectorIndexes[0]) != collections.VectorIndexDefinitionDigestV1(created.VectorIndexes[0]) {
 			database.Close()
-			t.Fatalf("create durable vector index: meta=%+v err=%v", indexed, err)
+			t.Fatalf("trusted genesis did not persist the initial vector-index epoch: meta=%+v", persisted)
 		}
-		definition = indexed.VectorIndexes[0]
+		definition = persisted.VectorIndexes[0]
 	}
 	byID := make(map[string]vectorPartitionLiveDocumentV1, len(documents))
 	for _, document := range documents {
