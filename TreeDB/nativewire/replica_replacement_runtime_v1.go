@@ -86,6 +86,12 @@ func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, transpor
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateReplacementBeginV1(command raftplacement.ReplicaReplacementBeginV1) (FixedPeerTCPGroupV1, error) {
+	// The catalog authority refuses BEGIN while the vector lifecycle feature is
+	// enabled. Keep the same boundary at every replacement RPC before a local
+	// group or transport can be published.
+	if r.config.Vector != nil {
+		return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
+	}
 	if command.ConfigDigest != r.client.digest {
 		return FixedPeerTCPGroupV1{}, raftcluster.ErrInvalidConfig
 	}

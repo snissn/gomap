@@ -266,6 +266,25 @@ func TestReplacementBeginRefusesUnreconstructablePeerCapabilitiesV1(t *testing.T
 	}
 }
 
+func TestReplacementPrepareRefusesVectorRuntimeBeforeGroupPublicationV1(t *testing.T) {
+	begin := replacementReceiverTestBeginV1(t)
+	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &FixedPeerTCPRuntimeV1{
+		config: FixedPeerTCPConfigV1{Vector: &FixedPeerTCPVectorConfigV1{}},
+		data:   make(map[raftcluster.GroupID]*fixedPeerDataV1),
+	}
+	var reply fixedPeerReplyV1
+	if err := r.handleReplacementV1(context.Background(), "/v1/replacement-prepare", raw, &reply); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
+		t.Fatalf("vector-enabled prepare=%v, want unsupported feature", err)
+	}
+	if len(r.data) != 0 || r.local != nil || len(r.localRegistry.GroupIDs()) != 0 || len(r.transports) != 0 {
+		t.Fatal("refused vector-enabled prepare published local replacement state")
+	}
+}
+
 func TestReplacementCompletionReturnsChangedCatalogLeaderV1(t *testing.T) {
 	const old, next, target = raftcluster.NodeID("old"), raftcluster.NodeID("next"), raftcluster.NodeID("target")
 	digest := strings.Repeat("a", 64)
