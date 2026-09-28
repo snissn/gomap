@@ -66,8 +66,9 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	runtime := &FixedPeerTCPRuntimeV1{
 		authority: authority, meta: provider,
 		config: FixedPeerTCPConfigV1{
+			NodeID:  "ingress",
 			Catalog: FixedPeerTCPGroupV1{ID: "meta"},
-			Vector:  &FixedPeerTCPVectorConfigV1{Identity: identity}, RequestTimeout: time.Second,
+			Vector:  &FixedPeerTCPVectorConfigV1{Identity: identity, RouterNodeID: "ingress"}, RequestTimeout: time.Second,
 		},
 	}
 	newAdapter := func(fence func(context.Context) (raftplacement.CatalogMetaStatusV1, error)) *fixedPeerVectorScopedStageAuthorityV1 {
@@ -81,6 +82,20 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	stableFence := func(context.Context) (raftplacement.CatalogMetaStatusV1, error) { return status, nil }
 	if err := newAdapter(stableFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); err != nil {
 		t.Fatalf("catalog-only router preparation: %v", err)
+	}
+	localNonownerRouter := newAdapter(stableFence)
+	localNonownerRouter.hosted, localNonownerRouter.routerOnly = "group-c", false
+	localRouterScope := scope
+	localRouterScope.HostedGroup = "group-c"
+	if err := localNonownerRouter.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, localRouterScope); err != nil {
+		t.Fatalf("configured ingress with nonowner local data prepared router: %v", err)
+	}
+	localRouterScope.Router = false
+	if err := newAdapter(stableFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, localRouterScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("catalog-only host claimed local data: %v", err)
+	}
+	if err := localNonownerRouter.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, localRouterScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("ingress claimed nonowner local data: %v", err)
 	}
 	withoutRouter := scope
 	withoutRouter.Router = false
@@ -147,7 +162,7 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	ownerScope.HostedGroup = "group-a"
 	ownerScope.Router = false
 	ownerStage := newAdapter(stableFence)
-	ownerStage.hosted, ownerStage.routerOnly = "group-a", false
+	ownerStage.hosted, ownerStage.routerOnly, ownerStage.routerHost = "group-a", false, false
 	if err := ownerStage.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, ownerScope); err != nil {
 		t.Fatalf("ACTIVE elected owner re-stage: %v", err)
 	}

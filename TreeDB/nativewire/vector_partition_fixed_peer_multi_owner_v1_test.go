@@ -765,17 +765,10 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 	root := t.TempDir()
 	configs := make([]FixedPeerTCPConfigV1, len(ids))
 	for i, id := range ids {
-		raftTimeout := 300 * time.Millisecond
-		if ownerBReplicas == 3 && id == "source-holder" {
-			raftTimeout = 100 * time.Millisecond // first meta quorum includes the source holder
-		}
-		if ownerBReplicas == 3 && (id == "owner-b-2" || id == "owner-b-3") {
-			raftTimeout = time.Second // let the bootstrap owner win the first election
-		}
 		configs[i] = FixedPeerTCPConfigV1{
 			NodeID: id, DataRoot: filepath.Join(root, string(id), "data"), RaftRoot: filepath.Join(root, string(id), "raft"),
 			ListenAddress: nodes[i].Address, Nodes: nodes, Catalog: meta, Groups: groups,
-			RequestTimeout: 12 * time.Second, RaftTimeout: raftTimeout, Vector: vector,
+			RequestTimeout: 12 * time.Second, RaftTimeout: 300 * time.Millisecond, Vector: vector,
 			RaftListen: map[raftcluster.GroupID]string{"meta": meta.Peers[i].Address, groupForNode[id]: groupRaftAddress[id]},
 		}
 	}
