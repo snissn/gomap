@@ -3,6 +3,8 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,17 +24,49 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	var lastTailErr error
 	var lastTail raftcluster.ReplacementTailProgressV1
 	var target *fixedPeerDataV1
+	var source *fixedPeerDataV1
+	var proof raftcluster.ReplacementTailProgressV1
+	var seed raftcluster.ReplacementSnapshotSeedV1
 	var tailWaitBudget time.Duration
 	defer func() {
 		if t.Failed() {
 			t.Logf("promotion-tail stage=%s tail-wait-budget=%s last-tail=%+v last-tail-error=%v", stage, tailWaitBudget, lastTail, lastTailErr)
 			if stage == "wait for learner tail proof" && target != nil {
+				t.Logf("promotion-tail required source-proof=%+v seed-id=%s seed-term=%d seed-index=%d seed-manifest-index=%d seed-config-index=%d", proof.EntryID, seed.SnapshotID, seed.Term, seed.Index, seed.Manifest.LastIncludedIndex, seed.ConfigurationIndex)
 				inspect, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
+				if source != nil {
+					sourceNative, sourceErr := source.provider.RuntimeStatusV1(inspect)
+					t.Logf("promotion-tail source native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", sourceNative.State, sourceNative.LeaderID, sourceNative.Term, sourceNative.CommitIndex, sourceNative.RaftAppliedIndex, sourceNative.LastIndex, sourceNative.Applied, sourceErr)
+				}
 				native, nativeErr := target.provider.RuntimeStatusV1(inspect)
 				local, localErr := target.fsm.RecoveryStatusV1(inspect, raftfsm.RecoveryStatusOptionsV1{})
 				t.Logf("promotion-tail target native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", native.State, native.LeaderID, native.Term, native.CommitIndex, native.RaftAppliedIndex, native.LastIndex, native.Applied, nativeErr)
 				t.Logf("promotion-tail target durable applied=%+v command-lsn=%d status-error=%v", local.AppliedProgress, local.AppliedCommandLSN, localErr)
+				if target.prejoin != nil {
+					target.prejoin.mu.Lock()
+					phase, inflight, verified := target.prejoin.phase, target.prejoin.inflight, target.prejoin.verified
+					target.prejoin.mu.Unlock()
+					t.Logf("promotion-tail target prejoin phase=%s inflight=%t verified=%t", phase, inflight, verified)
+				}
+				// Native Raft errors are discarded by the fixture configuration.
+				// Capture only relevant goroutines, with a fixed output bound.
+				stacks := make([]byte, 256<<10)
+				n := runtime.Stack(stacks, true)
+				remaining := 16 << 10
+				for _, stack := range strings.Split(string(stacks[:n]), "\n\n") {
+					if remaining <= 0 {
+						break
+					}
+					if !strings.Contains(stack, "github.com/hashicorp/raft") || !strings.Contains(strings.ToLower(stack), "replicat") {
+						continue
+					}
+					if len(stack) > remaining {
+						stack = stack[:remaining]
+					}
+					t.Logf("promotion-tail raft replication goroutine:\n%s", stack)
+					remaining -= len(stack)
+				}
 			}
 		}
 	}()
@@ -45,7 +79,6 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	if err != nil {
 		t.Fatal(err)
 	}
-	var source *fixedPeerDataV1
 	for _, runtime := range runtimes[:3] {
 		if runtime.config.NodeID == dataLeader {
 			source = runtime.localDataV1(group.ID)
@@ -81,13 +114,16 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	if err != nil || state.Phase != raftplacement.ReplicaReplacementAddIntentV1 {
 		t.Fatalf("failed proof changed authority: %+v %v", state, err)
 	}
+	if state.Seed != nil {
+		seed = *state.Seed
+	}
 	stage = "read source fence"
 	configuration, progress, err := source.provider.ReplacementReadFenceV1(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stage = "read source tail proof"
-	proof, err := source.fsm.ReplacementTailProgressV1(ctx, raftentry.ApplyEntryID{Term: progress.Term, Index: progress.Index})
+	proof, err = source.fsm.ReplacementTailProgressV1(ctx, raftentry.ApplyEntryID{Term: progress.Term, Index: progress.Index})
 	if err != nil {
 		t.Fatal(err)
 	}
