@@ -519,6 +519,9 @@ func (s *VectorPartitionStoreV1) persistVerifiedVectorPartitionManifestLifecycle
 		return err
 	}
 	entry, generationPresent := loaded.state.Generations[m.Generation]
+	if generationPresent && entry.Scope != nil {
+		return fmt.Errorf("%w: generation %d has owner-local scope", ErrVectorPartitionManifestInvalid, m.Generation)
+	}
 	switch m.State {
 	case "building":
 		if generationPresent && entry.Deleting {
@@ -928,6 +931,9 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	}
 	if !present {
 		return VectorPartitionStatusV1{}, os.ErrNotExist
+	}
+	if entry, ok := loaded.state.Generations[generation]; ok && entry.Scope != nil {
+		return VectorPartitionStatusV1{}, fmt.Errorf("%w: generation %d has owner-local scope", ErrVectorPartitionManifestInvalid, generation)
 	}
 	manifest, err := vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
 	if err != nil {

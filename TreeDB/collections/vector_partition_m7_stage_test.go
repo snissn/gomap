@@ -67,6 +67,18 @@ func TestPreparedVectorPartitionScopedManifestVerifiesHostedBytesV1(t *testing.T
 	if _, err := store.OpenWithContext(t.Context(), ready.Collection, ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("full-local store open accepted scoped generation: %v", err)
 	}
+	if err := store.persistVerifiedVectorPartitionManifestLifecycleModeV1(ready, false); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("ordinary ready staging accepted scoped generation: %v", err)
+	}
+	if _, err := collection.VectorPartitionStatusV1(ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("full-local status accepted scoped generation: %v", err)
+	}
+	if router, _, err := collection.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(t.Context(), ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		if router != nil {
+			router.Close()
+		}
+		t.Fatalf("full-local prepared router accepted scoped generation: %v", err)
+	}
 	if err := store.persistVectorPartitionLifecycleOperationV1(ready.Collection, ready.IndexName, vectorPartitionLifecycleLocalActivateV1, ready.Generation, nil); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("local activation accepted scoped generation: %v", err)
 	}
