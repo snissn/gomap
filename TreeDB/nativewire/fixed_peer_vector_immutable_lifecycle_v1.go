@@ -223,6 +223,21 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 	if (!owner && !router) || (owner && router) {
 		return nil, ErrFixedPeerVectorWrongOwnerV1
 	}
+	// BEGIN_BUILD is committed on the catalog leader before this authenticated
+	// Stage request arrives. A follower may still be applying that command:
+	// wait for its exact catalog identity before the scoped Stage authority's
+	// fresh before/after fences, rather than mistaking ordinary apply lag for a
+	// stale proof.
+	reply, err := r.catalogConsumerCall(ctx, "catalog-read", fixedPeerRequestV1{})
+	if err != nil {
+		return nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
+	if reply.Catalog.Epoch != vector.Identity.Index.CatalogEpoch || reply.Catalog.Digest != vector.Identity.Index.CatalogDigest {
+		return nil, ErrFixedPeerVectorProofStaleV1
+	}
+	if err := r.waitForCatalogStatusV1(ctx, reply.Catalog); err != nil {
+		return nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
 	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 		return nil, err
 	}
@@ -268,6 +283,9 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 	proof, _, err := reads.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: r.config.NodeID, GroupID: group})
 	if err != nil || proof.Index == 0 {
 		return nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
+	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+		return nil, err
 	}
 	ready := &raftplacement.VectorPartitionLifecycleGroupReadyV1{
 		GroupID: group, AppliedIndex: proof.Index,

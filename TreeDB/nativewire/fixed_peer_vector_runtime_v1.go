@@ -616,6 +616,13 @@ func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleV1(ctx context.Context) err
 	if err != nil {
 		return err
 	}
+	return r.waitForCatalogStatusV1(ctx, target)
+}
+
+// waitForCatalogStatusV1 waits only for this node to apply an already
+// authenticated catalog status. It never treats a different catalog identity as
+// follower lag.
+func (r *FixedPeerTCPRuntimeV1) waitForCatalogStatusV1(ctx context.Context, target raftplacement.CatalogMetaStatusV1) error {
 	if target.Epoch == 0 || target.Digest == "" || target.AppliedIndex == 0 {
 		return raftplacement.ErrCatalogMetaUnavailable
 	}
