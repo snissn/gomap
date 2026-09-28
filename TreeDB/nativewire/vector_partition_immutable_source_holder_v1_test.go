@@ -22,13 +22,17 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 		Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle],
 	})
 	collection := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: fixture.manifest.Collection}
+	otherCollection := raftplacement.CollectionRefV1{Database: "other", Catalog: "other", Collection: fixture.manifest.Collection}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, raftplacement.CatalogV1{
 		Features: features,
 		Groups: []raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"source-meta"}, LeaderHint: "source-meta"},
 			{ID: "group-b", Members: []raftcluster.NodeID{"owner-b"}, LeaderHint: "owner-b"},
 		},
-		Placements: []raftplacement.CollectionPlacementV1{{Collection: collection, Mode: raftplacement.PlacementModeCollectionV1, GroupID: "group-a"}},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{Collection: collection, Mode: raftplacement.PlacementModeCollectionV1, GroupID: "group-a"},
+			{Collection: otherCollection, Mode: raftplacement.PlacementModeCollectionV1, GroupID: "group-a"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +81,7 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, raw); err != nil {
 		t.Fatal(err)
 	}
-	prepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, authority, provider)
+	prepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +107,22 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if err != nil || verified.ManifestDigest != fmt.Sprintf("%x", sha256.Sum256(manifestBytes)) || verified.PlacementDigest != placementDigest ||
 		len(groups) != 2 || groups[0] != "group-a" || groups[1] != "group-b" {
 		t.Fatalf("source and catalog preparation=%+v groups=%v err=%v", verified, groups, err)
+	}
+	// A local collection exposes only its leaf name. Even when the catalog
+	// places an identically named collection elsewhere, its bytes cannot
+	// certify that other full collection reference.
+	wrongCollection := identity
+	wrongCollection.Index.Collection = otherCollection
+	if _, _, err := prepare(ctx, wrongCollection); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("foreign full collection reference accepted: %v", err)
+	}
+	if _, ok := authority.VectorPartitionLifecycleRecordV1(wrongCollection); ok {
+		t.Fatal("foreign collection reference published a BUILD record")
+	}
+	wrongLeaf := collection
+	wrongLeaf.Collection = "different"
+	if _, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, wrongLeaf, authority, provider); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+		t.Fatalf("mismatched local collection accepted at construction: %v", err)
 	}
 	// These V1 identity fields are absent from both the prepared manifest and
 	// catalog record. The callback deliberately returns only the proven pair

@@ -26,28 +26,18 @@ import (
 // Direct local writes outside that catalog protocol are not covered.
 func NewVectorPartitionImmutableSourceHolderPreparationV1(
 	collection *collections.Collection,
+	collectionRef raftplacement.CollectionRefV1,
 	authority *raftplacement.CatalogMetaAuthorityV1,
 	provider *raftcluster.CatalogMetaRaftProviderV1,
 ) (func(context.Context, raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error), error) {
-	if collection == nil || authority == nil || provider == nil {
+	if collection == nil || collectionRef.Database == "" || collectionRef.Catalog == "" ||
+		collectionRef.Collection == "" || collection.Name() != collectionRef.Collection || authority == nil || provider == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
 	return func(ctx context.Context, identity raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
 		var zero raftplacement.VectorPartitionLifecycleImmutableAuthorityV1
-		if ctx == nil || identity.SourceFormat != 0 {
+		if ctx == nil || identity.SourceFormat != 0 || identity.Index.Collection != collectionRef {
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
-		}
-		proof, err := provider.LinearizableCatalogMetaReadProofV1(ctx)
-		if err != nil {
-			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
-		}
-		snapshot, err := authority.ExportCatalogMetaSnapshotV1()
-		if err != nil || snapshot.AppliedIndex != proof.CatalogAppliedIndex {
-			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
-		}
-		record, err := raftplacement.DecodeCatalogMetaRecordV1(snapshot.Record)
-		if err != nil || record.Epoch != identity.Index.CatalogEpoch || record.Digest != identity.Index.CatalogDigest {
-			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		manifest, err := collection.PreparedVectorPartitionManifestWithContextV1(ctx, identity.Index.IndexName, identity.Generation)
 		if err != nil {
@@ -65,6 +55,21 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 		}
 		placementDigest, err := collections.VectorPartitionPlacementDigestV1(manifest)
 		if err != nil {
+			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+		}
+		// Source validation and manifest encoding can exceed the short Raft
+		// leader lease. Acquire the catalog proof only after that work, then
+		// pair it with an exact applied-index snapshot before returning.
+		proof, err := provider.LinearizableCatalogMetaReadProofV1(ctx)
+		if err != nil {
+			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+		}
+		snapshot, err := authority.ExportCatalogMetaSnapshotV1()
+		if err != nil || snapshot.AppliedIndex != proof.CatalogAppliedIndex {
+			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+		}
+		record, err := raftplacement.DecodeCatalogMetaRecordV1(snapshot.Record)
+		if err != nil || record.Epoch != identity.Index.CatalogEpoch || record.Digest != identity.Index.CatalogDigest {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		resolved, err := raftplacement.Validate(record.Catalog)
