@@ -749,6 +749,9 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		if !ok || placed.Mode != raftplacement.PlacementModeCollectionV1 {
 			return errors.New("immutable vector source requires collection placement")
 		}
+		if owners[placed.GroupID] {
+			return errors.New("immutable vector source group must be separate from owner groups")
+		}
 		routerGroup := raftcluster.GroupID("")
 		for _, group := range vector.Catalog.Groups {
 			if slices.Contains(group.Members, vector.RouterNodeID) {

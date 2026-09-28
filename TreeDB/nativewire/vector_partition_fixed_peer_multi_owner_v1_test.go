@@ -659,6 +659,36 @@ func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.Vecto
 	return fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, manifest, sourceMeta, 1)
 }
 
+func TestFixedPeerImmutableVectorConfigRejectsSourceOwnerGroupV1(t *testing.T) {
+	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
+		{id: "a", vector: []float32{1, 0}, home: 0},
+		{id: "b", vector: []float32{.8, .2}, home: 1},
+		{id: "c", vector: []float32{0, 1}, home: 2},
+		{id: "d", vector: []float32{.2, .8}, home: 2},
+	}, nil, [2]string{"group-b", "group-c"}, true, true)
+	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, seed.collection.MetaView())
+	if err := seed.database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	config := configs[1] // owner-b becomes both source-group member and ANN owner
+	localGroups := map[raftcluster.GroupID]bool{"meta": true, "group-b": true}
+	if err := validateFixedPeerVectorConfigV1(config, localGroups); err != nil {
+		t.Fatalf("valid separate source and owners rejected: %v", err)
+	}
+	vector := *config.Vector
+	vector.Catalog.Placements = append([]raftplacement.CollectionPlacementV1(nil), vector.Catalog.Placements...)
+	vector.Catalog.Placements[0].GroupID = "group-b"
+	record, err := raftplacement.NewCatalogMetaRecordV1(vector.Identity.Index.CatalogEpoch, vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector.Identity.Index.CatalogDigest = record.Digest
+	config.Vector = &vector
+	if err := validateFixedPeerVectorConfigV1(config, localGroups); err == nil || err.Error() != "immutable vector source group must be separate from owner groups" {
+		t.Fatalf("source group that also owns domains accepted: %v", err)
+	}
+}
+
 func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta, ownerBReplicas int) []FixedPeerTCPConfigV1 {
 	t.Helper()
 	if ownerBReplicas != 1 && ownerBReplicas != 3 {
