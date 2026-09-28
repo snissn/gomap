@@ -238,6 +238,81 @@ func TestVectorPartitionLocalScopeV1EmptyRouterBuildDeleteSurvivesReopen(t *test
 	}
 }
 
+func TestVectorPartitionLocalScopeV1SkippedGenerationSurvivesEmptyCheckpoint(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	building, _, scope := scopedLifecycleManifestsV1(t)
+	scope.HostedGroup = "ingress" // Router-only BUILD has no local references.
+	later := cloneVectorPartitionManifestForCheckpointV1(building)
+	later.Generation += 2
+	for i := range later.Assets {
+		later.Assets[i].Ref.Generation = later.Generation
+	}
+	later.Canonicalize()
+	root := t.TempDir()
+	store, err := OpenVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, manifest := range []VectorPartitionManifestV1{building, later} {
+		payload, err := encodeVectorPartitionScopedBuildPayloadV1(manifest, scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleScopedBuildV1, manifest.Generation, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, generation := range []uint64{building.Generation, later.Generation} {
+		if err := store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleDeleteCompleteV1, generation, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened, err := OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := reopened.loadVectorPartitionLifecycleCheckpointStateV1("docs", "embedding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.state.Generations) != 0 {
+		t.Fatalf("live generations after deletion: %d", len(loaded.state.Generations))
+	}
+	raw, err := encodeVectorPartitionLifecycleCheckpointCanonicalV1(vectorPartitionLifecycleCheckpointV1{
+		Epoch: loaded.checkpoint.Epoch,
+		State: loaded.state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version := binary.BigEndian.Uint32(raw[4:8]); version != vectorPartitionLifecycleCheckpointGappedVersionV1 {
+		t.Fatalf("empty gapped checkpoint version=%d", version)
+	}
+	for _, generation := range []uint64{building.Generation, later.Generation} {
+		complete, err := reopened.vectorPartitionLifecycleGenerationCompleteV1("docs", "embedding", generation)
+		if err != nil || !complete {
+			t.Fatalf("completed generation %d: %v, %v", generation, complete, err)
+		}
+		if err := reopened.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleDeleteCompleteV1, generation, nil); err != nil {
+			t.Fatalf("completed generation %d retry: %v", generation, err)
+		}
+	}
+	skipped := building.Generation + 1
+	if complete, err := reopened.vectorPartitionLifecycleGenerationCompleteV1("docs", "embedding", skipped); err != nil || complete {
+		t.Fatalf("skipped generation completion=%v err=%v", complete, err)
+	}
+	if err := reopened.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleDeleteCompleteV1, skipped, nil); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("skipped generation delete retry: %v", err)
+	}
+	if err := deleteVectorPartitionStoreForTest(reopened, "docs", "embedding", skipped, VectorPartitionCleanupEligibilityV1{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("skipped generation public delete: %v", err)
+	}
+	decoded, err := decodeVectorPartitionLifecycleCheckpointCanonicalV1(raw, "docs", "embedding", loaded.checkpoint.Epoch)
+	if err != nil || !decoded.State.generationCompleteV1(building.Generation) || decoded.State.generationCompleteV1(skipped) {
+		t.Fatalf("gapped checkpoint round trip: complete=%v skipped=%v err=%v", decoded.State.generationCompleteV1(building.Generation), decoded.State.generationCompleteV1(skipped), err)
+	}
+}
+
 func TestVectorPartitionLocalScopeV1UnscopedCannotDeleteCompleteWithoutPrepare(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	building, _, _ := scopedLifecycleManifestsV1(t)

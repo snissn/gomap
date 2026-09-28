@@ -96,7 +96,7 @@ A TreeDB deployment uses:
 `vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
 vector-partition metadata; it is not a WAL or cache. VPM1 remains the canonical
 generation-manifest payload, but it is not published as a mutable standalone
-file. Local lifecycle authority is an immutable VCP1 or VCP2 checkpoint plus a
+file. Local lifecycle authority is an immutable VCP1, VCP2, or VCP3 checkpoint plus a
 digest-chained VLC1 delta tail under the exact hashed identity:
 
 ```text
@@ -112,9 +112,10 @@ into another checkpoint. A checkpoint contains the identity, generation floor
 and high water, durable activation high water, at most two live generation
 states, active/retired generation, last sequence/digest, embedded canonical
 VPM1 manifests, and any VPR1 reclaim debt. The generation floor records the
-first accepted generation; successors must be contiguous, so an absent
-generation inside the durable floor/high-water interval is exact proof of
-completed deletion rather than an unrecorded gap. The activation high water
+first accepted generation; ordinary successors must be contiguous. Owner-local
+scoped BUILD can skip an unhosted generation, and VCP3 retains canonical skipped
+ranges so absence inside the floor/high-water interval proves deletion only
+when the ID was not skipped. The activation high water
 records the newest generation that ever held local activation authority
 independently of the live pointers, so deletion and reclaim cannot make an
 older prepared generation eligible for reactivation. The checkpoint is capped
@@ -125,7 +126,9 @@ An optional immutable owner-local BUILD uses VLC1 operation 8 and stores a
 canonical VLS1 scope beside the unchanged global VPM1. VLS1 binds the hosted
 group, router-host flag, and exact SHA-256 manifest and placement commitments;
 it does not itself authorize serving. When any live generation has a scope,
-the checkpoint is VCP2 and adds one bounded scope field per generation.
+the checkpoint is VCP2 and adds one bounded scope field per generation. VCP3
+adds up to 4,096 skipped-generation ranges and retains them after all scoped
+generations are deleted.
 Unscoped checkpoints remain byte-identical VCP1. The scope derives local
 asset and reclaim references from the global placement, and rejects a physical
 segment shared across hosted and foreign owners. A router-only BUILD with no

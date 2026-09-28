@@ -473,13 +473,10 @@ func (s *VectorPartitionStoreV1) vectorPartitionLifecycleGenerationCompleteV1(co
 	if err != nil {
 		return false, err
 	}
-	if !present ||
-		generation < loaded.state.GenerationFloor ||
-		generation > loaded.state.GenerationHighWater {
+	if !present {
 		return false, nil
 	}
-	_, live := loaded.state.Generations[generation]
-	return !live, nil
+	return loaded.state.generationCompleteV1(generation), nil
 }
 
 func vectorPartitionManifestCanonicalEqualV1(a, b VectorPartitionManifestV1) bool {

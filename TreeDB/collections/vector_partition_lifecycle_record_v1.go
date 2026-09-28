@@ -82,12 +82,19 @@ type vectorPartitionLifecycleGenerationStateV1 struct {
 	Reclaim  *vectorPartitionReclaimStateV1
 }
 
+type vectorPartitionLifecycleSkippedGenerationsV1 struct {
+	First, Last uint64
+}
+
+const vectorPartitionLifecycleMaxSkippedRangesV1 = 4096
+
 // vectorPartitionLifecycleStateV1 is the pure reduction required by current
 // local lifecycle semantics. Generations are independent: dominated retained
 // history cannot revive a completed generation or erase unrelated authority.
 type vectorPartitionLifecycleStateV1 struct {
 	Collection, IndexName string
 	Generations           map[uint64]vectorPartitionLifecycleGenerationStateV1
+	SkippedGenerations    []vectorPartitionLifecycleSkippedGenerationsV1
 	GenerationFloor       uint64
 	GenerationHighWater   uint64
 	ActivationHighWater   uint64
@@ -98,6 +105,24 @@ type vectorPartitionLifecycleStateV1 struct {
 }
 
 func vectorPartitionLifecycleZeroDigestV1(d [sha256.Size]byte) bool { return d == [sha256.Size]byte{} }
+
+func (state vectorPartitionLifecycleStateV1) generationCompleteV1(generation uint64) bool {
+	if generation == 0 || generation < state.GenerationFloor || generation > state.GenerationHighWater {
+		return false
+	}
+	if _, live := state.Generations[generation]; live {
+		return false
+	}
+	for _, skipped := range state.SkippedGenerations {
+		if generation < skipped.First {
+			break
+		}
+		if generation <= skipped.Last {
+			return false
+		}
+	}
+	return true
+}
 
 func vectorPartitionLifecycleOperationValidV1(op vectorPartitionLifecycleOperationV1) bool {
 	return op >= vectorPartitionLifecycleBuildV1 && op <= vectorPartitionLifecycleScopedBuildV1
@@ -508,9 +533,13 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		if present ||
 			(state.GenerationHighWater != 0 &&
 				(r.Generation <= state.GenerationHighWater ||
-					r.Generation-state.GenerationHighWater != 1)) ||
+					(r.Operation == vectorPartitionLifecycleBuildV1 && r.Generation-state.GenerationHighWater != 1))) ||
 			len(state.Generations) >= 2 {
 			return fmt.Errorf("%w: build transition", ErrVectorPartitionManifestInvalid)
+		}
+		if state.GenerationHighWater != 0 && r.Generation-state.GenerationHighWater > 1 &&
+			len(state.SkippedGenerations) >= vectorPartitionLifecycleMaxSkippedRangesV1 {
+			return fmt.Errorf("%w: skipped generation ranges cap", ErrVectorPartitionManifestInvalid)
 		}
 		var m VectorPartitionManifestV1
 		var scope *VectorPartitionLocalScopeV1
@@ -524,6 +553,11 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		}
 		if err != nil {
 			return err
+		}
+		if state.GenerationHighWater != 0 && r.Generation-state.GenerationHighWater > 1 {
+			state.SkippedGenerations = append(state.SkippedGenerations, vectorPartitionLifecycleSkippedGenerationsV1{
+				First: state.GenerationHighWater + 1, Last: r.Generation - 1,
+			})
 		}
 		state.Generations[r.Generation] = vectorPartitionLifecycleGenerationStateV1{Manifest: &m, Scope: scope}
 		if state.GenerationFloor == 0 {

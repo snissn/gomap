@@ -75,7 +75,8 @@ func vectorPartitionCheckpointEnvelopeIdentityV1(raw []byte) (string, string, ui
 		len(raw) > vectorPartitionLifecycleCheckpointMaxBytesV1 ||
 		string(raw[:4]) != vectorPartitionLifecycleCheckpointMagicV1 ||
 		(binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointVersionV1 &&
-			binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointScopedVersionV1) {
+			binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointScopedVersionV1 &&
+			binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointGappedVersionV1) {
 		return "", "", 0, fmt.Errorf("%w: lifecycle snapshot checkpoint header", ErrVectorPartitionManifestInvalid)
 	}
 	payloadBytes := uint64(binary.BigEndian.Uint32(raw[8:12]))
