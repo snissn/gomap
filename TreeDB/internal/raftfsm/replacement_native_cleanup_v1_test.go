@@ -12,7 +12,6 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
-	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -129,7 +128,7 @@ func TestReplacementSnapshotNativeFailureRequiresRestartV1(t *testing.T) {
 	}
 }
 
-func TestReplacementSnapshotConfigOnlyGapIsRetryableBeforeSinkV1(t *testing.T) {
+func TestReplacementSnapshotConfigOnlyGapBindsNativeAndCommandBoundariesV1(t *testing.T) {
 	requireRaftSnapshotExportSupportedV1(t)
 	fsm, provider, _ := snapshotOwnerProviderForTest(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -142,23 +141,30 @@ func TestReplacementSnapshotConfigOnlyGapIsRetryableBeforeSinkV1(t *testing.T) {
 	if err != nil || changed.ConfigurationIndex <= initial.ConfigurationIndex {
 		t.Fatalf("committed configuration change: %+v %v", changed, err)
 	}
-	if err := provider.ReplacementSnapshotReadyV1(ctx); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
-		t.Fatalf("configuration-only gap accepted: %v", err)
-	}
-	if _, err := provider.SnapshotForReplacementV1(ctx); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) || raftcluster.ReplacementSnapshotCleanupRequiredV1(err) || !strings.Contains(err.Error(), "cannot take snapshot now, wait until the configuration entry") {
-		t.Fatalf("known pre-Create refusal poisoned native owner: %v", err)
-	}
-	if !fsm.SnapshotCarrierReleasedV1() {
-		t.Fatal("pre-Create refusal retained FSM carrier")
-	}
-	if _, err := provider.CommitCommandEntryV1(ctx, raftcluster.CommitCommandEntryV1Request{NodeID: "node-a", GroupID: "default", EntryBytes: deterministicInsertBatchEntry(t, "users", "after-config", iwire.DocumentFormatJSON, [][]byte{[]byte("after-config")}, [][]byte{[]byte(`{"value":1}`)}), CurrentCatalogVersion: testCatalogVersionStart, HasCurrentCatalogVersion: true, SyncLocalCommandWAL: true}); err != nil {
+	command, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := provider.ReplacementSnapshotReadyV1(ctx); err != nil {
-		t.Fatalf("real command did not advance snapshot boundary: %v", err)
+	if command.LastIncludedIndex >= changed.ConfigurationIndex {
+		t.Fatalf("fixture lacks configuration-only gap: command=%d config=%d", command.LastIncludedIndex, changed.ConfigurationIndex)
 	}
-	if _, err := provider.SnapshotForReplacementV1(ctx); err != nil {
-		t.Fatalf("retained native snapshot after command: %v", err)
+	if err := provider.ReplacementSnapshotReadyV1(ctx); err != nil {
+		t.Fatalf("configuration-only gap refused: %v", err)
+	}
+	selected, err := provider.SnapshotForReplacementV1(ctx)
+	if err != nil {
+		t.Fatalf("native configuration-only snapshot: %v", err)
+	}
+	manifest := selected.Manifest
+	commandTerm, commandIndex := manifest.CommandBoundaryV1()
+	if manifest.Version != raftcluster.SnapshotManifestVersion2 || manifest.LastIncludedIndex < changed.ConfigurationIndex || commandTerm != command.LastIncludedTerm || commandIndex != command.LastIncludedIndex {
+		t.Fatalf("native/command boundary mismatch: selected=%+v command=%+v config=%+v", manifest, command, changed)
+	}
+	if err := fsm.VerifyInstalledSnapshotManifestV1(manifest); err != nil {
+		t.Fatalf("snapshot digest/progress did not bind command boundary: %v", err)
+	}
+	if !fsm.SnapshotCarrierReleasedV1() {
+		t.Fatal("native future returned before FSM carrier release")
 	}
 }
 
@@ -259,13 +265,25 @@ func TestReplacementNativeInstallCleanupDebtRecoversExactSeedV1(t *testing.T) {
 	_, source, sourceOpts := snapshotOwnerProviderForTest(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	selected, err := source.Snapshot(ctx)
+	targetPeer := raftcluster.Peer{ID: "node-b", Address: "node-b"}
+	initial, err := source.CommittedConfigurationV1(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	changed, err := source.AddReplacementNonvoterV1(ctx, sourceOpts.Cluster.NodeID, raftcluster.Peer{ID: "node-c", Address: "node-c"}, initial.ConfigurationIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := source.SnapshotForReplacementV1(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, commandIndex := selected.Manifest.CommandBoundaryV1()
+	if selected.Manifest.Version != raftcluster.SnapshotManifestVersion2 || commandIndex >= changed.ConfigurationIndex || selected.Manifest.LastIncludedIndex < changed.ConfigurationIndex {
+		t.Fatalf("fixture lacks native/command gap: %+v config=%+v", selected.Manifest, changed)
+	}
 	_, sender := hraft.NewInmemTransport("node-a")
 	defer sender.Close()
-	targetPeer := raftcluster.Peer{ID: "node-b", Address: "node-b"}
 	store, err := hraft.NewFileSnapshotStore(t.TempDir(), 1, io.Discard)
 	if err != nil {
 		t.Fatal(err)

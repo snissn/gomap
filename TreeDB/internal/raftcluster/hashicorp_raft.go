@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	hraft "github.com/hashicorp/raft"
@@ -69,6 +70,8 @@ type HashicorpRaftProvider struct {
 	appliedProgress AppliedProgressReader
 	applyTimeout    time.Duration
 	owned           []io.Closer
+	snapshotGap     *readIndexSnapshotGapV1
+	fsmConfigIndex  *atomic.Uint64
 }
 
 func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaftProvider, error) {
@@ -117,10 +120,14 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 			}
 		}
 	}
+	snapshotGap := &readIndexSnapshotGapV1{}
+	fsmConfigIndex := &atomic.Uint64{}
 	r, err := hraft.NewRaft(conf, hashicorpRaftFSM{
 		groupID:             cluster.GroupID,
 		applier:             opts.Applier,
 		applyFailureHandler: applyFailureHandler,
+		snapshotGap:         snapshotGap,
+		fsmConfigIndex:      fsmConfigIndex,
 	}, stores.log, stores.stable, stores.snapshots, opts.Transport)
 	if err != nil {
 		err = errors.Join(ErrInvalidHashicorpRaftProvider, err)
@@ -139,6 +146,8 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		appliedProgress: progressReader,
 		applyTimeout:    applyTimeout,
 		owned:           stores.owned,
+		snapshotGap:     snapshotGap,
+		fsmConfigIndex:  fsmConfigIndex,
 	}, nil
 }
 
@@ -308,7 +317,7 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 	if err != nil {
 		return AppliedProgress{}, err
 	}
-	noCommands, firstCmd, err := p.readIndexGapHasNoCommands(firstIndex, minIndex)
+	noCommands, firstCmd, err := p.readIndexGapHasNoCommandsWithProgress(ctx, progress, firstIndex, minIndex)
 	if err != nil {
 		return AppliedProgress{}, err
 	}
@@ -361,7 +370,7 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 		if err != nil {
 			return AppliedProgress{}, err
 		}
-		noCommands, firstCmd, err = p.readIndexGapHasNoCommands(firstIndex, minIndex)
+		noCommands, firstCmd, err = p.readIndexGapHasNoCommandsWithProgress(ctx, progress, firstIndex, minIndex)
 		if err != nil {
 			return AppliedProgress{}, err
 		}
@@ -458,6 +467,10 @@ func readIndexGapFirstIndexAfterApplied(appliedIndex uint64) (uint64, error) {
 }
 
 func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex uint64) (bool, uint64, error) {
+	return p.readIndexGapHasNoCommandsWithProgress(context.Background(), AppliedProgress{}, firstIndex, lastIndex)
+}
+
+func (p *HashicorpRaftProvider) readIndexGapHasNoCommandsWithProgress(ctx context.Context, progress AppliedProgress, firstIndex, lastIndex uint64) (bool, uint64, error) {
 	if p == nil {
 		return false, 0, ErrInvalidHashicorpRaftProvider
 	}
@@ -471,13 +484,30 @@ func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex 
 		return false, 0, fmt.Errorf("%w: hashicorp raft log store is not configured", ErrReadBarrierNotSatisfied)
 	}
 	var entry hraft.Log
-	for index := firstIndex; ; index++ {
+	for index := firstIndex; ; {
+		if err := ctx.Err(); err != nil {
+			return false, 0, err
+		}
 		entry = hraft.Log{}
 		if err := p.logStore.GetLog(index, &entry); err != nil {
-			return false, 0, errors.Join(
-				ErrReadBarrierNotSatisfied,
-				fmt.Errorf("unable to inspect committed raft log %d for read-index gap: %w", index, err),
-			)
+			if !errors.Is(err, hraft.ErrLogNotFound) || p.snapshotGap == nil || !progress.HasApplied || index <= progress.Index {
+				return false, 0, errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("unable to inspect committed raft log %d for read-index gap: %w", index, err))
+			}
+			firstStored, firstErr := p.logStore.FirstIndex()
+			if firstErr != nil || (firstStored != 0 && index >= firstStored) {
+				return false, 0, errors.Join(ErrReadBarrierNotSatisfied, fmt.Errorf("missing retained raft log %d (first stored %d): %w", index, firstStored, errors.Join(err, firstErr)))
+			}
+			proof, proofErr := p.snapshotGap.get(ctx, progress, index, p.raft.InstalledSnapshotBoundary, func(ctx context.Context) (readIndexSnapshotGapProofV1, error) {
+				return p.verifyInstalledReadIndexSnapshotGapV1(ctx, progress)
+			})
+			if proofErr != nil {
+				return false, 0, proofErr
+			}
+			if proof.nativeIndex >= lastIndex {
+				return true, 0, nil
+			}
+			index = proof.nativeIndex + 1
+			continue
 		}
 		if entry.Type == hraft.LogCommand {
 			return false, index, nil
@@ -485,6 +515,7 @@ func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex 
 		if index == lastIndex {
 			break
 		}
+		index++
 	}
 	return true, 0, nil
 }
@@ -714,12 +745,16 @@ func (p *HashicorpRaftProvider) SnapshotForReplacementV1(ctx context.Context) (H
 	return p.snapshotV1(ctx, true)
 }
 
-// ReplacementSnapshotReadyV1 checks the real TreeDB command snapshot boundary
-// against the latest committed native configuration. HashiCorp's non-batching
-// FSM does not advance its snapshot index for configuration-only logs, so an
-// idle replica cannot snapshot a newer configuration until a real command is
-// durably applied. This check precedes caching a replacement seed worker.
+// ReplacementSnapshotReadyV1 requires durable TreeDB command progress and a
+// configuration consumed by runFSM. Raft's AppliedIndex only means the entry
+// was sent to runFSM; a snapshot request can overtake that queued entry.
 func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) error {
+	if p == nil || p.raft == nil || p.fsmConfigIndex == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	configuration, err := p.CommittedConfigurationV1(ctx)
 	if err != nil {
 		return err
@@ -728,10 +763,34 @@ func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	if !progress.HasApplied || progress.Index < configuration.ConfigurationIndex {
-		return fmt.Errorf("%w: replacement snapshot needs a TreeDB command after configuration index %d (have %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, progress.Index)
+	if !progress.HasApplied {
+		return fmt.Errorf("%w: replacement snapshot needs durable TreeDB command progress", ErrReadBarrierNotSatisfied)
 	}
-	return nil
+	timeout := p.applyTimeout
+	if timeout <= 0 {
+		timeout = hashicorpRaftDefaultApplyTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	poll := time.NewTicker(hashicorpRaftReadIndexInitialPoll)
+	defer poll.Stop()
+	for {
+		if err := p.requireHashicorpReadIndexLeaderTerm(configuration.Term); err != nil {
+			return err
+		}
+		installedIndex, _ := p.raft.InstalledSnapshotBoundary()
+		if p.fsmConfigIndex.Load() >= configuration.ConfigurationIndex || installedIndex >= configuration.ConfigurationIndex {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return fmt.Errorf("%w: replacement snapshot needs FSM-consumed configuration index %d (consumed %d, TreeDB command %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, p.fsmConfigIndex.Load(), progress.Index)
+		case <-poll.C:
+		}
+	}
 }
 
 func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bool) (HashicorpRaftSnapshotResultV1, error) {
@@ -990,6 +1049,17 @@ type hashicorpRaftFSM struct {
 	groupID             GroupID
 	applier             CommittedCommandApplierV1
 	applyFailureHandler func(error)
+	snapshotGap         *readIndexSnapshotGapV1
+	fsmConfigIndex      *atomic.Uint64
+}
+
+// StoreConfiguration satisfies HashiCorp's ConfigurationStore. Its runFSM
+// records the native configuration index/term for snapshotting; TreeDB command
+// progress, result, LSN, and digest intentionally remain unchanged.
+func (f hashicorpRaftFSM) StoreConfiguration(index uint64, _ hraft.Configuration) {
+	if f.fsmConfigIndex != nil {
+		f.fsmConfigIndex.Store(index)
+	}
 }
 
 func (f hashicorpRaftFSM) Apply(log *hraft.Log) interface{} {
@@ -1068,10 +1138,15 @@ func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
 		_ = snapshot.Release()
 		return nil, err
 	}
-	return hashicorpRaftSnapshotV1{snapshot: snapshot}, nil
+	return hashicorpRaftSnapshotV1{snapshot: snapshot, snapshotGap: f.snapshotGap}, nil
 }
 
 func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
+	f.snapshotGap.invalidate()
+	defer f.snapshotGap.invalidate()
+	if f.fsmConfigIndex != nil {
+		f.fsmConfigIndex.Store(0)
+	}
 	if src == nil {
 		return ErrRaftSnapshotUnsupported
 	}
@@ -1084,14 +1159,24 @@ func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
 }
 
 type hashicorpRaftSnapshotV1 struct {
-	snapshot RaftSnapshotV1
+	snapshot    RaftSnapshotV1
+	snapshotGap *readIndexSnapshotGapV1
 }
 
 func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) (resultErr error) {
+	s.snapshotGap.invalidate()
+	defer s.snapshotGap.invalidate()
 	if sink == nil {
 		return ErrInvalidSnapshotManifest
 	}
-	ready, err := s.snapshot.Materialize()
+	boundary, hasBoundary := hashicorpRaftSnapshotBoundaryFromSinkV1(sink)
+	var ready RaftSnapshotV1
+	var err error
+	if hasBoundary {
+		ready, err = s.snapshot.MaterializeWithNativeBoundaryV1(boundary.Term, boundary.Index)
+	} else {
+		ready, err = s.snapshot.Materialize()
+	}
 	if err != nil {
 		_ = sink.Cancel()
 		return err
@@ -1101,7 +1186,7 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) (resultErr err
 		_ = sink.Cancel()
 		return err
 	}
-	if boundary, ok := hashicorpRaftSnapshotBoundaryFromSinkV1(sink); ok {
+	if hasBoundary {
 		if err := validateHashicorpRaftSnapshotBoundaryV1(boundary, s.snapshot.Manifest); err != nil {
 			_ = sink.Cancel()
 			return err

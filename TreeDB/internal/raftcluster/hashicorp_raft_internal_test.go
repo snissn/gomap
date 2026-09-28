@@ -118,11 +118,13 @@ func TestHashicorpRaftSnapshotPersistRejectsMismatchedBoundary(t *testing.T) {
 func TestHashicorpRaftSnapshotPersistAcceptsMatchingBoundary(t *testing.T) {
 	manifest := validSnapshotManifestV1()
 	payload := validRaftSnapshotArchivePayloadV1(t, manifest)
+	gap := &readIndexSnapshotGapV1{proof: readIndexSnapshotGapProofV1{commandTerm: 2, commandIndex: 5, nativeTerm: 2, nativeIndex: 7}}
 	snapshot := hashicorpRaftSnapshotV1{
 		snapshot: RaftSnapshotV1{
 			Manifest: manifest,
 			Payload:  payload,
 		},
+		snapshotGap: gap,
 	}
 	sink := &boundaryTestSnapshotSink{
 		boundary: hashicorpRaftSnapshotBoundaryV1{
@@ -142,6 +144,9 @@ func TestHashicorpRaftSnapshotPersistAcceptsMatchingBoundary(t *testing.T) {
 	}
 	if !bytes.Equal(sink.Bytes(), payload) {
 		t.Fatalf("Persist wrote %d bytes, want payload %d bytes", sink.Len(), len(payload))
+	}
+	if gap.proof != (readIndexSnapshotGapProofV1{}) || gap.generation != 2 {
+		t.Fatalf("Persist retained stale gap proof: proof=%+v generation=%d", gap.proof, gap.generation)
 	}
 }
 
