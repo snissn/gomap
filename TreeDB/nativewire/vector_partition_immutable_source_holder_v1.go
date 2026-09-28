@@ -57,14 +57,14 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		// Source validation and manifest encoding can exceed the short Raft
-		// leader lease. Acquire the catalog proof only after that work, then
-		// pair it with an exact applied-index snapshot before returning.
-		proof, err := provider.LinearizableCatalogMetaReadProofV1(ctx)
+		// Source validation, manifest encoding, and snapshot export can exceed
+		// the short Raft leader lease. Acquire the proof only after that work,
+		// then require the snapshot's exact applied index before returning.
+		snapshot, err := authority.ExportCatalogMetaSnapshotV1()
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		snapshot, err := authority.ExportCatalogMetaSnapshotV1()
+		proof, err := provider.LinearizableCatalogMetaReadProofV1(ctx)
 		if err != nil || snapshot.AppliedIndex != proof.CatalogAppliedIndex {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
@@ -78,6 +78,10 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 		}
 		placementMode, ok := resolved.Placement(identity.Index.Collection)
 		if !ok || placementMode.Mode != raftplacement.PlacementModeCollectionV1 {
+			return zero, nil, ErrFixedPeerVectorProofStaleV1
+		}
+		collectionGroup, ok := resolved.Group(placementMode.GroupID)
+		if !ok || !slices.Contains(collectionGroup.Members, proof.NodeID) {
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
 		}
 		placement := raftplacement.VectorPartitionPlacementRecordV1{

@@ -157,6 +157,31 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if _, ok := tokenAuthority.VectorPartitionLifecycleRecordV1(tokenIdentity); ok {
 		t.Fatal("token-routed source published a BUILD record")
 	}
+	// The meta leader may have a stale local copy of the source while the
+	// catalog assigns the collection to another group's members. That copy
+	// cannot certify the collection's authoritative source.
+	nonmemberCatalog := record.Catalog
+	nonmemberCatalog.Placements = append([]raftplacement.CollectionPlacementV1(nil), record.Catalog.Placements...)
+	nonmemberCatalog.Placements[0].GroupID = "group-b"
+	nonmemberRecord, err := raftplacement.NewCatalogMetaRecordV1(1, nonmemberCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonmemberCtx, stopNonmember := context.WithTimeout(t.Context(), 8*time.Second)
+	defer stopNonmember()
+	nonmemberAuthority, nonmemberProvider := openVectorSourceHolderTestCatalogV1(t, nonmemberCtx, nonmemberRecord)
+	nonmemberPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, nonmemberAuthority, nonmemberProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonmemberIdentity := identity
+	nonmemberIdentity.Index.CatalogEpoch, nonmemberIdentity.Index.CatalogDigest = nonmemberRecord.Epoch, nonmemberRecord.Digest
+	if _, _, err := nonmemberPrepare(nonmemberCtx, nonmemberIdentity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("nonmember source holder accepted: %v", err)
+	}
+	if _, ok := nonmemberAuthority.VectorPartitionLifecycleRecordV1(nonmemberIdentity); ok {
+		t.Fatal("nonmember source holder published a BUILD record")
+	}
 	if _, err := fixture.collection.Insert([]byte("new-row"), []byte(`{"embedding":[1,0]}`)); err != nil {
 		t.Fatal(err)
 	}
