@@ -282,7 +282,7 @@ func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCaptu
 		}
 	}
 	mainDir, sideDir := filepath.Join(stage, raftSnapshotDBPrefixV1), filepath.Join(stage, raftSnapshotSidePrefixV1)
-	if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, mainDir, sideDir); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, mainDir, sideDir, options.DisableSideStores); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	options.Dir = mainDir

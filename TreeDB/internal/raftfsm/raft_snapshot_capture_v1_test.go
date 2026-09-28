@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,10 +9,110 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
+
+func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	sourceDir := filepath.Join(sourceRoot, "maindb")
+	ctx := context.Background()
+
+	dictDir := filepath.Join(sourceRoot, "dictdb")
+	dictStore, err := dictdb.Open(dictDir, backenddb.Options{ChunkSize: 64 * 1024, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dictBytes := bytes.Repeat([]byte("captured-pointer-dictionary|"), 512)
+	dictID, err := dictStore.PutDictBytes(ctx, dictBytes)
+	if err != nil {
+		_ = dictStore.Close()
+		t.Fatal(err)
+	}
+	resources, err := dictStore.CaptureDictionaryResources(ctx, dictID)
+	if err != nil {
+		_ = dictStore.Close()
+		t.Fatal(err)
+	}
+	if got := resources.Len(); got != 2 {
+		resources.Release()
+		_ = dictStore.Close()
+		t.Fatalf("dictionary physical closure=%d want index and value-log segment", got)
+	}
+	resources.Release()
+	if err := dictStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
+	closeSides, err := wireRaftSnapshotSideStoreLookupsV1(sourceRoot, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSides()
+	sourceDB, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceDB.Close()
+	source := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceRoot, false)
+	defer source.Close()
+	doc := []byte(`{"_id":"u-large","payload":"` + string(bytes.Repeat([]byte("d"), 8192)) + `"}`)
+	applySnapshotSourceEntries(t, source, doc)
+
+	captured, err := source.CaptureRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.Release()
+	ready, err := captured.Materialize()
+	if err != nil {
+		t.Fatalf("materialize pointer-backed side store: %v", err)
+	}
+	defer ready.Release()
+
+	targetRoot := filepath.Join(root, "target")
+	targetDir := filepath.Join(targetRoot, "maindb")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer targetDB.Close()
+	target := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetRoot, false)
+	defer target.Close()
+	installRaftSnapshotForTest(t, target, ready)
+	assertSnapshotDocument(t, target, "u-large", doc)
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopen := backenddb.Options{Dir: targetDir, ReadOnly: true, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
+	closeReopenedSides, err := wireRaftSnapshotSideStoreLookupsV1(targetRoot, &reopen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeReopenedSides()
+	reopened, err := backenddb.Open(reopen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	gotDict, err := reopen.ValueLog.DictLookup(dictID)
+	if err != nil || !bytes.Equal(gotDict, dictBytes) {
+		t.Fatalf("reopened dictionary length=%d want=%d err=%v", len(gotDict), len(dictBytes), err)
+	}
+	collection, err := collections.NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDoc, err := collection.Get([]byte("u-large"))
+	if err != nil || !bytes.Equal(gotDoc, doc) {
+		t.Fatalf("reopened document length=%d want=%d err=%v", len(gotDoc), len(doc), err)
+	}
+}
 
 func TestCapturedRaftSnapshotV1RestoresCutAndReplaysTail(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
