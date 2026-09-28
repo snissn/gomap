@@ -260,11 +260,23 @@ func (r *fixedPeerVectorRuntimeV1) Close() error {
 
 func (r *fixedPeerVectorRuntimeV1) start() {
 	go func() {
+		var retryDelay time.Duration
 		for {
 			conn, err := r.listener.Accept()
 			if err != nil {
+				var netErr net.Error
+				if !errors.Is(err, net.ErrClosed) && errors.As(err, &netErr) && netErr.Temporary() {
+					if retryDelay == 0 {
+						retryDelay = 5 * time.Millisecond
+					} else {
+						retryDelay = min(2*retryDelay, time.Second)
+					}
+					time.Sleep(retryDelay)
+					continue
+				}
 				return
 			}
+			retryDelay = 0
 			go func() { _ = r.server.ServeConn(context.Background(), conn) }()
 		}
 	}()
@@ -291,6 +303,9 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 	collection, err := manager.OpenCollection(parent.config.Vector.Collection.Collection)
 	if err != nil {
 		return nil, fmt.Errorf("nativewire: open fixed-peer vector collection: %w", err)
+	}
+	if !collections.VectorPartitionLiveDocumentProofSupportedV1(collection.MetaView()) {
+		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, ErrFixedPeerVectorDocumentV1)
 	}
 	prepared, err := collection.PreparedVectorPartitionManifestWithContextV1(context.Background(), parent.config.Vector.Manifest.IndexName, parent.config.Vector.Manifest.Generation)
 	if err != nil || !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.config.Vector.Manifest) {

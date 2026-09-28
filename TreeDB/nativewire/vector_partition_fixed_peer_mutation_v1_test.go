@@ -169,6 +169,63 @@ func TestFixedPeerVectorRuntimeCloseReleasesPublicListenerV1(t *testing.T) {
 	_ = rebound.Close()
 }
 
+func TestFixedPeerVectorPublicListenerRetriesTemporaryAcceptV1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := &temporaryWildcardTCPListenerV1{Listener: listener, addr: listener.Addr()}
+	runtime := &fixedPeerVectorRuntimeV1{listener: temporary, server: NewServer(ServerOptions{})}
+	runtime.start()
+	t.Cleanup(func() { _ = runtime.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	client, err := DialContext(ctx, "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("public listener stopped after temporary accept error: %v", err)
+	}
+	defer client.Close()
+	if !temporary.injected.Load() {
+		t.Fatal("listener did not inject the temporary accept error")
+	}
+}
+
+func TestFixedPeerVectorRuntimeRefusesUnsupportedDocumentProofAtStartupV1(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options collections.CollectionOptions
+	}{
+		{name: "bson", options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}},
+		{name: "dropped-column-payload", options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+			ColumnStore: &collections.ColumnStoreConfig{Enabled: true, RetainedPayload: collections.ColumnRetainedPayloadNone,
+				Columns: []collections.ColumnStoreColumn{{Name: "value", Path: "value", ValueType: collections.ColumnStoreValueString}}},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			manager := collections.NewCollectionManager(db)
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "docs", Options: tc.options}); err != nil {
+				t.Fatal(err)
+			}
+			parent := &FixedPeerTCPRuntimeV1{
+				config: FixedPeerTCPConfigV1{
+					Vector: &FixedPeerTCPVectorConfigV1{Collection: raftplacement.CollectionRefV1{Collection: "docs"}},
+					Groups: []FixedPeerTCPGroupV1{{ID: "group-a"}},
+				},
+				data: map[raftcluster.GroupID]*fixedPeerDataV1{"group-a": {db: db}},
+			}
+			if runtime, err := openFixedPeerVectorRuntimeV1(parent); !errors.Is(err, ErrFixedPeerVectorDocumentV1) || runtime != nil {
+				t.Fatalf("unsupported proof storage opened public vector listener: runtime=%v err=%v", runtime, err)
+			}
+		})
+	}
+}
+
 func TestFixedPeerVectorRuntimeDisablesSnapshotCommandsV1(t *testing.T) {
 	registry, err := fixedPeerVectorRegistryV1()
 	if err != nil {

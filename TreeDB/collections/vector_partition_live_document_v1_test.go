@@ -8,6 +8,9 @@ import (
 
 func TestVectorPartitionLiveDocumentContentV1(t *testing.T) {
 	meta := CollectionMeta{Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}
+	if !VectorPartitionLiveDocumentProofSupportedV1(meta) {
+		t.Fatal("plain JSON document proof was refused")
+	}
 	for _, tc := range []struct {
 		name, expected, current string
 		equal, invalid          bool
@@ -33,6 +36,9 @@ func TestVectorPartitionLiveDocumentContentV1(t *testing.T) {
 		})
 	}
 	meta.Options.DocumentFormat = DocumentFormatBSON
+	if VectorPartitionLiveDocumentProofSupportedV1(meta) {
+		t.Fatal("BSON document proof was advertised")
+	}
 	if _, err := vectorPartitionLiveDocumentEqualV1(meta, []byte("id"), []byte(`{}`), []byte(`{}`)); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
 		t.Fatalf("unsupported format error=%v", err)
 	}
@@ -43,12 +49,18 @@ func TestVectorPartitionLiveDocumentContentV1(t *testing.T) {
 		ActiveManifest: &ColumnManifestIdentity{}, RecoveryAuthoritativeManifest: &ColumnManifestIdentity{},
 		Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2}},
 	}
+	if !VectorPartitionLiveDocumentProofSupportedV1(meta) {
+		t.Fatal("reconstructable column document proof was refused")
+	}
 	expected := []byte(`{"embedding":[0.10000000149011612,1],"n":9007199254740993}`)
 	current := []byte(`{"n":9007199254740993,"embedding":[0.1,1]}`)
 	if equal, err := vectorPartitionLiveDocumentEqualV1(meta, []byte("id"), expected, current); err != nil || !equal {
 		t.Fatalf("FP32 reconstruction equal=%v err=%v", equal, err)
 	}
 	meta.Options.ColumnStore.RetainedPayload = ColumnRetainedPayloadNone
+	if VectorPartitionLiveDocumentProofSupportedV1(meta) {
+		t.Fatal("dropped column payload proof was advertised")
+	}
 	if _, err := vectorPartitionLiveDocumentEqualV1(meta, []byte("id"), expected, current); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
 		t.Fatalf("dropped payload error=%v", err)
 	}

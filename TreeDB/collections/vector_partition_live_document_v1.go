@@ -90,20 +90,29 @@ func (c *Collection) proveVectorPartitionLiveDocumentAtSnapshotV1(ctx context.Co
 	return status, nil
 }
 
+// VectorPartitionLiveDocumentProofSupportedV1 reports whether the collection
+// can compare a submitted JSON document with its retained live contents. It is
+// checked before a public vector listener advertises insert support and again
+// by the proof, so unsupported storage modes fail before submission.
+func VectorPartitionLiveDocumentProofSupportedV1(meta CollectionMeta) bool {
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+		return false
+	}
+	if !columnStoreNeedsRetainedPayloadTransform(meta) {
+		return true
+	}
+	return meta.Options.ColumnStore.RetainedPayload == ColumnRetainedPayloadNonColumn && columnStoreCanReconstructDocument(meta)
+}
+
 func vectorPartitionLiveDocumentEqualV1(meta CollectionMeta, id, expected, current []byte) (bool, error) {
 	if len(current) == 0 {
 		return false, nil
 	}
-	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+	if !VectorPartitionLiveDocumentProofSupportedV1(meta) {
 		return false, ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	if columnStoreNeedsRetainedPayloadTransform(meta) {
 		cfg := *meta.Options.ColumnStore
-		// Dropped fields cannot establish full-document identity, even when all
-		// currently declared columns agree with the submitted document.
-		if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn || !columnStoreCanReconstructDocument(meta) {
-			return false, ErrVectorIndexPartitionLiveUnavailableV1
-		}
 		retained, err := columnRetainedPayloadFromJSONDocument(cfg, expected)
 		if err != nil {
 			return false, err
