@@ -89,6 +89,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 				dictChunk = defaultDictChunkSize
 			}
 			dictOpts := *opts
+			dictOpts.PhysicalSnapshotSideStoreCapture = nil
 			dictOpts.Dir = dictDir
 			dictOpts.ReadOnly = opts.ReadOnly
 			dictOpts.ChunkSize = dictChunk
@@ -111,6 +112,21 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 				return nil, fmt.Errorf("treedb: open dictdb: %w", err)
 			}
 			closers = append(closers, dictBackend.Close)
+			previousCapture := opts.PhysicalSnapshotSideStoreCapture
+			opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
+				if name == "dictdb" {
+					if !dictOpts.ReadOnly {
+						if err := dictBackend.Checkpoint(); err != nil {
+							return nil, err
+						}
+					}
+					return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
+				}
+				if previousCapture != nil {
+					return previousCapture(ctx, name)
+				}
+				return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
+			}
 			store := dictdb.New(dictBackend)
 			opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 				return store.GetDictBytes(context.Background(), dictID)
@@ -161,6 +177,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 				templateChunk = defaultTemplateChunkSize
 			}
 			templateOpts := *opts
+			templateOpts.PhysicalSnapshotSideStoreCapture = nil
 			templateOpts.Dir = templateDir
 			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff
 			templateOpts.ReadOnly = templateReadOnly
@@ -184,6 +201,21 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 				return nil, fmt.Errorf("treedb: open templatedb: %w", err)
 			}
 			closers = append(closers, templateBackend.Close)
+			previousCapture := opts.PhysicalSnapshotSideStoreCapture
+			opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
+				if name == "templatedb" {
+					if !templateReadOnly {
+						if err := templateBackend.Checkpoint(); err != nil {
+							return nil, err
+						}
+					}
+					return templateBackend.CapturePhysicalSnapshotCutV1(ctx)
+				}
+				if previousCapture != nil {
+					return previousCapture(ctx, name)
+				}
+				return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
+			}
 			store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
 			if !templateReadOnly && opts.ValueLog.TemplateMode != template.TemplateOff && opts.ValueLog.TemplateStore == nil {
 				opts.ValueLog.TemplateStore = store

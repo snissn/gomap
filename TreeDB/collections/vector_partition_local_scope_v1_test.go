@@ -135,6 +135,17 @@ func TestVectorPartitionLocalScopeV1ScopedBuildReopenAndCheckpoint(t *testing.T)
 	if err := ValidateVectorPartitionSnapshotNamespaceV1(root); !errors.Is(err, ErrVectorPartitionManifestInvalid) || !strings.Contains(err.Error(), "partition/0") {
 		t.Fatalf("snapshot accepted missing hosted asset or checked wrong asset: %v", err)
 	}
+	probe := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+	if err := ValidateVectorPartitionSnapshotNamespaceWithContextV1(probe, root); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("snapshot probe err=%v", err)
+	}
+	if probe.calls < 2 {
+		t.Fatalf("snapshot probe checked context only %d times", probe.calls)
+	}
+	canceled := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: probe.calls}
+	if err := ValidateVectorPartitionSnapshotNamespaceWithContextV1(canceled, root); !errors.Is(err, context.Canceled) {
+		t.Fatalf("scoped asset validation ignored cancellation: %v", err)
+	}
 }
 
 func TestVectorPartitionLocalScopeV1RejectsChangedManifestAndForeignSegment(t *testing.T) {

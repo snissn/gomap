@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"iter"
 
@@ -101,12 +102,19 @@ func rebuildDependencyDirectoryV2(p *pager.Pager, allocator bulk.Allocator, reso
 // directory structure before host identities have their final installed names.
 // Ordinary recovery instead uses the full physical/content admission callback.
 func dependencyDirectoryStructureValidatorV2(p *pager.Pager) durableDirectoryValidatorV2 {
+	return dependencyDirectoryStructureValidatorWithContextV2(nil, p)
+}
+
+func dependencyDirectoryStructureValidatorWithContextV2(ctx context.Context, p *pager.Pager) durableDirectoryValidatorV2 {
 	return func(record rootpublication.DurableRootRecordV1) (*rootpublication.StableResourceSet, error) {
 		directory, err := rootpublication.NewDependencyDirectoryV2(p, record.Directory, record.TotalPages, func() {})
 		if err != nil {
 			return nil, err
 		}
 		defer directory.Release()
+		if ctx != nil {
+			return nil, directory.Walk(func(_, _ []byte) error { return ctx.Err() })
+		}
 		return nil, directory.Walk(nil)
 	}
 }

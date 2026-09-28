@@ -103,9 +103,12 @@ type DB struct {
 	leafGenerationPendingSet       map[uint32]struct{}
 	leafGenerationPendingCommitSeq map[uint32]uint64
 	lock                           *lockfile.Lock
-	adaptive                       *adaptive.Controller
-	pruner                         pruneWorker
-	leafGenerationPins             leafGenerationPinTracker
+
+	physicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
+
+	adaptive           *adaptive.Controller
+	pruner             pruneWorker
+	leafGenerationPins leafGenerationPinTracker
 	// Test hooks used for exact compaction phase-boundary coordination.
 	compactStorageBeforePhase           func(string)
 	compactStorageAfterPhase            func(string)
@@ -1140,6 +1143,11 @@ type ValueLogOptions struct {
 
 type Options struct {
 	Dir string
+	// PhysicalSnapshotSideStoreCapture is registered by the owner of dictionary
+	// and template stores. A missing owner refuses deferred export of an existing
+	// side index. Only "dictdb" and "templatedb" names are admitted.
+	PhysicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
+
 	// ResolvedProfile is the canonical public durability contract selected by
 	// the TreeDB profile resolver. Public constructors populate it before any
 	// backend or cached-layer routing decision is made.
@@ -2233,6 +2241,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
+		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,

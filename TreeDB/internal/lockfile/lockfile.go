@@ -15,9 +15,14 @@ var (
 	ErrUnsupported = errors.New("file locking unsupported")
 )
 
-type Lock struct {
-	f    *os.File
-	path string
+// Lock is one independently releasable ownership of an OS directory lock.
+// Its shared state and ownership transitions are protected by processMu.
+type Lock struct{ state *lockState }
+
+type lockState struct {
+	f      *os.File
+	path   string
+	owners uint64
 }
 
 var (
@@ -63,7 +68,7 @@ func Acquire(path string) (*Lock, error) {
 	_, _ = f.Seek(0, 0)
 	_, _ = fmt.Fprintf(f, "pid=%d\n", os.Getpid())
 
-	return &Lock{f: f, path: path}, nil
+	return &Lock{state: &lockState{f: f, path: path, owners: 1}}, nil
 }
 
 // AcquireShared attempts to take a shared (read) lock on an existing lock file.
@@ -101,24 +106,58 @@ func AcquireShared(path string) (*Lock, error) {
 		return nil, err
 	}
 
-	return &Lock{f: f, path: path}, nil
+	return &Lock{state: &lockState{f: f, path: path, owners: 1}}, nil
+}
+
+// Retain preserves both the OS lock and process-local registration until this
+// independent ownership is closed. It does not reopen the lock's pathname.
+func (l *Lock) Retain() (*Lock, error) {
+	processMu.Lock()
+	defer processMu.Unlock()
+	if l == nil || l.state == nil {
+		return nil, os.ErrClosed
+	}
+	l.state.owners++
+	return &Lock{state: l.state}, nil
 }
 
 func (l *Lock) Close() error {
-	if l == nil || l.f == nil {
+	processMu.Lock()
+	defer processMu.Unlock()
+	if l == nil || l.state == nil {
 		return nil
 	}
-
-	processMu.Lock()
-	delete(processLocks, l.path)
-	processMu.Unlock()
-
-	unlockErr := unlockFile(l.f)
-	closeErr := l.f.Close()
-	l.f = nil
-
-	if unlockErr != nil {
-		return unlockErr
+	state := l.state
+	l.state = nil
+	state.owners--
+	if state.owners != 0 {
+		return nil
 	}
-	return closeErr
+	// Keep the process registration through the OS unlock/close transition.
+	// No export writer or other caller work executes under this mutex.
+	unlockErr := unlockFile(state.f)
+	closeErr := state.f.Close()
+	delete(processLocks, state.path)
+	return errors.Join(unlockErr, closeErr)
+}
+
+// SameFile verifies that a separately opened, parent-relative entry is the
+// exact file owned by this lock. It does not reopen the lock's pathname. This
+// lets a caller bind a retained directory handle to a pathname-acquired lock
+// before using that handle for mutation.
+func (l *Lock) SameFile(file *os.File) (bool, error) {
+	processMu.Lock()
+	defer processMu.Unlock()
+	if l == nil || l.state == nil || file == nil {
+		return false, os.ErrClosed
+	}
+	locked, err := l.state.f.Stat()
+	if err != nil {
+		return false, err
+	}
+	candidate, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(locked, candidate), nil
 }

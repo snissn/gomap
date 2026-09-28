@@ -281,6 +281,30 @@ func TestGroupedFrameCache_AfterCloseDoesNotRecreateOrRetain(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_CloseDoesNotFillProcessScratchPool(t *testing.T) {
+	drainDecodeScratchPoolsForTest()
+	t.Cleanup(drainDecodeScratchPoolsForTest)
+
+	handle, err := os.CreateTemp(t.TempDir(), "value-log-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newTestGroupedCacheFile(1, 1024, 0)
+	f.File = handle
+	raw := make([]byte, 64)
+	if !f.groupedFrameCacheStore(1, false, 1, groupedCacheOffsets(len(raw)), raw, true) {
+		t.Fatal("store pooled frame")
+	}
+	before := DecodeScratchStatsSnapshot()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after := DecodeScratchStatsSnapshot()
+	if after.SmallPoolEntries != before.SmallPoolEntries {
+		t.Fatalf("closed file returned cached frame to process pool: before=%d after=%d", before.SmallPoolEntries, after.SmallPoolEntries)
+	}
+}
+
 func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVerifyRead(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")

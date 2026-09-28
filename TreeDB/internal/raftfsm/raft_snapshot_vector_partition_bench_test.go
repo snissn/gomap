@@ -30,6 +30,9 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 						b.Fatal(err)
 					}
 					archiveBytes = len(readRaftSnapshotArchiveForTest(b, snapshot))
+					if err := snapshot.Release(); err != nil {
+						b.Fatal(err)
+					}
 				}
 				b.ReportMetric(float64(archiveBytes), "archive-bytes")
 			})
@@ -37,6 +40,7 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			defer snapshot.Release()
 			b.Run("install", func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					targetDir := filepath.Join(root, fmt.Sprintf("target-%d", i))

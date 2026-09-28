@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -15,7 +16,7 @@ import (
 // validates BOTH slots' directories. It never grants writable access to live
 // tree pages. Fixed-width identity replacement preserves leaf packing, keys,
 // revisions, roots and allocator high-water, including shared slot subtrees.
-func rebindSnapshotDependencyDirectoryV2(dir, sideRoot string, p *pager.Pager, record rootpublication.DurableRootRecordV1) error {
+func rebindSnapshotDependencyDirectoryWithContextV2(ctx context.Context, dir, sideRoot string, p *pager.Pager, record rootpublication.DurableRootRecordV1) error {
 	tr := tree.NewWithPageLimit(p, nil, record.Directory.RootPageID, record.TotalPages)
 	it := tr.Iterator(nil, nil)
 	defer it.Close()
@@ -24,6 +25,9 @@ func rebindSnapshotDependencyDirectoryV2(dir, sideRoot string, p *pager.Pager, r
 		return rootpublication.ErrDependencyManifestFormat
 	}
 	for physical := uint64(0); physical < record.Directory.PhysicalCount; physical++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !it.Valid() {
 			if err := it.Error(); err != nil {
 				return err
