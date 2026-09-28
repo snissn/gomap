@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -73,6 +74,57 @@ func (c *lifecycleCoordinatorCommitterV1) SubmitCatalogMetaCommandV1(_ context.C
 		return 0, 0, err
 	}
 	return 1, c.index, nil
+}
+
+func TestVectorPartitionImmutableBeginRequiresVerifiedAuthorityV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	groups := []raftcluster.GroupID{"group-a", "group-b"}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) || committer.index != 1 {
+		t.Fatalf("unverified immutable begin err=%v committed index=%d", err, committer.index)
+	}
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
+		return VectorPartitionLifecycleImmutableAuthorityV1{
+			ManifestDigest: strings.Repeat("c", 64), PlacementDigest: identity.Immutable.PlacementDigest,
+		}, nil
+	}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) || committer.index != 1 {
+		t.Fatalf("mismatched source-holder proof err=%v committed index=%d", err, committer.index)
+	}
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
+		return identity.Immutable, nil
+	}
+	record, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1)
+	if err != nil || record.Identity != identity || committer.index != 2 {
+		t.Fatalf("verified immutable begin record=%+v err=%v committed index=%d", record, err, committer.index)
+	}
+}
+
+func TestVectorPartitionImmutableBeginRejectsSourceMutationDuringPreparationV1(t *testing.T) {
+	authority, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
+	coordinator.PrepareImmutableV1 = func(ctx context.Context, _ VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
+		if _, err := coordinator.BeginRelevantCollectionMutationV1(ctx, identity.Index.Collection, strings.Repeat("c", 64)); err != nil {
+			return VectorPartitionLifecycleImmutableAuthorityV1{}, err
+		}
+		return identity.Immutable, nil
+	}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("stale source proof err=%v", err)
+	}
+	if _, ok := authority.VectorPartitionLifecycleRecordV1(identity); ok {
+		t.Fatal("source mutation after preparation published stale immutable build")
+	}
 }
 
 func TestVectorPartitionLifecycleCoordinatorInvalidatesBeforeRelevantMutationV1(t *testing.T) {
