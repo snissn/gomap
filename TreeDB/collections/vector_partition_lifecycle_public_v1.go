@@ -643,11 +643,15 @@ func (s *VectorPartitionStoreV1) deleteVectorPartitionLifecycleV1(collection, in
 	if err != nil {
 		return err
 	}
-	if !present {
-		return os.ErrNotExist
-	}
 	entry, generationPresent := loaded.state.Generations[generation]
-	if !generationPresent || entry.Manifest == nil {
+	if !present || !generationPresent || entry.Manifest == nil {
+		complete, err := s.vectorPartitionLifecycleGenerationCompleteV1(collection, index, generation)
+		if err != nil {
+			return err
+		}
+		if complete {
+			return nil
+		}
 		return os.ErrNotExist
 	}
 	if loaded.state.ActiveGeneration == generation {

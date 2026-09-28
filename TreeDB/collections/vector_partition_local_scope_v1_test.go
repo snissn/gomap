@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -203,9 +204,18 @@ func TestVectorPartitionLocalScopeV1EmptyRouterBuildDeleteSurvivesReopen(t *test
 	if err := store.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleScopedBuildV1, building.Generation, payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := deleteVectorPartitionStoreForTest(store, "docs", "embedding", building.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
-		t.Fatal(err)
+	injected := errors.New("post-install delete complete")
+	restore := setVectorPartitionLifecycleStoreHookForTestV1(func(boundary string) error {
+		if boundary == "after_delta_install" {
+			return injected
+		}
+		return nil
+	})
+	t.Cleanup(restore)
+	if err := deleteVectorPartitionStoreForTest(store, "docs", "embedding", building.Generation, VectorPartitionCleanupEligibilityV1{}); !errors.Is(err, injected) {
+		t.Fatalf("ambiguous zero-ref delete err=%v", err)
 	}
+	restore()
 	reopened, err := OpenExistingVectorPartitionStoreV1(root)
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +223,12 @@ func TestVectorPartitionLocalScopeV1EmptyRouterBuildDeleteSurvivesReopen(t *test
 	complete, err := reopened.vectorPartitionLifecycleGenerationCompleteV1("docs", "embedding", building.Generation)
 	if err != nil || !complete {
 		t.Fatalf("reopened completion=%v err=%v", complete, err)
+	}
+	if err := deleteVectorPartitionStoreForTest(reopened, "docs", "embedding", building.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatalf("retry completed zero-ref delete: %v", err)
+	}
+	if err := deleteVectorPartitionStoreForTest(reopened, "docs", "embedding", building.Generation+1, VectorPartitionCleanupEligibilityV1{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("never-created generation retry err=%v", err)
 	}
 	if err := reopened.persistVectorPartitionLifecycleOperationV1("docs", "embedding", vectorPartitionLifecycleDeleteCompleteV1, building.Generation, nil); err != nil {
 		t.Fatalf("ambiguous completion replay: %v", err)
