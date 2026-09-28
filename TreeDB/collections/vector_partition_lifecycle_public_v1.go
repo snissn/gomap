@@ -161,6 +161,60 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 	return manifest, nil
 }
 
+// PreparedVectorPartitionScopedManifestWithContextV1 reads local immutable
+// preparation evidence without requiring the full source graph on this node.
+// It verifies every hosted asset, but grants no catalog or serving authority.
+// The caller must independently fence and compare the committed immutable
+// manifest/placement pair before opening or serving this generation.
+func (c *Collection) PreparedVectorPartitionScopedManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, VectorPartitionLocalScopeV1, error) {
+	var zeroManifest VectorPartitionManifestV1
+	var zeroScope VectorPartitionLocalScopeV1
+	if c == nil || c.db == nil {
+		return zeroManifest, zeroScope, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zeroManifest, zeroScope, err
+	}
+	var manifest VectorPartitionManifestV1
+	var scope VectorPartitionLocalScopeV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return err
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !present || !ok || entry.Manifest == nil || entry.Scope == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return fmt.Errorf("%w: generation %d is not scoped and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		if err != nil {
+			return err
+		}
+		scope = *entry.Scope
+		assets, err := scope.localAssetsV1(manifest)
+		if err != nil {
+			return err
+		}
+		if c.meta.Options.ColumnStore == nil || c.meta.Options.ColumnStore.AssetManager == nil {
+			return fmt.Errorf("%w: missing local asset manager", ErrVectorPartitionManifestInvalid)
+		}
+		return verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), c.meta.Options.ColumnStore.AssetManager.Namespace, assets)
+	})
+	if err != nil {
+		return zeroManifest, zeroScope, err
+	}
+	return manifest, scope, nil
+}
+
 // ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1 opens the full
 // lifecycle and source authority once and returns the leased token used for
 // bounded warm checks. The caller must Release the token.

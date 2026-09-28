@@ -134,6 +134,17 @@ the VPR1 prepare/progress/physical-reclaim sequence. Restore validates only
 the scoped hosted assets, including their bytes and digests, while retaining
 the unchanged global manifest identity. Catalog authority and source-holder
 verification are separate prerequisites before a scoped node may serve.
+The placement commitment uses `VPD1` followed by the big-endian partition
+count and, in partition-ID order, each big-endian partition ID, group-byte
+length, and group bytes. Scope validation recomputes it from the complete
+global manifest; a caller-supplied digest is never accepted by syntax alone.
+Owner-local Stage requires a fresh fenced catalog BUILD record with the same
+immutable pair, source, definition, generation, and complete owner set both
+before and after local-byte verification. It stores only local preparation,
+not a serving pointer. If the catalog moves after publication, the local
+generation remains unservable until a fresh authority check. New Stage is
+refused once the catalog record reaches ACTIVE; ordinary V1 publication stays
+full-local and unchanged.
 
 Every file is installed no-replace from an exact synchronized anonymous handle,
 then the parent namespace is synchronized and reopened. Exact-byte retries are

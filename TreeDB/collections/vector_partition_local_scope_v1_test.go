@@ -28,9 +28,13 @@ func scopedLifecycleManifestsV1(t *testing.T) (VectorPartitionManifestV1, Vector
 	if _, err := EncodeVectorPartitionManifestV1(building); err != nil {
 		t.Fatal(err)
 	}
+	placementDigest, err := VectorPartitionPlacementDigestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
 	scope := VectorPartitionLocalScopeV1{
 		HostedGroup: "raft-a", Router: true,
-		ManifestDigest: fmt.Sprintf("%x", sha256.Sum256(readyRaw)), PlacementDigest: strings.Repeat("b", 64),
+		ManifestDigest: fmt.Sprintf("%x", sha256.Sum256(readyRaw)), PlacementDigest: placementDigest,
 	}
 	return building, ready, scope
 }
@@ -119,6 +123,11 @@ func TestVectorPartitionLocalScopeV1ScopedBuildReopenAndCheckpoint(t *testing.T)
 
 func TestVectorPartitionLocalScopeV1RejectsChangedManifestAndForeignSegment(t *testing.T) {
 	building, ready, scope := scopedLifecycleManifestsV1(t)
+	wrongPlacement := scope
+	wrongPlacement.PlacementDigest = strings.Repeat("f", 64)
+	if err := wrongPlacement.validateManifestV1(ready); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("caller-supplied placement digest accepted: %v", err)
+	}
 	if _, err := scope.localAssetsV1(testVectorPartitionPagedRootV2(t)); !errors.Is(err, ErrVectorPartitionPagedRuntimeUnsupportedV2) {
 		t.Fatalf("paged root local assets err=%v", err)
 	}

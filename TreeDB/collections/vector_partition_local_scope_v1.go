@@ -108,7 +108,48 @@ func (scope VectorPartitionLocalScopeV1) validateManifestV1(manifest VectorParti
 			return fmt.Errorf("%w: incomplete local scope placement", ErrVectorPartitionManifestInvalid)
 		}
 	}
+	digest, err := VectorPartitionPlacementDigestV1(manifest)
+	if err != nil || digest != scope.PlacementDigest {
+		return fmt.Errorf("%w: local scope placement digest", ErrVectorPartitionManifestInvalid)
+	}
 	return nil
+}
+
+// VectorPartitionPlacementDigestV1 is the canonical logical-owner commitment
+// shared by source-holder catalog preparation and owner-local inventory. It
+// deliberately excludes asset filenames and the catalog epoch: the manifest
+// digest binds the former, and the lifecycle index identity binds the latter.
+func VectorPartitionPlacementDigestV1(manifest VectorPartitionManifestV1) (string, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return "", err
+	}
+	if manifest.PartitionCount == 0 || len(manifest.Placements) != int(manifest.PartitionCount) {
+		return "", fmt.Errorf("%w: incomplete placement digest input", ErrVectorPartitionManifestInvalid)
+	}
+	groups := make([]string, manifest.PartitionCount)
+	for _, placement := range manifest.Placements {
+		if placement.PartitionID >= manifest.PartitionCount || groups[placement.PartitionID] != "" ||
+			placement.GroupID == "" || len(placement.GroupID) > 0xffff {
+			return "", fmt.Errorf("%w: noncanonical placement digest input", ErrVectorPartitionManifestInvalid)
+		}
+		groups[placement.PartitionID] = placement.GroupID
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte("VPD1"))
+	var word [4]byte
+	binary.BigEndian.PutUint32(word[:], manifest.PartitionCount)
+	_, _ = h.Write(word[:])
+	for partitionID, group := range groups {
+		if group == "" {
+			return "", fmt.Errorf("%w: incomplete placement digest input", ErrVectorPartitionManifestInvalid)
+		}
+		binary.BigEndian.PutUint32(word[:], uint32(partitionID))
+		_, _ = h.Write(word[:])
+		binary.BigEndian.PutUint32(word[:], uint32(len(group)))
+		_, _ = h.Write(word[:])
+		_, _ = h.Write([]byte(group))
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (scope VectorPartitionLocalScopeV1) localAssetsV1(manifest VectorPartitionManifestV1) ([]VectorPartitionAssetV1, error) {
