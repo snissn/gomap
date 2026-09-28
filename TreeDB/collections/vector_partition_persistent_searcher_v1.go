@@ -1922,13 +1922,21 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 // Callers install the returned descriptors in the generation M1 manifest;
 // publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1, nil, false)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1, nil, false, nil)
+}
+
+// MaterializeVectorPartitionOwnerSeparatedLocalSearchAssetsV1 builds against
+// the complete authoritative source but puts each owner's whole domains in
+// that owner's reserved segment. It does not publish an owner-local manifest;
+// callers still validate and publish the one global generation identity.
+func (c *Collection) MaterializeVectorPartitionOwnerSeparatedLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, ownerFileIDs map[string]uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, 0, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1, nil, false, ownerFileIDs)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
 // graph variants. Every noncanonical variant remains offline-only.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil, false)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil, false, nil)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1 is an
@@ -1936,7 +1944,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index 
 // identical; only the temporary builder receives the nullable trace sink.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, VectorPartitionConstructionEvidenceV1, error) {
 	evidence := VectorPartitionConstructionEvidenceV1{Schema: VectorPartitionConstructionEvidenceSchemaV1, Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
-	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, false)
+	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, false, nil)
 	return assets, resources, evidence, err
 }
 
@@ -1946,7 +1954,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstruction
 // and a live final-origin map. Search-pack bytes are unchanged.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, VectorPartitionConstructionEvidenceV1, error) {
 	evidence := VectorPartitionConstructionEvidenceV1{Schema: VectorPartitionConstructionEvidenceSchemaV1, Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
-	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, true)
+	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, true, nil)
 	return assets, resources, evidence, err
 }
 
@@ -2447,7 +2455,7 @@ func vectorPartitionConstructionAddV1(left, right uint64) (uint64, bool) {
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1, nil, false)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1, nil, false, nil)
 }
 
 // vectorPartitionConstructionReplayEvidenceV1 deterministically reconstructs
@@ -2561,7 +2569,7 @@ func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorParti
 	})
 }
 
-func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1, boundedEvidence bool) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1, boundedEvidence bool, ownerFileIDs map[string]uint32) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	if err := manifest.requireInlineRuntimeV1(); err != nil {
 		return nil, nil, err
 	}
@@ -2624,7 +2632,11 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	}
 	domainMode := variant == vectorPartitionLocalDefaultGraphVariantV1 && manifest.DomainCount > 0 && manifest.DomainCount < manifest.PartitionCount
 	buildInputs := inputs
+	var fileIDByAnchor map[uint32]uint32
 	homeMemberships, overlapMemberships := manifest.Memberships, manifest.OverlapMemberships
+	if ownerFileIDs != nil && !domainMode {
+		return nil, nil, fmt.Errorf("%w: owner-separated segments require domain mode", ErrVectorPartitionSearchUnavailable)
+	}
 	if domainMode {
 		anchors, anchorForPack, err := vectorPartitionDomainLayoutV1(manifest)
 		if err != nil || len(inputs) != int(manifest.PartitionCount) {
@@ -2642,6 +2654,35 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			if _, ok := inputsByPartition[partition]; !ok {
 				return nil, nil, fmt.Errorf("%w: missing physical pack %d", ErrVectorPartitionSearchUnavailable, partition)
 			}
+		}
+		if ownerFileIDs != nil {
+			fileIDByAnchor = make(map[uint32]uint32, len(anchors))
+			placements := make(map[uint32]string, len(manifest.Placements))
+			for _, placement := range manifest.Placements {
+				placements[placement.PartitionID] = placement.GroupID
+			}
+			used := make(map[uint32]string, len(ownerFileIDs))
+			seenOwners := make(map[string]bool, len(ownerFileIDs))
+			for _, anchor := range anchors {
+				owner := placements[anchor]
+				segment := ownerFileIDs[owner]
+				if owner == "" || segment == 0 || used[segment] != "" && used[segment] != owner {
+					return nil, nil, fmt.Errorf("%w: missing or shared owner segment", ErrVectorPartitionSearchUnavailable)
+				}
+				used[segment], seenOwners[owner], fileIDByAnchor[anchor] = owner, true, segment
+			}
+			if len(seenOwners) != len(ownerFileIDs) {
+				return nil, nil, fmt.Errorf("%w: unused owner segment", ErrVectorPartitionSearchUnavailable)
+			}
+			// Keep each owner's domains adjacent so one stable append session
+			// closes each owner segment once, even for interleaved placements.
+			sort.Slice(buildInputs, func(i, j int) bool {
+				left, right := placements[buildInputs[i].PartitionID], placements[buildInputs[j].PartitionID]
+				if left != right {
+					return left < right
+				}
+				return buildInputs[i].PartitionID < buildInputs[j].PartitionID
+			})
 		}
 		homeMemberships, overlapMemberships, err = vectorPartitionServingMembershipListsV1(manifest, anchorForPack)
 		if err != nil {
@@ -2819,7 +2860,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		for j := range payloads {
 			payloads[j].constructionSource = i
 			pending = append(pending, payloads[j])
-			items = append(items, StableColumnPhysicalAssetAppend{Payload: payloads[j].payload, Kind: ColumnAssetKindTCS1HNSWSearchPack, Generation: generation, PartID: uint64(in.PartitionID) + 1})
+			items = append(items, StableColumnPhysicalAssetAppend{Payload: payloads[j].payload, Kind: ColumnAssetKindTCS1HNSWSearchPack, Generation: generation, PartID: uint64(in.PartitionID) + 1, FileID: fileIDByAnchor[in.PartitionID]})
 		}
 		if trace != nil {
 			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: in.PartitionID, NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...), PruneKeeps: trace.pruneKeeps, CompactLifecycle: trace.compactLifecycle, PostfillEdges: trace.postfillEdges, TraceMode: "compact"}

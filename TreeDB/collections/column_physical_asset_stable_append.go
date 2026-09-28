@@ -15,6 +15,9 @@ type StableColumnPhysicalAssetAppend struct {
 	Kind       ColumnAssetKind
 	Generation uint64
 	PartID     uint64
+	// FileID selects a segment for this item. Zero uses the call's fileID.
+	// Adjacent items with the same effective ID share one append batch.
+	FileID uint32
 }
 
 // StableResourceCaptureRecoveryRetainer accepts exact rollback authority while
@@ -53,19 +56,66 @@ func AppendColumnPhysicalAssetsWithStableResources(
 		}
 	}
 	session := newColumnPhysicalAssetAppendSessionWithStableResources(rootDir, cfg, registry, recoveryRetainer)
-	refs, err := session.appendKinds(fileID, internal)
-	if err != nil {
-		return nil, nil, errors.Join(err, session.abort())
+	segmented := false
+	for _, item := range items {
+		segmented = segmented || item.FileID != 0
+	}
+	refs := make([]ColumnAssetRef, 0, len(items))
+	for start := 0; start < len(items); {
+		selectedFileID := items[start].FileID
+		if selectedFileID == 0 {
+			selectedFileID = fileID
+		}
+		end := start + 1
+		for end < len(items) {
+			nextFileID := items[end].FileID
+			if nextFileID == 0 {
+				nextFileID = fileID
+			}
+			if nextFileID != selectedFileID {
+				break
+			}
+			end++
+		}
+		batch, err := session.appendKinds(selectedFileID, internal[start:end])
+		if err != nil {
+			return nil, nil, errors.Join(err, session.abort())
+		}
+		if segmented {
+			preparedBatch := make([]ColumnPreparedAsset, len(batch))
+			for i := range batch {
+				preparedBatch[i] = ColumnPreparedAsset{Ref: batch[i], Bytes: batch[i].Length}
+			}
+			if err := session.closeActiveWithStableValidation(func(captured *rootpublication.StableResourceSet) error {
+				return validateStableColumnResourcesMatchPrepared(preparedBatch, captured)
+			}); err != nil {
+				return nil, nil, errors.Join(err, session.abort())
+			}
+		}
+		refs = append(refs, batch...)
+		start = end
 	}
 	prepared := make([]ColumnPreparedAsset, len(refs))
 	for i := range refs {
 		prepared[i] = ColumnPreparedAsset{Ref: refs[i], Bytes: refs[i].Length}
 	}
-	_, resources, err := session.closeWithStableResourcesValidated(func(captured *rootpublication.StableResourceSet) error {
-		return validateStableColumnResourcesMatchPrepared(prepared, captured)
-	})
+	var resources *rootpublication.StableResourceSet
+	var err error
+	if segmented {
+		_, resources, err = session.closeWithStableResources()
+	} else {
+		_, resources, err = session.closeWithStableResourcesValidated(func(captured *rootpublication.StableResourceSet) error {
+			return validateStableColumnResourcesMatchPrepared(prepared, captured)
+		})
+	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if segmented {
+		if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
+			resources.Release()
+			return nil, nil, errors.Join(err, session.forgetNewStableLinks())
+		}
 	}
 	return refs, resources, nil
 }
