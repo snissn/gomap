@@ -1021,7 +1021,7 @@ Each file starts with a 20-byte header:
 
 ```text
 bytes[8] Magic     = "TDBR3A1\n"
-u32      Version   = 1
+u32      Version   = 2
 u16      Kind      = 1 for progress, 2 for results
 u16      HeaderLen = 20
 u32      HeaderCRC = CRC-32/IEEE over bytes 0..15
@@ -1032,7 +1032,7 @@ Each appended frame has a 16-byte header followed by the payload:
 ```text
 bytes[4] Magic      = "R3AF"
 u16      Kind       = file kind
-u16      Version    = 1
+u16      Version    = 2
 u32      PayloadLen
 u32      FrameCRC   = CRC-32/IEEE over the first 12 header bytes plus payload
 bytes    Payload
@@ -1055,6 +1055,8 @@ u64       ApplyTerm
 u64       ApplyIndex
 bytes[32] CommandDigestV1
 u64       AppliedCommandLSN
+u64       HasExpectedCatalogVersion // 0 or 1; zero guard itself is valid
+u64       ExpectedCatalogVersion    // original deterministic entry guard
 u64       IdempotencyKeyLen
 bytes     IdempotencyKey
 u64       ResultStatusLen
@@ -1068,9 +1070,12 @@ bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
 bytes[32] ProgressLogicalDigestV1 // logical digest to repair missing progress
 ```
 
-New v1 writers include `MatchedCount`. V1 decoders MUST also accept legacy
-records where `ResultDigest` follows `AffectedCount` directly; those records
-decode with `MatchedCount=0`.
+The v2 result record preserves the original catalog guard along with the
+entry digest. An exact idempotent retry can reconstruct the original entry
+after the current catalog version advances; a missing guard never authorizes
+that replay. V2 decoders still accept a result payload without `MatchedCount`
+by treating it as zero. File and frame v1 headers are not opened by the v2
+reader; this pre-alpha format change requires rebuilding old group directories.
 
 Open-time recovery scans complete frames and rebuilds in-memory lookup indexes.
 Frame truncation, checksum mismatch, unsupported file or frame versions, kind

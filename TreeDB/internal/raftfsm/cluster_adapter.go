@@ -34,6 +34,38 @@ func (f *FSM) CurrentCatalogVersion(ctx context.Context) (uint64, bool, error) {
 	return state.CommitSeq, true, nil
 }
 
+// AppliedIdempotencyGuardV1 returns the original deterministic guard and digest
+// only from a durable, locally covered applied result. The FSM lock follows
+// snapshot replacement, so the lookup cannot use a detached result store.
+func (f *FSM) AppliedIdempotencyGuardV1(ctx context.Context, key []byte) (uint64, raftentry.CommandDigestV1, bool, error) {
+	ctx = readBarrierContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return 0, raftentry.CommandDigestV1{}, false, err
+	}
+	if f == nil {
+		return 0, raftentry.CommandDigestV1{}, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return 0, raftentry.CommandDigestV1{}, false, err
+	}
+	if f.closed || f.db == nil || f.results == nil {
+		return 0, raftentry.CommandDigestV1{}, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM result store is not open")
+	}
+	record, found, err := f.results.LookupApplyResultByIdempotencyKey(key)
+	if err != nil || !found {
+		return 0, raftentry.CommandDigestV1{}, false, err
+	}
+	state, ok := f.db.StateToken()
+	if !ok || !record.HasExpectedCatalogVersion || record.AppliedCommandLSN == 0 || state.AppliedCommandLSN < record.AppliedCommandLSN ||
+		(record.Result.Status != raftentry.ApplyStatusApplied && record.Result.Status != raftentry.ApplyStatusAlreadyApplied) ||
+		record.Result.CommandDigest != record.CommandDigest {
+		return 0, raftentry.CommandDigestV1{}, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "applied idempotency result has no covered original guard")
+	}
+	return record.ExpectedCatalogVersion, record.CommandDigest, true, nil
+}
+
 // PreflightCommandEntryV1 adapts the raftcluster pre-commit deterministic
 // preflight request into the local FSM apply preflight shape.
 func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {

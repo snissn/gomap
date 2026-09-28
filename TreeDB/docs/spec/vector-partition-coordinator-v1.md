@@ -83,6 +83,16 @@ NewVectorPartitionCoordinatorForTopologyV1(
 This adapter validates the public topology into the canonical M1
 catalog/placement representation before constructing the same coordinator.
 
+With replicated lifecycle authority, a router source must also supply a
+replicated live pin. An external topology serving only an immutable prepared
+generation can explicitly wrap its router source in
+`VectorPartitionImmutableCoordinatorRouterSourceV1` instead. The wrapper asserts
+that the router and dispatched shard sources serve the same immutable
+generation; it supplies a no-op live pin and does not make a mutable live-tail
+source safe. An ordinary router source without either capability is refused
+before routing or shard dispatch. M8 and ProductionNode use the immutable
+wrapper for their prepared-generation sources.
+
 `CollectionVectorPartitionCoordinatorRouterSourceV1` adapts a real
 `collections.Collection`. The coordinator opens one context-aware M4 router
 session per index/generation and leases it to concurrent searches. Every lease

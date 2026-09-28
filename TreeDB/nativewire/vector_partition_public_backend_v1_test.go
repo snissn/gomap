@@ -39,6 +39,24 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 	if got := publicBackendErrorV1(context.Canceled); !errors.Is(got, context.Canceled) {
 		t.Fatalf("canceled = %v", got)
 	}
+	for _, err := range []error{
+		collections.ErrVectorPartitionRouterQueryV1,
+		(&VectorPartitionCoordinatorV1{}).wrapError(collections.ErrVectorPartitionRouterQueryV1, ""),
+	} {
+		if mapped := publicBackendErrorV1(err); !hasPublicErrorCodeV1(mapped, public.ErrorInvalidRequestV1) {
+			t.Fatalf("router input error mapped as %v", mapped)
+		}
+	}
+	ambiguous := publicBackendErrorV1(errors.Join(context.DeadlineExceeded, raftcluster.ErrCommitAmbiguous))
+	if !hasPublicErrorCodeV1(ambiguous, public.ErrorCommitAmbiguousV1) || errors.Is(ambiguous, context.DeadlineExceeded) {
+		t.Fatalf("post-commit deadline = %v", ambiguous)
+	}
+	for _, code := range []public.ErrorCodeV1{public.ErrorInvalidRequestV1, public.ErrorDeadlineExceededV1} {
+		mapped := fixedPeerVectorPublicErrorV1(&fixedPeerRemoteErrorV1{message: "remote refusal", code: string(code)})
+		if !hasPublicErrorCodeV1(mapped, code) {
+			t.Fatalf("remote public code=%q mapped=%v", code, mapped)
+		}
+	}
 	got := publicBackendErrorV1(&VectorPartitionCoordinatorErrorV1{
 		Code: VectorPartitionCoordinatorErrorBudgetExceededV1,
 		Err:  collections.ErrVectorPartitionRouterScoreBudget,
@@ -66,6 +84,27 @@ func TestVectorPartitionPublicBackendMapsBoundGenerationMismatchV1(t *testing.T)
 func hasPublicErrorCodeV1(err error, want public.ErrorCodeV1) bool {
 	var apiErr *public.ErrorV1
 	return errors.As(err, &apiErr) && apiErr.Code == want
+}
+
+func TestVectorPartitionMutationOwnerUsesDomainPackMappingV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3, DomainCount: 2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{PartitionCount: 3, Partitions: []raftplacement.VectorPartitionGroupV1{
+		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"},
+	}}
+	pack, owner, err := vectorPartitionMutationOwnerV1(manifest, placement, 1)
+	if err != nil || pack != 2 || owner != "group-b" {
+		t.Fatalf("domain owner = pack %d group %q err=%v", pack, owner, err)
+	}
+	if _, _, err := vectorPartitionMutationOwnerV1(manifest, placement, 0); err != nil {
+		t.Fatalf("same-owner domain rejected: %v", err)
+	}
+	placement.Partitions[1].GroupID = "group-b"
+	if _, _, err := vectorPartitionMutationOwnerV1(manifest, placement, 0); !errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {
+		t.Fatalf("cross-owner domain error = %v", err)
+	}
 }
 
 type publicBackendLifecycleBuilderV1 struct{ calls int }
@@ -101,7 +140,7 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest)
+		topology, base, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, servingAuthority, readySetDigest, false)
 		builder := &publicBackendLifecycleBuilderV1{}
 		backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{Topology: topology, RequestBase: base, Lifecycle: harness.LifecycleCoordinator(), ReadFence: harness.LeaderFence(), Identity: boundIdentity, RequiredGroups: requiredGroups, Builder: builder, MutationEpoch: 1, RebuildRequest: func(context.Context) error { return nil }})
 		if err != nil {
@@ -127,12 +166,18 @@ func TestVectorPartitionPublicBackendLifecycleOverCatalogMetaRaftV1(t *testing.T
 	nearLimit := backend.opts
 	maxIdentityBytes := topology.Coordinator().limits.MaxIdentityBytes
 	nearLimit.RequestBase.RequestID = strings.Repeat("r", maxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1)
+	nearLimit.RequestBase.CancellationID = strings.Repeat("c", maxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1)
 	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err != nil {
 		t.Fatalf("exact identity limit = %v", err)
 	}
 	nearLimit.RequestBase.RequestID += "r"
 	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err == nil || !strings.Contains(err.Error(), "exceeds coordinator limit after suffix") {
 		t.Fatalf("oversized suffixed identity = %v", err)
+	}
+	nearLimit.RequestBase.RequestID = backend.opts.RequestBase.RequestID
+	nearLimit.RequestBase.CancellationID += "c"
+	if _, err := NewVectorPartitionPublicBackendV1(nearLimit); err == nil || !strings.Contains(err.Error(), "exceeds coordinator limit after suffix") {
+		t.Fatalf("oversized suffixed cancellation identity = %v", err)
 	}
 	id := public.GenerationIDV1{Index: base.IndexName, Generation: 7}
 	if _, err := operations.Register(ctx, public.GenerationRegistrationV1{GenerationIDV1: id, SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 2}); err != nil {

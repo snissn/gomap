@@ -99,6 +99,8 @@ const (
 	SectionSourceReplaceResponse        SectionID = 141
 	SectionTypedMetadataUpdateRequest   SectionID = 142
 	SectionTypedMetadataUpdateResponse  SectionID = 143
+	SectionVectorInsertRequest          SectionID = 144
+	SectionVectorInsertResponse         SectionID = 145
 )
 
 type CommandID uint64
@@ -138,9 +140,9 @@ const (
 	CommandVectorClosePinnedSnapshot CommandID = 63
 	CommandDenseVectorSearch         CommandID = 64
 	CommandTypedDocumentUpsert       CommandID = 65
-	// Command 66 is reserved by the vector-insert transport tracked in #4734.
-	CommandTypedSourceReplace  CommandID = 67
-	CommandTypedMetadataUpdate CommandID = 68
+	CommandVectorInsert              CommandID = 66
+	CommandTypedSourceReplace        CommandID = 67
+	CommandTypedMetadataUpdate       CommandID = 68
 )
 
 type DocumentFormat uint64

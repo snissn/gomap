@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -47,6 +48,7 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	Collection           *collections.Collection
 	replicatedCollection raftplacement.CollectionRefV1
 	replicatedLifecycle  VectorPartitionReplicatedLifecycleAuthorityV1
+	replicatedLive       *collectionVectorPartitionReplicatedLiveV1
 	offlineGraphVariant  collections.VectorPartitionLocalGraphVariantV1
 	ownerGroupID         raftcluster.GroupID
 	ownerManifestDigest  string
@@ -66,6 +68,11 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	testValidateActive             func(context.Context, collectionVectorPartitionGenerationKeyV1) error
 	testBeforeLoadWait             func()
 	testAfterAuthorityRefreshEvict func()
+}
+
+type collectionVectorPartitionReplicatedLiveV1 struct {
+	manifest       collections.VectorPartitionManifestV1
+	readySetDigest string
 }
 
 type CollectionVectorPartitionGenerationCacheStatsV1 struct {
@@ -98,6 +105,29 @@ func NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(
 		replicatedCollection: collectionRef,
 		replicatedLifecycle:  authority,
 	}, nil
+}
+
+// NewCollectionVectorPartitionGenerationSourceForReplicatedLiveLifecycleV1 is
+// the explicit replicated-live capability. The ordinary replicated constructor
+// remains immutable. Every load first validates replicated lifecycle authority,
+// then matches this exact manifest and ready-set before touching the live
+// binding; standalone ActiveGeneration is neither read nor changed.
+func NewCollectionVectorPartitionGenerationSourceForReplicatedLiveLifecycleV1(
+	collection *collections.Collection,
+	collectionRef raftplacement.CollectionRefV1,
+	authority VectorPartitionReplicatedLifecycleAuthorityV1,
+	manifest collections.VectorPartitionManifestV1,
+	readySetDigest string,
+) (*CollectionVectorPartitionGenerationSourceV1, error) {
+	source, err := NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(collection, collectionRef, authority)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.State != "ready" || manifest.Collection != collectionRef.Collection || manifest.IndexName == "" || manifest.Generation == 0 || manifest.IntegrityDigest == "" || readySetDigest == "" {
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	source.replicatedLive = &collectionVectorPartitionReplicatedLiveV1{manifest: manifest, readySetDigest: readySetDigest}
+	return source, nil
 }
 
 type collectionVectorPartitionGenerationKeyV1 struct {
@@ -293,6 +323,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		}
 		authorityToken = validatedToken
 		liveManifest = manifest
+	} else if s.replicatedLive != nil {
+		expected := s.replicatedLive
+		if replicatedReadySetDigest != expected.readySetDigest || !vectorPartitionReplicatedLiveManifestMatchesV1(manifest, expected.manifest) {
+			return nil, fmt.Errorf("%w: replicated live identity", ErrVectorPartitionShardSearchGenerationMismatch)
+		}
+		liveManifest = manifest
 	}
 	var openPlan *collections.VectorPartitionGenerationSearchOpenPlanV1
 	var ownerPlan *collections.VectorPartitionGenerationOwnerSearchOpenPlanV2
@@ -300,6 +336,8 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		ownerPlan, err = collections.NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx, manifest, string(s.ownerGroupID))
 	} else if s.replicatedLifecycle == nil {
 		openPlan, err = s.Collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx, manifest)
+	} else if s.replicatedLive != nil {
+		openPlan, err = s.Collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx, manifest)
 	} else {
 		openPlan, err = collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
 	}
@@ -330,6 +368,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
 		opening:        make(map[uint32]*collectionVectorPartitionSearchLoadV1),
 	}, nil
+}
+
+func vectorPartitionReplicatedLiveManifestMatchesV1(left, right collections.VectorPartitionManifestV1) bool {
+	leftRaw, leftErr := collections.EncodeVectorPartitionManifestV1(left)
+	rightRaw, rightErr := collections.EncodeVectorPartitionManifestV1(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftRaw, rightRaw)
 }
 
 func vectorPartitionReplicatedLifecycleValidationErrorV1(ctx context.Context, err error) error {

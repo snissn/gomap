@@ -53,12 +53,16 @@ func codedError(code raftentry.DeterministicErrorCodeV1, format string, args ...
 // ApplyEntryID. The result payload is intentionally bounded separately from the
 // deterministic entry bytes.
 type ApplyResultRecordV1 struct {
-	EntryID                 raftentry.ApplyEntryID
-	CommandDigest           raftentry.CommandDigestV1
-	IdempotencyKey          []byte
-	AppliedCommandLSN       uint64
-	ProgressLogicalDigestV1 LogicalDigestV1
-	Result                  raftentry.ApplyResultV1
+	EntryID           raftentry.ApplyEntryID
+	CommandDigest     raftentry.CommandDigestV1
+	IdempotencyKey    []byte
+	AppliedCommandLSN uint64
+	// Preserve the original deterministic-entry guard across retries. Zero is
+	// valid, so absence must be represented separately and fail closed at lookup.
+	ExpectedCatalogVersion    uint64
+	HasExpectedCatalogVersion bool
+	ProgressLogicalDigestV1   LogicalDigestV1
+	Result                    raftentry.ApplyResultV1
 }
 
 // ApplyResultStore records deterministic apply results for idempotency/replay.
@@ -170,7 +174,7 @@ func (s *MemoryApplyResultStore) CheckCanRecordApplyResult(record ApplyResultRec
 
 func (s *MemoryApplyResultStore) checkCanRecordApplyResultLocked(record ApplyResultRecordV1) error {
 	if existing, ok := s.records[record.EntryID]; ok {
-		if existing.CommandDigest != record.CommandDigest {
+		if existing.CommandDigest != record.CommandDigest || existing.ExpectedCatalogVersion != record.ExpectedCatalogVersion || existing.HasExpectedCatalogVersion != record.HasExpectedCatalogVersion {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
@@ -183,7 +187,7 @@ func (s *MemoryApplyResultStore) checkCanRecordApplyResultLocked(record ApplyRes
 	if len(record.IdempotencyKey) > 0 {
 		if existingID, ok := s.byKey[string(record.IdempotencyKey)]; ok {
 			existing := s.records[existingID]
-			if existing.CommandDigest != record.CommandDigest {
+			if existing.CommandDigest != record.CommandDigest || existing.ExpectedCatalogVersion != record.ExpectedCatalogVersion || existing.HasExpectedCatalogVersion != record.HasExpectedCatalogVersion {
 				return codedError(raftentry.ErrorRejectedConflictV1, "idempotency key digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 			}
 		}
@@ -356,6 +360,9 @@ func validateApplyResultRecordV1(record ApplyResultRecordV1, requireCoverage boo
 	if requireCoverage && record.AppliedCommandLSN == 0 {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply result record has no local AppliedCommandLSN coverage")
 	}
+	if !record.HasExpectedCatalogVersion && record.ExpectedCatalogVersion != 0 {
+		return codedError(raftentry.ErrorMalformedEntryV1, "apply result catalog version has no presence marker")
+	}
 	if len(record.IdempotencyKey) == 0 {
 		return codedError(raftentry.ErrorNoIdempotencyV1, "apply result record missing idempotency key")
 	}
@@ -384,6 +391,7 @@ func validateApplyProgressRecordV1(record ApplyProgressRecordV1, requireCoverage
 func applyResultRecordSizeV1(record ApplyResultRecordV1) int {
 	return applyEntryIDSizeV1 +
 		len(record.CommandDigest) +
+		2*uint64SizeV1 + // original expected catalog version and presence
 		uint64SizeV1 +
 		encodedBytesSizeV1(record.IdempotencyKey) +
 		encodedBytesSizeV1([]byte(record.Result.Status)) +

@@ -36,6 +36,21 @@ func TestVectorPartitionProductionTopologyTwoGroupTCPGenerationPinnedV1(t *testi
 	}
 }
 
+func TestVectorPartitionProductionTopologyExternalImmutableRouterWithoutSnapshotV1(t *testing.T) {
+	topology, request, reads := newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}, strings.Repeat("b", 64), true)
+	defer topology.Close()
+	if topology.servingSnapshot != nil {
+		t.Fatal("test unexpectedly installed a serving snapshot")
+	}
+	response, err := topology.Coordinator().Search(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 2 || response.LiveRevision != 0 || response.LiveCoverage != 0 || response.Counters.LiveDomainsSearched != 0 || reads["group-a"].callCount() != 1 || reads["group-b"].callCount() != 1 {
+		t.Fatalf("immutable response=%+v read calls a=%d b=%d", response, reads["group-a"].callCount(), reads["group-b"].callCount())
+	}
+}
+
 func TestVectorPartitionProductionTopologyRollsBackPartialStartAndRestartsV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
 	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}}})
@@ -74,10 +89,10 @@ func newVectorPartitionProductionTopologyTwoGroupTestV1(t testing.TB) (*VectorPa
 }
 
 func newVectorPartitionProductionTopologyTwoGroupWithLifecycleTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
-	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, lifecycle, strings.Repeat("b", 64))
+	return newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t, lifecycle, strings.Repeat("b", 64), false)
 }
 
-func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1, readySetDigest string) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
+func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t testing.TB, lifecycle VectorPartitionReplicatedLifecycleAuthorityV1, readySetDigest string, immutableRouter bool) (*VectorPartitionProductionTopologyV1, VectorPartitionCoordinatorRequestV1, map[raftcluster.GroupID]*fakeVectorPartitionReadCoordinatorV1) {
 	t.Helper()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	groups := []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"}}
@@ -111,7 +126,14 @@ func newVectorPartitionProductionTopologyTwoGroupWithLifecycleReadySetTestV1(t t
 	boundA := listenerA.Addr().(*net.TCPAddr)
 	listenerA = &temporaryWildcardTCPListenerV1{Listener: listenerA, addr: &net.TCPAddr{IP: net.IPv4zero, Port: boundA.Port}}
 	router := &testVectorPartitionCoordinatorRouterV1{status: collections.VectorPartitionRouterRuntimeStatusV1{Manifest: manifest, ModelDigest: strings.Repeat("c", 64), Representatives: 2, Partitions: 2}, partitions: []collections.VectorPartitionRouterPartitionScoreV1{{PartitionID: 0}, {PartitionID: 1, Distance: 0.1}}}
-	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router}, ReplicatedLifecycle: lifecycle, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
+	var routerSource VectorPartitionCoordinatorRouterSourceV1 = &testVectorPartitionCoordinatorRouterSourceV1{router: router}
+	if immutableRouter {
+		// Hide fixture-only capabilities as an external router source would.
+		routerSource = VectorPartitionImmutableCoordinatorRouterSourceV1{struct {
+			VectorPartitionCoordinatorRouterSourceV1
+		}{routerSource}}
+	}
+	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Catalog: catalog, Placement: placement, RouterSource: routerSource, ReplicatedLifecycle: lifecycle, Endpoints: map[raftcluster.GroupID]string{"group-a": endpointA, "group-b": listenerB.Addr().String()}, Shards: []VectorPartitionProductionShardV1{{GroupID: "group-a", Listener: listenerA, Service: service("group-a", "node-a", 0)}, {GroupID: "group-b", Listener: listenerB, Service: service("group-b", "node-b", 1)}}})
 	if err != nil {
 		_ = listenerA.Close()
 		_ = listenerB.Close()

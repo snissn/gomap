@@ -71,6 +71,50 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 	}
 }
 
+func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierReadOnlyV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedDB := openCollectionCommandWALDB(t, dir)
+	defer reopenedDB.Close()
+	reopened, err := NewCollectionManager(reopenedDB).OpenCollection(manifest.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.registeredVectorIndex(def.Name); got != nil {
+		t.Fatalf("collection reopen eagerly registered carrier=%p", got)
+	}
+	beforeLSN := reopenedDB.State().AppliedCommandLSN
+	rebuilds := 0
+	restoreHook := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { rebuilds++ })
+	defer restoreHook()
+	plan, err := reopened.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.liveRecovery || reopened.registeredVectorIndex(def.Name) == nil {
+		t.Fatalf("replicated live plan=%+v carrier=%p", plan, reopened.registeredVectorIndex(def.Name))
+	}
+	if afterLSN := reopenedDB.State().AppliedCommandLSN; afterLSN != beforeLSN {
+		t.Fatalf("read-only replicated live carrier restore advanced command-WAL coverage: before=%d after=%d", beforeLSN, afterLSN)
+	}
+	if rebuilds != 0 {
+		t.Fatalf("read-only replicated live carrier restore rebuilt graph %d times", rebuilds)
+	}
+	pin, err := reopened.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin.Release()
+}
+
 func TestAppendVectorPartitionMembershipsToPlanV1FailsClosedOnChangedInput(t *testing.T) {
 	plan := &VectorPartitionGenerationSearchOpenPlanV1{
 		partitionCount: 2,

@@ -283,6 +283,11 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		digest, _ := raftentry.ValidateCommandDigestInputV1(entryBytes, decodeOpts)
 		return reject(digest, code, err)
 	}
+	expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	if err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
 
 	if h.opts.ResultStore != nil {
 		record, ok, err := h.opts.ResultStore.LookupApplyResult(meta.EntryID)
@@ -328,7 +333,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				code, _ := ErrorCodeOf(err)
 				return recoveryRequired(entry.Digest, code, err)
 			}
-			if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey); err != nil {
+			if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey, expectedCatalogVersion); err != nil {
 				code, _ := ErrorCodeOf(err)
 				return reject(entry.Digest, code, err)
 			}
@@ -348,12 +353,14 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			duplicate.AffectedCount = 0
 			duplicate.MatchedCount = 0
 			if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-				EntryID:                 meta.EntryID,
-				CommandDigest:           entry.Digest,
-				IdempotencyKey:          entry.IdempotencyKey,
-				AppliedCommandLSN:       duplicateLSN,
-				ProgressLogicalDigestV1: logical,
-				Result:                  duplicate,
+				EntryID:                   meta.EntryID,
+				CommandDigest:             entry.Digest,
+				IdempotencyKey:            entry.IdempotencyKey,
+				AppliedCommandLSN:         duplicateLSN,
+				ExpectedCatalogVersion:    record.ExpectedCatalogVersion,
+				HasExpectedCatalogVersion: record.HasExpectedCatalogVersion,
+				ProgressLogicalDigestV1:   logical,
+				Result:                    duplicate,
 			}); err != nil {
 				code, _ := ErrorCodeOf(err)
 				return recoveryRequired(entry.Digest, code, err)
@@ -379,7 +386,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		}
 	}
 
-	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey); err != nil {
+	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey, expectedCatalogVersion); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(entry.Digest, code, err)
 	}
@@ -414,12 +421,14 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-			EntryID:                 meta.EntryID,
-			CommandDigest:           entry.Digest,
-			IdempotencyKey:          entry.IdempotencyKey,
-			AppliedCommandLSN:       appliedLSN,
-			ProgressLogicalDigestV1: LogicalDigestV1(result.ResultDigest),
-			Result:                  result,
+			EntryID:                   meta.EntryID,
+			CommandDigest:             entry.Digest,
+			IdempotencyKey:            entry.IdempotencyKey,
+			AppliedCommandLSN:         appliedLSN,
+			ExpectedCatalogVersion:    expectedCatalogVersion,
+			HasExpectedCatalogVersion: true,
+			ProgressLogicalDigestV1:   LogicalDigestV1(result.ResultDigest),
+			Result:                    result,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
@@ -472,12 +481,14 @@ func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
 	return nil
 }
 
-func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1, idempotencyKey []byte) error {
+func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1, idempotencyKey []byte, expectedCatalogVersion uint64) error {
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.CheckCanRecordApplyResult(ApplyResultRecordV1{
-			EntryID:        id,
-			CommandDigest:  digest,
-			IdempotencyKey: idempotencyKey,
+			EntryID:                   id,
+			CommandDigest:             digest,
+			IdempotencyKey:            idempotencyKey,
+			ExpectedCatalogVersion:    expectedCatalogVersion,
+			HasExpectedCatalogVersion: true,
 		}); err != nil {
 			return err
 		}
