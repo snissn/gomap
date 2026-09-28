@@ -226,8 +226,8 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorNodesV1(ctx context.Context, 
 			return fmt.Errorf("owner %s: %w", owner, err)
 		}
 	}
-	// Ingress is reported ready only after each owner has opened its shard
-	// listener. Topology construction itself does not connect to the owners.
+	// Warm the router only after every owner has opened its shard listener.
+	// Operational readiness separately observes ACTIVE and these listeners.
 	if err := r.warmImmutableVectorOnNodeV1(ctx, r.config.Vector.RouterNodeID); err != nil {
 		return fmt.Errorf("router: %w", err)
 	}

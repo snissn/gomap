@@ -195,10 +195,18 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 		}
 		return true
 	})
+	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
+		if report, err := client.ReadinessV1(ctx, node); err == nil || report.Ready {
+			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
+		}
+	}
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("source-verified BUILD, hosted Stage, and ACTIVE: %v", err)
 	}
 	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
+		if report, err := client.ReadinessV1(ctx, node); err != nil || !report.Ready {
+			t.Fatalf("warmed %s readiness: %+v err=%v", node, report, err)
+		}
 		peer, err := DialContext(ctx, "tcp", configs[0].Vector.PublicAddresses[node])
 		if err != nil {
 			t.Fatalf("public listener for %s: %v", node, err)
@@ -269,8 +277,16 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 		status, err := client.Status(ctx, "owner-b")
 		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
 	})
+	fixedPeerWaitV1(t, ctx, func() bool {
+		report, err := client.ReadinessV1(ctx, "owner-b")
+		return err != nil && !report.Ready && len(report.Groups) == 1 && report.Groups[0].Ready &&
+			strings.Contains(report.Error, "immutable vector listener")
+	})
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("reopened owner lifecycle: %v", err)
+	}
+	if report, err := client.ReadinessV1(ctx, "owner-b"); err != nil || !report.Ready {
+		t.Fatalf("rewarmed owner readiness: %+v err=%v", report, err)
 	}
 	request.Deadline = time.Now().Add(12 * time.Second)
 	reopened, err := publicClient.VectorSearchStrictV1(ctx, request)

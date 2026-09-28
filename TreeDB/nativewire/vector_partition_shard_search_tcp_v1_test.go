@@ -790,6 +790,51 @@ func TestVectorPartitionShardSearchTCPDispatcherRediscoveryAfterDeadOwnerV1(t *t
 	}
 }
 
+func TestVectorPartitionShardSearchTCPDispatcherRediscoveryAfterLiveNotLeaderV1(t *testing.T) {
+	leader := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: r.RequestID}, nil
+	}))
+	stale := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-a", Err: errors.New("old owner stepped down")}
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(
+		map[raftcluster.GroupID]string{"group-a": stale.Addr().String()},
+		map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-a": {"node-a": stale.Addr().String(), "node-b": leader.Addr().String()}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	var rediscoveries int
+	dispatcher.transportLeaderResolver = func(_ context.Context, group raftcluster.GroupID, old raftcluster.NodeID) (raftcluster.NodeID, error) {
+		rediscoveries++
+		if group != "group-a" || old != "node-a" {
+			t.Fatalf("rediscovery group=%q old=%q", group, old)
+		}
+		return "node-b", nil
+	}
+	request := VectorPartitionShardSearchRequestV1{TargetGroupID: "group-a", TargetNodeID: "node-a", RequestID: "live-old-owner"}
+	_, err = dispatcher.DispatchVectorPartitionShardSearchV1(t.Context(), request)
+	var shardErr *VectorPartitionShardSearchErrorV1
+	if !errors.As(err, &shardErr) || shardErr.Code != VectorPartitionShardSearchErrorNotLeaderV1 || shardErr.LeaderHint != "node-b" || rediscoveries != 1 {
+		t.Fatalf("live old owner err=%v rediscoveries=%d", err, rediscoveries)
+	}
+	request.TargetNodeID = shardErr.LeaderHint
+	if response, err := dispatcher.DispatchVectorPartitionShardSearchV1(t.Context(), request); err != nil || response.RequestID != request.RequestID {
+		t.Fatalf("elected owner response=%+v err=%v", response, err)
+	}
+	request.TargetNodeID = "node-a"
+	for _, unresolved := range []raftcluster.NodeID{"node-a", ""} {
+		dispatcher.transportLeaderResolver = func(context.Context, raftcluster.GroupID, raftcluster.NodeID) (raftcluster.NodeID, error) {
+			return unresolved, nil
+		}
+		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(t.Context(), request)
+		if !errors.As(err, &shardErr) || shardErr.Code != VectorPartitionShardSearchErrorGroupUnavailableV1 {
+			t.Fatalf("unresolved live old owner %q err=%v, want group unavailable", unresolved, err)
+		}
+	}
+}
+
 func TestVectorPartitionShardSearchTCPDispatcherRediscoveryHonorsRequestDeadlineV1(t *testing.T) {
 	dead, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

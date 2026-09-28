@@ -213,7 +213,14 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
-		if err == nil || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
+		if err == nil || ctx.Err() != nil {
+			return response, err
+		}
+		var shardErr *VectorPartitionShardSearchErrorV1
+		if d.transportLeaderResolver != nil && request.TargetNodeID != "" && errors.As(err, &shardErr) && shardErr.Code == VectorPartitionShardSearchErrorNotLeaderV1 {
+			return response, d.rediscoverVectorPartitionShardLeaderV1(ctx, request, err)
+		}
+		if !vectorPartitionShardSearchTCPReconnectableV1(err) {
 			return response, err
 		}
 		if attempt == 0 {
@@ -221,29 +228,28 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 			continue
 		}
 		if d.transportLeaderResolver != nil && request.TargetNodeID != "" {
-			resolveCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, request.DeadlineUnixNano)
-			if resolveCtx.Err() != nil {
-				resolveErr := vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, resolveCtx.Err())
-				cancel()
-				return response, resolveErr
-			}
-			leader, resolveErr := d.transportLeaderResolver(resolveCtx, request.TargetGroupID, request.TargetNodeID)
-			ctxErr := resolveCtx.Err()
-			cancel()
-			if ctxErr != nil {
-				return response, vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, ctxErr)
-			}
-			if resolveErr != nil {
-				return response, errors.Join(err, resolveErr)
-			}
-			if leader != "" && leader != request.TargetNodeID {
-				return response, &VectorPartitionShardSearchErrorV1{
-					Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: request.TargetGroupID,
-					LeaderHint: leader, Err: err,
-				}
-			}
+			return response, d.rediscoverVectorPartitionShardLeaderV1(ctx, request, err)
 		}
 		return response, err
+	}
+}
+
+func (d *VectorPartitionShardSearchTCPDispatcherV1) rediscoverVectorPartitionShardLeaderV1(ctx context.Context, request VectorPartitionShardSearchRequestV1, cause error) error {
+	resolveCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, request.DeadlineUnixNano)
+	defer cancel()
+	if err := resolveCtx.Err(); err != nil {
+		return vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, err)
+	}
+	leader, err := d.transportLeaderResolver(resolveCtx, request.TargetGroupID, request.TargetNodeID)
+	if ctxErr := resolveCtx.Err(); ctxErr != nil {
+		return vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, ctxErr)
+	}
+	if err != nil || leader == "" || leader == request.TargetNodeID {
+		return &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: errors.Join(cause, err)}
+	}
+	return &VectorPartitionShardSearchErrorV1{
+		Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: request.TargetGroupID,
+		LeaderHint: leader, Err: cause,
 	}
 }
 

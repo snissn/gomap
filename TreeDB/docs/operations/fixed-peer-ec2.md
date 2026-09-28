@@ -38,8 +38,11 @@ data groups. Serving nodes retain metadata and only their hosted router or graph
 assets; the source holder alone keeps the full builder collection. A successful
 process start or local asset copy is not readiness. The authenticated lifecycle
 control path must commit source-verified BUILD, each owner's staged-byte and
-applied readiness, PREPARE, and ACTIVE before warming listeners. Verify fresh
-readiness on the router and owners before routing search. Public strict search
+applied readiness, PREPARE, and ACTIVE before warming listeners. After a restart,
+rerun the authenticated lifecycle control path to re-stage and warm any new
+owner leader. Then check fresh readiness on the router and owners before
+routing search; immutable readiness requires ACTIVE and already-open router or
+shard listeners, and does not warm them itself. Public strict search
 is available only on the configured router; nonrouters and immutable vector
 mutations return typed unavailability. A missing owner or stale authority must
 fail the whole result.
