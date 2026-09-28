@@ -1,5 +1,17 @@
 # benchprof
 
+`BenchmarkDocumentSnapshotGrowthV1` and
+`BenchmarkDocumentSnapshotForegroundV1` use the standalone
+`scripts/treedb_document_snapshot_evidence.sh OUTPUT_DIRECTORY` capture flow.
+It writes fresh-process Go test JSON plus `cpu_*.pprof` and `heap_*.pprof`
+for each leaf. Inspect those profiles directly with `go tool pprof`; their
+fixture population is outside the benchmark timer but inside the process
+profiles. The script does not emit `benchprof_results.json`, so these files
+are not inputs to `benchprof`.
+Growth records use `source_directory_file_bytes_before_export` for the source
+directory size before export and `archive_bytes` for the streamed archive size.
+Foreground records use `archive_bytes` for the native snapshot size.
+
 `benchprof` analyzes `unified-bench` profile artifacts (CPU + allocation sections) and emits:
 
 - `insights.md` (human-readable summary)

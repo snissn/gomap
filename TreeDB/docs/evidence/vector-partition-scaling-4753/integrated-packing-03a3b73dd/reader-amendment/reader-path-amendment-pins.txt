@@ -1,0 +1,3 @@
+4b5db5732f8ff6c93558fbcdf22f48d459b04e1c5b31972b7387edf0307832ed  /home/mikers/gomap-4753-integrated-03a3b73dd/f-resource-read-v2.sh
+adece25dd3a7bfd0c21510fbc9540c26d5e7a5b252d2259004fba81f8743e5a0  /home/mikers/gomap-4753-integrated-03a3b73dd/f-physical-v2.sh
+4554843bb99dee7024f7b1b7c5976586620759d7f8f72ff0c1b856dca9cf3b70  /home/mikers/gomap-4753-integrated-03a3b73dd/reader-path-amendment.json

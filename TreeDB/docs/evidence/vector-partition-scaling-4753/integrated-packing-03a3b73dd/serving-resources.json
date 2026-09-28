@@ -1,0 +1,175 @@
+{
+  "status": "ONE_PROSPECTIVE_RESOURCE_OBSERVATION_NOT_QUALIFICATION",
+  "source_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+  "readers": {
+    "one": {
+      "Status": "DERIVED_SERVING_RESOURCES_NOT_QUALIFICATION",
+      "Scope": "whole co-located process during bounded native M8 workers: request preparation, coordinator/client, TCP shards, Raft/background and Go runtime/GC; excludes setup, warmup, preallocated outcome slots, post-response validation, attribution and receipt encoding; CPU snapshot follows ReadMemStats, so CPU delta includes final snapshot overhead; wall excludes both snapshots; no forced GC or idle subtraction; standard M8 CPU/block/mutex/trace enabled; one prospective observation, not historical allocations or resource-improvement significance; host admission, cgroup envelope and isolation remain root-attested from pinned launch receipts",
+      "InventorySHA256": "2cb946da375b6fba9abb4e286f81ec10059b1d27a9858cf00dde58e79138e6c3",
+      "HeaderSHA256": "124ee60c7b5aba9c91223a6bbcda98cd8c474397bab9fae03a7aaef6454cb503",
+      "ReceiptSHA256": "b733a39d13f3acd7e0aa754b30f385b592c2d1475ac77335e6cfe36402902d4d",
+      "ExitStatusSHA256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "ParentReportSHA256": "90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c",
+      "Asset": 1,
+      "ExternalBlock": 1,
+      "Cells": [
+        {
+          "Probes": 5,
+          "Concurrency": 1,
+          "Attempts": 512,
+          "CPUNanos": 1862744000,
+          "TotalAllocBytes": 96121264,
+          "Mallocs": 543649,
+          "WorkerWallNanos": 743717918,
+          "BeforeSnapshotNanos": 134971,
+          "AfterSnapshotNanos": 76471,
+          "CPUNanosPerAttempt": 3638171.875,
+          "BytesPerAttempt": 187736.84375,
+          "AllocsPerAttempt": 1061.814453125
+        },
+        {
+          "Probes": 5,
+          "Concurrency": 32,
+          "Attempts": 512,
+          "CPUNanos": 5381490000,
+          "TotalAllocBytes": 146037440,
+          "Mallocs": 486447,
+          "WorkerWallNanos": 342790929,
+          "BeforeSnapshotNanos": 29360,
+          "AfterSnapshotNanos": 97800,
+          "CPUNanosPerAttempt": 10510722.65625,
+          "BytesPerAttempt": 285229.375,
+          "AllocsPerAttempt": 950.091796875
+        },
+        {
+          "Probes": 16,
+          "Concurrency": 1,
+          "Attempts": 512,
+          "CPUNanos": 6115112000,
+          "TotalAllocBytes": 187988032,
+          "Mallocs": 770350,
+          "WorkerWallNanos": 1674392041,
+          "BeforeSnapshotNanos": 22891,
+          "AfterSnapshotNanos": 101291,
+          "CPUNanosPerAttempt": 11943578.125,
+          "BytesPerAttempt": 367164.125,
+          "AllocsPerAttempt": 1504.58984375
+        },
+        {
+          "Probes": 16,
+          "Concurrency": 32,
+          "Attempts": 512,
+          "CPUNanos": 15204791000,
+          "TotalAllocBytes": 207573936,
+          "Mallocs": 691040,
+          "WorkerWallNanos": 957730783,
+          "BeforeSnapshotNanos": 24481,
+          "AfterSnapshotNanos": 156482,
+          "CPUNanosPerAttempt": 29696857.421875,
+          "BytesPerAttempt": 405417.84375,
+          "AllocsPerAttempt": 1349.6875
+        }
+      ]
+    },
+    "multi": {
+      "Status": "DERIVED_SERVING_RESOURCES_NOT_QUALIFICATION",
+      "Scope": "whole co-located process during bounded native M8 workers: request preparation, coordinator/client, TCP shards, Raft/background and Go runtime/GC; excludes setup, warmup, preallocated outcome slots, post-response validation, attribution and receipt encoding; CPU snapshot follows ReadMemStats, so CPU delta includes final snapshot overhead; wall excludes both snapshots; no forced GC or idle subtraction; standard M8 CPU/block/mutex/trace enabled; one prospective observation, not historical allocations or resource-improvement significance; host admission, cgroup envelope and isolation remain root-attested from pinned launch receipts",
+      "InventorySHA256": "763c07c3a0fa1582ac26f46c668f7cdb5d5fe6e88e1fbb11eddce76c2ed8f64f",
+      "HeaderSHA256": "fa655d4c12db641483b46797f233a60126613efcf19c66ba39103a08e4bbaf89",
+      "ReceiptSHA256": "b254e9ea616a36d4c1ed9bf200f7e260414bfd133405da1d5c4a636367bb7abb",
+      "ExitStatusSHA256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "ParentReportSHA256": "6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850",
+      "Asset": 2,
+      "ExternalBlock": 1,
+      "Cells": [
+        {
+          "Probes": 5,
+          "Concurrency": 1,
+          "Attempts": 512,
+          "CPUNanos": 1872700000,
+          "TotalAllocBytes": 103757256,
+          "Mallocs": 544072,
+          "WorkerWallNanos": 747422281,
+          "BeforeSnapshotNanos": 133902,
+          "AfterSnapshotNanos": 109531,
+          "CPUNanosPerAttempt": 3657617.1875,
+          "BytesPerAttempt": 202650.890625,
+          "AllocsPerAttempt": 1062.640625
+        },
+        {
+          "Probes": 5,
+          "Concurrency": 32,
+          "Attempts": 512,
+          "CPUNanos": 5423950000,
+          "TotalAllocBytes": 147214544,
+          "Mallocs": 488713,
+          "WorkerWallNanos": 346534358,
+          "BeforeSnapshotNanos": 21841,
+          "AfterSnapshotNanos": 112601,
+          "CPUNanosPerAttempt": 10593652.34375,
+          "BytesPerAttempt": 287528.40625,
+          "AllocsPerAttempt": 954.517578125
+        },
+        {
+          "Probes": 16,
+          "Concurrency": 1,
+          "Attempts": 512,
+          "CPUNanos": 6130379000,
+          "TotalAllocBytes": 203269656,
+          "Mallocs": 773462,
+          "WorkerWallNanos": 1674407197,
+          "BeforeSnapshotNanos": 31811,
+          "AfterSnapshotNanos": 118122,
+          "CPUNanosPerAttempt": 11973396.484375,
+          "BytesPerAttempt": 397011.046875,
+          "AllocsPerAttempt": 1510.66796875
+        },
+        {
+          "Probes": 16,
+          "Concurrency": 32,
+          "Attempts": 512,
+          "CPUNanos": 15136836000,
+          "TotalAllocBytes": 215382800,
+          "Mallocs": 692414,
+          "WorkerWallNanos": 973427845,
+          "BeforeSnapshotNanos": 36770,
+          "AfterSnapshotNanos": 121881,
+          "CPUNanosPerAttempt": 29564132.8125,
+          "BytesPerAttempt": 420669.53125,
+          "AllocsPerAttempt": 1352.37109375
+        }
+      ]
+    }
+  },
+  "ratios": [
+    {
+      "probes": 5,
+      "concurrency": 1,
+      "multi_over_one_cpu": 1.005344803150621,
+      "multi_over_one_total_alloc": 1.0794412358122965,
+      "multi_over_one_mallocs": 1.0007780755597822
+    },
+    {
+      "probes": 5,
+      "concurrency": 32,
+      "multi_over_one_cpu": 1.007890008157592,
+      "multi_over_one_total_alloc": 1.0080602891970716,
+      "multi_over_one_mallocs": 1.0046582669848925
+    },
+    {
+      "probes": 16,
+      "concurrency": 1,
+      "multi_over_one_cpu": 1.0024966018610943,
+      "multi_over_one_total_alloc": 1.0812904089553956,
+      "multi_over_one_mallocs": 1.0040397222041928
+    },
+    {
+      "probes": 16,
+      "concurrency": 32,
+      "multi_over_one_cpu": 0.995530685032106,
+      "multi_over_one_total_alloc": 1.0376196749480147,
+      "multi_over_one_mallocs": 1.001988307478583
+    }
+  ],
+  "limits": "One externally labelled observation; process-wide worker phase, profiles enabled, no significance or universal memory claim; cannot override failed timing gate."
+}

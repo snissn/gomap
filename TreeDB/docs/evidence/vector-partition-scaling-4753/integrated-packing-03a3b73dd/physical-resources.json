@@ -1,0 +1,1353 @@
+{
+  "status": "BOTH_PHYSICAL_READERS_PASS_NOT_QUALIFICATION",
+  "source_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+  "scope": "Exact strict reader projections from separate untimed collectors; owned pack inventory and release accounting, not query touches, RSS, heap reclamation or packing qualification.",
+  "readers": {
+    "one": {
+      "Status": "DERIVED_CURRENT_RUNTIME_PHYSICAL_RESOURCES_NOT_QUALIFICATION",
+      "ParentSHA256": "90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c",
+      "OriginalHeaderSHA256": "f0949f224762cdaa0c776ff246e80f84e5f28b7fd3dbe3bd9d4794924f148ae5",
+      "ReceiptSHA256": "eb99833146314829774474547236e690a2afd2c5971fe838ba63d1f7975ac162",
+      "ExitSHA256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "RawRetainedManifestDigest": "225e7494abd8d25252774e8211fd87e73fbfcb9626685abcf070ea6f6dc1c0c6",
+      "DerivedExpectedHeader": {
+        "kind": "physical_resources",
+        "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+        "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+        "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c rows=20\n",
+        "head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+        "executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+        "source_checkout": "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+        "command": [
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/bin/treedb_vector_partition_bench",
+          "physical-resources",
+          "-out",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/physical/one-block1/resources.json",
+          "-source-checkout",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+          "-head-sha",
+          "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "-executable-sha256",
+          "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "--",
+          "-root",
+          "/home/mikers",
+          "-report",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/serving/one-block1/vector_partition_m8_03a3b73dd2fc_d841d9e1a9d8.json",
+          "-report-sha256",
+          "90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c",
+          "-fixture-sha256",
+          "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+          "-command-sha256",
+          "8f703c5662dd074c6ce3c37460af60eed1af95c9a4f2804e3c9215247831a9c4",
+          "-executable-sha256",
+          "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "-variant-descriptor-sha256",
+          "f5502c0635032751f363086f0bd16f879ac107a1f2a3b5874fd9502033b25b8d",
+          "-truth-artifact-sha256",
+          "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+          "-truth-content-sha256",
+          "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+        ],
+        "parent_execution_id": "f8cf64128af22aac399e20f9212fc99a",
+        "parent_head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+        "parent_executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+        "manifest_integrity_digest": "9e04192d04ac80d26fd17868cb44ec2a89f0bd5ed1ddb53645bd7a6686096046",
+        "generation": 1,
+        "domain_graphs": false,
+        "serving_partitions": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "top_k": 10,
+        "ef_search": [
+          96
+        ],
+        "go_version": "go1.26.0",
+        "goos": "linux",
+        "goarch": "amd64",
+        "page_size": 4096,
+        "host": {
+          "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+          "memory_bytes": 32109105152,
+          "numa_nodes": "0",
+          "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+          "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+        }
+      },
+      "Observation": {
+        "header": {
+          "kind": "physical_resources",
+          "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+          "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+          "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c rows=20\n",
+          "head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "source_checkout": "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+          "command": [
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/bin/treedb_vector_partition_bench",
+            "physical-resources",
+            "-out",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/physical/one-block1/resources.json",
+            "-source-checkout",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+            "-head-sha",
+            "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+            "-executable-sha256",
+            "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+            "--",
+            "-root",
+            "/home/mikers",
+            "-report",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/serving/one-block1/vector_partition_m8_03a3b73dd2fc_d841d9e1a9d8.json",
+            "-report-sha256",
+            "90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c",
+            "-fixture-sha256",
+            "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+            "-command-sha256",
+            "8f703c5662dd074c6ce3c37460af60eed1af95c9a4f2804e3c9215247831a9c4",
+            "-executable-sha256",
+            "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+            "-variant-descriptor-sha256",
+            "f5502c0635032751f363086f0bd16f879ac107a1f2a3b5874fd9502033b25b8d",
+            "-truth-artifact-sha256",
+            "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+            "-truth-content-sha256",
+            "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+          ],
+          "parent_execution_id": "f8cf64128af22aac399e20f9212fc99a",
+          "parent_head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "parent_executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "manifest_integrity_digest": "9e04192d04ac80d26fd17868cb44ec2a89f0bd5ed1ddb53645bd7a6686096046",
+          "generation": 1,
+          "domain_graphs": false,
+          "serving_partitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "top_k": 10,
+          "ef_search": [
+            96
+          ],
+          "go_version": "go1.26.0",
+          "goos": "linux",
+          "goarch": "amd64",
+          "page_size": 4096,
+          "host": {
+            "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+            "memory_bytes": 32109105152,
+            "numa_nodes": "0",
+            "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+            "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+            "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+            "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+          }
+        },
+        "packs": [
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 0,
+              "pack_bytes": 21853034,
+              "mapped_extent_bytes": 21856256,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 1,
+              "pack_bytes": 21918002,
+              "mapped_extent_bytes": 21921792,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 2,
+              "pack_bytes": 21768786,
+              "mapped_extent_bytes": 21770240,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 3,
+              "pack_bytes": 21813090,
+              "mapped_extent_bytes": 21819392,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 4,
+              "pack_bytes": 21841922,
+              "mapped_extent_bytes": 21843968,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 5,
+              "pack_bytes": 5260442,
+              "mapped_extent_bytes": 5267456,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 39900
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 6,
+              "pack_bytes": 21796938,
+              "mapped_extent_bytes": 21798912,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 7,
+              "pack_bytes": 21710130,
+              "mapped_extent_bytes": 21716992,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 8,
+              "pack_bytes": 21796722,
+              "mapped_extent_bytes": 21798912,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 9,
+              "pack_bytes": 21644986,
+              "mapped_extent_bytes": 21647360,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 10,
+              "pack_bytes": 21605986,
+              "mapped_extent_bytes": 21610496,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 11,
+              "pack_bytes": 21831866,
+              "mapped_extent_bytes": 21835776,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 12,
+              "pack_bytes": 21684634,
+              "mapped_extent_bytes": 21688320,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 13,
+              "pack_bytes": 21807130,
+              "mapped_extent_bytes": 21811200,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 14,
+              "pack_bytes": 21806242,
+              "mapped_extent_bytes": 21811200,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 15,
+              "pack_bytes": 21747506,
+              "mapped_extent_bytes": 21753856,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 2912,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 1,
+              "required_chunks": 0,
+              "opened_chunks": 0,
+              "validated_chunks": 0
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 1,
+              "releases": 1,
+              "errors": 0
+            }
+          }
+        ],
+        "totals": {
+          "pack_bytes": 331887416,
+          "mapped_extent_bytes": 331952128,
+          "heap_copy_bytes": 0,
+          "metadata_bytes_bound": 46592,
+          "stable_id_bytes_bound": 0,
+          "logical_handles": 16,
+          "required_chunks": 0,
+          "opened_chunks": 0,
+          "validated_chunks": 0,
+          "inventory_scratch_bounds": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 1881840
+            }
+          ]
+        },
+        "complete": true
+      }
+    },
+    "multi": {
+      "Status": "DERIVED_CURRENT_RUNTIME_PHYSICAL_RESOURCES_NOT_QUALIFICATION",
+      "ParentSHA256": "6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850",
+      "OriginalHeaderSHA256": "78070b1ea62a284fa8be1294231a26b33396fcc5b8fcfd65186ec43bfc61d6be",
+      "ReceiptSHA256": "382293afe549b91bf6900b405d91ca227b95382e83c74b874562a69b60aee171",
+      "ExitSHA256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "RawRetainedManifestDigest": "d7eaea882b4e9c37692e66d27b79f815bf1d560af67f9e9e4af3f0e69956d60f",
+      "DerivedExpectedHeader": {
+        "kind": "physical_resources",
+        "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+        "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+        "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850 rows=20\n",
+        "head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+        "executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+        "source_checkout": "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+        "command": [
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/bin/treedb_vector_partition_bench",
+          "physical-resources",
+          "-out",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/physical/multi-block1/resources.json",
+          "-source-checkout",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+          "-head-sha",
+          "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "-executable-sha256",
+          "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "--",
+          "-root",
+          "/home/mikers",
+          "-report",
+          "/home/mikers/gomap-4753-integrated-03a3b73dd/serving/multi-block1/vector_partition_m8_03a3b73dd2fc_43c3ed65072a.json",
+          "-report-sha256",
+          "6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850",
+          "-fixture-sha256",
+          "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+          "-command-sha256",
+          "d40903610ff44a92941aa7467efd26b3c38a18821b4fcca28c602ed23325e250",
+          "-executable-sha256",
+          "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "-variant-descriptor-sha256",
+          "86acd613de12f34de5f6b97ad6cd071aff5735c48069122744237d92ef19409b",
+          "-truth-artifact-sha256",
+          "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+          "-truth-content-sha256",
+          "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+        ],
+        "parent_execution_id": "bd2eb4e4147f580177d4d0df89b7f627",
+        "parent_head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+        "parent_executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+        "manifest_integrity_digest": "eb757fa7eeee9dd945aa1279c77c4f17decf7e8ac5fded7cc9a9cc4bb279d9ec",
+        "generation": 1,
+        "domain_graphs": true,
+        "serving_partitions": [
+          0,
+          4,
+          8,
+          12,
+          16,
+          20,
+          24,
+          28,
+          32,
+          36,
+          40,
+          44,
+          48,
+          52,
+          56,
+          60
+        ],
+        "top_k": 10,
+        "ef_search": [
+          96
+        ],
+        "go_version": "go1.26.0",
+        "goos": "linux",
+        "goarch": "amd64",
+        "page_size": 4096,
+        "host": {
+          "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+          "memory_bytes": 32109105152,
+          "numa_nodes": "0",
+          "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+          "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+          "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+        }
+      },
+      "Observation": {
+        "header": {
+          "kind": "physical_resources",
+          "contract": "untimed_retained_pack_physical_resources_not_qualification_v1",
+          "scope": "new collector opens pinned assets through retained attribution searchers; mapped extents are not RSS; logical handles are not OS FDs; chunks are fully opened/validated, not query touches; metadata and per-search scratch are conservative bounds, not heap/peak measurements; post-close counters prove owned handle release, not Go reclamation; excludes router, native topology and historical measured-process resources",
+          "replay_receipt": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850 rows=20\n",
+          "head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "source_checkout": "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+          "command": [
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/bin/treedb_vector_partition_bench",
+            "physical-resources",
+            "-out",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/physical/multi-block1/resources.json",
+            "-source-checkout",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/candidate/source",
+            "-head-sha",
+            "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+            "-executable-sha256",
+            "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+            "--",
+            "-root",
+            "/home/mikers",
+            "-report",
+            "/home/mikers/gomap-4753-integrated-03a3b73dd/serving/multi-block1/vector_partition_m8_03a3b73dd2fc_43c3ed65072a.json",
+            "-report-sha256",
+            "6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850",
+            "-fixture-sha256",
+            "873b15980fa0f41839c2fb4ddd1fa43b6a000f1fe292d44a9cc89f431b12f023",
+            "-command-sha256",
+            "d40903610ff44a92941aa7467efd26b3c38a18821b4fcca28c602ed23325e250",
+            "-executable-sha256",
+            "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+            "-variant-descriptor-sha256",
+            "86acd613de12f34de5f6b97ad6cd071aff5735c48069122744237d92ef19409b",
+            "-truth-artifact-sha256",
+            "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8",
+            "-truth-content-sha256",
+            "1bb71cdc5f56388e115f2995642c301f3b07472a5f5809f754f8725af6eb71cb"
+          ],
+          "parent_execution_id": "bd2eb4e4147f580177d4d0df89b7f627",
+          "parent_head_sha": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+          "parent_executable_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+          "manifest_integrity_digest": "eb757fa7eeee9dd945aa1279c77c4f17decf7e8ac5fded7cc9a9cc4bb279d9ec",
+          "generation": 1,
+          "domain_graphs": true,
+          "serving_partitions": [
+            0,
+            4,
+            8,
+            12,
+            16,
+            20,
+            24,
+            28,
+            32,
+            36,
+            40,
+            44,
+            48,
+            52,
+            56,
+            60
+          ],
+          "top_k": 10,
+          "ef_search": [
+            96
+          ],
+          "go_version": "go1.26.0",
+          "goos": "linux",
+          "goarch": "amd64",
+          "page_size": 4096,
+          "host": {
+            "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+            "memory_bytes": 32109105152,
+            "numa_nodes": "0",
+            "kernel": "Linux 7.0.0-30-generic x86_64 GNU/Linux",
+            "artifact_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+            "dataset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime",
+            "persistent_asset_mount": "/ /dev/nvme1n1p2 ext4 rw,relatime"
+          }
+        },
+        "packs": [
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 0,
+              "pack_bytes": 21853024,
+              "mapped_extent_bytes": 21897216,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 4,
+              "pack_bytes": 21917992,
+              "mapped_extent_bytes": 21962752,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 8,
+              "pack_bytes": 21768780,
+              "mapped_extent_bytes": 21811200,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 12,
+              "pack_bytes": 21813084,
+              "mapped_extent_bytes": 21860352,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 16,
+              "pack_bytes": 21841916,
+              "mapped_extent_bytes": 21884928,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 20,
+              "pack_bytes": 5260432,
+              "mapped_extent_bytes": 5308416,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 39900
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 24,
+              "pack_bytes": 21796928,
+              "mapped_extent_bytes": 21839872,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 28,
+              "pack_bytes": 21710120,
+              "mapped_extent_bytes": 21757952,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 32,
+              "pack_bytes": 21796712,
+              "mapped_extent_bytes": 21839872,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 36,
+              "pack_bytes": 21644976,
+              "mapped_extent_bytes": 21692416,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 40,
+              "pack_bytes": 21605980,
+              "mapped_extent_bytes": 21647360,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 44,
+              "pack_bytes": 21831860,
+              "mapped_extent_bytes": 21876736,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 48,
+              "pack_bytes": 21684624,
+              "mapped_extent_bytes": 21729280,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 52,
+              "pack_bytes": 21807124,
+              "mapped_extent_bytes": 21852160,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 56,
+              "pack_bytes": 21806236,
+              "mapped_extent_bytes": 21848064,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          },
+          {
+            "live": {
+              "generation": 1,
+              "partition_id": 60,
+              "pack_bytes": 21747500,
+              "mapped_extent_bytes": 21794816,
+              "heap_copy_bytes": 0,
+              "metadata_bytes_bound": 22560,
+              "stable_id_bytes_bound": 0,
+              "logical_handles": 11,
+              "required_chunks": 10,
+              "opened_chunks": 10,
+              "validated_chunks": 10
+            },
+            "scratch": [
+              {
+                "top_k": 10,
+                "ef_search": 96,
+                "bytes_bound": 122796
+              }
+            ],
+            "after_close": {
+              "logical_handles": 0,
+              "mapped_extent_bytes": 0,
+              "heap_copy_bytes": 0,
+              "acquires": 11,
+              "releases": 11,
+              "errors": 0
+            }
+          }
+        ],
+        "totals": {
+          "pack_bytes": 331887288,
+          "mapped_extent_bytes": 332603392,
+          "heap_copy_bytes": 0,
+          "metadata_bytes_bound": 360960,
+          "stable_id_bytes_bound": 0,
+          "logical_handles": 176,
+          "required_chunks": 160,
+          "opened_chunks": 160,
+          "validated_chunks": 160,
+          "inventory_scratch_bounds": [
+            {
+              "top_k": 10,
+              "ef_search": 96,
+              "bytes_bound": 1881840
+            }
+          ]
+        },
+        "complete": true
+      }
+    }
+  }
+}

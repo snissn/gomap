@@ -8,6 +8,20 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Pebble
 - Run: `./bin/unified-bench`
 - Or: `go run ./cmd/unified_bench`
 
+`BenchmarkDocumentSnapshotGrowthV1` and `BenchmarkDocumentSnapshotForegroundV1`
+in `TreeDB/internal/raftfsm` exercise real FSM export/install and foreground
+commits, rather than a unified-bench database adapter. Capture their five leaves
+in separate processes with
+`scripts/treedb_document_snapshot_evidence.sh OUTPUT_DIRECTORY`. The script
+uses `-benchtime=1x -count=1`, records Go test JSON and one CPU/heap profile per
+leaf, and saves the source head and Go version from a required clean checkout.
+The `DOCUMENT_SNAPSHOT_EVIDENCE` JSON log records the measured phase; process
+profiles also include fixture population. These artifacts are not
+`unified-bench -profile-dir` outputs.
+Growth records use `source_directory_file_bytes_before_export` for the source
+directory size before export and `archive_bytes` for the streamed archive size.
+Foreground records use `archive_bytes` for the native snapshot size.
+
 ## Guardrail Check (Read Snapshot + Append-Only)
 
 Targeted regression guardrail for append-only writes plus read-heavy snapshot acquisition:

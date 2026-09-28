@@ -1,0 +1,4 @@
+=== RUN   TestFResourceRetained
+    f_resource_test.go:83: decode M8 profile "/home/mikers/gomap-4753-integrated-03a3b73dd/resources/one-block1/profiles/allocs_baseline.pprof": exec: "go": executable file not found in $PATH
+--- FAIL: TestFResourceRetained (0.58s)
+FAIL
