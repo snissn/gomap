@@ -376,8 +376,13 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
 	})
 	if missingOwnerAsset {
-		if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err == nil {
-			t.Fatal("ACTIVE recovery accepted a missing declared group-b graph segment")
+		_, recoveryErr := client.EnsureImmutableVectorLifecycleV1(ctx)
+		var remoteErr *fixedPeerRemoteErrorV1
+		missingFile := strings.ToLower(fmt.Sprint(recoveryErr))
+		if !errors.As(recoveryErr, &remoteErr) || remoteErr.code != "rejected" ||
+			(!strings.Contains(missingFile, "no such file") &&
+				!strings.Contains(missingFile, "cannot find the file")) {
+			t.Fatalf("ACTIVE recovery did not reject the missing declared group-b graph segment: %v", recoveryErr)
 		}
 		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing group-b graph segment was replaced during recovery: %v", err)
@@ -391,7 +396,7 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[2].DataRoot, "group-c"), hostedFiles["group-c"], false)
 		request.Deadline = time.Now().Add(12 * time.Second)
 		partial, searchErr := publicClient.VectorSearchStrictV1(ctx, request)
-		if searchErr == nil || len(partial.Neighbors) != 0 {
+		if !hasPublicVectorErrorCodeV1(searchErr, public.ErrorUnavailableV1) || len(partial.Neighbors) != 0 {
 			t.Fatalf("missing declared owner asset returned partial result: response=%+v err=%v", partial, searchErr)
 		}
 		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
