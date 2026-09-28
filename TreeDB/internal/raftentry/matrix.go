@@ -80,6 +80,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandVectorClosePinnedSnapshot,
 		nativewire.CommandDenseVectorSearch,
 		nativewire.CommandTypedDocumentUpsert,
+		nativewire.CommandVectorInsert,
 		nativewire.CommandTypedSourceReplace,
 		nativewire.CommandTypedMetadataUpdate,
 	}
@@ -110,6 +111,7 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 	nativewire.CommandUpdateBSONSet: acceptedRow(nativewire.CommandUpdateBSONSet, "CommandUpdateBSONSet", "update_bson_set", "CollectionUpdateBatchByID", "native-wire deterministic entry fixture", "accepted mutation widening slice; structured top-level BSON $set lowers to deterministic replacement command-WAL payload"),
 
 	nativewire.CommandTypedDocumentUpsert: rejectedRow(nativewire.CommandTypedDocumentUpsert, "CommandTypedDocumentUpsert", "typed_document_upsert", "WAL-supported", "CollectionReplaceSourceByID (typed format 12)", "local_only_mutation_v1", "typed upsert has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
+	nativewire.CommandVectorInsert:        rejectedRow(nativewire.CommandVectorInsert, "CommandVectorInsert", "vector_insert", "WAL-supported", "CollectionInsertBatchByID (via fixed-peer Raft owner)", "local_only_mutation_v1", "public vector insert is local-only routing; the owner lowers the validated request to the existing deterministic insert-batch Raft entry"),
 	nativewire.CommandTypedSourceReplace:  rejectedRow(nativewire.CommandTypedSourceReplace, "CommandTypedSourceReplace", "typed_source_replace", "WAL-supported", "CollectionReplaceSourceByID (typed format 12 or delete-only format 10)", "local_only_mutation_v1", "typed source replacement has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
 	nativewire.CommandTypedMetadataUpdate: rejectedRow(nativewire.CommandTypedMetadataUpdate, "CommandTypedMetadataUpdate", "typed_metadata_update", "WAL-supported", "CollectionUpdateBatchByID (typed metadata format 13)", "local_only_mutation_v1", "typed metadata update has a local partial command-WAL/replay contract but no replicated deterministic-entry contract"),
 

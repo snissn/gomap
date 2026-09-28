@@ -12,6 +12,24 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
+func TestDurableApplyResultV2RejectsInvalidOriginalGuardMarker(t *testing.T) {
+	record := testDurableApplyResultRecord(1, 1, "guard-marker")
+	record.HasExpectedCatalogVersion = true
+	record.ExpectedCatalogVersion = 0 // zero is a valid original guard.
+	payload, err := encodeDurableApplyResultRecordV1(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeDurableApplyResultRecordV1(payload)
+	if err != nil || !decoded.HasExpectedCatalogVersion || decoded.ExpectedCatalogVersion != 0 {
+		t.Fatalf("zero guard roundtrip=%+v err=%v", decoded, err)
+	}
+	binary.LittleEndian.PutUint64(payload[applyEntryIDSizeV1+32+8:], 2)
+	if _, err := decodeDurableApplyResultRecordV1(payload); codeOf(err) != raftentry.ErrorMalformedEntryV1 {
+		t.Fatalf("invalid guard marker error=%v code=%s", err, codeOf(err))
+	}
+}
+
 func TestDurableApplyStoresCloseReopenPreservesApplyProgressIdempotencyAndResult(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
@@ -36,6 +54,9 @@ func TestDurableApplyStoresCloseReopenPreservesApplyProgressIdempotencyAndResult
 	if record.Result != result || record.AppliedCommandLSN == 0 {
 		t.Fatalf("stored result before reopen=%+v lsn=%d, want %+v with coverage", record.Result, record.AppliedCommandLSN, result)
 	}
+	if !record.HasExpectedCatalogVersion || record.ExpectedCatalogVersion != testCatalogVersionStart {
+		t.Fatalf("stored original catalog guard=%d/%v", record.ExpectedCatalogVersion, record.HasExpectedCatalogVersion)
+	}
 
 	closeDurableApplyStoresForTest(t, progress, results)
 	if err := db.Close(); err != nil {
@@ -53,6 +74,9 @@ func TestDurableApplyStoresCloseReopenPreservesApplyProgressIdempotencyAndResult
 	}
 	if reopenedRecord.Result != result || reopenedRecord.AppliedCommandLSN != record.AppliedCommandLSN {
 		t.Fatalf("reopened record=%+v, want result %+v lsn %d", reopenedRecord, result, record.AppliedCommandLSN)
+	}
+	if reopenedRecord.ExpectedCatalogVersion != record.ExpectedCatalogVersion || !reopenedRecord.HasExpectedCatalogVersion || reopenedRecord.CommandDigest != record.CommandDigest {
+		t.Fatalf("reopened original guard/digest=%+v, want %+v", reopenedRecord, record)
 	}
 
 	replayed, err := ApplyCommittedEntryV1(reopenedDB, raw, applyMeta(1, 1), Options{
@@ -102,6 +126,13 @@ func TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest(t *t
 		t.Fatalf("durable duplicate record result=%+v, want already-applied with original logical digest", record.Result)
 	}
 	assertDurableLastApplied(t, progress, raftentry.ApplyEntryID{Term: 1, Index: 2})
+	if !record.HasExpectedCatalogVersion || record.ExpectedCatalogVersion != testCatalogVersionStart {
+		t.Fatalf("duplicate record lost original guard: %+v", record)
+	}
+	changedGuard := deterministicCreateCollectionEntryWithCatalogVersion(t, "users", "durable:duplicate", testCatalogVersionStart+1, testCreateCollectionMetaOptions{})
+	if _, err := PreflightCommandEntryV1(db, changedGuard, applyMetaWithCatalogVersion(1, 3, testCatalogVersionStart+1), Options{ResultStore: results}); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("same-key changed-guard preflight error=%v code=%s", err, codeOf(err))
+	}
 
 	conflictingRaw := deterministicCreateCollectionEntry(t, "orders", "durable:duplicate", testCreateCollectionMetaOptions{})
 	rejected, err := ApplyCommittedEntryV1(db, conflictingRaw, applyMeta(1, 3), Options{

@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -48,8 +49,18 @@ func TestSingleGroupApplyLoopCloseReopenDurableProgressResult(t *testing.T) {
 	if record.Result != results[0] || record.AppliedCommandLSN == 0 {
 		t.Fatalf("record before reopen=%+v lsn=%d, want result %+v with coverage", record.Result, record.AppliedCommandLSN, results[0])
 	}
+	guard, digest, found, err := fsm.AppliedIdempotencyGuardV1(context.Background(), []byte("fsm:create:users"))
+	if err != nil || !found || guard != testCatalogVersionStart || digest != record.CommandDigest {
+		t.Fatalf("original guard/digest=%d/%v/%v/%s", guard, digest, found, err)
+	}
+	if _, _, found, err := fsm.AppliedIdempotencyGuardV1(context.Background(), []byte("unknown")); err != nil || found {
+		t.Fatalf("unknown key found=%v err=%v", found, err)
+	}
 	if err := fsm.Close(); err != nil {
 		t.Fatalf("Close FSM: %v", err)
+	}
+	if _, _, _, err := fsm.AppliedIdempotencyGuardV1(context.Background(), []byte("fsm:create:users")); err == nil {
+		t.Fatal("closed FSM returned an idempotency guard")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close DB: %v", err)
@@ -66,6 +77,10 @@ func TestSingleGroupApplyLoopCloseReopenDurableProgressResult(t *testing.T) {
 	}
 	if reopenedRecord.Result != results[0] || reopenedRecord.AppliedCommandLSN != record.AppliedCommandLSN {
 		t.Fatalf("reopened record=%+v, want result %+v lsn %d", reopenedRecord, results[0], record.AppliedCommandLSN)
+	}
+	guard, digest, found, err = reopenedFSM.AppliedIdempotencyGuardV1(context.Background(), []byte("fsm:create:users"))
+	if err != nil || !found || guard != testCatalogVersionStart || digest != record.CommandDigest {
+		t.Fatalf("reopened original guard/digest=%d/%v/%v/%s", guard, digest, found, err)
 	}
 
 	replayed, err := reopenedFSM.ApplyCommittedEntryV1(committedCommand(2, 1, raw))

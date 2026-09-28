@@ -137,6 +137,22 @@ type vectorPartitionCoordinatorLivePinSourceV1 interface {
 	acquireVectorPartitionCoordinatorLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
 }
 
+type vectorPartitionCoordinatorReplicatedLivePinSourceV1 interface {
+	acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
+}
+
+// VectorPartitionImmutableCoordinatorRouterSourceV1 asserts that its router and
+// dispatched shard sources serve the same immutable generation under replicated
+// lifecycle authority. It is for explicit immutable topologies, not mutable
+// collection live-tail serving. It preserves the supplied router's behavior.
+type VectorPartitionImmutableCoordinatorRouterSourceV1 struct {
+	VectorPartitionCoordinatorRouterSourceV1
+}
+
+func (VectorPartitionImmutableCoordinatorRouterSourceV1) acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
+	return nil, nil
+}
+
 type vectorPartitionCoordinatorLiveRouterSourceV1 interface {
 	openVectorPartitionCoordinatorLiveRouterV1(context.Context, string, uint64) (VectorPartitionCoordinatorRouterV1, error)
 }
@@ -999,12 +1015,20 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		return response, c.wrapError(err, "")
 	}
 	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
-	if strict == nil && c.replicatedLifecycle == nil {
-		if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok {
-			livePin, err = source.acquireVectorPartitionCoordinatorLivePinV1(requestCtx, status.Manifest)
-			if err != nil {
-				return response, c.wrapError(fmt.Errorf("%w: live partition identity: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err), "")
+	if strict == nil {
+		if c.replicatedLifecycle != nil {
+			source, ok := c.routerSource.(vectorPartitionCoordinatorReplicatedLivePinSourceV1)
+			if !ok {
+				return response, c.wrapError(fmt.Errorf("%w: replicated live-pin source is required", ErrVectorPartitionCoordinatorUnavailable), "")
 			}
+			livePin, err = source.acquireVectorPartitionCoordinatorReplicatedLivePinV1(requestCtx, status.Manifest)
+		} else if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok {
+			livePin, err = source.acquireVectorPartitionCoordinatorLivePinV1(requestCtx, status.Manifest)
+		}
+		if err != nil {
+			return response, c.wrapError(fmt.Errorf("%w: live partition identity: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err), "")
+		}
+		if livePin != nil {
 			defer livePin.Release()
 		}
 	}
@@ -1539,11 +1563,32 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	}
 	scoreSurplus := uint64(localScoreBudget - taskCount)
 	totalScoreWeight := totalCandidateWeight
-	liveDomainFloors := make(map[uint32]uint64, len(routed))
-	liveDomainScoreWeights := make(map[uint32]uint64, len(routed))
-	if livePin != nil {
-		for _, score := range routed {
-			candidateCeiling, scratchBytes, preflightErr := livePin.DomainSearchPreflightV1(score.PartitionID, collections.VectorPartitionSearchOptionsV1{
+	type liveDomainKeyV1 struct {
+		group  raftcluster.GroupID
+		domain uint32
+	}
+	livePinForGroup := func(group raftcluster.GroupID) *collections.VectorIndexPartitionLiveSearchPinV1 {
+		if strict != nil {
+			return strict.snapshot.snapshot.livePins[group]
+		}
+		return livePin
+	}
+	liveDomainFloors := make(map[liveDomainKeyV1]uint64, len(routed))
+	liveDomainScoreWeights := make(map[liveDomainKeyV1]uint64, len(routed))
+	for _, score := range routed {
+		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
+		seenGroups := make(map[raftcluster.GroupID]struct{}, end-start)
+		for _, mapping := range domainPacks[start:end] {
+			group := c.placement.Partitions[mapping.PackID].GroupID
+			if _, seen := seenGroups[group]; seen {
+				continue
+			}
+			seenGroups[group] = struct{}{}
+			groupLivePin := livePinForGroup(group)
+			if groupLivePin == nil {
+				continue
+			}
+			candidateCeiling, scratchBytes, preflightErr := groupLivePin.DomainSearchPreflightV1(score.PartitionID, collections.VectorPartitionSearchOptionsV1{
 				TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: shardLimits.MaxStableIDBytes,
 			})
 			if preflightErr != nil {
@@ -1556,8 +1601,9 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			liveDomainFloors[score.PartitionID] = deltaFloor
-			liveDomainScoreWeights[score.PartitionID] = candidateCeiling
+			key := liveDomainKeyV1{group: group, domain: score.PartitionID}
+			liveDomainFloors[key] = deltaFloor
+			liveDomainScoreWeights[key] = candidateCeiling
 			totalScoreWeight, floorOK = addUint64V1(totalScoreWeight, candidateCeiling)
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
@@ -1574,14 +1620,15 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	candidateSurplus := request.CandidateBytesLimit - totalCandidateFloor
 	var candidateWeightCursor uint64
 	var scoreWeightCursor uint64
-	assignedLiveDomains := make(map[uint32]struct{})
-	var liveStatus collections.VectorIndexPartitionLiveStatusV1
-	if livePin != nil {
-		liveStatus = livePin.StatusV1()
-	}
+	assignedLiveDomains := make(map[liveDomainKeyV1]struct{})
 	for _, groupID := range groupIDs {
 		group := c.groups[groupID]
 		partitions := byGroup[groupID]
+		groupLivePin := livePinForGroup(groupID)
+		var liveStatus collections.VectorIndexPartitionLiveStatusV1
+		if groupLivePin != nil {
+			liveStatus = groupLivePin.StatusV1()
+		}
 		for start := 0; start < len(partitions); start += c.limits.MaxPartitionsPerRequest {
 			end := min(start+c.limits.MaxPartitionsPerRequest, len(partitions))
 			ids := slices.Clone(partitions[start:end])
@@ -1622,22 +1669,23 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			}
 			var liveBaseline uint64
 			var liveScoreWeight uint64
-			if livePin != nil {
+			if groupLivePin != nil {
 				shardRequest.LiveRevision = liveStatus.Revision
 				shardRequest.LiveCoverage = liveStatus.Coverage
 				for _, partitionID := range ids {
-					domain, ok := livePin.DomainForPackV1(partitionID)
+					domain, ok := groupLivePin.DomainForPackV1(partitionID)
 					if !ok {
 						return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 					}
-					if _, assigned := assignedLiveDomains[domain]; assigned {
+					key := liveDomainKeyV1{group: groupID, domain: domain}
+					if _, assigned := assignedLiveDomains[key]; assigned {
 						continue
 					}
-					assignedLiveDomains[domain] = struct{}{}
+					assignedLiveDomains[key] = struct{}{}
 					shardRequest.LiveDomainIDs = append(shardRequest.LiveDomainIDs, domain)
-					liveBaseline, ok = addUint64V1(liveBaseline, liveDomainFloors[domain])
+					liveBaseline, ok = addUint64V1(liveBaseline, liveDomainFloors[key])
 					if ok {
-						liveScoreWeight, ok = addUint64V1(liveScoreWeight, liveDomainScoreWeights[domain])
+						liveScoreWeight, ok = addUint64V1(liveScoreWeight, liveDomainScoreWeights[key])
 					}
 					if !ok {
 						return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
