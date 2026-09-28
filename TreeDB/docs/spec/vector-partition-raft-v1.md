@@ -680,8 +680,9 @@ snapshot validation, and reclaim debt derive from the scope and full placement;
 shared foreign-owner segments are invalid. VLS1 is local inventory, not a
 substitute for source-holder validation or fresh catalog authority at READY,
 reopen, and serving admission. Older binaries are not promised to open VCP2.
-Full-local prepared/store reads and LOCAL_ACTIVATE reject scoped generations;
-the scoped prepared read only verifies hosted bytes and grants no serving authority.
+Full-local prepared/store/router reads, ordinary ready staging/status, and
+LOCAL_ACTIVATE reject scoped generations; the scoped prepared read only
+verifies hosted bytes and grants no serving authority.
 
 ### Lifecycle, publication, and cleanup authority
 
