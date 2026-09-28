@@ -117,9 +117,19 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		ReplicatedLifecycle: lifecycle,
 		Endpoints:           endpoints,
 		NodeEndpoints:       nodeEndpoints,
-		CoordinatorLimits:   DefaultVectorPartitionCoordinatorLimitsV1(),
-		ShardLimits:         DefaultVectorPartitionShardSearchLimitsV1(),
-		ShardIdleTimeout:    r.parent.config.RequestTimeout,
+		transportLeaderResolver: func(ctx context.Context, group raftcluster.GroupID, _ raftcluster.NodeID) (raftcluster.NodeID, error) {
+			leader, err := r.parent.immutableVectorOwnerLeaderV1(ctx, resolved, group)
+			if err != nil {
+				return "", err
+			}
+			if nodeEndpoints[group][leader] == "" {
+				return "", ErrFixedPeerVectorWrongOwnerV1
+			}
+			return leader, nil
+		},
+		CoordinatorLimits: DefaultVectorPartitionCoordinatorLimitsV1(),
+		ShardLimits:       DefaultVectorPartitionShardSearchLimitsV1(),
+		ShardIdleTimeout:  r.parent.config.RequestTimeout,
 	}
 	var source *CollectionVectorPartitionGenerationSourceV1
 	var shardListener net.Listener

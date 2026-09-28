@@ -258,6 +258,12 @@ func TestPreparedVectorPartitionScopedManifestVerifiesHostedBytesV1(t *testing.T
 	if err := os.Remove(segment); err != nil {
 		t.Fatal(err)
 	}
+	if resources, err := collection.CaptureVectorPartitionScopedExistingAssetsV1(ready, scope); err == nil {
+		if resources != nil {
+			resources.Release()
+		}
+		t.Fatal("scoped recovery captured missing hosted bytes")
+	}
 	if _, _, err := collection.PreparedVectorPartitionScopedManifestWithContextV1(t.Context(), ready.IndexName, ready.Generation); err == nil {
 		t.Fatal("scoped prepared read accepted missing hosted bytes")
 	}

@@ -74,7 +74,8 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 	if !ok || record.Identity != a.identity || record.Aborted ||
 		(record.State != raftplacement.VectorPartitionLifecycleBuildingV1 &&
 			record.State != raftplacement.VectorPartitionLifecycleStagedV1 &&
-			record.State != raftplacement.VectorPartitionLifecyclePreparedV1) {
+			record.State != raftplacement.VectorPartitionLifecyclePreparedV1 &&
+			record.State != raftplacement.VectorPartitionLifecycleActiveV1) {
 		return ErrFixedPeerVectorProofStaleV1
 	}
 	identity := a.identity
@@ -99,6 +100,26 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 	owners = slices.Compact(owners)
 	if !slices.Equal(owners, record.RequiredGroups) {
 		return fmt.Errorf("%w: scoped stage owner set differs from catalog", ErrFixedPeerVectorProofStaleV1)
+	}
+	if record.State == raftplacement.VectorPartitionLifecycleActiveV1 {
+		// Recovery may stage a newly elected peer after ACTIVE, but only for
+		// an owner whose exact assets already have a committed READY receipt.
+		// The router has no READY vote, so require the complete owner set.
+		if len(record.ReadyGroups) != len(owners) {
+			return ErrFixedPeerVectorProofStaleV1
+		}
+		for _, owner := range owners {
+			found := false
+			for _, ready := range record.ReadyGroups {
+				if ready.GroupID == owner && ready.AppliedIndex != 0 &&
+					ready.AssetSetDigest == vectorPartitionM8GroupAssetSetDigestV1(string(owner), manifest) {
+					found = true
+				}
+			}
+			if !found {
+				return ErrFixedPeerVectorProofStaleV1
+			}
+		}
 	}
 	if a.routerOnly {
 		// A catalog-only ingress may prepare the router, but it cannot claim

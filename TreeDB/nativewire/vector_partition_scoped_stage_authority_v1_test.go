@@ -125,7 +125,7 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	}
 	for _, group := range []raftcluster.GroupID{"group-a", "group-b"} {
 		if _, err := coordinator.RecordGroupReadyV1(t.Context(), identity, raftplacement.VectorPartitionLifecycleGroupReadyV1{
-			GroupID: group, AppliedIndex: 1, AssetSetDigest: fmt.Sprintf("%064x", 3),
+			GroupID: group, AppliedIndex: 1, AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(group), manifest),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -140,15 +140,26 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	if !ok {
 		t.Fatal("active catalog status unavailable")
 	}
-	if err := newAdapter(stableFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
-		t.Fatalf("late Stage after ACTIVE err=%v", err)
+	if err := newAdapter(stableFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); err != nil {
+		t.Fatalf("ACTIVE router re-stage with complete committed READY set: %v", err)
 	}
 	ownerScope := scope
 	ownerScope.HostedGroup = "group-a"
 	ownerScope.Router = false
+	ownerStage := newAdapter(stableFence)
+	ownerStage.hosted, ownerStage.routerOnly = "group-a", false
+	if err := ownerStage.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, ownerScope); err != nil {
+		t.Fatalf("ACTIVE elected owner re-stage: %v", err)
+	}
+	ownerStage.hosted = "group-c"
+	ownerScope.HostedGroup = "group-c"
+	if err := ownerStage.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("ACTIVE uncommitted owner re-staged: %v", err)
+	}
+	ownerScope.HostedGroup = "group-a"
 	owner := &fixedPeerVectorScopedOwnerAuthorityV1{
 		authority: authority, fence: stableFence, identity: identity, hosted: "group-a",
-		owners: []raftcluster.GroupID{"group-a", "group-b"}, readyDigest: fmt.Sprintf("%064x", 3),
+		owners: []raftcluster.GroupID{"group-a", "group-b"}, readyDigest: vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest),
 	}
 	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); err != nil {
 		t.Fatalf("cached ACTIVE owner pair: %v", err)
@@ -157,7 +168,7 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("changed ready receipt accepted: %v", err)
 	}
-	owner.readyDigest = fmt.Sprintf("%064x", 3)
+	owner.readyDigest = vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest)
 	owner.owners = []raftcluster.GroupID{"group-a"}
 	if err := owner.ValidateVectorPartitionScopedOwnerPairV1(t.Context(), ownerScope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("changed owner set accepted: %v", err)

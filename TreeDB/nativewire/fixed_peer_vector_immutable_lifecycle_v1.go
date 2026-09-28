@@ -98,6 +98,33 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		if _, err := r.immutableActiveVectorRecordV1(ctx, owners); err != nil {
 			return zero, err
 		}
+		// A new leader may have received the hosted assets but never staged
+		// them locally. ACTIVE recovery verifies the same committed READY set
+		// before opening any replacement listener; it never writes a new vote.
+		if _, err := r.stageImmutableVectorOnNodeV1(ctx, vector.RouterNodeID); err != nil {
+			return zero, fmt.Errorf("immutable ACTIVE router stage: %w", err)
+		}
+		for _, owner := range owners {
+			leader, err := r.immutableVectorOwnerLeaderV1(ctx, resolved, owner)
+			if err != nil {
+				return zero, fmt.Errorf("immutable ACTIVE owner %s leader: %w", owner, err)
+			}
+			ready, err := r.stageImmutableVectorOnNodeV1(ctx, leader)
+			if err != nil {
+				return zero, fmt.Errorf("immutable ACTIVE owner %s stage: %w", owner, err)
+			}
+			if ready == nil || ready.GroupID != owner || ready.AppliedIndex == 0 ||
+				ready.AssetSetDigest != vectorPartitionM8GroupAssetSetDigestV1(string(owner), vector.Manifest) {
+				return zero, ErrFixedPeerVectorProofStaleV1
+			}
+			committed, err := immutableVectorReadyCommittedV1(record.ReadyGroups, *ready)
+			if err != nil {
+				return zero, err
+			}
+			if !committed {
+				return zero, ErrFixedPeerVectorProofStaleV1
+			}
+		}
 		if err := r.warmImmutableVectorNodesV1(ctx, resolved, owners); err != nil {
 			return zero, fmt.Errorf("immutable warm: %w", err)
 		}

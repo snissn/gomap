@@ -56,6 +56,7 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 	requestSlots              chan struct{}
 	groupRequests             map[raftcluster.GroupID]chan struct{}
 	groupReserved             map[raftcluster.GroupID]chan struct{}
+	transportLeaderResolver   func(context.Context, raftcluster.GroupID, raftcluster.NodeID) (raftcluster.NodeID, error)
 	lifetime                  context.Context
 	cancel                    context.CancelFunc
 	mu                        sync.Mutex
@@ -212,10 +213,37 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
-		if err == nil || attempt != 0 || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
+		if err == nil || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
 			return response, err
 		}
-		d.discardIdle(request.TargetGroupID, request.TargetNodeID)
+		if attempt == 0 {
+			d.discardIdle(request.TargetGroupID, request.TargetNodeID)
+			continue
+		}
+		if d.transportLeaderResolver != nil && request.TargetNodeID != "" {
+			resolveCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, request.DeadlineUnixNano)
+			if resolveCtx.Err() != nil {
+				resolveErr := vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, resolveCtx.Err())
+				cancel()
+				return response, resolveErr
+			}
+			leader, resolveErr := d.transportLeaderResolver(resolveCtx, request.TargetGroupID, request.TargetNodeID)
+			ctxErr := resolveCtx.Err()
+			cancel()
+			if ctxErr != nil {
+				return response, vectorPartitionShardSearchTCPTransportErrorV1(resolveCtx, request.TargetGroupID, ctxErr)
+			}
+			if resolveErr != nil {
+				return response, errors.Join(err, resolveErr)
+			}
+			if leader != "" && leader != request.TargetNodeID {
+				return response, &VectorPartitionShardSearchErrorV1{
+					Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: request.TargetGroupID,
+					LeaderHint: leader, Err: err,
+				}
+			}
+		}
+		return response, err
 	}
 }
 

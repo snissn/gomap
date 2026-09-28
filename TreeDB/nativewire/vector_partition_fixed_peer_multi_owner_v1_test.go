@@ -310,6 +310,180 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	}
 }
 
+func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
+		{id: "a", vector: []float32{1, 0}, home: 0},
+		{id: "b", vector: []float32{.8, .2}, home: 1},
+		{id: "c", vector: []float32{0, 1}, home: 2},
+		{id: "d", vector: []float32{.2, .8}, home: 2},
+	}, nil, [2]string{"group-b", "group-c"}, true, true)
+	if err := seed.collection.EnsureVectorPartitionLiveBindingV1(ctx, seed.manifest); err != nil {
+		t.Fatal(err)
+	}
+	appliedCommandLSN := seed.database.State().AppliedCommandLSN
+	if appliedCommandLSN == 0 {
+		t.Fatal("trusted source has no command-WAL coverage")
+	}
+	meta := seed.collection.MetaView()
+	if meta.Options.ColumnStore == nil {
+		t.Fatal("source has no column-store definition")
+	}
+	columnStore := *meta.Options.ColumnStore
+	columnStore.ActiveManifest = nil
+	columnStore.RecoveryAuthoritativeManifest = nil
+	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
+	meta.Options.ColumnStore = &columnStore
+	configs := fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, seed.manifest, meta, 3)
+	if err := seed.database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	graphSegments := map[raftcluster.GroupID]map[uint32]bool{"group-b": {}, "group-c": {}}
+	placement := make(map[uint32]raftcluster.GroupID)
+	for _, item := range seed.manifest.Placements {
+		placement[item.PartitionID] = raftcluster.GroupID(item.GroupID)
+	}
+	for _, asset := range seed.manifest.Assets {
+		group := placement[asset.PartitionID]
+		if graphSegments[group] == nil {
+			t.Fatalf("asset %q has no owner", asset.ID)
+		}
+		graphSegments[group][asset.Ref.FileID] = true
+	}
+	for _, config := range configs {
+		if config.NodeID == "source-holder" {
+			root := filepath.Join(config.DataRoot, "group-d")
+			if err := os.CopyFS(root, os.DirFS(seed.dir)); err != nil {
+				t.Fatal(err)
+			}
+			if err := backenddb.RebindDurableRootSnapshotV1(root); err != nil {
+				t.Fatal(err)
+			}
+			bootstrapFixedPeerVectorTrustedGenesisV1(t, config, appliedCommandLSN)
+			continue
+		}
+		group := raftcluster.GroupID("group-a")
+		if strings.HasPrefix(string(config.NodeID), "owner-b") {
+			group = "group-b"
+		} else if config.NodeID == "owner-c" {
+			group = "group-c"
+		}
+		root := filepath.Join(config.DataRoot, string(group))
+		hosted := fixedPeerCopyHostedVectorAssetsV1(t, seed.dir, root, seed.manifest, graphSegments[group], group == "group-a")
+		fixedPeerBootstrapHostedVectorMetadataV1(t, config, meta, root)
+		fixedPeerAssertHostedVectorFilesV1(t, root, hosted, false)
+		fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, 0)
+	}
+	processes := make([]*fixedPeerTestProcessV1, len(configs))
+	for i, config := range configs[:4] {
+		processes[i] = fixedPeerStartTestProcessV1(t, config)
+	}
+	defer func() {
+		for _, process := range processes {
+			if process != nil {
+				process.stop(t)
+			}
+		}
+	}()
+	client, err := NewFixedPeerTCPClientV1(configs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	// Four meta voters form a quorum before the two extra owner voters start.
+	// The source holder must lead meta to run the trusted V1 BUILD callback.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := client.Status(ctx, "source-holder")
+		return err == nil && status.CatalogRaft.LeaderID == "source-holder"
+	})
+	processes[4] = fixedPeerStartTestProcessV1(t, configs[4])
+	// Two group-b voters form a quorum while the slower third voter is down.
+	// This makes the configured old hint the first owner leader.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := client.Status(ctx, "owner-b")
+		return err == nil && len(status.Groups) == 1 && status.Groups[0].LeaderID == "owner-b"
+	})
+	processes[5] = fixedPeerStartTestProcessV1(t, configs[5])
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, config := range configs {
+			status, err := client.Status(ctx, config.NodeID)
+			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" {
+				return false
+			}
+		}
+		return true
+	})
+	record, err := raftplacement.NewCatalogMetaRecordV1(1, configs[0].Vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PublishCatalog(ctx, "source-holder", command); err != nil {
+		t.Fatal(err)
+	}
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, config := range configs {
+			status, err := client.Status(ctx, config.NodeID)
+			if err != nil || status.Catalog.AppliedIndex == 0 || status.Catalog.Digest != record.Digest {
+				return false
+			}
+		}
+		return true
+	})
+	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
+		t.Fatalf("initial ACTIVE: %v", err)
+	}
+	publicClient, err := DialContext(ctx, "tcp", configs[0].Vector.PublicAddresses["ingress"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publicClient.Close()
+	request := public.SearchRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: seed.manifest.IndexName, Generation: seed.manifest.Generation},
+		Query: []float32{.7, .7}, Metric: public.MetricCosineV1, TopK: 4, Probes: 2, EfSearch: 8,
+		Consistency: public.ConsistencyGenerationSnapshotV1,
+		Limits:      public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 16},
+		Deadline:    time.Now().Add(12 * time.Second),
+	}
+	before, err := publicClient.VectorSearchStrictV1(ctx, request)
+	if err != nil || len(before.Neighbors) == 0 {
+		t.Fatalf("old owner search=%+v err=%v", before, err)
+	}
+	processes[1].stop(t)
+	processes[1] = nil
+	var elected raftcluster.NodeID
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := client.Status(ctx, "owner-b-2")
+		if err != nil || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" || status.Groups[0].LeaderID == "owner-b" {
+			return false
+		}
+		elected = status.Groups[0].LeaderID
+		return true
+	})
+	request.Deadline = time.Now().Add(12 * time.Second)
+	partial, err := publicClient.VectorSearchStrictV1(ctx, request)
+	if err == nil || len(partial.Neighbors) != 0 {
+		t.Fatalf("unstaged elected owner %s returned partial hits: response=%+v err=%v", elected, partial, err)
+	}
+	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
+		t.Fatalf("ACTIVE recovery on elected owner %s: %v", elected, err)
+	}
+	request.Deadline = time.Now().Add(12 * time.Second)
+	after, err := publicClient.VectorSearchStrictV1(ctx, request)
+	if err != nil || len(after.Neighbors) != len(before.Neighbors) || after.Counters.SelectedDomains != 2 || after.Counters.RPCs != 2 {
+		t.Fatalf("elected owner search before=%+v after=%+v err=%v", before, after, err)
+	}
+	for i := range before.Neighbors {
+		if before.Neighbors[i].ID != after.Neighbors[i].ID || math.Abs(float64(before.Neighbors[i].Score-after.Neighbors[i].Score)) > 1e-5 {
+			t.Fatalf("elected owner result at rank %d: before=%+v after=%+v", i, before.Neighbors[i], after.Neighbors[i])
+		}
+	}
+}
+
 func TestFixedPeerImmutableDefinitionAndMutationRefusalV1(t *testing.T) {
 	definition := collections.VectorIndexDefinition{Name: "embedding", SchemaGeneration: 17}
 	identity := raftplacement.VectorPartitionLifecycleIdentityV1{
@@ -415,7 +589,14 @@ func fixedPeerAssertSourceDocumentCountV1(t testing.TB, root, collectionName str
 }
 
 func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta) []FixedPeerTCPConfigV1 {
+	return fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, manifest, sourceMeta, 1)
+}
+
+func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta, ownerBReplicas int) []FixedPeerTCPConfigV1 {
 	t.Helper()
+	if ownerBReplicas != 1 && ownerBReplicas != 3 {
+		t.Fatal("owner-b fixture requires one or three voters")
+	}
 	var listeners []net.Listener
 	defer func() {
 		for _, listener := range listeners {
@@ -431,6 +612,9 @@ func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.Vecto
 		return listener.Addr().String()
 	}
 	ids := []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"}
+	for replica := 2; replica <= ownerBReplicas; replica++ {
+		ids = append(ids, raftcluster.NodeID(fmt.Sprintf("owner-b-%d", replica)))
+	}
 	features := raftcluster.DefaultFeatureSet()
 	features.Required = append(features.Required,
 		raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]},
@@ -446,12 +630,33 @@ func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.Vecto
 	nodes := make([]FixedPeerTCPNodeV1, 0, len(ids))
 	publicAddresses := make(map[raftcluster.NodeID]string, len(ids))
 	shardAddresses := map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-b": {}, "group-c": {}}
-	for i, id := range ids {
+	ownerBMembers := make([]raftcluster.NodeID, 0, ownerBReplicas)
+	groupForNode := make(map[raftcluster.NodeID]raftcluster.GroupID, len(ids))
+	groupRaftAddress := make(map[raftcluster.NodeID]string, len(ids))
+	for _, id := range ids {
+		group := raftcluster.GroupID("group-a")
+		switch {
+		case strings.HasPrefix(string(id), "owner-b"):
+			group = "group-b"
+			ownerBMembers = append(ownerBMembers, id)
+		case id == "owner-c":
+			group = "group-c"
+		case id == "source-holder":
+			group = "group-d"
+		}
+		groupForNode[id] = group
 		nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address()})
 		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: id, Address: address(), Capabilities: features})
-		groups[i].Peers = append(groups[i].Peers, raftcluster.Peer{ID: id, Address: address()})
-		if i == 1 || i == 2 {
-			shardAddresses[groups[i].ID][id] = address()
+		for i := range groups {
+			if groups[i].ID != group {
+				continue
+			}
+			groupRaftAddress[id] = address()
+			groups[i].Peers = append(groups[i].Peers, raftcluster.Peer{ID: id, Address: groupRaftAddress[id]})
+			break
+		}
+		if group == "group-b" || group == "group-c" {
+			shardAddresses[group][id] = address()
 		}
 		publicAddresses[id] = address()
 	}
@@ -464,7 +669,7 @@ func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.Vecto
 		Features: catalogFeatures,
 		Groups: []raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"ingress"}, LeaderHint: "ingress"},
-			{ID: "group-b", Members: []raftcluster.NodeID{"owner-b"}, LeaderHint: "owner-b"},
+			{ID: "group-b", Members: ownerBMembers, LeaderHint: "owner-b"},
 			{ID: "group-c", Members: []raftcluster.NodeID{"owner-c"}, LeaderHint: "owner-c"},
 			{ID: "group-d", Members: []raftcluster.NodeID{"source-holder"}, LeaderHint: "source-holder"},
 		},
@@ -530,11 +735,18 @@ func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.Vecto
 	root := t.TempDir()
 	configs := make([]FixedPeerTCPConfigV1, len(ids))
 	for i, id := range ids {
+		raftTimeout := 300 * time.Millisecond
+		if ownerBReplicas == 3 && id == "source-holder" {
+			raftTimeout = 100 * time.Millisecond // first meta quorum includes the source holder
+		}
+		if ownerBReplicas == 3 && (id == "owner-b-2" || id == "owner-b-3") {
+			raftTimeout = time.Second // let the bootstrap owner win the first election
+		}
 		configs[i] = FixedPeerTCPConfigV1{
 			NodeID: id, DataRoot: filepath.Join(root, string(id), "data"), RaftRoot: filepath.Join(root, string(id), "raft"),
 			ListenAddress: nodes[i].Address, Nodes: nodes, Catalog: meta, Groups: groups,
-			RequestTimeout: 12 * time.Second, RaftTimeout: 300 * time.Millisecond, Vector: vector,
-			RaftListen: map[raftcluster.GroupID]string{"meta": meta.Peers[i].Address, groups[i].ID: groups[i].Peers[0].Address},
+			RequestTimeout: 12 * time.Second, RaftTimeout: raftTimeout, Vector: vector,
+			RaftListen: map[raftcluster.GroupID]string{"meta": meta.Peers[i].Address, groupForNode[id]: groupRaftAddress[id]},
 		}
 	}
 	return configs

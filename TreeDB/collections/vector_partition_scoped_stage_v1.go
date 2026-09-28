@@ -19,7 +19,7 @@ type VectorPartitionScopedStageAuthorityV1 interface {
 // CaptureVectorPartitionScopedExistingAssetsV1 recaptures stable tokens for
 // this node's already-distributed immutable assets. It grants no publication
 // authority: StageVectorPartitionScopedManifestWithContextV1 still verifies
-// their bytes and requires a fresh committed catalog BUILD proof.
+// their bytes and requires a fresh committed catalog lifecycle proof.
 func (c *Collection) CaptureVectorPartitionScopedExistingAssetsV1(ready VectorPartitionManifestV1, scope VectorPartitionLocalScopeV1) (*rootpublication.StableResourceSet, error) {
 	if c == nil || c.db == nil || ready.State != "ready" || ready.Collection != c.name {
 		return nil, fmt.Errorf("%w: scoped asset capture collection or state", ErrVectorPartitionManifestInvalid)
