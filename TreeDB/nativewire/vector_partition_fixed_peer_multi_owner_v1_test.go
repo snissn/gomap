@@ -414,6 +414,15 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
+			for _, i := range []int{3, 0, 1, 2} {
+				if process := processes[i]; process != nil {
+					log, readErr := os.ReadFile(process.log.Name())
+					if len(log) > 4096 {
+						log = log[len(log)-4096:]
+					}
+					t.Logf("%s startup log tail (read error=%v): %s", configs[i].NodeID, readErr, log)
+				}
+			}
 			t.Fatalf("source-holder meta leadership: observed=%q last status error=%v: %v", observedMetaLeader, statusErr, ctx.Err())
 		case <-time.After(20 * time.Millisecond):
 		}
