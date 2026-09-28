@@ -9,6 +9,49 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
+// This optional scalar trace is installed only by a focused replacement test.
+// It never retains request entries or response-owned buffers.
+type peerAppendDiagnosticV1 struct{ record func(peerAppendObservationV1) }
+
+type peerAppendObservationV1 struct {
+	Target                                             hraft.ServerID
+	Scope                                              string
+	Stage                                              string
+	Error                                              string
+	Term, PrevLogEntry, PrevLogTerm, LeaderCommitIndex uint64
+	EntryCount                                         int
+	FirstEntry, LastEntry                              uint64
+	ResponseTerm, ResponseLastLog                      uint64
+	ResponseSuccess, ResponseNoRetryBackoff            bool
+}
+
+func (t *peerRaftTransportV1) observeAppendV1(id hraft.ServerID, args *hraft.AppendEntriesRequest, response *hraft.AppendEntriesResponse, stage string, err error) {
+	diagnostic := t.appendDiagnostic.Load()
+	if diagnostic == nil || diagnostic.record == nil {
+		return
+	}
+	observation := peerAppendObservationV1{Target: id, Scope: t.scope, Stage: stage}
+	if err != nil {
+		observation.Error = err.Error()
+		if len(observation.Error) > 256 {
+			observation.Error = observation.Error[:256]
+		}
+	}
+	if args != nil {
+		observation.Term, observation.PrevLogEntry, observation.PrevLogTerm = args.Term, args.PrevLogEntry, args.PrevLogTerm
+		observation.LeaderCommitIndex, observation.EntryCount = args.LeaderCommitIndex, len(args.Entries)
+		if len(args.Entries) > 0 && args.Entries[0] != nil && args.Entries[len(args.Entries)-1] != nil {
+			observation.FirstEntry = args.Entries[0].Index
+			observation.LastEntry = args.Entries[len(args.Entries)-1].Index
+		}
+	}
+	if response != nil {
+		observation.ResponseTerm, observation.ResponseLastLog = response.Term, response.LastLog
+		observation.ResponseSuccess, observation.ResponseNoRetryBackoff = response.Success, response.NoRetryBackoff
+	}
+	diagnostic.record(observation)
+}
+
 func (t *peerRaftTransportV1) appendWork(args *hraft.AppendEntriesRequest) (peerWorkLeaseV1, error) {
 	if args == nil || len(args.Entries) > 1 {
 		return peerWorkLeaseV1{}, raftcluster.ErrRouteTargetUnsupported
@@ -26,10 +69,15 @@ func (t *peerRaftTransportV1) appendWork(args *hraft.AppendEntriesRequest) (peer
 func (t *peerRaftTransportV1) AppendEntries(id hraft.ServerID, target hraft.ServerAddress, args *hraft.AppendEntriesRequest, response *hraft.AppendEntriesResponse) error {
 	work, err := t.appendWork(args)
 	if err != nil {
+		t.observeAppendV1(id, args, nil, "admission", err)
 		return err
 	}
 	defer work.release()
-	return t.NetworkTransport.AppendEntries(id, target, args, response)
+	err = t.NetworkTransport.AppendEntries(id, target, args, response)
+	if err != nil || response == nil || !response.Success {
+		t.observeAppendV1(id, args, response, "network", err)
+	}
+	return err
 }
 
 func (t *peerRaftTransportV1) RequestVote(id hraft.ServerID, target hraft.ServerAddress, args *hraft.RequestVoteRequest, response *hraft.RequestVoteResponse) error {

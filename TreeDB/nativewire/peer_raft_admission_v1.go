@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	hraft "github.com/hashicorp/raft"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -15,14 +16,15 @@ import (
 // group's Raft goroutine is occupied installing the first one.
 type peerRaftTransportV1 struct {
 	*hraft.NetworkTransport
-	admission *peerNodeAdmissionV1
-	scope     string
-	catalog   bool
-	inbox     chan hraft.RPC
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	closeErr  error
+	admission        *peerNodeAdmissionV1
+	scope            string
+	catalog          bool
+	inbox            chan hraft.RPC
+	ctx              context.Context
+	cancel           context.CancelFunc
+	closeOnce        sync.Once
+	closeErr         error
+	appendDiagnostic atomic.Pointer[peerAppendDiagnosticV1]
 }
 
 func newPeerRaftTransportV1(network *hraft.NetworkTransport, admission *peerNodeAdmissionV1, scope string, catalog bool) *peerRaftTransportV1 {

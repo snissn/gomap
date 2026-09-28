@@ -5,6 +5,7 @@ import (
 	"errors"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,9 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	var lastTail raftcluster.ReplacementTailProgressV1
 	var target *fixedPeerDataV1
 	var source *fixedPeerDataV1
+	var sourceRuntime *FixedPeerTCPRuntimeV1
+	var appendMu sync.Mutex
+	appendEvents := make([]peerAppendObservationV1, 0, 16)
 	var proof raftcluster.ReplacementTailProgressV1
 	var seed raftcluster.ReplacementSnapshotSeedV1
 	var tailWaitBudget time.Duration
@@ -38,6 +42,18 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 				if source != nil {
 					sourceNative, sourceErr := source.provider.RuntimeStatusV1(inspect)
 					t.Logf("promotion-tail source native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", sourceNative.State, sourceNative.LeaderID, sourceNative.Term, sourceNative.CommitIndex, sourceNative.RaftAppliedIndex, sourceNative.LastIndex, sourceNative.Applied, sourceErr)
+				}
+				appendMu.Lock()
+				events := append([]peerAppendObservationV1(nil), appendEvents...)
+				appendMu.Unlock()
+				t.Logf("promotion-tail source append-to-target last-%d=%+v", len(events), events)
+				if sourceRuntime != nil && sourceRuntime.client.peerTransport != nil {
+					stats := sourceRuntime.client.peerTransport.ResourceStatsV1()
+					t.Logf("promotion-tail source resources current=%v peak=%v rejected=%v", stats.Current, stats.Peak, stats.Rejected)
+				}
+				if runtimes[3].client.peerTransport != nil {
+					stats := runtimes[3].client.peerTransport.ResourceStatsV1()
+					t.Logf("promotion-tail target resources current=%v peak=%v rejected=%v", stats.Current, stats.Peak, stats.Rejected)
 				}
 				native, nativeErr := target.provider.RuntimeStatusV1(inspect)
 				local, localErr := target.fsm.RecoveryStatusV1(inspect, raftfsm.RecoveryStatusOptionsV1{})
@@ -82,11 +98,29 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	for _, runtime := range runtimes[:3] {
 		if runtime.config.NodeID == dataLeader {
 			source = runtime.localDataV1(group.ID)
+			sourceRuntime = runtime
 		}
 	}
 	if source == nil {
 		t.Fatal("missing data leader")
 	}
+	sourceTransport, ok := source.transport.(*peerRaftTransportV1)
+	if !ok {
+		t.Fatal("source has no admitted native transport")
+	}
+	sourceTransport.appendDiagnostic.Store(&peerAppendDiagnosticV1{record: func(event peerAppendObservationV1) {
+		if string(event.Target) != string(operation.NewPeer.ID) {
+			return
+		}
+		appendMu.Lock()
+		defer appendMu.Unlock()
+		if len(appendEvents) == cap(appendEvents) {
+			copy(appendEvents, appendEvents[1:])
+			appendEvents = appendEvents[:len(appendEvents)-1]
+		}
+		appendEvents = append(appendEvents, event)
+	}})
+	defer sourceTransport.appendDiagnostic.Store(nil)
 	stage = "refuse promotion before intent"
 	if _, err := client.call(ctx, dataLeader, "replacement-promote", fixedPeerRequestV1{Entry: raw}, true); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
 		t.Fatalf("native promotion before committed intent: %v", err)
