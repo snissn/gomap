@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +70,49 @@ type HashicorpRaftProvider struct {
 	appliedProgress AppliedProgressReader
 	applyTimeout    time.Duration
 	owned           []io.Closer
+}
+
+// HashicorpRaftLogProbeV1 is temporary failure-only replacement-test evidence.
+// It will be removed with the replacement append diagnostic.
+type HashicorpRaftLogProbeV1 struct {
+	FirstIndex, LastIndex, SnapshotIndex, SnapshotTerm uint64
+	Present                                            bool
+	Term                                               uint64
+	Type                                               hraft.LogType
+	DataSHA256                                         [32]byte
+}
+
+func (p *HashicorpRaftProvider) ReplacementLogProbeV1(index uint64) (HashicorpRaftLogProbeV1, error) {
+	if p == nil || p.logStore == nil || p.snapshotStore == nil {
+		return HashicorpRaftLogProbeV1{}, ErrHashicorpRaftUnavailable
+	}
+	var probe HashicorpRaftLogProbeV1
+	var err error
+	probe.FirstIndex, err = p.logStore.FirstIndex()
+	if err != nil {
+		return probe, err
+	}
+	probe.LastIndex, err = p.logStore.LastIndex()
+	if err != nil {
+		return probe, err
+	}
+	snapshots, err := p.snapshotStore.List()
+	if err != nil {
+		return probe, err
+	}
+	if len(snapshots) != 0 {
+		probe.SnapshotIndex, probe.SnapshotTerm = snapshots[0].Index, snapshots[0].Term
+	}
+	var entry hraft.Log
+	if err := p.logStore.GetLog(index, &entry); err != nil {
+		if errors.Is(err, hraft.ErrLogNotFound) {
+			return probe, nil
+		}
+		return probe, err
+	}
+	probe.Present, probe.Term, probe.Type = true, entry.Term, entry.Type
+	probe.DataSHA256 = sha256.Sum256(entry.Data)
+	return probe, nil
 }
 
 func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaftProvider, error) {

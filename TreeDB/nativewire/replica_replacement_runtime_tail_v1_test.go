@@ -29,6 +29,8 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	var sourceRuntime *FixedPeerTCPRuntimeV1
 	var appendMu sync.Mutex
 	appendEvents := make([]peerAppendObservationV1, 0, 16)
+	firstRestartFailures := make([]peerAppendObservationV1, 0, 8)
+	traceRestart := false
 	var proof raftcluster.ReplacementTailProgressV1
 	var seed raftcluster.ReplacementSnapshotSeedV1
 	var tailWaitBudget time.Duration
@@ -42,10 +44,14 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 				if source != nil {
 					sourceNative, sourceErr := source.provider.RuntimeStatusV1(inspect)
 					t.Logf("promotion-tail source native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", sourceNative.State, sourceNative.LeaderID, sourceNative.Term, sourceNative.CommitIndex, sourceNative.RaftAppliedIndex, sourceNative.LastIndex, sourceNative.Applied, sourceErr)
+					sourceLog, logErr := source.provider.ReplacementLogProbeV1(4)
+					t.Logf("promotion-tail source log-4=%+v error=%v", sourceLog, logErr)
 				}
 				appendMu.Lock()
 				events := append([]peerAppendObservationV1(nil), appendEvents...)
+				first := append([]peerAppendObservationV1(nil), firstRestartFailures...)
 				appendMu.Unlock()
+				t.Logf("promotion-tail first restart append failures=%+v", first)
 				t.Logf("promotion-tail source append-to-target last-%d=%+v", len(events), events)
 				if sourceRuntime != nil && sourceRuntime.client.peerTransport != nil {
 					stats := sourceRuntime.client.peerTransport.ResourceStatsV1()
@@ -56,6 +62,8 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 					t.Logf("promotion-tail target resources current=%v peak=%v rejected=%v", stats.Current, stats.Peak, stats.Rejected)
 				}
 				native, nativeErr := target.provider.RuntimeStatusV1(inspect)
+				targetLog, logErr := target.provider.ReplacementLogProbeV1(4)
+				t.Logf("promotion-tail target log-4=%+v error=%v", targetLog, logErr)
 				local, localErr := target.fsm.RecoveryStatusV1(inspect, raftfsm.RecoveryStatusOptionsV1{})
 				t.Logf("promotion-tail target native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", native.State, native.LeaderID, native.Term, native.CommitIndex, native.RaftAppliedIndex, native.LastIndex, native.Applied, nativeErr)
 				t.Logf("promotion-tail target durable applied=%+v command-lsn=%d status-error=%v", local.AppliedProgress, local.AppliedCommandLSN, localErr)
@@ -114,6 +122,9 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 		}
 		appendMu.Lock()
 		defer appendMu.Unlock()
+		if traceRestart && event.Error == "" && !event.ResponseSuccess && event.PrevLogEntry > 0 && len(firstRestartFailures) < cap(firstRestartFailures) {
+			firstRestartFailures = append(firstRestartFailures, event)
+		}
 		if len(appendEvents) == cap(appendEvents) {
 			copy(appendEvents, appendEvents[1:])
 			appendEvents = appendEvents[:len(appendEvents)-1]
@@ -181,6 +192,9 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 		})
 	}
 	stage = "restart learner"
+	appendMu.Lock()
+	traceRestart = true
+	appendMu.Unlock()
 	restart(3)
 	// Public preparation must reopen the operation-owned receiver after restart.
 	stage = "prepare restarted learner"
