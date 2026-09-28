@@ -645,6 +645,9 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	if localDataGroups != 1 {
 		return errors.New("fixed-peer vector runtime requires exactly one local data group")
 	}
+	if !localGroups[config.Catalog.ID] {
+		return errors.New("fixed-peer vector runtime requires local catalog authority")
+	}
 	for group := range owners {
 		var fixed *FixedPeerTCPGroupV1
 		for i := range config.Groups {

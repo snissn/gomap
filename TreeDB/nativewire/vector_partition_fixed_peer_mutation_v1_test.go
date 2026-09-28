@@ -901,6 +901,25 @@ func TestFixedPeerVectorConfigRequiresCatalogLifecycleFeatureV1(t *testing.T) {
 	}
 }
 
+func TestFixedPeerVectorConfigRequiresLocalCatalogAuthorityV1(t *testing.T) {
+	configs := fixedPeerVectorTestConfigsV1(t, fixedPeerVectorSeedV1(t))
+	config := configs[0]
+	if config.Catalog.Peers[0].ID != config.NodeID {
+		t.Fatal("fixture ingress is not the first catalog peer")
+	}
+	config.Catalog.Peers = config.Catalog.Peers[1:]
+	listen := make(map[raftcluster.GroupID]string, len(config.RaftListen)-1)
+	for group, address := range config.RaftListen {
+		if group != config.Catalog.ID {
+			listen[group] = address
+		}
+	}
+	config.RaftListen = listen
+	if _, _, err := validateFixedPeerConfigV1(config); err == nil || !strings.Contains(err.Error(), "fixed-peer vector runtime requires local catalog authority") {
+		t.Fatalf("catalog-consumer vector node accepted: %v", err)
+	}
+}
+
 func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
 	vector := &FixedPeerTCPVectorConfigV1{

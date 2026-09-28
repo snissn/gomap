@@ -216,7 +216,7 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 		}
 		work, err := c.peerAdmission.request(ctx, "native", int64(c.limits.MaxFrameSize)*4, peerRequestDescendantV1)
 		if err != nil {
-			return iwire.Header{}, nil, err
+			return iwire.Header{}, nil, &requestNotSubmittedError{err}
 		}
 		defer work.release()
 		ctx = work.ctx

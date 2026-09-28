@@ -15,6 +15,7 @@ import (
 	"time"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -690,6 +691,37 @@ func TestVectorPartitionNativeWireInsertCanceledBeforeSendV1(t *testing.T) {
 	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
 	if _, err := client.VectorInsertV1(ctx, request); !hasPublicErrorCodeV1(err, public.ErrorCanceledV1) {
 		t.Fatalf("pre-send canceled error = %v", err)
+	}
+}
+
+func TestVectorPartitionNativeWireInsertPeerAdmissionRefusalIsNotSubmittedV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	client := NewClientWithMaxFrameSize(left, peerNativeDefaultFrameV1)
+	defer client.Close()
+	admission, err := newPeerNodeAdmissionV1(FixedPeerTCPConfigV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admission.close()
+	client.peerAdmission = admission
+	admission.beginDrain()
+	request := public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"),
+		ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+	}
+	if _, err := client.VectorInsertV1(t.Context(), request); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) || hasPublicErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
+		t.Fatalf("pre-send peer admission error = %v", err)
+	}
+	if client.nextReq.Load() != 0 {
+		t.Fatal("refused insert allocated a wire request ID")
+	}
+	if err := right.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if n, err := right.Read(one[:]); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("refused insert wrote to peer: bytes=%d error=%v", n, err)
 	}
 }
 
