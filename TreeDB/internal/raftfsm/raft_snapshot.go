@@ -743,6 +743,7 @@ func extractRaftSnapshotArchiveWithDiskAvailableV1(ctx context.Context, reader i
 		sawHeader    bool
 		sawDBFile    bool
 		sawApplyFile bool
+		initialFree  [3]uint64
 	)
 	for {
 		tarHeader, err := tr.Next()
@@ -767,10 +768,14 @@ func extractRaftSnapshotArchiveWithDiskAvailableV1(ctx context.Context, reader i
 			return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot install staging allowance exceeded")
 		}
 		// Rebinding can hold a sibling copy of an index. Charge a full second
-		// storage image conservatively, and check each possible filesystem.
-		for _, root := range []string{mainDir, sideDir, applyDir} {
+		// image against initial free space, then check live free space without
+		// charging previously written entries twice on each possible filesystem.
+		for i, root := range []string{mainDir, sideDir, applyDir} {
 			available, err := diskAvailable(root)
-			if err != nil || uint64(2*total+overhead) > available {
+			if entries == 1 {
+				initialFree[i] = available
+			}
+			if err != nil || uint64(2*total+overhead) > initialFree[i] || uint64(total+tarHeader.Size+overhead) > available {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, errors.Join(err, fmt.Errorf("raftfsm: snapshot install disk admission failed"))
 			}
 		}

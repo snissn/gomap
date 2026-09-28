@@ -91,6 +91,42 @@ func TestRaftSnapshotInstallDiskAdmissionChargesPriorIndexCopyV1(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotInstallDiskAdmissionAccountsForWrittenBytesV1(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, name := range []string{"db/index.db", "db/payload"} {
+		if err := writer.WriteHeader(&tar.Header{Name: name, Size: 20 << 10, Mode: 0600}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(bytes.Repeat([]byte("x"), 20<<10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	main, side, apply := t.TempDir(), t.TempDir(), t.TempDir()
+	limits, err := (SnapshotCaptureLimitsV1{MaxFiles: 8, MaxBytes: 128 << 10, MaxStagingBytes: 2 << 20}).normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overhead := int64(limits.MaxFiles)*8192 + (1 << 20) + 8192
+	diskAvailable := func(string) (uint64, error) {
+		if _, err := os.Stat(filepath.Join(main, "index.db")); err == nil {
+			return uint64(overhead + 70<<10), nil
+		} else if !os.IsNotExist(err) {
+			return 0, err
+		}
+		return uint64(overhead + 90<<10), nil
+	}
+	if _, err := extractRaftSnapshotArchiveWithDiskAvailableV1(context.Background(), &archive, main, side, apply, limits, diskAvailable); err == nil || !strings.Contains(err.Error(), "missing snapshot archive header") {
+		t.Fatal("valid disk reserve refused before archive validation", err)
+	}
+	if _, err := os.Stat(filepath.Join(main, "payload")); err != nil {
+		t.Fatal("second entry was refused after the first consumed disk", err)
+	}
+}
+
 func TestRaftSnapshotInstallCleanupFailureRetainsAdmissionV1(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	dir := t.TempDir()
