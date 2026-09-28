@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
 		{id: "a", vector: []float32{1, 0}, home: 0},
@@ -49,6 +50,46 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	columnStore.RecoveryAuthoritativeManifest = nil
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
+	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
+	// Search the same immutable generation locally before the source holder is
+	// closed. This is a result reference, not a substitute for the hosted-only
+	// process and wire assertions below.
+	localFixture := seed
+	resolvedCatalog, err := raftplacement.Validate(configs[0].Vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localFixture.catalog = resolvedCatalog
+	localFixture.placement = configs[0].Vector.Placement
+	localServices, localSources := newVectorPartitionLiveProductionServicesV1(t, localFixture)
+	localCoordinator, err := NewVectorPartitionCoordinatorForTopologyV1(
+		vectorPartitionLiveCoordinatorTopologyV1(localFixture),
+		VectorPartitionImmutableCoordinatorRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: seed.collection}},
+		&vectorPartitionLiveProductionDispatcherV1{services: localServices}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRequest := configs[0].Vector.RequestBase
+	localRequest.RequestID, localRequest.CancellationID = "local-parity", "local-parity-cancel"
+	localRequest.Query = []float32{.7, .7}
+	localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
+	localResult, err := localCoordinator.Search(ctx, localRequest)
+	if err != nil {
+		t.Fatalf("same-generation local reference: %v", err)
+	}
+	if localResult.PartitionGeneration != seed.manifest.Generation || localResult.Counters.SelectedDomains != 2 ||
+		localResult.Counters.SelectedPartitions != 2 || localResult.Counters.HNSWServedPartitions != 2 || len(localResult.Neighbors) == 0 {
+		t.Fatalf("same-generation local reference omitted a domain: %+v", localResult)
+	}
+	if err := localCoordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range localSources {
+		if err := source.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := seed.database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +126,6 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 		}
 	}
 
-	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
 	hostedFiles := make(map[raftcluster.GroupID]map[string]bool)
 	for _, config := range configs {
 		if config.NodeID == "source-holder" {
@@ -202,8 +242,49 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Counters.SelectedDomains != 2 || response.Counters.SelectedGroups != 2 || response.Counters.RPCs != 2 || len(response.Neighbors) == 0 {
-		t.Fatalf("multi-owner search omitted a domain or bypassed shard RPCs: %+v", response)
+	if response.Counters.SelectedDomains != 2 || response.Counters.SelectedGroups != 2 || response.Counters.RPCs != 2 ||
+		response.Counters.SelectedPartitions != 2 || response.Counters.HNSWServedPartitions != 2 || response.Counters.ExactScanPartitions != 0 {
+		t.Fatalf("multi-owner search did not traverse each selected domain exactly once: %+v", response.Counters)
+	}
+	if len(response.Neighbors) == 0 || len(response.Neighbors) != len(localResult.Neighbors) {
+		t.Fatalf("multi-owner result cardinality differs from same-generation local search: remote=%+v local=%+v", response.Neighbors, localResult.Neighbors)
+	}
+	for i, remote := range response.Neighbors {
+		local := localResult.Neighbors[i]
+		if remote.ID != local.ID || math.Abs(float64(remote.Score-local.Score)) > 1e-5 {
+			t.Fatalf("same-generation local parity at rank %d: remote=%+v local=%+v", i, remote, local)
+		}
+	}
+	// Losing one selected owner must fail the whole public request; no partial
+	// hits from the surviving owner may escape. Reopen that owner on its original
+	// hosted-only assets and require the same generation/result again.
+	processes[1].stop(t)
+	request.Deadline = time.Now().Add(12 * time.Second)
+	partial, searchErr := publicClient.VectorSearchStrictV1(ctx, request)
+	if searchErr == nil || len(partial.Neighbors) != 0 {
+		t.Fatalf("missing selected owner returned partial result: response=%+v err=%v", partial, searchErr)
+	}
+	processes[1] = fixedPeerStartTestProcessV1(t, configs[1])
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := client.Status(ctx, "owner-b")
+		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
+	})
+	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
+		t.Fatalf("reopened owner lifecycle: %v", err)
+	}
+	request.Deadline = time.Now().Add(12 * time.Second)
+	reopened, err := publicClient.VectorSearchStrictV1(ctx, request)
+	if err != nil {
+		t.Fatalf("reopened owner search: %v", err)
+	}
+	if len(reopened.Neighbors) != len(response.Neighbors) || reopened.Counters.SelectedDomains != 2 || reopened.Counters.RPCs != 2 ||
+		reopened.Counters.SelectedPartitions != 2 || reopened.Counters.HNSWServedPartitions != 2 || reopened.Counters.ExactScanPartitions != 0 {
+		t.Fatalf("reopened owner lost a domain or result: before=%+v after=%+v", response, reopened)
+	}
+	for i, neighbor := range reopened.Neighbors {
+		if neighbor.ID != response.Neighbors[i].ID || math.Abs(float64(neighbor.Score-response.Neighbors[i].Score)) > 1e-5 {
+			t.Fatalf("reopened owner result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
+		}
 	}
 	if err := publicClient.Close(); err != nil {
 		t.Fatal(err)
