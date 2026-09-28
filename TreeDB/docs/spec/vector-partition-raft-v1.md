@@ -671,17 +671,29 @@ live generation pointers. VLC1 version-1 records form a sequence- and
 previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch. The
 physical identity namespace is capped at 64 MiB and 4,096 entries.
 
+Immutable owner-local preparation adds VLC1 operation 8 (scoped BUILD) and
+VCP2 checkpoint version 2 only while a scoped generation is live. Each scoped
+generation carries one canonical VLS1 hosted-group/router flag and exact
+manifest/placement SHA-256 pair; ordinary VCP1 bytes and operation values are
+unchanged. The global VPM1 is retained rather than filtered. Local assets,
+snapshot validation, and reclaim debt derive from the scope and full placement;
+shared foreign-owner segments are invalid. VLS1 is local inventory, not a
+substitute for source-holder validation or fresh catalog authority at READY,
+reopen, and serving admission. Older binaries are not promised to open VCP2.
+
 ### Lifecycle, publication, and cleanup authority
 
 | Transition | Immutable operation | Observable result |
 | --- | --- | --- |
 | absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
+| absent -> scoped building | scoped BUILD (operation 8) in a new VCP2 checkpoint epoch | complete non-active local generation tied to global manifest and placement |
 | building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
 | ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active and the activation high water advances |
 | active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
 | non-active building/ready (including retired ready) -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | initial cleanup is accepted; an identical retry is idempotent; conflicting or resurrection transitions fail closed |
 | deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |
 | deleting -> absent | physical GC followed by DELETE_COMPLETE | generation leaves the live set; generation high water prevents resurrection |
+| scoped building with no local refs -> absent | DELETE_COMPLETE under the ordinary deletion fences | no VPR1 debt exists; generation floor/high water prove durable completion |
 
 The storage barrier is canonical-root scoped (including symlink aliases) and
 serializes publication, deletion, reader acquisition, and snapshot export.
@@ -703,7 +715,8 @@ Restore rejects a missing directory, legacy mutable files, symlinks, hard-link
 aliases, malformed chains, corrupt highest checkpoints, and extra audit epochs
 before replacing the target namespace. It also streams and verifies the exact
 ranges, CRC32 values, and SHA-256 digests of every asset referenced by a
-non-deleting manifest. A restored manifest’s typed refs resolve against the
+non-deleting unscoped manifest, or the derived hosted subset of a scoped
+manifest. A restored manifest’s typed refs resolve against the
 archived assets instead of the prior target directory. Snapshot archives are
 copies: exporting an archive does not create a live reader pin or a durable
 catalog reference. File names

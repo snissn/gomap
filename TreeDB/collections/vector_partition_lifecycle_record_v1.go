@@ -43,6 +43,7 @@ const (
 	vectorPartitionLifecycleDeletePrepareV1
 	vectorPartitionLifecycleReclaimProgressV1
 	vectorPartitionLifecycleDeleteCompleteV1
+	vectorPartitionLifecycleScopedBuildV1
 )
 
 // vectorPartitionLifecycleRecordV1 is one immutable chain member. BUILD
@@ -76,6 +77,7 @@ type vectorPartitionReadyPromotionV1 struct {
 // generation. A nil Manifest means no live generation entry.
 type vectorPartitionLifecycleGenerationStateV1 struct {
 	Manifest *VectorPartitionManifestV1
+	Scope    *VectorPartitionLocalScopeV1
 	Deleting bool
 	Reclaim  *vectorPartitionReclaimStateV1
 }
@@ -98,7 +100,65 @@ type vectorPartitionLifecycleStateV1 struct {
 func vectorPartitionLifecycleZeroDigestV1(d [sha256.Size]byte) bool { return d == [sha256.Size]byte{} }
 
 func vectorPartitionLifecycleOperationValidV1(op vectorPartitionLifecycleOperationV1) bool {
-	return op >= vectorPartitionLifecycleBuildV1 && op <= vectorPartitionLifecycleDeleteCompleteV1
+	return op >= vectorPartitionLifecycleBuildV1 && op <= vectorPartitionLifecycleScopedBuildV1
+}
+
+func encodeVectorPartitionScopedBuildPayloadV1(manifest VectorPartitionManifestV1, scope VectorPartitionLocalScopeV1) ([]byte, error) {
+	if manifest.State != "building" {
+		return nil, fmt.Errorf("%w: scoped build state", ErrVectorPartitionManifestInvalid)
+	}
+	if _, err := scope.localAssetsV1(manifest); err != nil {
+		return nil, err
+	}
+	manifestRaw, err := EncodeVectorPartitionManifestV1(manifest)
+	if err != nil {
+		return nil, err
+	}
+	scopeRaw, err := encodeVectorPartitionLocalScopeV1(scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(manifestRaw) > vectorPartitionLifecycleMaxBytesV1-vectorPartitionLifecycleHeaderBytesV1-sha256.Size-8-len(scopeRaw) {
+		return nil, fmt.Errorf("%w: scoped build bytes", ErrVectorPartitionManifestInvalid)
+	}
+	out := make([]byte, 8+len(scopeRaw)+len(manifestRaw))
+	binary.BigEndian.PutUint32(out[:4], uint32(len(scopeRaw)))
+	copy(out[4:], scopeRaw)
+	off := 4 + len(scopeRaw)
+	binary.BigEndian.PutUint32(out[off:off+4], uint32(len(manifestRaw)))
+	copy(out[off+4:], manifestRaw)
+	return out, nil
+}
+
+func decodeVectorPartitionScopedBuildPayloadV1(raw []byte) (VectorPartitionManifestV1, VectorPartitionLocalScopeV1, error) {
+	var manifest VectorPartitionManifestV1
+	var scope VectorPartitionLocalScopeV1
+	if len(raw) < 8 {
+		return manifest, scope, fmt.Errorf("%w: scoped build length", ErrVectorPartitionManifestInvalid)
+	}
+	scopeN := int(binary.BigEndian.Uint32(raw[:4]))
+	if scopeN == 0 || scopeN > len(raw)-8 {
+		return manifest, scope, fmt.Errorf("%w: scoped build scope length", ErrVectorPartitionManifestInvalid)
+	}
+	off := 4 + scopeN
+	manifestN := int(binary.BigEndian.Uint32(raw[off : off+4]))
+	if manifestN == 0 || manifestN != len(raw)-off-4 {
+		return manifest, scope, fmt.Errorf("%w: scoped build manifest length", ErrVectorPartitionManifestInvalid)
+	}
+	var err error
+	scope, err = decodeVectorPartitionLocalScopeV1(raw[4:off])
+	if err != nil {
+		return manifest, scope, err
+	}
+	manifest, err = DecodeVectorPartitionManifestV1(raw[off+4:], DefaultVectorPartitionManifestLimits())
+	if err != nil {
+		return manifest, scope, err
+	}
+	canonical, err := encodeVectorPartitionScopedBuildPayloadV1(manifest, scope)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return manifest, scope, fmt.Errorf("%w: noncanonical scoped build", ErrVectorPartitionManifestInvalid)
+	}
+	return manifest, scope, nil
 }
 
 func vectorPartitionReadyPromotionShapeV1(p vectorPartitionReadyPromotionV1) error {
@@ -296,6 +356,11 @@ func vectorPartitionLifecyclePayloadV1(r vectorPartitionLifecycleRecordV1) error
 		if err != nil || !bytes.Equal(canonical, r.Payload) {
 			return fmt.Errorf("%w: noncanonical lifecycle manifest", ErrVectorPartitionManifestInvalid)
 		}
+	case vectorPartitionLifecycleScopedBuildV1:
+		m, _, err := decodeVectorPartitionScopedBuildPayloadV1(r.Payload)
+		if err != nil || m.Collection != r.Collection || m.IndexName != r.IndexName || m.Generation != r.Generation {
+			return fmt.Errorf("%w: lifecycle scoped build", ErrVectorPartitionManifestInvalid)
+		}
 	case vectorPartitionLifecycleReadyV1:
 		promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(r.Payload)
 		if err != nil || promotion.Generation != r.Generation {
@@ -438,7 +503,7 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		return DecodeVectorPartitionManifestV1(r.Payload, DefaultVectorPartitionManifestLimits())
 	}
 	switch r.Operation {
-	case vectorPartitionLifecycleBuildV1:
+	case vectorPartitionLifecycleBuildV1, vectorPartitionLifecycleScopedBuildV1:
 		_, present := state.Generations[r.Generation]
 		if present ||
 			(state.GenerationHighWater != 0 &&
@@ -447,11 +512,20 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 			len(state.Generations) >= 2 {
 			return fmt.Errorf("%w: build transition", ErrVectorPartitionManifestInvalid)
 		}
-		m, err := manifest()
+		var m VectorPartitionManifestV1
+		var scope *VectorPartitionLocalScopeV1
+		var err error
+		if r.Operation == vectorPartitionLifecycleScopedBuildV1 {
+			var decoded VectorPartitionLocalScopeV1
+			m, decoded, err = decodeVectorPartitionScopedBuildPayloadV1(r.Payload)
+			scope = &decoded
+		} else {
+			m, err = manifest()
+		}
 		if err != nil {
 			return err
 		}
-		state.Generations[r.Generation] = vectorPartitionLifecycleGenerationStateV1{Manifest: &m}
+		state.Generations[r.Generation] = vectorPartitionLifecycleGenerationStateV1{Manifest: &m, Scope: scope}
 		if state.GenerationFloor == 0 {
 			state.GenerationFloor = r.Generation
 		}
@@ -464,6 +538,11 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		m, err := applyVectorPartitionReadyPromotionV1(*generation.Manifest, r.Payload)
 		if err != nil {
 			return fmt.Errorf("%w: ready promotion", ErrVectorPartitionManifestInvalid)
+		}
+		if generation.Scope != nil {
+			if _, err := generation.Scope.localAssetsV1(m); err != nil {
+				return err
+			}
 		}
 		generation.Manifest = &m
 		state.Generations[r.Generation] = generation
@@ -494,8 +573,12 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		if !present || generation.Manifest == nil || state.ActiveGeneration == r.Generation || generation.Deleting {
 			return fmt.Errorf("%w: delete prepare transition", ErrVectorPartitionManifestInvalid)
 		}
+		originalRefs, refsErr := vectorPartitionGenerationRefsV1(generation)
+		if refsErr != nil {
+			return refsErr
+		}
 		reclaim, err := decodeVectorPartitionReclaimRecordV1(r.Payload)
-		if err != nil || len(reclaim.SupersededRefs) != 0 || !vectorPartitionLifecycleRefsEqualV1(reclaim.OriginalRefs, vectorPartitionReclaimRefsFromManifestV1(*generation.Manifest)) {
+		if err != nil || len(reclaim.SupersededRefs) != 0 || !vectorPartitionLifecycleRefsEqualV1(reclaim.OriginalRefs, originalRefs) {
 			return fmt.Errorf("%w: delete prepare reclaim identity", ErrVectorPartitionManifestInvalid)
 		}
 		generation.Deleting, generation.Reclaim = true, &reclaim
@@ -516,8 +599,18 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		state.Generations[r.Generation] = generation
 	case vectorPartitionLifecycleDeleteCompleteV1:
 		generation, present := state.Generations[r.Generation]
-		if !present || !generation.Deleting {
+		if !present || generation.Manifest == nil || state.ActiveGeneration == r.Generation {
 			return fmt.Errorf("%w: delete complete transition", ErrVectorPartitionManifestInvalid)
+		}
+		if !generation.Deleting {
+			// A scoped router-only BUILD has no local asset or VPR1 debt.
+			if generation.Scope == nil {
+				return fmt.Errorf("%w: delete complete without reclaim", ErrVectorPartitionManifestInvalid)
+			}
+			refs, err := vectorPartitionGenerationRefsV1(generation)
+			if err != nil || len(refs) != 0 {
+				return fmt.Errorf("%w: delete complete with local refs", ErrVectorPartitionManifestInvalid)
+			}
 		}
 		// Integration may append DELETE_COMPLETE only after physical reclaim debt
 		// is discharged. This pure reducer records logical completion only.

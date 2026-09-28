@@ -96,7 +96,7 @@ A TreeDB deployment uses:
 `vector_partitions/` is a persistent, Raft-snapshot-included namespace for M1
 vector-partition metadata; it is not a WAL or cache. VPM1 remains the canonical
 generation-manifest payload, but it is not published as a mutable standalone
-file. Local lifecycle authority is an immutable VCP1 checkpoint plus a
+file. Local lifecycle authority is an immutable VCP1 or VCP2 checkpoint plus a
 digest-chained VLC1 delta tail under the exact hashed identity:
 
 ```text
@@ -121,6 +121,20 @@ older prepared generation eligible for reactivation. The checkpoint is capped
 at 30 MiB, its current tail at 4 MiB, the identity namespace at 64 MiB and
 4,096 entries. Counts and lengths are checked before allocation.
 
+An optional immutable owner-local BUILD uses VLC1 operation 8 and stores a
+canonical VLS1 scope beside the unchanged global VPM1. VLS1 binds the hosted
+group, router-host flag, and exact SHA-256 manifest and placement commitments;
+it does not itself authorize serving. When any live generation has a scope,
+the checkpoint is VCP2 and adds one bounded scope field per generation.
+Unscoped checkpoints remain byte-identical VCP1. The scope derives local
+asset and reclaim references from the global placement, and rejects a physical
+segment shared across hosted and foreign owners. A router-only BUILD with no
+local assets can complete deletion directly; nonempty scoped generations keep
+the VPR1 prepare/progress/physical-reclaim sequence. Restore validates only
+the scoped hosted assets, including their bytes and digests, while retaining
+the unchanged global manifest identity. Catalog authority and source-holder
+verification are separate prerequisites before a scoped node may serve.
+
 Every file is installed no-replace from an exact synchronized anonymous handle,
 then the parent namespace is synchronized and reopened. Exact-byte retries are
 idempotent; conflicting immutable names, physical aliases, symlinks, malformed
@@ -131,8 +145,9 @@ tail. The archive always carries an explicit `db/vector_partitions` directory,
 including when it is empty. Restore rejects a missing directory, any extra
 audit epoch, or legacy mutable authority. It reads the namespace in bounded
 batches, applies the 4,096-entry cap to all names, and verifies the ranges,
-CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
-manifest before replacing the target namespace.
+CRC32 values, and SHA-256 digests of every locally derived asset referenced by
+a non-deleting manifest before replacing the target namespace. An unscoped
+manifest still requires its complete asset set.
 
 The default VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,

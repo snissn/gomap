@@ -605,7 +605,22 @@ func (s *VectorPartitionStoreV1) deleteVectorPartitionLifecycleV1(collection, in
 		}
 		return nil
 	}
-	reclaim, err := newVectorPartitionReclaimStateV1(*entry.Manifest)
+	var reclaim vectorPartitionReclaimStateV1
+	if entry.Scope != nil {
+		refs, refsErr := vectorPartitionGenerationRefsV1(entry)
+		if refsErr != nil {
+			return refsErr
+		}
+		if len(refs) == 0 {
+			// A scoped router-only BUILD has no local assets to reclaim.
+			return s.persistVectorPartitionLifecycleOperationV1(collection, index, vectorPartitionLifecycleDeleteCompleteV1, generation, nil)
+		}
+		reclaim, err = canonicalVectorPartitionReclaimStateV1(vectorPartitionReclaimStateV1{
+			Collection: collection, IndexName: index, Generation: generation, OriginalRefs: refs,
+		})
+	} else {
+		reclaim, err = newVectorPartitionReclaimStateV1(*entry.Manifest)
+	}
 	if err != nil {
 		return err
 	}
@@ -772,7 +787,16 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				}
 				continue
 			}
-			if state.Manifest.isPagedRootV2() {
+			if state.Scope != nil {
+				refs, err := vectorPartitionGenerationRefsV1(state)
+				if err != nil {
+					return nil, nil, err
+				}
+				prepared = append(prepared, refs...)
+				if loaded.state.ActiveGeneration == generation {
+					pinned = append(pinned, refs...)
+				}
+			} else if state.Manifest.isPagedRootV2() {
 				namespace := ""
 				if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
 					namespace = cfg.AssetManager.Namespace
