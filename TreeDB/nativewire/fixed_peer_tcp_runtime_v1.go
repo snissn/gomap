@@ -663,7 +663,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		}
 		for _, d := range data {
 			if d.fsm != nil {
-				_ = d.fsm.Close()
+				errs = append(errs, d.fsm.Close())
 			}
 			if d.db != nil {
 				errs = append(errs, d.db.Close())

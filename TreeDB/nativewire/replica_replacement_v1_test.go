@@ -444,9 +444,8 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	}
 }
 
-// Runtime shutdown remains once-only for consensus, transports and stores, but
-// it must retain and retry the FSM's failed archive cleanup on later Close calls.
-func TestFixedPeerRuntimeCloseRetriesSnapshotCleanupV1(t *testing.T) {
+func fixedPeerRuntimeWithBlockedSnapshotV1(t *testing.T) (*FixedPeerTCPRuntimeV1, raftcluster.RaftSnapshotV1, string) {
+	t.Helper()
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("snapshot requires relative namespace support")
 	}
@@ -456,11 +455,7 @@ func TestFixedPeerRuntimeCloseRetriesSnapshotCleanupV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := r.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	t.Cleanup(func() { _ = r.Close() })
 	client, err := NewFixedPeerTCPClientV1(c)
 	if err != nil {
 		t.Fatal(err)
@@ -513,8 +508,20 @@ func TestFixedPeerRuntimeCloseRetriesSnapshotCleanupV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(blocker); _ = snapshot.Release() })
-	if err := r.Close(); err == nil {
+	return r, snapshot, blocker
+}
+
+// Runtime shutdown remains once-only for consensus, transports and stores, but
+// it must retain and retry the FSM's failed archive cleanup on later Close calls.
+func TestFixedPeerRuntimeCloseRetriesSnapshotCleanupV1(t *testing.T) {
+	r, snapshot, blocker := fixedPeerRuntimeWithBlockedSnapshotV1(t)
+	first := r.Close()
+	if first == nil {
 		t.Fatal("cleanup failure lost by runtime Close")
+	}
+	var cleanupErr *os.PathError
+	if !errors.As(first, &cleanupErr) || cleanupErr.Path != snapshot.ArchivePath {
+		t.Fatalf("first Close error=%v, want archive cleanup failure", first)
 	}
 	if _, err := os.Stat(blocker); err != nil {
 		t.Fatal(err)
@@ -522,13 +529,32 @@ func TestFixedPeerRuntimeCloseRetriesSnapshotCleanupV1(t *testing.T) {
 	if err := os.Remove(blocker); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Close(); err != nil {
-		t.Fatalf("cleanup retry: %v", err)
+	if err := r.Close(); !errors.Is(err, cleanupErr) {
+		t.Fatalf("cleanup retry lost first Close error: %v", err)
 	}
 	if _, err := os.Stat(snapshot.ArchivePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cleanup target remains: %v", err)
 	}
-	if err := r.Close(); err != nil {
-		t.Fatalf("idempotent Close: %v", err)
+	if err := r.Close(); !errors.Is(err, cleanupErr) {
+		t.Fatalf("idempotent Close lost first error: %v", err)
+	}
+}
+
+func TestFixedPeerRuntimeClosePreservesFirstFSMErrorAfterInternalRetryV1(t *testing.T) {
+	r, snapshot, blocker := fixedPeerRuntimeWithBlockedSnapshotV1(t)
+	// FSM.Close first fails to remove the nonempty archive. The original DB's
+	// close hook then clears the blocker, so the runtime's internal FSM retry
+	// succeeds during this same Close call.
+	r.localDataV1("group-a").db.RegisterCloseHook(func() error { return os.Remove(blocker) })
+	first := r.Close()
+	var cleanupErr *os.PathError
+	if !errors.As(first, &cleanupErr) || cleanupErr.Path != snapshot.ArchivePath {
+		t.Fatalf("first Close error=%v, want archive cleanup failure", first)
+	}
+	if _, err := os.Stat(snapshot.ArchivePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("internal retry left cleanup target: %v", err)
+	}
+	if err := r.Close(); !errors.Is(err, cleanupErr) {
+		t.Fatalf("later Close lost first error: %v", err)
 	}
 }
