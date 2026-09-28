@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
@@ -19,9 +21,19 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	stage := "encode begin"
 	var lastTailErr error
 	var lastTail raftcluster.ReplacementTailProgressV1
+	var target *fixedPeerDataV1
+	var tailWaitBudget time.Duration
 	defer func() {
 		if t.Failed() {
-			t.Logf("promotion-tail stage=%s last-tail=%+v last-tail-error=%v", stage, lastTail, lastTailErr)
+			t.Logf("promotion-tail stage=%s tail-wait-budget=%s last-tail=%+v last-tail-error=%v", stage, tailWaitBudget, lastTail, lastTailErr)
+			if stage == "wait for learner tail proof" && target != nil {
+				inspect, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				native, nativeErr := target.provider.RuntimeStatusV1(inspect)
+				local, localErr := target.fsm.RecoveryStatusV1(inspect, raftfsm.RecoveryStatusOptionsV1{})
+				t.Logf("promotion-tail target native state=%s leader=%s term=%d commit=%d raft-applied=%d last=%d durable-applied=%+v native-error=%v", native.State, native.LeaderID, native.Term, native.CommitIndex, native.RaftAppliedIndex, native.LastIndex, native.Applied, nativeErr)
+				t.Logf("promotion-tail target durable applied=%+v command-lsn=%d status-error=%v", local.AppliedProgress, local.AppliedCommandLSN, localErr)
+			}
 		}
 	}()
 	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(operation)
@@ -105,8 +117,11 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 	if _, err := client.PrepareReplicaReplacementV1(ctx, configs[catalogLeader].NodeID, operation); err != nil {
 		t.Fatal(err)
 	}
-	target := runtimes[3].localDataV1(group.ID)
+	target = runtimes[3].localDataV1(group.ID)
 	stage = "wait for learner tail proof"
+	if deadline, ok := ctx.Deadline(); ok {
+		tailWaitBudget = time.Until(deadline)
+	}
 	fixedPeerWaitV1(t, ctx, func() bool {
 		lastTail, lastTailErr = target.fsm.ReplacementTailProgressV1(ctx, proof.EntryID)
 		return lastTailErr == nil && lastTail == proof
