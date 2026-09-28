@@ -730,6 +730,14 @@ func decodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
 	}
 	return record, nil
 }
+
+// DecodeCatalogMetaRecordV1 validates a canonical committed catalog record.
+// It is used by source holders that must derive immutable vector placement
+// from the fenced meta-Raft record rather than a caller-supplied catalog.
+func DecodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
+	return decodeCatalogMetaRecordV1(raw)
+}
+
 func catalogMetaDigestV1(record CatalogMetaRecordV1) (string, error) {
 	// Keep the digest input structurally separate from the wire record. Merely
 	// clearing record.Digest would still serialize `"digest":""`, contrary to
