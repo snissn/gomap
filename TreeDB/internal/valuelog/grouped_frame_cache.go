@@ -312,11 +312,16 @@ func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
 		return
 	}
 	c.releases.Add(1)
-	if c.owner != nil && !c.owner.closed.Load() {
+	if c.owner != nil {
+		if c.owner.closed.Load() {
+			// A closed file cannot reuse its cached frames. Returning all of
+			// them to the process pool can displace scratch used by live files.
+			return
+		}
 		c.owner.releaseDecodeScratch(raw)
-	} else {
-		putDecodeScratch(raw)
+		return
 	}
+	putDecodeScratch(raw)
 }
 
 func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
