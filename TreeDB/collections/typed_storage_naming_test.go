@@ -335,6 +335,11 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Scoped preparation also reads the existing asset-manager configuration.
 	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/vector_partition_scoped_stage_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
+	{path: "TreeDB/collections/vector_partition_m7_stage_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Scoped owner and router admission use the retained configuration to find
+	// and verify locally hosted typed-column asset bytes.
+	{path: "TreeDB/collections/vector_partition_scoped_owner_pin_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
+	{path: "TreeDB/collections/vector_partition_scoped_router_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	{path: "TreeDB/collections/vector_partition_paged_source_session_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_ann_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_domain_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -424,7 +429,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_index_partition_live_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// #4324's nativewire integration fixtures use the exported compatibility
 	// schema names to configure typed-column vector and sorted-scalar sources.
-	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
+	// The real-process hosted-assets fixture copies the compatibility-retained
+	// schema definition while excluding the builder's source documents.
+	{path: "TreeDB/nativewire/vector_partition_fixed_peer_multi_owner_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	// #4728's fixed-peer mutation fixtures use the exported compatibility
 	// schema names for typed-column vector and unsupported-payload cases.

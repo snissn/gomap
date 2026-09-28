@@ -699,6 +699,11 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 		columns = &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}
 	}
 	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: columns}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
+	if ownerSeparated {
+		// The distributed fixture needs a durable index epoch. Inline indexes in
+		// CreateCollection predate CreateVectorIndex's schema-generation stamp.
+		meta.VectorIndexes = nil
+	}
 	manager := collections.NewCollectionManager(database)
 	if _, err := manager.CreateCollection(&meta); err != nil {
 		database.Close()
@@ -708,6 +713,14 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 	if err != nil {
 		database.Close()
 		t.Fatal(err)
+	}
+	if ownerSeparated {
+		indexed, err := collection.CreateVectorIndex(definition)
+		if err != nil || indexed == nil || len(indexed.VectorIndexes) != 1 {
+			database.Close()
+			t.Fatalf("create durable vector index: meta=%+v err=%v", indexed, err)
+		}
+		definition = indexed.VectorIndexes[0]
 	}
 	byID := make(map[string]vectorPartitionLiveDocumentV1, len(documents))
 	for _, document := range documents {
