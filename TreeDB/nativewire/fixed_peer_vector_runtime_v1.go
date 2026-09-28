@@ -748,10 +748,14 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		}
 	}
 	if request.RouterScoreBudget < 1 || request.RouterScoreBudget > min(limits.MaxRouterScoreCalls, collections.MaxVectorPartitionRouterScoreBudgetV3) ||
+		request.LocalScoreBudget < 0 || request.LocalScoreBudget > limits.MaxLocalScoreCalls ||
 		(request.RouterMode != collections.VectorPartitionRouterModeExactV1 && request.RouterMode != collections.VectorPartitionRouterModeApproxV1) ||
 		(request.RouterMode == collections.VectorPartitionRouterModeExactV1 && request.RouterScoreBudget < len(manifest.Representatives)) ||
 		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 {
 		return errors.New("invalid vector request base router or stats defaults")
+	}
+	if err := manifest.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
+		return fmt.Errorf("invalid vector manifest: %w", err)
 	}
 	return nil
 }

@@ -958,6 +958,19 @@ func TestFixedPeerVectorConfigRequiresCatalogLifecycleFeatureV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionReplicatedLiveManifestRejectsSpoofedRepresentativeV1(t *testing.T) {
+	manifest := fixedPeerVectorSeedV1(t).manifest
+	if !vectorPartitionReplicatedLiveManifestMatchesV1(manifest, manifest) {
+		t.Fatal("valid prepared manifest did not match itself")
+	}
+	spoofed := manifest
+	spoofed.Representatives = append([]collections.VectorPartitionRepresentativeV2(nil), manifest.Representatives...)
+	spoofed.Representatives[0].NodeID++
+	if spoofed.IntegrityDigest != manifest.IntegrityDigest || vectorPartitionReplicatedLiveManifestMatchesV1(spoofed, manifest) {
+		t.Fatal("replicated live manifest accepted altered representatives with a retained digest")
+	}
+}
+
 func TestFixedPeerVectorConfigRequiresLocalCatalogAuthorityV1(t *testing.T) {
 	configs := fixedPeerVectorTestConfigsV1(t, fixedPeerVectorSeedV1(t))
 	config := configs[0]
@@ -1059,8 +1072,9 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 		IndexDefinitionDigest: config.Vector.Placement.IndexDefinitionDigest,
 		RouterMode:            collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 	}
-	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
-		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"meta": true, localGroup: true}); err != nil {
+	readyConfigs := fixedPeerVectorTestConfigsV1(t, fixedPeerVectorSeedV1(t))
+	for i, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
+		if err := validateFixedPeerVectorConfigV1(readyConfigs[i], map[raftcluster.GroupID]bool{"meta": true, localGroup: true}); err != nil {
 			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
 		}
 	}
@@ -1114,24 +1128,7 @@ func TestFixedPeerVectorConfigPreflightBoundsInventoryAndRejectsUnauthenticatedL
 }
 
 func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
-	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
-	seed := fixedPeerVectorSeedFixtureV1{
-		manifest: collections.VectorPartitionManifestV1{
-			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
-			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRowCount: 1,
-			PartitionCount: 1, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-b"}},
-			Representatives: []collections.VectorPartitionRepresentativeV2{{PartitionID: 0, NodeID: 1}},
-		},
-		catalog: raftplacement.CatalogV1{
-			Features: raftplacement.DefaultFeatureSet(),
-			Groups: []raftplacement.GroupV1{
-				{ID: "group-a", Members: []raftcluster.NodeID{"ingress"}, LeaderHint: "ingress"},
-				{ID: "group-b", Members: []raftcluster.NodeID{"owner-1", "owner-2", "owner-3"}, LeaderHint: "owner-1"},
-			},
-			Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b", Mode: raftplacement.PlacementModeCollectionV1}},
-		},
-	}
-	seed.catalog.Features.Required = append(seed.catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
+	seed := fixedPeerVectorSeedV1(t)
 	limits := DefaultVectorPartitionCoordinatorLimitsV1()
 	bindCatalog := func(c *FixedPeerTCPConfigV1) {
 		record, err := raftplacement.NewCatalogMetaRecordV1(c.Vector.Identity.Index.CatalogEpoch, c.Vector.Catalog)
@@ -1148,7 +1145,7 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 		"catalog_digest_binding": func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogDigest = strings.Repeat("b", 64) },
 		"catalog_members_binding": func(c *FixedPeerTCPConfigV1) {
 			c.Vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), c.Vector.Catalog.Groups...)
-			c.Vector.Catalog.Groups[1].Members = []raftcluster.NodeID{"owner-1", "owner-2", "ingress"}
+			c.Vector.Catalog.Groups[1].Members = append(append([]raftcluster.NodeID(nil), c.Vector.Catalog.Groups[1].Members...), "ingress")
 			bindCatalog(c)
 		},
 		"catalog_owner_leader_missing": func(c *FixedPeerTCPConfigV1) {
@@ -1181,8 +1178,18 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 		"request_router_budget_limit": func(c *FixedPeerTCPConfigV1) {
 			c.Vector.RequestBase.RouterScoreBudget = limits.MaxRouterScoreCalls + 1
 		},
+		"request_local_budget_negative": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.LocalScoreBudget = -1
+		},
+		"request_local_budget_limit": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.LocalScoreBudget = limits.MaxLocalScoreCalls + 1
+		},
 		"request_exact_budget_shortfall": func(c *FixedPeerTCPConfigV1) {
 			c.Vector.Manifest.Representatives = append(c.Vector.Manifest.Representatives, collections.VectorPartitionRepresentativeV2{VectorOrdinal: 1, PartitionID: 0, NodeID: 2})
+		},
+		"manifest_representative_spoofed_digest": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Manifest.Representatives = append([]collections.VectorPartitionRepresentativeV2(nil), c.Vector.Manifest.Representatives...)
+			c.Vector.Manifest.Representatives[0].NodeID++
 		},
 		"request_stats_mode":           func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.StatsMode = "invalid" },
 		"collection_incarnation":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CollectionIncarnation = 0 },

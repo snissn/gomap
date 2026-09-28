@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -370,9 +371,9 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 }
 
 func vectorPartitionReplicatedLiveManifestMatchesV1(left, right collections.VectorPartitionManifestV1) bool {
-	return left.Collection == right.Collection && left.IndexName == right.IndexName && left.IndexDefinitionDigest == right.IndexDefinitionDigest &&
-		left.SourceGeneration == right.SourceGeneration && left.SourceChecksum == right.SourceChecksum && left.SourceSchemaHash == right.SourceSchemaHash &&
-		left.SourceRowCount == right.SourceRowCount && left.Generation == right.Generation && left.IntegrityDigest == right.IntegrityDigest
+	leftRaw, leftErr := collections.EncodeVectorPartitionManifestV1(left)
+	rightRaw, rightErr := collections.EncodeVectorPartitionManifestV1(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftRaw, rightRaw)
 }
 
 func vectorPartitionReplicatedLifecycleValidationErrorV1(ctx context.Context, err error) error {
