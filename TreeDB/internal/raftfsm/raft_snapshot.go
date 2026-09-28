@@ -723,6 +723,10 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 	return extractRaftSnapshotArchiveWithLimitsV1(context.Background(), reader, mainDir, sideDir, applyDir, limits)
 }
 func extractRaftSnapshotArchiveWithLimitsV1(ctx context.Context, reader io.Reader, mainDir, sideDir, applyDir string, limits SnapshotCaptureLimitsV1) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
+	return extractRaftSnapshotArchiveWithDiskAvailableV1(ctx, reader, mainDir, sideDir, applyDir, limits, snapshotDiskAvailableV1)
+}
+
+func extractRaftSnapshotArchiveWithDiskAvailableV1(ctx context.Context, reader io.Reader, mainDir, sideDir, applyDir string, limits SnapshotCaptureLimitsV1, diskAvailable func(string) (uint64, error)) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
 	// Bound raw tar/PAX bytes too; the entry ceilings alone do not constrain
 	// extension records consumed internally by archive/tar. An archive that
 	// exhausts this allowance is conservatively refused, even at exact EOF.
@@ -765,8 +769,8 @@ func extractRaftSnapshotArchiveWithLimitsV1(ctx context.Context, reader io.Reade
 		// Rebinding can hold a sibling copy of an index. Charge a full second
 		// storage image conservatively, and check each possible filesystem.
 		for _, root := range []string{mainDir, sideDir, applyDir} {
-			available, err := snapshotDiskAvailableV1(root)
-			if err != nil || uint64(total+tarHeader.Size+overhead) > available {
+			available, err := diskAvailable(root)
+			if err != nil || uint64(2*total+overhead) > available {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, errors.Join(err, fmt.Errorf("raftfsm: snapshot install disk admission failed"))
 			}
 		}

@@ -52,6 +52,45 @@ func TestRaftSnapshotInstallLimitsRefuseBeforeEntryWriteV1(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotInstallDiskAdmissionChargesPriorIndexCopyV1(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, entry := range []struct {
+		name string
+		size int
+	}{
+		{"db/index.db", 40 << 10},
+		{"db/payload", 20 << 10},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: entry.name, Size: int64(entry.size), Mode: 0600}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(bytes.Repeat([]byte("x"), entry.size)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	main, side, apply := t.TempDir(), t.TempDir(), t.TempDir()
+	limits, err := (SnapshotCaptureLimitsV1{MaxFiles: 8, MaxBytes: 128 << 10, MaxStagingBytes: 2 << 20}).normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overhead := int64(limits.MaxFiles)*8192 + (1 << 20) + 8192
+	available := uint64(overhead + 90<<10)
+	diskAvailable := func(string) (uint64, error) { return available, nil }
+	if _, err := extractRaftSnapshotArchiveWithDiskAvailableV1(context.Background(), &archive, main, side, apply, limits, diskAvailable); err == nil || !strings.Contains(err.Error(), "snapshot install disk admission failed") {
+		t.Fatal("second image admitted", err)
+	}
+	if _, err := os.Stat(filepath.Join(main, "index.db")); err != nil {
+		t.Fatal("first entry was not admitted", err)
+	}
+	if _, err := os.Stat(filepath.Join(main, "payload")); !os.IsNotExist(err) {
+		t.Fatal("second entry was written before refusal", err)
+	}
+}
+
 func TestRaftSnapshotInstallCleanupFailureRetainsAdmissionV1(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	dir := t.TempDir()
