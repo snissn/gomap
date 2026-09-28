@@ -1021,7 +1021,7 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1
 			return VectorPartitionManifestV1{}, err
 		}
 		entry, ok := loaded.state.Generations[generation]
-		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+		if !present || !ok || entry.Manifest == nil || entry.Scope != nil || entry.Deleting || entry.Manifest.State != "ready" {
 			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
 		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)

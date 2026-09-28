@@ -74,7 +74,9 @@ func vectorPartitionCheckpointEnvelopeIdentityV1(raw []byte) (string, string, ui
 	if len(raw) < vectorPartitionLifecycleCheckpointHeaderBytesV1+vectorPartitionLifecycleCheckpointChecksumBytesV1 ||
 		len(raw) > vectorPartitionLifecycleCheckpointMaxBytesV1 ||
 		string(raw[:4]) != vectorPartitionLifecycleCheckpointMagicV1 ||
-		binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointVersionV1 {
+		(binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointVersionV1 &&
+			binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointScopedVersionV1 &&
+			binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointGappedVersionV1) {
 		return "", "", 0, fmt.Errorf("%w: lifecycle snapshot checkpoint header", ErrVectorPartitionManifestInvalid)
 	}
 	payloadBytes := uint64(binary.BigEndian.Uint32(raw[8:12]))
@@ -264,6 +266,20 @@ func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartition
 		for _, generation := range generations {
 			entry := loaded.state.Generations[generation]
 			if entry.Manifest == nil || entry.Deleting {
+				continue
+			}
+			if entry.Scope != nil {
+				assets, err := entry.Scope.localAssetsV1(*entry.Manifest)
+				if err != nil {
+					return fmt.Errorf("%w: snapshot scoped generation %d: %v", ErrVectorPartitionManifestInvalid, generation, err)
+				}
+				if len(assets) == 0 {
+					continue // A router-only ingress has no asset until READY.
+				}
+				namespace := assets[0].Ref.Namespace
+				if err := verifyVectorPartitionAssetsWithContextV1(context.Background(), filepath.Join(root, "column_assets"), namespace, assets); err != nil {
+					return fmt.Errorf("%w: snapshot scoped generation %d assets: %v", ErrVectorPartitionManifestInvalid, generation, err)
+				}
 				continue
 			}
 			namespace := ""

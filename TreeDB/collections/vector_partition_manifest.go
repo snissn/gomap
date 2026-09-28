@@ -2736,6 +2736,9 @@ func (s *VectorPartitionStoreV1) OpenWithContext(ctx context.Context, collection
 	if !present {
 		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
+	if entry, ok := loaded.state.Generations[generation]; ok && entry.Scope != nil {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: scoped generation requires scoped prepared read", ErrVectorPartitionManifestInvalid)
+	}
 	return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
 }
 func (s *VectorPartitionStoreV1) openDir() (*os.File, error) {
