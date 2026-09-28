@@ -372,6 +372,27 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			t.Fatalf("reopened owner result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
 		}
 	}
+	if separateLeaders && !sourceFollower {
+		// ACTIVE recovery needs only the committed owner assets. The source
+		// group has no leader after its sole member exits.
+		processes[3].stop(t)
+		if _, err := client.Status(ctx, "source-holder"); err == nil {
+			t.Fatal("source holder remained available after shutdown")
+		}
+		if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
+			t.Fatalf("ACTIVE recovery with source group unavailable: %v", err)
+		}
+		request.Deadline = time.Now().Add(12 * time.Second)
+		recovered, err := publicClient.VectorSearchStrictV1(ctx, request)
+		if err != nil || len(recovered.Neighbors) != len(response.Neighbors) {
+			t.Fatalf("ACTIVE source-outage search: response=%+v err=%v", recovered, err)
+		}
+		for i, neighbor := range recovered.Neighbors {
+			if neighbor.ID != response.Neighbors[i].ID || math.Abs(float64(neighbor.Score-response.Neighbors[i].Score)) > 1e-5 {
+				t.Fatalf("ACTIVE source-outage result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
+			}
+		}
+	}
 	if err := publicClient.Close(); err != nil {
 		t.Fatal(err)
 	}
