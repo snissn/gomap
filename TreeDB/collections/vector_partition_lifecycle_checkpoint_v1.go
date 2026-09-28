@@ -196,6 +196,9 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 		var scope *VectorPartitionLocalScopeV1
 		var scopeRaw []byte
 		if entry.Scope != nil {
+			if state.ActiveGeneration == generation {
+				return zero, nil, fmt.Errorf("%w: scoped generation cannot be locally active", ErrVectorPartitionManifestInvalid)
+			}
 			if _, err := entry.Scope.localAssetsV1(manifest); err != nil {
 				return zero, nil, err
 			}

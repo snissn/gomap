@@ -680,6 +680,8 @@ snapshot validation, and reclaim debt derive from the scope and full placement;
 shared foreign-owner segments are invalid. VLS1 is local inventory, not a
 substitute for source-holder validation or fresh catalog authority at READY,
 reopen, and serving admission. Older binaries are not promised to open VCP2.
+Full-local prepared/store reads and LOCAL_ACTIVATE reject scoped generations;
+the scoped prepared read only verifies hosted bytes and grants no serving authority.
 
 ### Lifecycle, publication, and cleanup authority
 
@@ -688,7 +690,7 @@ reopen, and serving admission. Older binaries are not promised to open VCP2.
 | absent -> building | BUILD in a new VCP1 checkpoint epoch | complete non-active building generation |
 | absent -> scoped building | scoped BUILD (operation 8) in a new VCP2 checkpoint epoch | complete non-active local generation tied to global manifest and placement |
 | building -> ready | READY digest-bound promotion delta | complete prepared generation, still not active |
-| ready -> active | LOCAL_ACTIVATE delta | one complete ready generation is locally active and the activation high water advances |
+| unscoped ready -> active | LOCAL_ACTIVATE delta | one complete full-local generation is locally active and the activation high water advances |
 | active -> retired | DEACTIVATE delta | generation remains prepared but is not active |
 | non-active building/ready (including retired ready) -> deleting | caller fences plus DELETE_PREPARE carrying VPR1 | initial cleanup is accepted; an identical retry is idempotent; conflicting or resurrection transitions fail closed |
 | deleting -> progress | RECLAIM_PROGRESS before mixed-segment remap publication | original and superseded debt remain protected and retryable |

@@ -134,7 +134,7 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 			return err
 		}
 		entry, ok := loaded.state.Generations[generation]
-		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+		if !present || !ok || entry.Manifest == nil || entry.Scope != nil || entry.Deleting || entry.Manifest.State != "ready" {
 			return fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
 		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)

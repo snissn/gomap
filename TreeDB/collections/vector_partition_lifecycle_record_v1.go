@@ -550,6 +550,7 @@ func reduceVectorPartitionLifecycleRecordV1(state *vectorPartitionLifecycleState
 		generation, present := state.Generations[r.Generation]
 		if !present ||
 			generation.Manifest == nil ||
+			generation.Scope != nil ||
 			generation.Manifest.State != "ready" ||
 			generation.Deleting ||
 			r.Generation <= state.ActivationHighWater {

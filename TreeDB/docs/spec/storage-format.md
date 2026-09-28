@@ -134,6 +134,8 @@ the VPR1 prepare/progress/physical-reclaim sequence. Restore validates only
 the scoped hosted assets, including their bytes and digests, while retaining
 the unchanged global manifest identity. Catalog authority and source-holder
 verification are separate prerequisites before a scoped node may serve.
+Full-local store/prepared reads and local activation reject scoped generations;
+the scoped prepared API is local byte evidence only.
 The placement commitment uses `VPD1` followed by the big-endian partition
 count and, in partition-ID order, each big-endian partition ID, group-byte
 length, and group bytes. Scope validation recomputes it from the complete
