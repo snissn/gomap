@@ -102,7 +102,7 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 	var manifest raftcluster.SnapshotManifestV1
 	var progressDigest raftapply.LogicalDigestV1
 	var options backenddb.Options
-	err = collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+	err = collections.WithVectorPartitionStorageBarrierWithContextV1(ctx, raftcluster.MainDBDir(f.cluster.Dir), func() error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if err := f.requireRaftSnapshotOpenV1(); err != nil {

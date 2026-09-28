@@ -168,7 +168,7 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		}
 		ctx, cancel := context.WithTimeout(ctx, limits.Lifetime)
 		defer cancel()
-		return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+		return collections.WithVectorPartitionStorageBarrierWithContextV1(ctx, raftcluster.MainDBDir(f.cluster.Dir), func() error {
 			return f.installRaftSnapshotV1Locked(ctx, reader, scratch, limits)
 		})
 	}, scratch.close, releaseOwner)
