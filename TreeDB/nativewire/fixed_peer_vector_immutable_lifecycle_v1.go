@@ -67,6 +67,9 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		// leaders. A catalog-only leader cannot attest another node's source.
 		return zero, ErrFixedPeerVectorUnavailableV1
 	}
+	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+		return zero, err
+	}
 	collection, err := r.vector.manager.OpenCollection(vector.Collection.Collection)
 	if err != nil {
 		return zero, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
@@ -220,6 +223,9 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 	if (!owner && !router) || (owner && router) {
 		return nil, ErrFixedPeerVectorWrongOwnerV1
 	}
+	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+		return nil, err
+	}
 	collection, err := r.vector.manager.OpenCollection(vector.Collection.Collection)
 	if err != nil {
 		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
@@ -241,6 +247,9 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 		return nil, err
 	}
 	if err := collection.StageVectorPartitionScopedManifestWithContextV1(ctx, vector.Manifest, scope, resources, authority); err != nil {
+		return nil, err
+	}
+	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 		return nil, err
 	}
 	if router {

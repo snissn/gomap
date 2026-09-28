@@ -6,8 +6,21 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
+
+// HasCurrentDBV1 rejects a collection handle bound to a database that a Raft
+// snapshot restore has replaced. The comparison is made under the same FSM
+// lock used when the restore closes and swaps f.db.
+func (f *FSM) HasCurrentDBV1(db *backenddb.DB) bool {
+	if f == nil || db == nil {
+		return false
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return !f.closed && f.db == db
+}
 
 // PreparedVectorPartitionManifestFromCurrentDBV1 captures full-local source
 // evidence from this FSM's current database. The root barrier precedes f.mu,

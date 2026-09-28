@@ -16,6 +16,17 @@ import (
 // The immutable branch is opened only after a replicated ACTIVE record covers
 // every physical owner. A config digest or locally prepared scope alone is not
 // serving authority. Mutable fixed-peer construction remains unchanged.
+func (r *fixedPeerVectorRuntimeV1) requireCurrentImmutableDBV1() error {
+	if r == nil || r.parent == nil {
+		return ErrFixedPeerVectorUnavailableV1
+	}
+	data := r.parent.data[r.dataGroup]
+	if data == nil || data.fsm == nil || !data.fsm.HasCurrentDBV1(data.db) {
+		return ErrFixedPeerVectorProofStaleV1
+	}
+	return nil
+}
+
 func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
 	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
@@ -24,6 +35,9 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.requireCurrentImmutableDBV1(); err != nil {
 		return nil, err
 	}
 	vector := r.parent.config.Vector
@@ -37,6 +51,9 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 	r.initMu.Lock()
 	defer r.initMu.Unlock()
 	if r.backend != nil {
+		if err := r.requireCurrentImmutableDBV1(); err != nil {
+			return nil, err
+		}
 		return r.backend, nil
 	}
 	resolved, err := raftplacement.Validate(vector.Catalog)
@@ -133,6 +150,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 			_ = source.Close()
 			return nil, err
 		}
+		shardService.postSearchGuard = r.requireCurrentImmutableDBV1
 		shardListener, err = net.Listen("tcp", vector.ShardAddresses[r.dataGroup][r.parent.config.NodeID])
 		if err != nil {
 			_ = source.Close()
@@ -159,6 +177,13 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		Builder: fixedPeerVectorImmutableNoBuildV1{}, MutationEpoch: record.MutationEpoch,
 	})
 	if err != nil {
+		_ = topology.Close()
+		if source != nil {
+			_ = source.Close()
+		}
+		return nil, err
+	}
+	if err := r.requireCurrentImmutableDBV1(); err != nil {
 		_ = topology.Close()
 		if source != nil {
 			_ = source.Close()

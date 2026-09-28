@@ -858,7 +858,14 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		if err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
-		return backend.SearchVectorPartitionV1(ctx, request)
+		response, err := backend.SearchVectorPartitionV1(ctx, request)
+		if err != nil {
+			return public.SearchResponseV1{}, err
+		}
+		if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
+		return response, nil
 	}
 	owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
 	if len(owners) != 1 {

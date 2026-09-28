@@ -21,6 +21,7 @@ type fixedPeerVectorScopedOwnerAuthorityV1 struct {
 	fence     func(context.Context) (raftplacement.CatalogMetaStatusV1, error)
 	identity  raftplacement.VectorPartitionLifecycleIdentityV1
 	hosted    raftcluster.GroupID
+	currentDB func() error
 
 	mu          sync.RWMutex
 	owners      []raftcluster.GroupID
@@ -34,6 +35,7 @@ func newFixedPeerVectorScopedOwnerAuthorityV1(r *FixedPeerTCPRuntimeV1, hosted r
 	}
 	return &fixedPeerVectorScopedOwnerAuthorityV1{
 		authority: r.authority, fence: r.catalogFence, identity: r.config.Vector.Identity, hosted: hosted,
+		currentDB: r.vector.requireCurrentImmutableDBV1,
 	}, nil
 }
 
@@ -45,6 +47,11 @@ func (a *fixedPeerVectorScopedOwnerAuthorityV1) ValidateVectorPartitionScopedOwn
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if a.currentDB != nil {
+		if err := a.currentDB(); err != nil {
+			return err
+		}
 	}
 	if scope.HostedGroup != string(a.hosted) || a.hosted == "" || a.identity.Immutable.ManifestDigest == "" ||
 		a.identity.Immutable.PlacementDigest == "" {
@@ -112,6 +119,11 @@ func (a *fixedPeerVectorScopedOwnerAuthorityV1) validatePair(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if a.currentDB != nil {
+		if err := a.currentDB(); err != nil {
+			return err
+		}
+	}
 	if a.hosted == "" || scope.HostedGroup != string(a.hosted) ||
 		scope.ManifestDigest != a.identity.Immutable.ManifestDigest ||
 		scope.PlacementDigest != a.identity.Immutable.PlacementDigest {
@@ -142,6 +154,9 @@ func (a *fixedPeerVectorScopedOwnerAuthorityV1) validatePair(
 	}
 	if !ready {
 		return ErrFixedPeerVectorProofStaleV1
+	}
+	if a.currentDB != nil {
+		return a.currentDB()
 	}
 	return nil
 }

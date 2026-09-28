@@ -762,6 +762,22 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	}
 }
 
+func TestVectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1(t *testing.T) {
+	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+	)
+	service.postSearchGuard = func() error { return ErrFixedPeerVectorProofStaleV1 }
+	response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+	if !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || !vectorPartitionShardSearchResponseZeroTestV1(response) {
+		t.Fatalf("stale DB response=%+v err=%v", response, err)
+	}
+	assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorGenerationMismatchV1)
+	if pins, releases, _ := source.counts(); pins != 1 || releases != 1 {
+		t.Fatalf("stale DB leaked generation pin: pins=%d releases=%d", pins, releases)
+	}
+}
+
 func TestVectorPartitionShardSearchScoreBudgetSpansPartitionsV1(t *testing.T) {
 	service, _, _ := newVectorPartitionShardSearchTestServiceV1(t, []raftplacement.VectorPartitionGroupV1{
 		{PartitionID: 0, GroupID: "group-a"},
