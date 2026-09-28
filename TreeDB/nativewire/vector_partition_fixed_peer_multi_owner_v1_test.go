@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,18 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false)
+}
+
+func TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false)
+}
+
+func TestMultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true)
+}
+
+func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
@@ -51,6 +64,33 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
+	metaLeader := raftcluster.NodeID("source-holder")
+	if separateLeaders {
+		metaLeader = "ingress"
+		if sourceFollower {
+			configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
+			metaLeader = "source-follower"
+		}
+		ca := newPeerCAFixtureV1(t)
+		for i := range configs {
+			configs[i].Catalog.BootstrapNode = metaLeader
+			configs[i].ClusterID = "multi-owner-separate-leaders"
+			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			validated, _, err := validateFixedPeerConfigV1(configs[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(validated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Credentialed startup pairs empty roots before admitting data.
+			// Record that identity before trusted genesis populates DataRoot.
+			if err := preparePeerStorageV1(validated, raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	// Search the same immutable generation locally before the source holder is
 	// closed. This is a result reference, not a substitute for the hosted-only
 	// process and wire assertions below.
@@ -142,6 +182,10 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 			fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, int(seed.manifest.SourceRowCount))
 			continue
 		}
+		if config.NodeID == "source-follower" {
+			fixedPeerBootstrapHostedVectorMetadataV1(t, config, meta, filepath.Join(config.DataRoot, "group-d"))
+			continue
+		}
 		group := raftcluster.GroupID("group-a")
 		switch config.NodeID {
 		case "owner-b":
@@ -158,7 +202,14 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 		fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, 0)
 	}
 	processes := make([]*fixedPeerTestProcessV1, len(configs))
+	if sourceFollower {
+		// The meta bootstrap member must be running before quorum arrives.
+		processes[len(configs)-1] = fixedPeerStartTestProcessV1(t, configs[len(configs)-1])
+	}
 	for i, config := range configs {
+		if processes[i] != nil {
+			continue
+		}
 		processes[i] = fixedPeerStartTestProcessV1(t, config)
 	}
 	client, err := NewFixedPeerTCPClientV1(configs[0])
@@ -167,9 +218,12 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	}
 	defer client.Close()
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, id := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"} {
+		for _, config := range configs {
+			id := config.NodeID
 			status, err := client.Status(ctx, id)
-			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" {
+			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" ||
+				(separateLeaders && (status.CatalogRaft.LeaderID != metaLeader ||
+					((id == "source-holder" || id == "source-follower") && status.Groups[0].LeaderID != "source-holder"))) {
 				return false
 			}
 		}
@@ -183,11 +237,12 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishCatalog(ctx, "source-holder", command); err != nil {
+	if _, err := client.PublishCatalog(ctx, metaLeader, command); err != nil {
 		t.Fatal(err)
 	}
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, id := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"} {
+		for _, config := range configs {
+			id := config.NodeID
 			status, err := client.Status(ctx, id)
 			if err != nil || status.Catalog.AppliedIndex == 0 || status.Catalog.Digest != record.Digest {
 				return false
@@ -198,6 +253,21 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
 		if report, err := client.ReadinessV1(ctx, node); err == nil || report.Ready {
 			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
+		}
+	}
+	if separateLeaders {
+		// owner-b has a valid cluster certificate but is not the catalog
+		// leader. It may not request a source capture or publish BUILD.
+		wrongCaller, err := NewFixedPeerTCPClientV1(configs[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, captureErr := wrongCaller.call(ctx, "source-holder", "vector-lifecycle", fixedPeerRequestV1{
+			VectorLifecycle: &fixedPeerVectorLifecycleRequestV1{Action: fixedPeerVectorLifecycleCaptureSourceV1},
+		}, false)
+		wrongCaller.Close()
+		if !errors.Is(captureErr, errPeerAuthenticationV1) {
+			t.Fatalf("non-meta peer source capture: got %v, want peer authentication refusal", captureErr)
 		}
 	}
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
@@ -302,6 +372,27 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 			t.Fatalf("reopened owner result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
 		}
 	}
+	if separateLeaders && !sourceFollower {
+		// ACTIVE recovery needs only the committed owner assets. The source
+		// group has no leader after its sole member exits.
+		processes[3].stop(t)
+		if _, err := client.Status(ctx, "source-holder"); err == nil {
+			t.Fatal("source holder remained available after shutdown")
+		}
+		if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
+			t.Fatalf("ACTIVE recovery with source group unavailable: %v", err)
+		}
+		request.Deadline = time.Now().Add(12 * time.Second)
+		recovered, err := publicClient.VectorSearchStrictV1(ctx, request)
+		if err != nil || len(recovered.Neighbors) != len(response.Neighbors) {
+			t.Fatalf("ACTIVE source-outage search: response=%+v err=%v", recovered, err)
+		}
+		for i, neighbor := range recovered.Neighbors {
+			if neighbor.ID != response.Neighbors[i].ID || math.Abs(float64(neighbor.Score-response.Neighbors[i].Score)) > 1e-5 {
+				t.Fatalf("ACTIVE source-outage result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
+			}
+		}
+	}
 	if err := publicClient.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -313,6 +404,9 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 		if config.NodeID == "source-holder" {
 			fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(config.DataRoot, "group-d"), seed.manifest.Collection, int(seed.manifest.SourceRowCount))
 			continue
+		}
+		if config.NodeID == "source-follower" {
+			continue // a source-group follower may acquire the replicated source
 		}
 		group := raftcluster.GroupID("group-a")
 		switch config.NodeID {
@@ -840,6 +934,65 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 		}
 	}
 	return configs
+}
+
+// Keep the router in group-a while the meta leader is a follower of group-d.
+// The source-holder remains group-d's bootstrap leader. This exposes callback
+// selection that incorrectly treats local group membership as leadership.
+func fixedPeerAddSourceFollowerMetaLeaderV1(t testing.TB, configs []FixedPeerTCPConfigV1) []FixedPeerTCPConfigV1 {
+	t.Helper()
+	address := func() string {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return addr
+	}
+	const follower raftcluster.NodeID = "source-follower"
+	metaAddress, dataAddress, controlAddress, publicAddress := address(), address(), address(), address()
+	meta := configs[0].Catalog
+	meta.BootstrapNode = follower
+	meta.Peers = append(append([]raftcluster.Peer(nil), meta.Peers...), raftcluster.Peer{
+		ID: follower, Address: metaAddress, Capabilities: meta.Features,
+	})
+	groups := append([]FixedPeerTCPGroupV1(nil), configs[0].Groups...)
+	for i := range groups {
+		if groups[i].ID == "group-d" {
+			groups[i].Peers = append(append([]raftcluster.Peer(nil), groups[i].Peers...), raftcluster.Peer{ID: follower, Address: dataAddress})
+		}
+	}
+	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), FixedPeerTCPNodeV1{ID: follower, Address: controlAddress})
+	vector := *configs[0].Vector
+	vector.PublicAddresses = make(map[raftcluster.NodeID]string, len(configs[0].Vector.PublicAddresses)+1)
+	for node, addr := range configs[0].Vector.PublicAddresses {
+		vector.PublicAddresses[node] = addr
+	}
+	vector.PublicAddresses[follower] = publicAddress
+	vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), vector.Catalog.Groups...)
+	for i := range vector.Catalog.Groups {
+		if vector.Catalog.Groups[i].ID == "group-d" {
+			vector.Catalog.Groups[i].Members = append(append([]raftcluster.NodeID(nil), vector.Catalog.Groups[i].Members...), follower)
+		}
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(vector.Identity.Index.CatalogEpoch, vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector.Identity.Index.CatalogDigest = record.Digest
+	for i := range configs {
+		configs[i].Nodes, configs[i].Catalog, configs[i].Groups, configs[i].Vector = nodes, meta, groups, &vector
+	}
+	root := t.TempDir()
+	return append(configs, FixedPeerTCPConfigV1{
+		NodeID: follower, DataRoot: filepath.Join(root, "data"), RaftRoot: filepath.Join(root, "raft"),
+		ListenAddress: controlAddress, Nodes: nodes, Catalog: meta, Groups: groups,
+		RequestTimeout: configs[0].RequestTimeout, RaftTimeout: configs[0].RaftTimeout, Vector: &vector,
+		RaftListen: map[raftcluster.GroupID]string{"meta": metaAddress, "group-d": dataAddress},
+	})
 }
 
 // The fixture transfers only declared immutable search assets. In particular,

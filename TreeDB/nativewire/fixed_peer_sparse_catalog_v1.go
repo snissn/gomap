@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"fmt"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -117,11 +118,29 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 		}
 	}
 	if c.Vector != nil {
-		if c.Credentials != nil {
-			return invalid("authenticated vector listeners are unsupported")
-		}
 		if !preflightFixedPeerVectorInventoryV1(reflect.ValueOf(c.Vector), &budget) {
 			return invalid("vector inventory exceeds byte budget")
+		}
+		if c.Credentials != nil {
+			// The public and shard vector protocols have no TLS handshake. In
+			// authenticated peer mode they may only be exposed on this host;
+			// the control/Raft listeners still authenticate their peers.
+			loopback := func(address string) bool {
+				parsed, err := netip.ParseAddrPort(address)
+				return err == nil && parsed.Addr().IsLoopback()
+			}
+			for _, address := range c.Vector.PublicAddresses {
+				if !loopback(address) {
+					return invalid("authenticated vector public listener must be loopback")
+				}
+			}
+			for _, members := range c.Vector.ShardAddresses {
+				for _, address := range members {
+					if !loopback(address) {
+						return invalid("authenticated vector shard listener must be loopback")
+					}
+				}
+			}
 		}
 	}
 	return nil

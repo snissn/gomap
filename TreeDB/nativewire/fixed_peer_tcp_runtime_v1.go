@@ -881,6 +881,7 @@ type fixedPeerReplyV1 struct {
 	VectorInsert         *public.InsertResponseV1                            `json:",omitempty"`
 	VectorSearch         *public.SearchResponseV1                            `json:",omitempty"`
 	VectorReady          *raftplacement.VectorPartitionLifecycleGroupReadyV1 `json:",omitempty"`
+	VectorSource         *fixedPeerVectorSourceAttestationV1                 `json:",omitempty"`
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -899,12 +900,12 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		_ = json.NewEncoder(w).Encode(reply)
 	}()
+	var caller raftcluster.NodeID
 	if r.client.security != nil {
 		if request.TLS == nil || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.PeerCertificates) == 0 {
 			err = errPeerAuthenticationV1
 			return
 		}
-		var caller raftcluster.NodeID
 		caller, err = r.client.security.identity(request.TLS.PeerCertificates[0])
 		if err != nil {
 			return
@@ -1059,6 +1060,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			reply.VectorReady, err = r.stageImmutableVectorLocalV1(ctx)
 		case body.VectorLifecycle.Action == fixedPeerVectorLifecycleWarmImmutableV1:
 			err = r.warmImmutableVectorLocalV1(ctx)
+		case body.VectorLifecycle.Action == fixedPeerVectorLifecycleCaptureSourceV1:
+			reply.VectorSource, err = r.captureImmutableVectorSourceForMetaLeaderV1(ctx, caller)
 		default:
 			err = raftcluster.ErrRouteTargetUnsupported
 		}
