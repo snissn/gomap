@@ -694,11 +694,13 @@ verifies hosted bytes and grants no serving authority.
 ### Fixed-peer immutable multi-owner serving (bounded profile)
 
 The fixed-peer immutable path requires an exact replicated manifest/placement
-pair, a designated router host, and whole-domain owner groups. In the currently
-supported preparation topology, the full-source data leader and catalog leader
-are the same source-holder node; that node is not a search owner. The source
-holder uses its current data-group FSM DB and a routed read/apply proof to
-validate the source and commits immutable BUILD through catalog Raft. Each
+pair, a designated router host, and whole-domain owner groups. The full-source
+data leader may be distinct from the catalog leader; neither is a search owner.
+The source holder uses its current data-group FSM DB and a routed read/apply
+proof to validate the source. When leaders differ, it returns only a bounded
+manifest/placement/owner-set digest attestation to the authenticated catalog
+leader. That leader validates the full configured manifest against current
+catalog placement and fences its catalog lease before committing BUILD. Each
 serving owner verifies and stages only its hosted graph assets and records a
 local applied readiness proof. The catalog then commits the complete ready set,
 PREPARE, and ACTIVE before the router and shard listeners warm. The ingress
