@@ -432,7 +432,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
 	// The real-process hosted-assets fixture copies the compatibility-retained
 	// schema definition while excluding the builder's source documents.
-	{path: "TreeDB/nativewire/vector_partition_fixed_peer_multi_owner_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/nativewire/vector_partition_fixed_peer_multi_owner_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	// #4728's fixed-peer mutation fixtures use the exported compatibility
 	// schema names for typed-column vector and unsupported-payload cases.
