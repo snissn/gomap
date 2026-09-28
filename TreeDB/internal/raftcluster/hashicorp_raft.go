@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	hraft "github.com/hashicorp/raft"
@@ -70,6 +71,7 @@ type HashicorpRaftProvider struct {
 	applyTimeout    time.Duration
 	owned           []io.Closer
 	snapshotGap     *readIndexSnapshotGapV1
+	fsmConfigIndex  *atomic.Uint64
 }
 
 func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaftProvider, error) {
@@ -119,11 +121,13 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		}
 	}
 	snapshotGap := &readIndexSnapshotGapV1{}
+	fsmConfigIndex := &atomic.Uint64{}
 	r, err := hraft.NewRaft(conf, hashicorpRaftFSM{
 		groupID:             cluster.GroupID,
 		applier:             opts.Applier,
 		applyFailureHandler: applyFailureHandler,
 		snapshotGap:         snapshotGap,
+		fsmConfigIndex:      fsmConfigIndex,
 	}, stores.log, stores.stable, stores.snapshots, opts.Transport)
 	if err != nil {
 		err = errors.Join(ErrInvalidHashicorpRaftProvider, err)
@@ -143,6 +147,7 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		applyTimeout:    applyTimeout,
 		owned:           stores.owned,
 		snapshotGap:     snapshotGap,
+		fsmConfigIndex:  fsmConfigIndex,
 	}, nil
 }
 
@@ -740,10 +745,16 @@ func (p *HashicorpRaftProvider) SnapshotForReplacementV1(ctx context.Context) (H
 	return p.snapshotV1(ctx, true)
 }
 
-// ReplacementSnapshotReadyV1 requires durable TreeDB command progress and an
-// applied native configuration. The FSM's ConfigurationStore separately lets
-// the native snapshot include later configuration-only entries.
+// ReplacementSnapshotReadyV1 requires durable TreeDB command progress and a
+// configuration consumed by runFSM. Raft's AppliedIndex only means the entry
+// was sent to runFSM; a snapshot request can overtake that queued entry.
 func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) error {
+	if p == nil || p.raft == nil || p.fsmConfigIndex == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	configuration, err := p.CommittedConfigurationV1(ctx)
 	if err != nil {
 		return err
@@ -752,10 +763,34 @@ func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	if !progress.HasApplied || p.raft.AppliedIndex() < configuration.ConfigurationIndex {
-		return fmt.Errorf("%w: replacement snapshot needs applied configuration index %d (native applied %d, TreeDB command %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, p.raft.AppliedIndex(), progress.Index)
+	if !progress.HasApplied {
+		return fmt.Errorf("%w: replacement snapshot needs durable TreeDB command progress", ErrReadBarrierNotSatisfied)
 	}
-	return nil
+	timeout := p.applyTimeout
+	if timeout <= 0 {
+		timeout = hashicorpRaftDefaultApplyTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	poll := time.NewTicker(hashicorpRaftReadIndexInitialPoll)
+	defer poll.Stop()
+	for {
+		if err := p.requireHashicorpReadIndexLeaderTerm(configuration.Term); err != nil {
+			return err
+		}
+		installedIndex, _ := p.raft.InstalledSnapshotBoundary()
+		if p.fsmConfigIndex.Load() >= configuration.ConfigurationIndex || installedIndex >= configuration.ConfigurationIndex {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return fmt.Errorf("%w: replacement snapshot needs FSM-consumed configuration index %d (consumed %d, TreeDB command %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, p.fsmConfigIndex.Load(), progress.Index)
+		case <-poll.C:
+		}
+	}
 }
 
 func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bool) (HashicorpRaftSnapshotResultV1, error) {
@@ -1015,12 +1050,17 @@ type hashicorpRaftFSM struct {
 	applier             CommittedCommandApplierV1
 	applyFailureHandler func(error)
 	snapshotGap         *readIndexSnapshotGapV1
+	fsmConfigIndex      *atomic.Uint64
 }
 
 // StoreConfiguration satisfies HashiCorp's ConfigurationStore. Its runFSM
 // records the native configuration index/term for snapshotting; TreeDB command
 // progress, result, LSN, and digest intentionally remain unchanged.
-func (f hashicorpRaftFSM) StoreConfiguration(_ uint64, _ hraft.Configuration) {}
+func (f hashicorpRaftFSM) StoreConfiguration(index uint64, _ hraft.Configuration) {
+	if f.fsmConfigIndex != nil {
+		f.fsmConfigIndex.Store(index)
+	}
+}
 
 func (f hashicorpRaftFSM) Apply(log *hraft.Log) interface{} {
 	if log == nil || log.Type != hraft.LogCommand {
@@ -1104,6 +1144,9 @@ func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
 func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
 	f.snapshotGap.invalidate()
 	defer f.snapshotGap.invalidate()
+	if f.fsmConfigIndex != nil {
+		f.fsmConfigIndex.Store(0)
+	}
 	if src == nil {
 		return ErrRaftSnapshotUnsupported
 	}
