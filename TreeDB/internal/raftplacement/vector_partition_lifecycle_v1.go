@@ -84,14 +84,23 @@ type VectorPartitionLifecycleSourceIdentityV1 struct {
 	RowCount   uint64 `json:"row_count"`
 }
 
+// VectorPartitionLifecycleImmutableAuthorityV1 binds an immutable generation
+// to the full source-validated manifest and the catalog's exact placement.
+// Both digests are absent for the existing mutable inline lifecycle.
+type VectorPartitionLifecycleImmutableAuthorityV1 struct {
+	ManifestDigest  string `json:"manifest_digest"`
+	PlacementDigest string `json:"placement_digest"`
+}
+
 // VectorPartitionLifecycleIdentityV1 is the exact identity of one derived
 // generation and its immutable source.
 type VectorPartitionLifecycleIdentityV1 struct {
-	SourceFormat uint16                                   `json:"source_format,omitempty"`
-	SourceV2     VectorPartitionLifecycleSourceIdentityV2 `json:"source_v2,omitzero"`
-	Index        VectorPartitionLifecycleIndexIdentityV1  `json:"index"`
-	Source       VectorPartitionLifecycleSourceIdentityV1 `json:"source"`
-	Generation   uint64                                   `json:"generation"`
+	SourceFormat uint16                                       `json:"source_format,omitempty"`
+	SourceV2     VectorPartitionLifecycleSourceIdentityV2     `json:"source_v2,omitzero"`
+	Immutable    VectorPartitionLifecycleImmutableAuthorityV1 `json:"immutable,omitzero"`
+	Index        VectorPartitionLifecycleIndexIdentityV1      `json:"index"`
+	Source       VectorPartitionLifecycleSourceIdentityV1     `json:"source"`
+	Generation   uint64                                       `json:"generation"`
 }
 
 // VectorPartitionLifecycleGroupReadyV1 is one bounded group-level aggregate.
@@ -854,6 +863,9 @@ func validateVectorPartitionLifecycleIdentityV1(identity VectorPartitionLifecycl
 		return err
 	}
 	if identity.SourceFormat == 2 {
+		if identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) {
+			return ErrVectorPartitionLifecycleIdentity
+		}
 		return validateVectorPartitionSourceIdentityV2(identity)
 	}
 	if identity.SourceFormat != 0 || identity.SourceV2 != (VectorPartitionLifecycleSourceIdentityV2{}) {
@@ -862,6 +874,11 @@ func validateVectorPartitionLifecycleIdentityV1(identity VectorPartitionLifecycl
 	if identity.Generation == 0 || identity.Source.Generation == 0 || identity.Source.Checksum == 0 ||
 		identity.Source.SchemaHash == 0 || identity.Source.RowCount == 0 {
 		return errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("identity contains zero generation or source field"))
+	}
+	if identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) &&
+		(!isSHA256HexVectorPartitionV1(identity.Immutable.ManifestDigest) ||
+			!isSHA256HexVectorPartitionV1(identity.Immutable.PlacementDigest)) {
+		return errors.Join(ErrVectorPartitionLifecycleIdentity, fmt.Errorf("immutable manifest and placement digests are required together"))
 	}
 	return nil
 }

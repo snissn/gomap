@@ -203,6 +203,45 @@ func TestAppendColumnPhysicalAssetsWithStableResourcesValidationFailureRemovesFr
 	}
 }
 
+func TestAppendColumnPhysicalAssetsWithStableResourcesLaterSegmentFailureReleasesPins(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable column append requires exact relative namespace support")
+	}
+	rootDir := t.TempDir()
+	cfg := stableColumnAppendTestConfig("stable-append-later-segment-failure")
+	registry := rootpublication.NewIdentityPinRegistry()
+	recovery := &stableColumnAppendTestRecoveryRetainer{}
+	const first, second = uint32(1981), uint32(1982)
+	secondPath := stableColumnAppendTestPath(t, rootDir, cfg, second)
+	restore := setColumnAssetStableObligationTestHook(func(ref ColumnAssetRef, _ rootpublication.StableLogicalObligation, _ *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
+		if ref.FileID == second {
+			return columnAssetStableCaptureOmitToken
+		}
+		return columnAssetStableCaptureKeep
+	})
+	t.Cleanup(restore)
+	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(rootDir, cfg, first,
+		[]StableColumnPhysicalAssetAppend{
+			{Payload: []byte("first"), Kind: ColumnAssetKindTCS1PartImage, Generation: 1, PartID: 1, FileID: first},
+			{Payload: []byte("second"), Kind: ColumnAssetKindTCS1PartImage, Generation: 1, PartID: 2, FileID: second},
+		}, registry, recovery)
+	restore()
+	if resources != nil {
+		resources.Release()
+	}
+	if refs != nil || !errors.Is(err, rootpublication.ErrUnresolvedResource) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("later segment result refs=%v resources=%v err=%v", refs, resources, err)
+	}
+	if _, statErr := os.Stat(secondPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("rejected second segment still exists: %v", statErr)
+	}
+	stats := registry.Stats()
+	if stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 || len(recovery.cleanups) != 0 {
+		t.Fatalf("later segment failure retained authority: stats=%+v recoveries=%d", stats, len(recovery.cleanups))
+	}
+	// The first closed segment may remain as an unpublished orphan for normal GC.
+}
+
 func TestAppendColumnPhysicalAssetsWithStableResourcesRollbackSyncAmbiguityRetainsProof(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("stable column append requires exact relative namespace support")

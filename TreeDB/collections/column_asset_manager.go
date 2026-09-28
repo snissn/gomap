@@ -1208,6 +1208,25 @@ type columnPhysicalAssetAppendSession struct {
 	stableRegistry         *rootpublication.IdentityPinRegistry
 	stableBuilder          *rootpublication.StableResourceSetBuilder
 	stableRecoveryRetainer StableResourceCaptureRecoveryRetainer
+	newStableLinks         []columnPhysicalAssetStableLink
+}
+
+type columnPhysicalAssetStableLink struct {
+	parent rootpublication.StableIdentity
+	child  rootpublication.StableIdentity
+	name   string
+}
+
+func (s *columnPhysicalAssetAppendSession) forgetNewStableLinks() error {
+	if s == nil || s.stableRegistry == nil {
+		return nil
+	}
+	var err error
+	for _, link := range s.newStableLinks {
+		err = errors.Join(err, s.stableRegistry.ForgetStableNamespaceLinkIdentity(link.parent, link.child, link.name))
+	}
+	s.newStableLinks = nil
+	return err
 }
 
 func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) *columnPhysicalAssetAppendSession {
@@ -1324,15 +1343,15 @@ func (s *columnPhysicalAssetAppendSession) closeWithStableResourcesValidated(val
 		if s.stableBuilder != nil {
 			s.stableBuilder.Abandon()
 		}
-		return s.closeStats, nil, s.closeErr
+		return s.closeStats, nil, errors.Join(s.closeErr, s.forgetNewStableLinks())
 	}
 	if s.stableBuilder == nil {
-		return s.closeStats, nil, errors.New("collections: column physical asset append session has no stable resource builder")
+		return s.closeStats, nil, errors.Join(errors.New("collections: column physical asset append session has no stable resource builder"), s.forgetNewStableLinks())
 	}
 	resources, err := s.stableBuilder.Freeze()
 	if err != nil {
 		s.stableBuilder.Abandon()
-		return s.closeStats, nil, err
+		return s.closeStats, nil, errors.Join(err, s.forgetNewStableLinks())
 	}
 	s.stableBuilder = nil
 	return s.closeStats, resources, nil
@@ -1347,12 +1366,12 @@ func (s *columnPhysicalAssetAppendSession) abort() error {
 		s.stableBuilder = nil
 	}
 	if s.active == nil {
-		return nil
+		return s.forgetNewStableLinks()
 	}
 	appender := s.active
 	s.active = nil
 	s.activeFile = 0
-	return appender.abort()
+	return errors.Join(appender.abort(), s.forgetNewStableLinks())
 }
 
 func (s *columnPhysicalAssetAppendSession) closeActive() error {
@@ -1368,6 +1387,11 @@ func (s *columnPhysicalAssetAppendSession) closeActiveWithStableValidation(valid
 	s.active = nil
 	s.activeFile = 0
 	err := appender.closeWithStableValidation(validate)
+	if err == nil && appender.stableNamespaceProofAdded {
+		s.newStableLinks = append(s.newStableLinks, columnPhysicalAssetStableLink{
+			parent: appender.stableParentIdentity, child: appender.stableChildIdentity, name: appender.stableChildName,
+		})
+	}
 	s.closeStats.AddSegment(activeFile, appender.closeStats)
 	if err == nil && appender.stableResources != nil {
 		if s.stableBuilder == nil {

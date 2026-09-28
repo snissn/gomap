@@ -356,6 +356,20 @@ catalog mutation while it is pending. BEGIN changes no catalog membership or
 placement and is not snapshot-installation, tail-readiness or promotion proof.
 Lifecycle-bearing fixed-peer replacement remains explicitly unsupported.
 
+An inline-source lifecycle identity may additionally carry an `immutable`
+object with lowercase SHA-256 `manifest_digest` and `placement_digest` fields.
+Both fields must be present together. The manifest digest identifies the full
+source-validated vector-partition manifest; the placement digest identifies
+the exact hosted-domain placement against catalog authority. The pair is part
+of the lifecycle identity in commands, records, and snapshots: a second BUILD
+for the same index and generation with different immutable digests is a
+conflict, including during snapshot restore. Existing mutable inline
+identities omit `immutable` and retain their previous canonical JSON bytes.
+This pre-alpha metadata extension has no migration path; an older binary may
+refuse a snapshot containing the new field. The committed pair is an authority
+binding for future owner-scoped preparation, not permission to serve without
+verified local assets and an ACTIVE ready set.
+
 Before a writable public open can succeed, TreeDB establishes the complete
 directory dependency chain from the outer database root through `maindb`,
 enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,

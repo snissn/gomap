@@ -50,6 +50,10 @@ Rules of thumb:
 - Do not expect on-disk format compatibility across commits unless explicitly stated.
 - It is acceptable for new binaries to fail to open old DB directories (and vice versa).
 - Prefer rebuilding DB directories for benchmarks and experiments.
+- The optional immutable vector-partition catalog lifecycle identity adds
+  manifest and placement SHA-256 fields to persisted catalog/meta commands and
+  snapshots. Existing mutable inline identities keep their canonical bytes;
+  older binaries are not promised to read snapshots containing the new fields.
 - If/when we stabilize formats, we’ll add:
   - an explicit version marker in metadata, and
   - a migration story (or a “rebuild required” guarantee).

@@ -458,6 +458,46 @@ func TestVectorPartitionLifecycleV1CanonicalCodecsAndLimits(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionImmutableIdentityPreservesInlineEncodingV1(t *testing.T) {
+	identity := vectorPartitionLifecycleTestIdentityV1()
+	oldShape := struct {
+		SourceFormat uint16                                   `json:"source_format,omitempty"`
+		SourceV2     VectorPartitionLifecycleSourceIdentityV2 `json:"source_v2,omitzero"`
+		Index        VectorPartitionLifecycleIndexIdentityV1  `json:"index"`
+		Source       VectorPartitionLifecycleSourceIdentityV1 `json:"source"`
+		Generation   uint64                                   `json:"generation"`
+	}{identity.SourceFormat, identity.SourceV2, identity.Index, identity.Source, identity.Generation}
+	previous, err := json.Marshal(oldShape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(current, previous) || bytes.Contains(current, []byte(`"immutable"`)) {
+		t.Fatalf("existing inline identity encoding changed: current=%s previous=%s", current, previous)
+	}
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	command := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a"}, MutationEpoch: 1,
+	}
+	raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded := mustDecodeVectorPartitionLifecycleCommandV1(t, raw); decoded.Identity != identity {
+		t.Fatalf("immutable identity changed on decode: %+v", decoded.Identity)
+	}
+	command.Identity.Immutable.PlacementDigest = ""
+	if _, err := EncodeVectorPartitionLifecycleCommandV1(command); !errors.Is(err, ErrVectorPartitionLifecycleIdentity) {
+		t.Fatalf("partial immutable authority err=%v", err)
+	}
+}
+
 func TestVectorPartitionLifecycleV1TransitionGuardsFailClosed(t *testing.T) {
 	identity := vectorPartitionLifecycleTestIdentityV1()
 	states := []VectorPartitionLifecycleStateV1{

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 // VectorPartitionLifecycleCommitterV1 is the narrow meta-Raft submission
@@ -28,6 +30,10 @@ type VectorPartitionLifecycleCoordinatorV1 struct {
 	PrepareSourceV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error)
 	// PrepareANNV2 derives the complete intended placement stream through the trusted planner boundary.
 	PrepareANNV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error)
+	// PrepareImmutableV1 must read a source-holder's staged, source-validated
+	// manifest and derive placement and its owner groups from fresh catalog
+	// authority. It must not echo the proposed identity or accept a configuration digest as proof.
+	PrepareImmutableV1 func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error)
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) validateConfiguredV1() error {
@@ -51,6 +57,35 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 	}
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
+	}
+	if command.Kind == VectorPartitionLifecycleBeginBuildV1 && command.Identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		if c.PrepareImmutableV1 == nil {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
+		}
+		if err := c.validateImmutableBuildFreshnessV1(command); err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		verified, verifiedGroups, err := c.PrepareImmutableV1(ctx, command.Identity)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if !isSHA256HexVectorPartitionV1(verified.ManifestDigest) || !isSHA256HexVectorPartitionV1(verified.PlacementDigest) || verified != command.Identity.Immutable {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		verifiedGroups, err = canonicalVectorPartitionLifecycleGroupsV1(verifiedGroups)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		requiredGroups, err := canonicalVectorPartitionLifecycleGroupsV1(command.RequiredGroups)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if !reflect.DeepEqual(verifiedGroups, requiredGroups) {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		if err := c.validateImmutableBuildFreshnessV1(command); err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
 	}
 	if command.Kind == VectorPartitionLifecycleBeginBuildV1 && command.Identity.SourceFormat == 2 {
 		if c.PrepareSourceV2 == nil || c.PrepareANNV2 == nil {
@@ -129,6 +164,21 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 		return VectorPartitionLifecycleRecordV1{}, errors.Join(ErrCatalogMetaUnavailable, fmt.Errorf("lifecycle command committed without locally applied record"))
 	}
 	return record, nil
+}
+
+func (c VectorPartitionLifecycleCoordinatorV1) validateImmutableBuildFreshnessV1(command VectorPartitionLifecycleCommandV1) error {
+	catalog, ok := c.Authority.Status()
+	if !ok || catalog.Epoch != command.Identity.Index.CatalogEpoch || catalog.Digest != command.Identity.Index.CatalogDigest {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	epoch, err := c.BuildSourceMutationEpochV1(command.Identity.Index.Collection)
+	if err != nil {
+		return err
+	}
+	if epoch != command.MutationEpoch {
+		return ErrVectorPartitionLifecycleGuard
+	}
+	return nil
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) validateConfirmedMutationProofV1(identity VectorPartitionLifecycleIndexIdentityV1, proof VectorPartitionLifecycleMutationProofV1, label string) error {
