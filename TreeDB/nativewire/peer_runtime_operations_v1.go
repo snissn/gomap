@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -171,6 +172,30 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		}
 		report.Groups = append(report.Groups, item)
 	}
+	if r.config.Vector != nil && r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
+		router := r.config.NodeID == r.config.Vector.RouterNodeID
+		localOwner, ownerLeader := false, false
+		for _, owner := range owners {
+			if r.data[owner] == nil {
+				continue
+			}
+			localOwner = true
+			for _, group := range report.Groups {
+				if r.vector != nil && group.GroupID == owner && group.GroupID == r.vector.dataGroup &&
+					group.Ready && group.LeaderID == r.config.NodeID {
+					ownerLeader = true
+				}
+			}
+		}
+		if router || localOwner {
+			// Followers still need the fresh ACTIVE and local-DB checks, but
+			// only the current owner leader is expected to have a shard listener.
+			if err := r.immutableVectorWarmReadinessV1(ctx, owners, router || ownerLeader, ownerLeader); err != nil {
+				failures = append(failures, fmt.Errorf("immutable vector listener: %w", err))
+			}
+		}
+	}
 	if r.draining.Load() {
 		report.Draining = true
 		failures = append(failures, raftcluster.ErrAdmissionUnavailable)
@@ -181,6 +206,36 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		report.Error = err.Error()
 	}
 	return report, err
+}
+
+// Readiness observes an already warmed immutable listener where this node
+// serves one. It must not open the backend: ACTIVE can precede listener warm.
+func (r *FixedPeerTCPRuntimeV1) immutableVectorWarmReadinessV1(ctx context.Context, owners []raftcluster.GroupID, listener, ownerLeader bool) error {
+	if r.vector == nil {
+		return ErrFixedPeerVectorUnavailableV1
+	}
+	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+		return err
+	}
+	if listener {
+		r.vector.initMu.Lock()
+		backend, topology := r.vector.backend, r.vector.topology
+		r.vector.initMu.Unlock()
+		if backend == nil || topology == nil {
+			return ErrFixedPeerVectorUnavailableV1
+		}
+		status := topology.Status()
+		if !status.Ready {
+			return ErrFixedPeerVectorUnavailableV1
+		}
+		if ownerLeader && !slices.Contains(status.ShardGroups, r.vector.dataGroup) {
+			return ErrFixedPeerVectorUnavailableV1
+		}
+	}
+	if _, err := r.immutableActiveVectorRecordV1(ctx, owners); err != nil {
+		return err
+	}
+	return r.vector.requireCurrentImmutableDBV1()
 }
 
 func (c *FixedPeerTCPClientV1) ReadinessV1(ctx context.Context, node raftcluster.NodeID) (FixedPeerReadinessV1, error) {

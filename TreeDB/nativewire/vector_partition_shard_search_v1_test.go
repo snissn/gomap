@@ -314,6 +314,58 @@ type recordingVectorPartitionReplicatedLifecycleAuthorityV1 struct {
 	err            error
 }
 
+type recordingVectorPartitionScopedOwnerAuthorityV1 struct {
+	pairCalls int
+	pairErr   error
+}
+
+func (*recordingVectorPartitionScopedOwnerAuthorityV1) ValidateVectorPartitionScopedOwnerV1(context.Context, collections.VectorPartitionManifestV1, collections.VectorPartitionLocalScopeV1) error {
+	return nil
+}
+
+func (a *recordingVectorPartitionScopedOwnerAuthorityV1) ValidateVectorPartitionScopedOwnerPairV1(context.Context, collections.VectorPartitionLocalScopeV1) error {
+	a.pairCalls++
+	return a.pairErr
+}
+
+func TestCollectionVectorPartitionScopedOwnerCacheRejectsChangedCatalogV1(t *testing.T) {
+	key := collectionVectorPartitionGenerationKeyV1{index: "embedding", generation: 7}
+	manifest := VectorPartitionPinnedManifestV1{
+		Collection: "users", IndexName: key.index, Generation: key.generation,
+		IndexDefinitionDigest: strings.Repeat("a", 64), ReadySetDigest: strings.Repeat("b", 64),
+	}
+	entry := &collectionVectorPartitionGenerationCacheV1{
+		index: key.index, generation: key.generation, manifest: manifest,
+		searchers: make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
+		opening:   make(map[uint32]*collectionVectorPartitionSearchLoadV1),
+	}
+	scoped := &recordingVectorPartitionScopedOwnerAuthorityV1{}
+	source := &CollectionVectorPartitionGenerationSourceV1{
+		Collection:           new(collections.Collection),
+		replicatedCollection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"},
+		replicatedLifecycle:  &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: manifest.ReadySetDigest},
+		scopedOwnerAuthority: scoped,
+		entries:              map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1{key: entry},
+	}
+	lease, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation)
+	if err != nil || lease == nil || scoped.pairCalls != 1 {
+		t.Fatalf("warm scoped pin lease=%v calls=%d err=%v", lease, scoped.pairCalls, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	scoped.pairErr = ErrFixedPeerVectorProofStaleV1
+	if _, err := source.PinVectorPartitionGenerationV1(t.Context(), key.index, key.generation); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) || scoped.pairCalls != 2 {
+		t.Fatalf("changed catalog retained cached generation: calls=%d err=%v", scoped.pairCalls, err)
+	}
+	if _, ok := source.invalidated[key]; !ok {
+		t.Fatal("changed catalog did not evict cached generation")
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionReplicatedLifecycleValidationErrorPreservesCancellationV1(t *testing.T) {
 	tests := []struct {
 		name string
@@ -707,6 +759,22 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if stats.Requests != 1 || stats.Successes != 1 || stats.Errors != 0 || stats.Partitions != 2 ||
 		stats.ReadProofs != 1 {
 		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1(t *testing.T) {
+	service, source, _ := newVectorPartitionShardSearchTestServiceV1(t,
+		[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}},
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})},
+	)
+	service.postSearchGuard = func() error { return ErrFixedPeerVectorProofStaleV1 }
+	response, err := service.Search(context.Background(), vectorPartitionShardSearchRequestTestV1([]uint32{0}))
+	if !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || !vectorPartitionShardSearchResponseZeroTestV1(response) {
+		t.Fatalf("stale DB response=%+v err=%v", response, err)
+	}
+	assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorGenerationMismatchV1)
+	if pins, releases, _ := source.counts(); pins != 1 || releases != 1 {
+		t.Fatalf("stale DB leaked generation pin: pins=%d releases=%d", pins, releases)
 	}
 }
 

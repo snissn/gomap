@@ -556,78 +556,87 @@ func openSourceImportDirectoryCollectionV2(t testing.TB) (string, *backenddb.DB,
 // Count actual changed directory key/value bytes and COW pages across import
 // and checkpoint, including queued publications. Descriptor comparisons and
 // binding checks are separate from persisted changed-record bytes.
-func TestVectorPartitionSourceImportDependencyEncodingDoesNotScaleWithHistoryV2(t *testing.T) {
-	for _, mode := range []string{"continuous", "reopen", "coalesced"} {
-		t.Run(mode, func(t *testing.T) {
-			type work struct{ bytes, pages uint64 }
-			measure := func(prior int) work {
-				dir, d, c := openSourceImportDirectoryCollectionV2(t)
-				defer func() { d.Close() }()
-				imports := 1
-				if mode == "coalesced" {
-					imports = 2
-				}
-				ownership, input := sourceImportFixtureV2(t, c, 2*uint64(prior+imports))
-				input.DocumentRevisions = []uint64{1, 2}
-				put := func(i int) {
-					input.ChunkIndex = uint64(i)
-					ids, retained, columns := sourceImportRowsV2(fmt.Sprintf("history-%020d", 2*i), fmt.Sprintf("history-%020d", 2*i+1))
-					if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
-						t.Fatal(err)
-					}
-				}
-				for i := 0; i < prior; i++ {
-					put(i)
-				}
-				if err := d.Checkpoint(); err != nil {
+func TestVectorPartitionSourceImportDependencyEncodingContinuousV2(t *testing.T) {
+	testVectorPartitionSourceImportDependencyEncodingV2(t, "continuous")
+}
+
+func TestVectorPartitionSourceImportDependencyEncodingReopenV2(t *testing.T) {
+	testVectorPartitionSourceImportDependencyEncodingV2(t, "reopen")
+}
+
+func TestVectorPartitionSourceImportDependencyEncodingCoalescedV2(t *testing.T) {
+	testVectorPartitionSourceImportDependencyEncodingV2(t, "coalesced")
+}
+
+func testVectorPartitionSourceImportDependencyEncodingV2(t *testing.T, mode string) {
+	t.Helper()
+	type work struct{ bytes, pages uint64 }
+	measure := func(prior int) work {
+		dir, d, c := openSourceImportDirectoryCollectionV2(t)
+		defer func() { d.Close() }()
+		imports := 1
+		if mode == "coalesced" {
+			imports = 2
+		}
+		ownership, input := sourceImportFixtureV2(t, c, 2*uint64(prior+imports))
+		input.DocumentRevisions = []uint64{1, 2}
+		put := func(i int) {
+			input.ChunkIndex = uint64(i)
+			ids, retained, columns := sourceImportRowsV2(fmt.Sprintf("history-%020d", 2*i), fmt.Sprintf("history-%020d", 2*i+1))
+			if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < prior; i++ {
+			put(i)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		if mode == "reopen" {
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			d = openTypedMinimaDB(t, dir)
+			var err error
+			c, err = NewCollectionManager(d).OpenCollection("minima")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		read := func() work {
+			stats := d.Stats()
+			if stats["treedb.durable_root.format_version"] != "2" || stats["treedb.durable_root.directory.root_page"] == "0" {
+				t.Fatal("public test did not persist DPM2")
+			}
+			parse := func(key string) uint64 {
+				n, err := strconv.ParseUint(stats[key], 10, 64)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if mode == "reopen" {
-					if err := d.Close(); err != nil {
-						t.Fatal(err)
-					}
-					d = openTypedMinimaDB(t, dir)
-					var err error
-					c, err = NewCollectionManager(d).OpenCollection("minima")
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				read := func() work {
-					stats := d.Stats()
-					if stats["treedb.durable_root.format_version"] != "2" || stats["treedb.durable_root.directory.root_page"] == "0" {
-						t.Fatal("public test did not persist DPM2")
-					}
-					parse := func(key string) uint64 {
-						n, err := strconv.ParseUint(stats[key], 10, 64)
-						if err != nil {
-							t.Fatal(err)
-						}
-						return n
-					}
-					return work{parse("treedb.durable_root.directory_build.changed_record_bytes"), parse("treedb.durable_root.directory_build.pages_written")}
-				}
-				before := read()
-				for i := 0; i < imports; i++ {
-					put(prior + i)
-				}
-				if err := d.Checkpoint(); err != nil {
-					t.Fatal(err)
-				}
-				after := read()
-				if after.bytes <= before.bytes || after.pages <= before.pages {
-					t.Fatalf("public imports did not charge actual changed records and pages: before=%+v after=%+v", before, after)
-				}
-				return work{after.bytes - before.bytes, after.pages - before.pages}
+				return n
 			}
-			small, large := measure(32), measure(1024)
-			t.Logf("public import+checkpoint changed directory work: prior32=%+v prior1024=%+v", small, large)
-			if large.bytes > 4*small.bytes+(64<<10) {
-				t.Fatalf("public source import rewrites retained dependency history: small=%+v large=%+v budget=%d", small, large, 4*small.bytes+(64<<10))
-			}
-			if large.pages > 4*small.pages+16 {
-				t.Fatalf("directory COW pages scale with history: small=%+v large=%+v", small, large)
-			}
-		})
+			return work{parse("treedb.durable_root.directory_build.changed_record_bytes"), parse("treedb.durable_root.directory_build.pages_written")}
+		}
+		before := read()
+		for i := 0; i < imports; i++ {
+			put(prior + i)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		after := read()
+		if after.bytes <= before.bytes || after.pages <= before.pages {
+			t.Fatalf("public imports did not charge actual changed records and pages: before=%+v after=%+v", before, after)
+		}
+		return work{after.bytes - before.bytes, after.pages - before.pages}
+	}
+	small, large := measure(32), measure(1024)
+	t.Logf("public import+checkpoint changed directory work: prior32=%+v prior1024=%+v", small, large)
+	if large.bytes > 4*small.bytes+(64<<10) {
+		t.Fatalf("public source import rewrites retained dependency history: small=%+v large=%+v budget=%d", small, large, 4*small.bytes+(64<<10))
+	}
+	if large.pages > 4*small.pages+16 {
+		t.Fatalf("directory COW pages scale with history: small=%+v large=%+v", small, large)
 	}
 }

@@ -16,6 +16,21 @@ type VectorPartitionScopedStageAuthorityV1 interface {
 	ValidateVectorPartitionScopedStageV1(context.Context, VectorPartitionManifestV1, VectorPartitionLocalScopeV1) error
 }
 
+// CaptureVectorPartitionScopedExistingAssetsV1 recaptures stable tokens for
+// this node's already-distributed immutable assets. It grants no publication
+// authority: StageVectorPartitionScopedManifestWithContextV1 still verifies
+// their bytes and requires a fresh committed catalog lifecycle proof.
+func (c *Collection) CaptureVectorPartitionScopedExistingAssetsV1(ready VectorPartitionManifestV1, scope VectorPartitionLocalScopeV1) (*rootpublication.StableResourceSet, error) {
+	if c == nil || c.db == nil || ready.State != "ready" || ready.Collection != c.name {
+		return nil, fmt.Errorf("%w: scoped asset capture collection or state", ErrVectorPartitionManifestInvalid)
+	}
+	assets, err := scope.localAssetsV1(ready)
+	if err != nil {
+		return nil, err
+	}
+	return captureVectorPartitionRouterExistingAssetsV1(c.db.ColumnAssetRootDir(), assets, c.db.StableResourceIdentityPinRegistry())
+}
+
 // StageVectorPartitionScopedManifestWithContextV1 persists only this node's
 // immutable prepared inventory. It never activates a local serving pointer.
 // The catalog check brackets local verification and publication; a changed

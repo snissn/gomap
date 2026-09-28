@@ -3,6 +3,7 @@ package collections
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,11 +17,28 @@ type VectorPartitionGenerationOwnerSearchOpenPlanV2 struct {
 	indexName             string
 	indexDefinitionDigest string
 	integrityDigest       string
+	scopedManifestDigest  string
 	owner                 string
 	source                VectorPartitionSourceIdentityV1
 	generation            uint64
 	partitions            map[uint32]*vectorPartitionOwnerSearchPartitionV2
 	members               []vectorPartitionMembershipSourceV1
+}
+
+// NewVectorPartitionScopedOwnerSearchOpenPlanWithContextV1 binds the local
+// plan to the complete canonical manifest used for immutable scoped serving.
+// Ordinary owner plans keep their existing allocation and validation contract.
+func NewVectorPartitionScopedOwnerSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1, groupID string) (*VectorPartitionGenerationOwnerSearchOpenPlanV2, error) {
+	raw, err := EncodeVectorPartitionManifestV1(manifest)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx, manifest, groupID)
+	if err != nil {
+		return nil, err
+	}
+	plan.scopedManifestDigest = fmt.Sprintf("%x", sha256.Sum256(raw))
+	return plan, nil
 }
 
 type vectorPartitionOwnerSearchPartitionV2 struct {

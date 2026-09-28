@@ -691,6 +691,30 @@ Full-local prepared/store/router reads, ordinary ready staging/status, and
 LOCAL_ACTIVATE reject scoped generations; the scoped prepared read only
 verifies hosted bytes and grants no serving authority.
 
+### Fixed-peer immutable multi-owner serving (bounded profile)
+
+The fixed-peer immutable path requires an exact replicated manifest/placement
+pair, a designated router host, and whole-domain owner groups. In the currently
+supported preparation topology, the full-source data leader and catalog leader
+are the same source-holder node; that node is not a search owner. The source
+holder uses its current data-group FSM DB and a routed read/apply proof to
+validate the source and commits immutable BUILD through catalog Raft. Each
+serving owner verifies and stages only its hosted graph assets and records a
+local applied readiness proof. The catalog then commits the complete ready set,
+PREPARE, and ACTIVE before the router and shard listeners warm. The ingress
+router and owners need only metadata and their explicitly hosted assets, not
+the full source collection or foreign-owner graph segments.
+
+Only the configured router accepts public strict search. It checks fresh ACTIVE
+catalog/placement authority; each owner opens its scoped generation and verifies
+its current FSM DB and hosted bytes. Stale authority, a missing owner, a changed
+DB, or corrupt assets fail the entire request without a partial top-K. The
+immutable profile refuses public vector mutation and unsupported snapshot-style
+commands. This fixed-peer path has request-side catalog fences and is not the
+no-quorum snapshot-cache cost model described above for `OperationsV1.Search`.
+The separate catalog/data-leader topology, broader failure and recovery
+behavior, and representative local-versus-TCP cost remain open under #4809.
+
 ### Lifecycle, publication, and cleanup authority
 
 | Transition | Immutable operation | Observable result |

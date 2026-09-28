@@ -2936,10 +2936,13 @@ func vectorPartitionReaderPinKeyV1(root, collection, index string, generation ui
 // routing is deferred, but any consumer that opens a generation can hold this
 // handle across use so status and cleanup observe real in-process readers.
 type VectorPartitionReaderPinV1 struct {
-	key      string
-	mu       sync.Mutex
-	released bool
-	once     sync.Once
+	key                   string
+	scopedManifestDigest  string
+	scopedPlacementDigest string
+	scopedHostedGroup     string
+	mu                    sync.Mutex
+	released              bool
+	once                  sync.Once
 }
 
 func (p *VectorPartitionReaderPinV1) Release() {
@@ -2976,7 +2979,10 @@ func (p *VectorPartitionReaderPinV1) cloneForKey(key string) (*VectorPartitionRe
 	vectorPartitionReaderPinsV1.Lock()
 	vectorPartitionReaderPinsV1.counts[key]++
 	vectorPartitionReaderPinsV1.Unlock()
-	return &VectorPartitionReaderPinV1{key: key}, nil
+	return &VectorPartitionReaderPinV1{
+		key: key, scopedManifestDigest: p.scopedManifestDigest,
+		scopedPlacementDigest: p.scopedPlacementDigest, scopedHostedGroup: p.scopedHostedGroup,
+	}, nil
 }
 func vectorPartitionReaderPinCountV1(root, collection, index string, generation uint64) uint64 {
 	vectorPartitionReaderPinsV1.Lock()

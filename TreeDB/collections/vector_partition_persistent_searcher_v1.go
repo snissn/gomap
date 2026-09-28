@@ -3333,6 +3333,40 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithContex
 	prepareStableIDOrdinals bool,
 	allowLiveRecovery bool,
 ) (*VectorPartitionLocalSearcherV1, error) {
+	return c.openVectorPartitionLocalSearcherForPreparedAssetsWithSourceModeV1(
+		ctx, index, generation, partition, indexDefinitionDigest, sourceGeneration,
+		sourceChecksum, sourceSchemaHash, sourceRowCount, asset, assetGroup, members,
+		home, overlap, allowOfflineNative, expectedGraphVariant,
+		prepareStableIDOrdinals, allowLiveRecovery, false,
+	)
+}
+
+// skipLocalSource is available only through the scoped immutable owner opener.
+// The ordinary prepared/live/offline openers always verify the local source.
+func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithSourceModeV1(
+	ctx context.Context,
+	index string,
+	generation uint64,
+	partition uint32,
+	indexDefinitionDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+	asset *VectorPartitionAssetV1,
+	assetGroup []VectorPartitionAssetV1,
+	members []vectorPartitionMembershipSourceV1,
+	home int,
+	overlap int,
+	allowOfflineNative bool,
+	expectedGraphVariant VectorPartitionLocalGraphVariantV1,
+	prepareStableIDOrdinals bool,
+	allowLiveRecovery bool,
+	skipLocalSource bool,
+) (*VectorPartitionLocalSearcherV1, error) {
+	if skipLocalSource && (allowLiveRecovery || allowOfflineNative || prepareStableIDOrdinals) {
+		return nil, fmt.Errorf("%w: scoped source mode cannot use recovery or offline options", ErrVectorPartitionSearchUnavailable)
+	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
 		return nil, fmt.Errorf("%w: stale index definition", ErrVectorPartitionSearchUnavailable)
@@ -3344,20 +3378,24 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithContex
 	if err != nil {
 		return nil, err
 	}
-	sourceReader, sourceErr := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
-	if sourceErr == nil && (sourceReader.graph.BaseManifestGeneration != sourceGeneration ||
-		sourceReader.graph.BaseManifestChecksum != sourceChecksum || sourceReader.graph.BaseSchemaHash != sourceSchemaHash ||
-		uint64(sourceReader.graph.RowCount) != sourceRowCount) {
-		_ = sourceReader.Close()
-		sourceReader = nil
-		sourceErr = ErrVectorIndexSnapshotMismatch
+	var sourceReader *columnVectorGraphPhysicalRowReader
+	var sourceErr error
+	if !skipLocalSource {
+		sourceReader, sourceErr = c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+		if sourceErr == nil && (sourceReader.graph.BaseManifestGeneration != sourceGeneration ||
+			sourceReader.graph.BaseManifestChecksum != sourceChecksum || sourceReader.graph.BaseSchemaHash != sourceSchemaHash ||
+			uint64(sourceReader.graph.RowCount) != sourceRowCount) {
+			_ = sourceReader.Close()
+			sourceReader = nil
+			sourceErr = ErrVectorIndexSnapshotMismatch
+		}
 	}
 	liveRecovery := sourceErr != nil && allowLiveRecovery
 	if sourceErr != nil && !liveRecovery {
 		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, sourceErr)
 	}
 	var recomputedMembershipDigest [sha256.Size]byte
-	if !liveRecovery {
+	if !liveRecovery && !skipLocalSource {
 		digestErr := error(nil)
 		recomputedMembershipDigest, digestErr = vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, members)
 		closeErr := sourceReader.Close()
@@ -3382,7 +3420,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithContex
 	if err != nil {
 		return nil, fmt.Errorf("%w: graph variant definition: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	if !liveRecovery && vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, graphVariant) != expectedMembershipDigest {
+	if !liveRecovery && !skipLocalSource && vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, graphVariant) != expectedMembershipDigest {
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace

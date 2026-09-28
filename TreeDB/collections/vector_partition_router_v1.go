@@ -1004,7 +1004,7 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context, index string) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	return c.openVectorPartitionRouterWithContextV1(ctx, index, false, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
 		return store.OpenActiveWithContext(ctx, c.name, index)
-	})
+	}, false)
 }
 
 // OpenPreparedVectorPartitionRouterForGenerationWithContextV1 opens one exact
@@ -1025,7 +1025,7 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1
 			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
 		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
-	})
+	}, false)
 }
 
 // OpenPreparedVectorPartitionRouterForLiveRecoveryWithContextV1 opens one
@@ -1050,7 +1050,7 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForLiveRecoveryWithContext
 			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
 		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
-	})
+	}, false)
 }
 
 func (c *Collection) openVectorPartitionRouterWithContextV1(
@@ -1058,6 +1058,7 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 	index string,
 	allowLiveRecovery bool,
 	load func(context.Context, *VectorPartitionStoreV1) (VectorPartitionManifestV1, error),
+	scoped bool,
 ) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	var router *VectorPartitionRouterV1
 	var status VectorPartitionRouterOpenStatusV1
@@ -1096,12 +1097,14 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 		if len(manifest.Representatives) == 0 {
 			return errors.New("collections: vector partition router ready generation has no representative mapping")
 		}
-		if err := c.validateVectorPartitionSourceIdentityV1(manifest); err != nil {
-			if !allowLiveRecovery {
-				return err
-			}
-			if liveErr := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); liveErr != nil {
-				return errors.Join(err, liveErr)
+		if !scoped {
+			if err := c.validateVectorPartitionSourceIdentityV1(manifest); err != nil {
+				if !allowLiveRecovery {
+					return err
+				}
+				if liveErr := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); liveErr != nil {
+					return errors.Join(err, liveErr)
+				}
 			}
 		}
 		opened, err := c.openVectorPartitionRouterManifestWithContextV1(ctx, manifest)

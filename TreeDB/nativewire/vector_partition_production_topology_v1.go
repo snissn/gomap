@@ -37,12 +37,14 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	ReplicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 	Endpoints           map[raftcluster.GroupID]string
 	NodeEndpoints       map[raftcluster.GroupID]map[raftcluster.NodeID]string
-	Shards              []VectorPartitionProductionShardV1
-	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
-	ShardLimits         VectorPartitionShardSearchLimitsV1
-	ShardIdleTimeout    time.Duration
-	ServingSnapshot     *VectorPartitionServingSnapshotPublisherOptionsV1
-	StrictCapabilityKey []byte
+	// Fixed-peer immutable serving uses this only after a socket failure.
+	transportLeaderResolver func(context.Context, raftcluster.GroupID, raftcluster.NodeID) (raftcluster.NodeID, error)
+	Shards                  []VectorPartitionProductionShardV1
+	CoordinatorLimits       VectorPartitionCoordinatorLimitsV1
+	ShardLimits             VectorPartitionShardSearchLimitsV1
+	ShardIdleTimeout        time.Duration
+	ServingSnapshot         *VectorPartitionServingSnapshotPublisherOptionsV1
+	StrictCapabilityKey     []byte
 }
 
 type VectorPartitionProductionTopologyStatusV1 struct {
@@ -242,6 +244,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if err != nil {
 		return nil, err
 	}
+	dispatcher.transportLeaderResolver = opts.transportLeaderResolver
 	h.dispatcher = dispatcher
 	h.coordinator, err = NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{Catalog: opts.Catalog, Placement: opts.Placement, RouterSource: opts.RouterSource, Dispatcher: dispatcher, ReplicatedLifecycle: opts.ReplicatedLifecycle, RequireReplicatedLifecycle: true, Limits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits})
 	if err != nil {

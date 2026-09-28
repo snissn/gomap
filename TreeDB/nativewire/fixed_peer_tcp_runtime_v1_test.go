@@ -219,6 +219,9 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 		return r
 	}
 	r := open()
+	if !r.data["group-a"].fsm.HasCurrentDBV1(r.data["group-a"].db) {
+		t.Fatal("newly opened group DB is not current in its FSM")
+	}
 	client, err := NewFixedPeerTCPClientV1(c)
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +270,13 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 	r = open()
 	if _, err := r.data["group-a"].db.Get([]byte("snapshot-restore-check")); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("snapshot did not replace the caller-owned DB: %v", err)
+	}
+	if r.data["group-a"].fsm.HasCurrentDBV1(r.data["group-a"].db) {
+		t.Fatal("restored FSM still accepts the closed startup DB")
+	}
+	bound := &fixedPeerVectorRuntimeV1{parent: r, dataGroup: "group-a"}
+	if err := bound.requireCurrentImmutableDBV1(); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("immutable serving accepted a snapshot-replaced DB: %v", err)
 	}
 	before, err = r.Status(ctx)
 	if err != nil {
