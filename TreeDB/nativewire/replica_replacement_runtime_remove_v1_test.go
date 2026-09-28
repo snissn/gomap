@@ -520,9 +520,6 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 		t.Fatalf("same-source fixture leader %s want %s: %v", dataLeader, source, err)
 	}
 	sourceData := runtimes[find(source)].localDataV1(group.ID)
-	if err := sourceData.provider.ReplacementSnapshotReadyV1(ctx); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
-		t.Fatalf("configuration-only boundary unexpectedly snapshot-ready: %v", err)
-	}
 	retained, err := runtimes[find(source)].deriveReplacementSeedV1(ctx, operation, sourceData)
 	if err != nil || retained == nil || !raftcluster.SameReplacementSnapshotSeedV1(*retained, *first.Seed) {
 		t.Fatalf("retained seed was not an exact retry source across the configuration gap: %+v %v", retained, err)
@@ -546,14 +543,10 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 	if _, err := client.call(ctx, leader, "replacement-begin", fixedPeerRequestV1{Entry: secondRaw}, true); err != nil {
 		t.Fatal(err)
 	}
-	// Configuration-only logs do not advance TreeDB's native FSM snapshot
-	// boundary. An idle second replacement must refuse before caching a seed
-	// worker; its exact BEGIN can be retried after real committed document work.
-	if _, err := client.call(ctx, source, "replacement-seed", fixedPeerRequestV1{Entry: secondRaw}, true); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
-		t.Fatalf("idle second seed was not a typed refusal: %v", err)
-	}
-	if work := runtimes[find(source)].localDataV1(group.ID).replacementWork.work; work != nil {
-		t.Fatalf("idle refusal cached native seed work: %+v", work)
+	// BEGIN2 has no seed yet. Its source must take a new native snapshot after
+	// the configuration-only first completion, without a document command.
+	if work := runtimes[find(source)].localDataV1(group.ID).replacementWork.work; work != nil && work.operation == second.OperationID {
+		t.Fatalf("new BEGIN unexpectedly cached native seed work: %+v", work)
 	}
 	// Interrupt immediately after BEGIN2: no seed exists yet, and BEGIN1 has
 	// been compacted out of the catalog. The current survivor must reopen from
@@ -562,52 +555,22 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 	if ready, err := runtimes[3].ReadinessV1(ctx); err == nil || ready.Ready {
 		t.Fatalf("unopened compacted-history survivor ready %+v %v", ready, err)
 	}
-	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
-	route, err := client.Route(ctx, leader, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
-	ApplyClusterRouteMetadata(&metadata, request, route)
-	// BEGIN2 is committed at the catalog leader, but this data source may
-	// still be applying it. A routed mutation must retain its single attempt:
-	// wait until the source can prove the exact route catalog generation.
-	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := runtimes[find(source)].catalogFence(ctx)
-		return err == nil && status.Epoch == route.CatalogMetaEpoch && status.Digest == route.CatalogMetaDigest
-	})
-	sourceData = runtimes[find(source)].localDataV1(group.ID)
-	version, _, err := sourceData.fsm.CurrentCatalogVersion(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	guard := []iwire.Section{{ID: iwire.SectionIdempotencyKey, Bytes: []byte("between-replacements")}, {ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)}}
-	body, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON, [][]byte{[]byte("between-replacements")}, [][]byte{[]byte(`{"value":"between-replacements"}`)}, AckRaftCommitted, 0, guard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sections, err := iwire.DecodeSections(body, iwire.Limits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry, err := iwire.AppendDeterministicEntry(nil, validated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Submit(ctx, source, entry, metadata); err != nil {
-		t.Fatalf("post-configuration document command: %v", err)
-	}
-	fixedPeerWaitV1(t, ctx, func() bool { return sourceData.provider.ReplacementSnapshotReadyV1(ctx) == nil })
 	if _, err := client.PrepareReplicaReplacementV1(ctx, leader, second); err != nil {
-		t.Fatalf("second real seed/enrollment: %v", err)
+		t.Fatalf("idle second real seed/enrollment: %v", err)
 	}
 	secondState, err := runtimes[find(leader)].authority.ReplicaReplacementStateV1(group.ID)
 	if err != nil || secondState.Seed == nil || secondState.Seed.SourceNodeID != source || secondState.Seed.SnapshotID == first.Seed.SnapshotID {
 		t.Fatalf("second seed %+v %v", secondState, err)
+	}
+	commandTerm, commandIndex := secondState.Seed.Manifest.CommandBoundaryV1()
+	if secondState.Seed.Manifest.Version != raftcluster.SnapshotManifestVersion2 || secondState.Seed.Manifest.LastIncludedIndex <= commandIndex {
+		t.Fatalf("idle second seed did not preserve native/configuration versus command boundary: %+v", secondState.Seed.Manifest)
+	}
+	for i := 0; i < 3; i++ {
+		proof, err := sourceData.provider.ReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: source, GroupID: group.ID})
+		if err != nil || proof.Index != commandIndex || proof.Term < commandTerm {
+			t.Fatalf("compacted command-free read fence %d: proof=%+v command=%d/%d err=%v", i, proof, commandTerm, commandIndex, err)
+		}
 	}
 	if _, err := client.PromoteReplicaReplacementV1(ctx, leader, second); err != nil {
 		t.Fatalf("second promotion: %v", err)
@@ -632,37 +595,47 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 	if err != nil || dataLeader != second.NewPeer.ID {
 		t.Fatalf("new target leadership %s %v", dataLeader, err)
 	}
+	// The new leader restored the second seed at native C with durable command
+	// state at D. Repeated ordinary leader fences must prove the compacted
+	// command-free gap without advancing the reported TreeDB command index.
+	targetData := runtimes[4].localDataV1(group.ID)
+	for i := 0; i < 3; i++ {
+		proof, err := targetData.provider.ReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: second.NewPeer.ID, GroupID: group.ID})
+		if err != nil || proof.Index != commandIndex {
+			t.Fatalf("restored leader read fence %d: proof=%+v command=%d err=%v", i, proof, commandIndex, err)
+		}
+	}
 	if secondFinal.ConfigurationIndex != terminal.Result.ConfigurationIndex {
 		t.Fatal("native result changed")
 	}
-	request = ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
-	route, err = client.Route(ctx, leader, request)
+	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
+	route, err := client.Route(ctx, leader, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata = ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+	metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
 	ApplyClusterRouteMetadata(&metadata, request, route)
 	d := runtimes[4].localDataV1(group.ID)
-	version, _, err = d.fsm.CurrentCatalogVersion(ctx)
+	version, _, err := d.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Normal ingress uses dispatcher-validated current IDs, including the new
 	// leader that never appeared in the original fixed group manifest.
-	guard = []iwire.Section{{ID: iwire.SectionIdempotencyKey, Bytes: []byte("after-second-replacement")}, {ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)}}
-	body, err = appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON, [][]byte{[]byte("replacement-row")}, [][]byte{[]byte(`{"value":"after-replacement"}`)}, AckRaftCommitted, 0, guard)
+	guard := []iwire.Section{{ID: iwire.SectionIdempotencyKey, Bytes: []byte("after-second-replacement")}, {ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)}}
+	body, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON, [][]byte{[]byte("replacement-row")}, [][]byte{[]byte(`{"value":"after-replacement"}`)}, AckRaftCommitted, 0, guard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sections, err = iwire.DecodeSections(body, iwire.Limits{})
+	sections, err := iwire.DecodeSections(body, iwire.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	validated, err = iwire.MustV1Registry().ValidateRequestSections(sections)
+	validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err = iwire.AppendDeterministicEntry(nil, validated)
+	entry, err := iwire.AppendDeterministicEntry(nil, validated)
 	if err != nil {
 		t.Fatal(err)
 	}

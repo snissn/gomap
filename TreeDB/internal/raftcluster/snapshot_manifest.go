@@ -18,6 +18,7 @@ import (
 const (
 	SnapshotManifestFormatV1 = "treedb.raftcluster.snapshot-manifest"
 	SnapshotManifestVersion1 = uint16(1)
+	SnapshotManifestVersion2 = uint16(2)
 
 	RaftSnapshotArchiveFormatV1       = "treedb.raftcluster.raft-snapshot-archive"
 	RaftSnapshotArchiveVersion1       = uint16(1)
@@ -94,23 +95,25 @@ func validateScopeIdentityField(name, value string) error {
 // files, install state into another DB, replay tails, truncate Raft logs,
 // rejoin nodes, or claim that the exported metadata can serve reads.
 type SnapshotManifestV1 struct {
-	Format            string                  `json:"format"`
-	Version           uint16                  `json:"version"`
-	GroupID           GroupID                 `json:"group_id"`
-	NodeID            NodeID                  `json:"node_id"`
-	LastIncludedTerm  uint64                  `json:"last_included_term"`
-	LastIncludedIndex uint64                  `json:"last_included_index"`
-	AppliedCommandLSN uint64                  `json:"applied_command_lsn"`
-	LogicalDigestV1   string                  `json:"logical_digest_v1"`
-	Scope             SnapshotScopeIdentityV1 `json:"scope"`
-	CreatedAt         time.Time               `json:"created_at"`
+	Format              string                  `json:"format"`
+	Version             uint16                  `json:"version"`
+	GroupID             GroupID                 `json:"group_id"`
+	NodeID              NodeID                  `json:"node_id"`
+	LastIncludedTerm    uint64                  `json:"last_included_term"`
+	LastIncludedIndex   uint64                  `json:"last_included_index"`
+	AppliedCommandTerm  uint64                  `json:"applied_command_term,omitempty"`
+	AppliedCommandIndex uint64                  `json:"applied_command_index,omitempty"`
+	AppliedCommandLSN   uint64                  `json:"applied_command_lsn"`
+	LogicalDigestV1     string                  `json:"logical_digest_v1"`
+	Scope               SnapshotScopeIdentityV1 `json:"scope"`
+	CreatedAt           time.Time               `json:"created_at"`
 }
 
 func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) error {
 	if m.Format != SnapshotManifestFormatV1 {
 		return fmt.Errorf("%w: unsupported format %q", ErrInvalidSnapshotManifest, m.Format)
 	}
-	if m.Version != SnapshotManifestVersion1 {
+	if m.Version != SnapshotManifestVersion1 && m.Version != SnapshotManifestVersion2 {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidSnapshotManifest, m.Version)
 	}
 	if err := validateID("group id", string(m.GroupID)); err != nil {
@@ -124,6 +127,13 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 	}
 	if m.LastIncludedTerm == 0 {
 		return fmt.Errorf("%w: missing last included term", ErrInvalidSnapshotManifest)
+	}
+	if m.Version == SnapshotManifestVersion1 {
+		if m.AppliedCommandTerm != 0 || m.AppliedCommandIndex != 0 {
+			return fmt.Errorf("%w: v1 has unexpected command boundary", ErrInvalidSnapshotManifest)
+		}
+	} else if m.AppliedCommandTerm == 0 || m.AppliedCommandIndex == 0 || m.AppliedCommandIndex >= m.LastIncludedIndex || m.AppliedCommandTerm > m.LastIncludedTerm {
+		return fmt.Errorf("%w: invalid command boundary", ErrInvalidSnapshotManifest)
 	}
 	if m.AppliedCommandLSN == 0 {
 		return fmt.Errorf("%w: missing applied command LSN", ErrInvalidSnapshotManifest)
@@ -141,6 +151,37 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 		return fmt.Errorf("%w: missing creation time", ErrInvalidSnapshotManifest)
 	}
 	return nil
+}
+
+// CommandBoundaryV1 identifies the last durable TreeDB command. A version 2
+// manifest can include later native configuration entries without inventing a
+// TreeDB command at that Raft index.
+func (m SnapshotManifestV1) CommandBoundaryV1() (uint64, uint64) {
+	if m.Version == SnapshotManifestVersion2 {
+		return m.AppliedCommandTerm, m.AppliedCommandIndex
+	}
+	return m.LastIncludedTerm, m.LastIncludedIndex
+}
+
+// WithNativeBoundaryV1 binds a captured command cut to the boundary supplied
+// by the native snapshot sink before the archive is materialized.
+func (m SnapshotManifestV1) WithNativeBoundaryV1(term, index uint64) (SnapshotManifestV1, error) {
+	if err := m.Validate(m.Scope); err != nil {
+		return SnapshotManifestV1{}, err
+	}
+	commandTerm, commandIndex := m.CommandBoundaryV1()
+	if index < commandIndex || term < commandTerm || term == 0 || index == commandIndex && term != commandTerm {
+		return SnapshotManifestV1{}, fmt.Errorf("%w: native boundary precedes durable command", ErrInvalidSnapshotManifest)
+	}
+	m.LastIncludedTerm, m.LastIncludedIndex = term, index
+	if index > commandIndex {
+		m.Version = SnapshotManifestVersion2
+		m.AppliedCommandTerm, m.AppliedCommandIndex = commandTerm, commandIndex
+	}
+	if err := m.Validate(m.Scope); err != nil {
+		return SnapshotManifestV1{}, err
+	}
+	return m, nil
 }
 
 func EncodeSnapshotManifestV1(manifest SnapshotManifestV1) ([]byte, error) {
@@ -283,6 +324,8 @@ func snapshotManifestV1Equal(a, b SnapshotManifestV1) bool {
 		a.NodeID == b.NodeID &&
 		a.LastIncludedTerm == b.LastIncludedTerm &&
 		a.LastIncludedIndex == b.LastIncludedIndex &&
+		a.AppliedCommandTerm == b.AppliedCommandTerm &&
+		a.AppliedCommandIndex == b.AppliedCommandIndex &&
 		a.AppliedCommandLSN == b.AppliedCommandLSN &&
 		a.LogicalDigestV1 == b.LogicalDigestV1 &&
 		a.Scope == b.Scope &&

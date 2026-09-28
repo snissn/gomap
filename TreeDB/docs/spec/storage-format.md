@@ -3642,6 +3642,25 @@ caller cancellation does not release operation ownership while that call is
 still running. Retained archive bytes and temporary copy bytes count against
 replacement admission separately from the ordinary native snapshot store.
 
+The snapshot manifest's `last_included_term`/`last_included_index` identify the
+native installed Raft prefix C. When a committed configuration entry follows
+the last durable TreeDB command D, manifest version 2 additionally records
+`applied_command_term`/`applied_command_index` for D (strictly before C).
+`applied_command_lsn` and `logical_digest_v1` always describe D; no command or
+WAL progress is invented for the configuration-only gap. Version 1 retains
+the original single boundary, where C equals D. Native snapshot metadata,
+seed identity and prejoin truncation use C; installed FSM verification and
+semantic tail proof use D. The native FSM records configuration entries for
+snapshot-index advancement without mutating TreeDB command state. Readers
+validate the versioned boundary relationship and reject malformed or older
+unknown formats; pre-alpha directories may be rebuilt rather than migrated.
+`RecoveryStatusV1` reports command-state readiness and uses D as its default
+tail target; it does not by itself prove a leader read. Ordinary leader read
+fences require quorum and current-term commit evidence, then accept a missing
+compacted log only within a verified installed D-to-C snapshot interval.
+Retained-log holes, unknown boundaries, and commands after C still refuse or
+wait for durable command progress.
+
 The receiver uses `replacement-receiver-v1.json` in its existing Raft group
 control directory, outside the TreeDB directory replaced during installation.
 Canonical JSON is capped at 16 KiB and binds the exact BEGIN, seed, and one of

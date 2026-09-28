@@ -15,3 +15,9 @@ and a persisted configuration at index 4 but has compacted the log at index 3.
 It must receive a retransmitted index-4 configuration before command traffic
 can catch up. The upstream v1.7.3 receiver otherwise rejects that predecessor,
 and leader backtracking can become stuck below the follower's compacted floor.
+
+`api.go` also exposes the installed in-memory snapshot index and term through
+`InstalledSnapshotBoundary`. TreeDB uses that read-only boundary to validate
+and cache a command-free gap between its durable last command and a later
+native configuration snapshot. It does not infer installation from the newest
+archive in the snapshot store.
