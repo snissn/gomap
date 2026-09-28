@@ -40,7 +40,7 @@ func TestImmutableVectorOwnerLeaderIgnoresStaleCatalogHintV1(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(fixedPeerReplyV1{
 				NodeID: raftcluster.NodeID(request.Header.Get("X-TreeDB-Node")), ConfigDigest: request.Header.Get("X-TreeDB-Config"),
-				Status: FixedPeerTCPStatusV1{Groups: []raftcluster.RuntimeStatusV1{{GroupID: "group-b", LeaderID: members[1]}}},
+				Status: FixedPeerTCPStatusV1{Groups: []FixedPeerTCPGroupStatusV1{{RuntimeStatusV1: raftcluster.RuntimeStatusV1{GroupID: "group-b", LeaderID: members[1]}}}},
 			})
 		}))
 		t.Cleanup(server.Close)
