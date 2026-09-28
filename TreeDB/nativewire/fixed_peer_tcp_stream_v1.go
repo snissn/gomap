@@ -2,9 +2,11 @@ package nativewire
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -227,7 +229,24 @@ func (s *fixedPeerTCPStreamV1) replaceAuthorizedPeersV1(peers []raftcluster.Peer
 	s.mu.Unlock()
 	var err error
 	for _, conn := range connections {
-		err = errors.Join(err, conn.Close())
+		closeErr := conn.Close()
+		if !closedTLSAlertOnRevocationV1(conn.Conn, closeErr) {
+			err = errors.Join(err, closeErr)
+		}
 	}
 	return err
+}
+
+// Go's TLS Close returns this alert error only after its underlying Conn.Close
+// succeeded. A peer revocation has already advanced the generation and removed
+// the tracked socket, so this exact result cannot undo that revocation.
+func closedTLSAlertOnRevocationV1(conn net.Conn, err error) bool {
+	if err == nil || !strings.HasPrefix(err.Error(), "tls: failed to send closeNotify alert (but connection was closed anyway): ") {
+		return false
+	}
+	if wire, ok := conn.(*peerRaftWireConnV1); ok {
+		conn = wire.Conn
+	}
+	_, ok := conn.(*tls.Conn)
+	return ok
 }
