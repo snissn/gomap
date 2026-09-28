@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -11,6 +12,20 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestVectorPartitionPlacementDigestWithContextV1CancelsDuringScan(t *testing.T) {
+	manifest := VectorPartitionManifestV1{PartitionCount: 2048, Placements: make([]VectorPartitionPlacementV1, 2048)}
+	for i := range manifest.Placements {
+		manifest.Placements[i] = VectorPartitionPlacementV1{PartitionID: uint32(i), GroupID: "raft-a"}
+	}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 5}
+	if _, err := VectorPartitionPlacementDigestWithContextV1(ctx, manifest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("placement digest cancellation err=%v want context.Canceled", err)
+	}
+	if ctx.calls < ctx.cancelAfter {
+		t.Fatalf("context calls=%d want at least %d", ctx.calls, ctx.cancelAfter)
+	}
+}
 
 func scopedLifecycleManifestsV1(t *testing.T) (VectorPartitionManifestV1, VectorPartitionManifestV1, VectorPartitionLocalScopeV1) {
 	t.Helper()

@@ -37,50 +37,9 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority := raftplacement.NewCatalogMetaAuthorityV1()
-	_, transport := hraft.NewInmemTransport("source-meta")
-	t.Cleanup(func() { _ = transport.Close() })
-	providerFeatures := raftcluster.FeatureSet{
-		ConfigVersion: raftcluster.SupportedConfigVersion,
-		Required: []raftcluster.RequiredFeature{
-			{Name: raftcluster.FeatureSingleGroupProvider, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureSingleGroupProvider]},
-			{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]},
-		},
-	}
-	provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{
-		Cluster: raftcluster.Config{
-			Dir: t.TempDir(), NodeID: "source-meta", GroupID: "meta", Features: providerFeatures,
-			Peers: []raftcluster.Peer{{ID: "source-meta", Address: "source-meta", Capabilities: providerFeatures}},
-		},
-		State: authority, Transport: transport, Bootstrap: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = provider.Close() })
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
-	for {
-		status, err := provider.ClusterAdmissionStatus(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if status.Leader {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		case <-time.After(time.Millisecond):
-		}
-	}
-	raw, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{ExpectedEpoch: 0, Record: record})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, raw); err != nil {
-		t.Fatal(err)
-	}
+	authority, provider := openVectorSourceHolderTestCatalogV1(t, ctx, record)
 	prepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, authority, provider)
 	if err != nil {
 		t.Fatal(err)
@@ -172,10 +131,83 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if _, ok := authority.VectorPartitionLifecycleRecordV1(identity); !ok {
 		t.Fatal("verified BUILD has no committed record")
 	}
+	// A token-routed catalog can place the same collection while this local
+	// source holder still has only one collection's bytes. It cannot attest
+	// the distributed source through the full-local V1 preparation path.
+	tokenCatalog := record.Catalog
+	tokenCatalog.Placements = append([]raftplacement.CollectionPlacementV1(nil), record.Catalog.Placements...)
+	tokenCatalog.Placements[0] = raftplacement.CollectionPlacementV1{
+		Collection: collection, Mode: raftplacement.PlacementModeTokenV1,
+		TokenPartitions: []raftplacement.TokenPartitionV1{{ID: "token-0", GroupID: "group-a", Start: 0, End: ^uint64(0)}},
+	}
+	tokenRecord, err := raftplacement.NewCatalogMetaRecordV1(1, tokenCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenAuthority, tokenProvider := openVectorSourceHolderTestCatalogV1(t, ctx, tokenRecord)
+	tokenPrepare, err := NewVectorPartitionImmutableSourceHolderPreparationV1(fixture.collection, collection, tokenAuthority, tokenProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenIdentity := identity
+	tokenIdentity.Index.CatalogEpoch, tokenIdentity.Index.CatalogDigest = tokenRecord.Epoch, tokenRecord.Digest
+	if _, _, err := tokenPrepare(ctx, tokenIdentity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("token-routed source accepted as full-local: %v", err)
+	}
+	if _, ok := tokenAuthority.VectorPartitionLifecycleRecordV1(tokenIdentity); ok {
+		t.Fatal("token-routed source published a BUILD record")
+	}
 	if _, err := fixture.collection.Insert([]byte("new-row"), []byte(`{"embedding":[1,0]}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := prepare(ctx, identity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("changed source accepted: %v", err)
 	}
+}
+
+func openVectorSourceHolderTestCatalogV1(t *testing.T, ctx context.Context, record raftplacement.CatalogMetaRecordV1) (*raftplacement.CatalogMetaAuthorityV1, *raftcluster.CatalogMetaRaftProviderV1) {
+	t.Helper()
+	authority := raftplacement.NewCatalogMetaAuthorityV1()
+	_, transport := hraft.NewInmemTransport("source-meta")
+	t.Cleanup(func() { _ = transport.Close() })
+	providerFeatures := raftcluster.FeatureSet{
+		ConfigVersion: raftcluster.SupportedConfigVersion,
+		Required: []raftcluster.RequiredFeature{
+			{Name: raftcluster.FeatureSingleGroupProvider, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureSingleGroupProvider]},
+			{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]},
+		},
+	}
+	provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{
+		Cluster: raftcluster.Config{
+			Dir: t.TempDir(), NodeID: "source-meta", GroupID: "meta", Features: providerFeatures,
+			Peers: []raftcluster.Peer{{ID: "source-meta", Address: "source-meta", Capabilities: providerFeatures}},
+		},
+		State: authority, Transport: transport, Bootstrap: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
+	for {
+		status, err := provider.ClusterAdmissionStatus(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Leader {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	raw, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{ExpectedEpoch: 0, Record: record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.SubmitCatalogMetaCommandV1(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	return authority, provider
 }

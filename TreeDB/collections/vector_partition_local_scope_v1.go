@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -120,6 +121,18 @@ func (scope VectorPartitionLocalScopeV1) validateManifestV1(manifest VectorParti
 // deliberately excludes asset filenames and the catalog epoch: the manifest
 // digest binds the former, and the lifecycle index identity binds the latter.
 func VectorPartitionPlacementDigestV1(manifest VectorPartitionManifestV1) (string, error) {
+	return VectorPartitionPlacementDigestWithContextV1(context.Background(), manifest)
+}
+
+// VectorPartitionPlacementDigestWithContextV1 computes the same VPD1 bytes
+// while allowing large placement scans to stop when the caller is canceled.
+func VectorPartitionPlacementDigestWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := manifest.requireInlineRuntimeV1(); err != nil {
 		return "", err
 	}
@@ -127,7 +140,12 @@ func VectorPartitionPlacementDigestV1(manifest VectorPartitionManifestV1) (strin
 		return "", fmt.Errorf("%w: incomplete placement digest input", ErrVectorPartitionManifestInvalid)
 	}
 	groups := make([]string, manifest.PartitionCount)
-	for _, placement := range manifest.Placements {
+	for i, placement := range manifest.Placements {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		if placement.PartitionID >= manifest.PartitionCount || groups[placement.PartitionID] != "" ||
 			placement.GroupID == "" || len(placement.GroupID) > 0xffff {
 			return "", fmt.Errorf("%w: noncanonical placement digest input", ErrVectorPartitionManifestInvalid)
@@ -140,6 +158,11 @@ func VectorPartitionPlacementDigestV1(manifest VectorPartitionManifestV1) (strin
 	binary.BigEndian.PutUint32(word[:], manifest.PartitionCount)
 	_, _ = h.Write(word[:])
 	for partitionID, group := range groups {
+		if partitionID&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		if group == "" {
 			return "", fmt.Errorf("%w: incomplete placement digest input", ErrVectorPartitionManifestInvalid)
 		}
@@ -148,6 +171,9 @@ func VectorPartitionPlacementDigestV1(manifest VectorPartitionManifestV1) (strin
 		binary.BigEndian.PutUint32(word[:], uint32(len(group)))
 		_, _ = h.Write(word[:])
 		_, _ = h.Write([]byte(group))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

@@ -1137,6 +1137,12 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	return encodeVectorPartitionManifestWithContextV1(context.Background(), m)
 }
 
+// EncodeVectorPartitionManifestWithContextV1 preserves the stable V1 encoding
+// while allowing callers to cancel large manifest preparation.
+func EncodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPartitionManifestV1) ([]byte, error) {
+	return encodeVectorPartitionManifestWithContextV1(ctx, m)
+}
+
 // encodeVectorPartitionManifestWithContextV1 preserves the stable V1 record
 // while polling cancellation throughout large-list sorting, digest
 // construction, validation, sizing, and binary emission.

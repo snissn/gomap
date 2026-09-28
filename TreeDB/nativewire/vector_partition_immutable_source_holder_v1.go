@@ -49,11 +49,11 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 			manifest.SourceSchemaHash != identity.Source.SchemaHash || manifest.SourceRowCount != identity.Source.RowCount {
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
 		}
-		manifestBytes, err := collections.EncodeVectorPartitionManifestV1(manifest)
+		manifestBytes, err := collections.EncodeVectorPartitionManifestWithContextV1(ctx, manifest)
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		placementDigest, err := collections.VectorPartitionPlacementDigestV1(manifest)
+		placementDigest, err := collections.VectorPartitionPlacementDigestWithContextV1(ctx, manifest)
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
@@ -76,7 +76,8 @@ func NewVectorPartitionImmutableSourceHolderPreparationV1(
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		if _, ok := resolved.Placement(identity.Index.Collection); !ok {
+		placementMode, ok := resolved.Placement(identity.Index.Collection)
+		if !ok || placementMode.Mode != raftplacement.PlacementModeCollectionV1 {
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
 		}
 		placement := raftplacement.VectorPartitionPlacementRecordV1{

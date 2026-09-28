@@ -3239,7 +3239,7 @@ func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
 func TestEncodeVectorPartitionManifestWithContextV1CancelsDuringLargeCanonicalSortScan(t *testing.T) {
 	m := scaledVectorPartitionManifestV1(32 << 10)
 	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 24}
-	if _, err := encodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
+	if _, err := EncodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
 		t.Fatalf("encode cancellation err=%v want context.Canceled", err)
 	}
 	if ctx.calls < ctx.cancelAfter {
