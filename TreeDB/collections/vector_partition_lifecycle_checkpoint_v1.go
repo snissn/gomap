@@ -17,6 +17,8 @@ import (
 const (
 	vectorPartitionLifecycleCheckpointMagicV1                = "VCP1"
 	vectorPartitionLifecycleCheckpointVersionV1       uint32 = 1
+	vectorPartitionLifecycleCheckpointScopedVersionV1 uint32 = 2
+	vectorPartitionLifecycleCheckpointGappedVersionV1 uint32 = 3
 	vectorPartitionLifecycleCheckpointMaxBytesV1             = 30 << 20
 	vectorPartitionLifecycleCheckpointTailMaxBytesV1         = 4 << 20
 	vectorPartitionLifecycleCheckpointMaxLiveV1              = 2
@@ -35,6 +37,7 @@ type vectorPartitionLifecycleCheckpointGenerationEncodingV1 struct {
 	deleting   bool
 	manifest   []byte
 	reclaim    []byte
+	scope      []byte
 }
 
 func cloneVectorPartitionManifestForCheckpointV1(m VectorPartitionManifestV1) VectorPartitionManifestV1 {
@@ -150,6 +153,19 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 		LastSequence:        state.LastSequence,
 		LastDigest:          state.LastDigest,
 	}
+	if len(state.SkippedGenerations) > vectorPartitionLifecycleMaxSkippedRangesV1 {
+		return zero, nil, fmt.Errorf("%w: skipped generation ranges cap", ErrVectorPartitionManifestInvalid)
+	}
+	for _, skipped := range state.SkippedGenerations {
+		if skipped.First <= state.GenerationFloor || skipped.Last >= state.GenerationHighWater || skipped.First > skipped.Last ||
+			(state.ActivationHighWater >= skipped.First && state.ActivationHighWater <= skipped.Last) {
+			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint skipped generation range", ErrVectorPartitionManifestInvalid)
+		}
+		if n := len(canonicalState.SkippedGenerations); n != 0 && skipped.First <= canonicalState.SkippedGenerations[n-1].Last+1 {
+			return zero, nil, fmt.Errorf("%w: noncanonical skipped generation ranges", ErrVectorPartitionManifestInvalid)
+		}
+		canonicalState.SkippedGenerations = append(canonicalState.SkippedGenerations, skipped)
+	}
 	encoded := make([]vectorPartitionLifecycleCheckpointGenerationEncodingV1, 0, len(generations))
 	for _, generation := range generations {
 		if err := ctx.Err(); err != nil {
@@ -158,6 +174,11 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 		entry := state.Generations[generation]
 		if generation < state.GenerationFloor || generation > state.GenerationHighWater || entry.Manifest == nil {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint generation", ErrVectorPartitionManifestInvalid)
+		}
+		for _, skipped := range canonicalState.SkippedGenerations {
+			if generation >= skipped.First && generation <= skipped.Last {
+				return zero, nil, fmt.Errorf("%w: live skipped generation", ErrVectorPartitionManifestInvalid)
+			}
 		}
 		if err := preflightVectorPartitionManifestWithContextV1(ctx, *entry.Manifest, limits); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -191,6 +212,22 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 			manifest.Generation != generation {
 			return zero, nil, fmt.Errorf("%w: lifecycle checkpoint manifest identity", ErrVectorPartitionManifestInvalid)
 		}
+		var scope *VectorPartitionLocalScopeV1
+		var scopeRaw []byte
+		if entry.Scope != nil {
+			if state.ActiveGeneration == generation {
+				return zero, nil, fmt.Errorf("%w: scoped generation cannot be locally active", ErrVectorPartitionManifestInvalid)
+			}
+			if _, err := entry.Scope.localAssetsV1(manifest); err != nil {
+				return zero, nil, err
+			}
+			scopeRaw, err = encodeVectorPartitionLocalScopeV1(*entry.Scope)
+			if err != nil {
+				return zero, nil, err
+			}
+			copied := *entry.Scope
+			scope = &copied
+		}
 
 		var reclaimRaw []byte
 		var reclaim *vectorPartitionReclaimStateV1
@@ -206,11 +243,12 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 				return zero, nil, fmt.Errorf("%w: lifecycle checkpoint reclaim", ErrVectorPartitionManifestInvalid)
 			}
 			decoded, decodeErr := decodeVectorPartitionReclaimRecordV1(reclaimRaw)
-			if decodeErr != nil ||
+			originalRefs, refsErr := vectorPartitionGenerationRefsV1(vectorPartitionLifecycleGenerationStateV1{Manifest: &manifest, Scope: scope})
+			if decodeErr != nil || refsErr != nil ||
 				decoded.Collection != state.Collection ||
 				decoded.IndexName != state.IndexName ||
 				decoded.Generation != generation ||
-				!vectorPartitionLifecycleRefsEqualV1(decoded.OriginalRefs, vectorPartitionReclaimRefsFromManifestV1(manifest)) {
+				!vectorPartitionLifecycleRefsEqualV1(decoded.OriginalRefs, originalRefs) {
 				return zero, nil, fmt.Errorf("%w: lifecycle checkpoint reclaim identity", ErrVectorPartitionManifestInvalid)
 			}
 			reclaim = &decoded
@@ -218,6 +256,7 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 
 		canonicalState.Generations[generation] = vectorPartitionLifecycleGenerationStateV1{
 			Manifest: &manifest,
+			Scope:    scope,
 			Deleting: entry.Deleting,
 			Reclaim:  reclaim,
 		}
@@ -226,6 +265,7 @@ func canonicalVectorPartitionLifecycleCheckpointWithContextV1(ctx context.Contex
 			deleting:   entry.Deleting,
 			manifest:   manifestRaw,
 			reclaim:    reclaimRaw,
+			scope:      scopeRaw,
 		})
 	}
 
@@ -264,6 +304,15 @@ func encodeVectorPartitionLifecycleCheckpointCanonicalV1(input vectorPartitionLi
 
 func encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint vectorPartitionLifecycleCheckpointV1, generations []vectorPartitionLifecycleCheckpointGenerationEncodingV1) ([]byte, error) {
 	state := checkpoint.State
+	version := vectorPartitionLifecycleCheckpointVersionV1
+	for _, generation := range generations {
+		if len(generation.scope) != 0 {
+			version = vectorPartitionLifecycleCheckpointScopedVersionV1
+		}
+	}
+	if len(state.SkippedGenerations) != 0 {
+		version = vectorPartitionLifecycleCheckpointGappedVersionV1
+	}
 	payloadBytes := uint64(4 + len(state.Collection) + 4 + len(state.IndexName) + 8 + 8 + sha256.Size + 8 + 8 + 8 + 8 + 8 + 4)
 	add := func(n uint64) error {
 		maxPayload := uint64(vectorPartitionLifecycleCheckpointMaxBytesV1 - vectorPartitionLifecycleCheckpointHeaderBytesV1 - vectorPartitionLifecycleCheckpointChecksumBytesV1)
@@ -274,7 +323,16 @@ func encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint vectorPartiti
 		return nil
 	}
 	for _, generation := range generations {
-		if err := add(8 + 1 + 4 + uint64(len(generation.manifest)) + 4 + uint64(len(generation.reclaim))); err != nil {
+		generationBytes := uint64(8 + 1 + 4 + len(generation.manifest) + 4 + len(generation.reclaim))
+		if version >= vectorPartitionLifecycleCheckpointScopedVersionV1 {
+			generationBytes += 4 + uint64(len(generation.scope))
+		}
+		if err := add(generationBytes); err != nil {
+			return nil, err
+		}
+	}
+	if version == vectorPartitionLifecycleCheckpointGappedVersionV1 {
+		if err := add(4 + 16*uint64(len(state.SkippedGenerations))); err != nil {
 			return nil, err
 		}
 	}
@@ -305,6 +363,17 @@ func encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint vectorPartiti
 		payload.Write(generation.manifest)
 		putU32VPM(payload, uint32(len(generation.reclaim)))
 		payload.Write(generation.reclaim)
+		if version >= vectorPartitionLifecycleCheckpointScopedVersionV1 {
+			putU32VPM(payload, uint32(len(generation.scope)))
+			payload.Write(generation.scope)
+		}
+	}
+	if version == vectorPartitionLifecycleCheckpointGappedVersionV1 {
+		putU32VPM(payload, uint32(len(state.SkippedGenerations)))
+		for _, skipped := range state.SkippedGenerations {
+			putU64VPM(payload, skipped.First)
+			putU64VPM(payload, skipped.Last)
+		}
 	}
 	if uint64(payload.Len()) != payloadBytes {
 		return nil, fmt.Errorf("%w: lifecycle checkpoint encoded length", ErrVectorPartitionManifestInvalid)
@@ -312,7 +381,7 @@ func encodePreparedVectorPartitionLifecycleCheckpointV1(checkpoint vectorPartiti
 
 	out := bytes.NewBuffer(make([]byte, 0, vectorPartitionLifecycleCheckpointHeaderBytesV1+payload.Len()+vectorPartitionLifecycleCheckpointChecksumBytesV1))
 	out.WriteString(vectorPartitionLifecycleCheckpointMagicV1)
-	putU32VPM(out, vectorPartitionLifecycleCheckpointVersionV1)
+	putU32VPM(out, version)
 	putU32VPM(out, uint32(payload.Len()))
 	out.Write(payload.Bytes())
 	sum := sha256.Sum256(out.Bytes())
@@ -338,7 +407,8 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 		string(raw[:4]) != vectorPartitionLifecycleCheckpointMagicV1 {
 		return zero, fmt.Errorf("%w: lifecycle checkpoint header", ErrVectorPartitionManifestInvalid)
 	}
-	if binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionLifecycleCheckpointVersionV1 {
+	version := binary.BigEndian.Uint32(raw[4:8])
+	if version != vectorPartitionLifecycleCheckpointVersionV1 && version != vectorPartitionLifecycleCheckpointScopedVersionV1 && version != vectorPartitionLifecycleCheckpointGappedVersionV1 {
 		return zero, fmt.Errorf("%w: lifecycle checkpoint version", ErrVectorPartitionManifestInvalid)
 	}
 	payloadBytes := uint64(binary.BigEndian.Uint32(raw[8:12]))
@@ -418,6 +488,10 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 		}
 		manifestRaw := readBlob(limits.MaxBytes, "manifest")
 		reclaimRaw := readBlob(vectorPartitionReclaimMaxBytesV1, "reclaim")
+		var scopeRaw []byte
+		if version >= vectorPartitionLifecycleCheckpointScopedVersionV1 {
+			scopeRaw = readBlob(4+2+limits.MaxStringBytes+1+2*sha256.Size, "scope")
+		}
 		if r.err != nil || len(manifestRaw) == 0 {
 			break
 		}
@@ -430,6 +504,14 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 			Manifest: &manifest,
 			Deleting: flags&vectorPartitionLifecycleCheckpointDeletingV1 != 0,
 		}
+		if len(scopeRaw) != 0 {
+			scope, err := decodeVectorPartitionLocalScopeV1(scopeRaw)
+			if err != nil {
+				r.err = err
+				break
+			}
+			entry.Scope = &scope
+		}
 		if len(reclaimRaw) != 0 {
 			reclaim, err := decodeVectorPartitionReclaimRecordV1(reclaimRaw)
 			if err != nil {
@@ -440,6 +522,12 @@ func decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1(ctx context.
 		}
 		state.Generations[generation] = entry
 		previousGeneration = generation
+	}
+	if version == vectorPartitionLifecycleCheckpointGappedVersionV1 && r.err == nil {
+		count := r.count(vectorPartitionLifecycleMaxSkippedRangesV1)
+		for i := 0; i < count && r.err == nil; i++ {
+			state.SkippedGenerations = append(state.SkippedGenerations, vectorPartitionLifecycleSkippedGenerationsV1{First: r.u64(), Last: r.u64()})
+		}
 	}
 	if r.err != nil || r.off != len(r.b) || len(state.Generations) != generationCount {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -495,7 +583,7 @@ func reduceVectorPartitionLifecycleCheckpointTailV1(checkpoint vectorPartitionLi
 		if err != nil {
 			return vectorPartitionLifecycleStateV1{}, err
 		}
-		if decoded.Operation == vectorPartitionLifecycleBuildV1 ||
+		if decoded.Operation == vectorPartitionLifecycleBuildV1 || decoded.Operation == vectorPartitionLifecycleScopedBuildV1 ||
 			state.LastSequence == math.MaxUint64 ||
 			decoded.Sequence != state.LastSequence+1 ||
 			decoded.PreviousDigest != state.LastDigest ||

@@ -120,6 +120,32 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 	}
 	var manifest VectorPartitionManifestV1
 	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var innerErr error
+		manifest, innerErr = c.PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx, index, generation)
+		return innerErr
+	})
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	return manifest, nil
+}
+
+// PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1 is the
+// barrier-held form used by a Raft FSM to bind source capture to its current
+// DB across snapshot replacement. Its caller must already hold that root's
+// non-reentrant vector-partition storage barrier.
+func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	var manifest VectorPartitionManifestV1
+	err := func() error {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -134,7 +160,7 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 			return err
 		}
 		entry, ok := loaded.state.Generations[generation]
-		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+		if !present || !ok || entry.Manifest == nil || entry.Scope != nil || entry.Deleting || entry.Manifest.State != "ready" {
 			return fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
 		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
@@ -154,11 +180,65 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 			return errors.New("collections: vector partition source identity mismatch")
 		}
 		return ctx.Err()
-	})
+	}()
 	if err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
 	return manifest, nil
+}
+
+// PreparedVectorPartitionScopedManifestWithContextV1 reads local immutable
+// preparation evidence without requiring the full source graph on this node.
+// It verifies every hosted asset, but grants no catalog or serving authority.
+// The caller must independently fence and compare the committed immutable
+// manifest/placement pair before opening or serving this generation.
+func (c *Collection) PreparedVectorPartitionScopedManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, VectorPartitionLocalScopeV1, error) {
+	var zeroManifest VectorPartitionManifestV1
+	var zeroScope VectorPartitionLocalScopeV1
+	if c == nil || c.db == nil {
+		return zeroManifest, zeroScope, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zeroManifest, zeroScope, err
+	}
+	var manifest VectorPartitionManifestV1
+	var scope VectorPartitionLocalScopeV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return err
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !present || !ok || entry.Manifest == nil || entry.Scope == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return fmt.Errorf("%w: generation %d is not scoped and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		if err != nil {
+			return err
+		}
+		scope = *entry.Scope
+		assets, err := scope.localAssetsV1(manifest)
+		if err != nil {
+			return err
+		}
+		if c.meta.Options.ColumnStore == nil || c.meta.Options.ColumnStore.AssetManager == nil {
+			return fmt.Errorf("%w: missing local asset manager", ErrVectorPartitionManifestInvalid)
+		}
+		return verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), c.meta.Options.ColumnStore.AssetManager.Namespace, assets)
+	})
+	if err != nil {
+		return zeroManifest, zeroScope, err
+	}
+	return manifest, scope, nil
 }
 
 // ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1 opens the full
@@ -419,13 +499,10 @@ func (s *VectorPartitionStoreV1) vectorPartitionLifecycleGenerationCompleteV1(co
 	if err != nil {
 		return false, err
 	}
-	if !present ||
-		generation < loaded.state.GenerationFloor ||
-		generation > loaded.state.GenerationHighWater {
+	if !present {
 		return false, nil
 	}
-	_, live := loaded.state.Generations[generation]
-	return !live, nil
+	return loaded.state.generationCompleteV1(generation), nil
 }
 
 func vectorPartitionManifestCanonicalEqualV1(a, b VectorPartitionManifestV1) bool {
@@ -465,6 +542,9 @@ func (s *VectorPartitionStoreV1) persistVerifiedVectorPartitionManifestLifecycle
 		return err
 	}
 	entry, generationPresent := loaded.state.Generations[m.Generation]
+	if generationPresent && entry.Scope != nil {
+		return fmt.Errorf("%w: generation %d has owner-local scope", ErrVectorPartitionManifestInvalid, m.Generation)
+	}
 	switch m.State {
 	case "building":
 		if generationPresent && entry.Deleting {
@@ -589,11 +669,11 @@ func (s *VectorPartitionStoreV1) deleteVectorPartitionLifecycleV1(collection, in
 	if err != nil {
 		return err
 	}
-	if !present {
-		return os.ErrNotExist
-	}
 	entry, generationPresent := loaded.state.Generations[generation]
-	if !generationPresent || entry.Manifest == nil {
+	if !present || !generationPresent || entry.Manifest == nil {
+		if present && loaded.state.generationCompleteV1(generation) {
+			return nil
+		}
 		return os.ErrNotExist
 	}
 	if loaded.state.ActiveGeneration == generation {
@@ -605,7 +685,22 @@ func (s *VectorPartitionStoreV1) deleteVectorPartitionLifecycleV1(collection, in
 		}
 		return nil
 	}
-	reclaim, err := newVectorPartitionReclaimStateV1(*entry.Manifest)
+	var reclaim vectorPartitionReclaimStateV1
+	if entry.Scope != nil {
+		refs, refsErr := vectorPartitionGenerationRefsV1(entry)
+		if refsErr != nil {
+			return refsErr
+		}
+		if len(refs) == 0 {
+			// A scoped router-only BUILD has no local assets to reclaim.
+			return s.persistVectorPartitionLifecycleOperationV1(collection, index, vectorPartitionLifecycleDeleteCompleteV1, generation, nil)
+		}
+		reclaim, err = canonicalVectorPartitionReclaimStateV1(vectorPartitionReclaimStateV1{
+			Collection: collection, IndexName: index, Generation: generation, OriginalRefs: refs,
+		})
+	} else {
+		reclaim, err = newVectorPartitionReclaimStateV1(*entry.Manifest)
+	}
 	if err != nil {
 		return err
 	}
@@ -772,7 +867,16 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				}
 				continue
 			}
-			if state.Manifest.isPagedRootV2() {
+			if state.Scope != nil {
+				refs, err := vectorPartitionGenerationRefsV1(state)
+				if err != nil {
+					return nil, nil, err
+				}
+				prepared = append(prepared, refs...)
+				if loaded.state.ActiveGeneration == generation {
+					pinned = append(pinned, refs...)
+				}
+			} else if state.Manifest.isPagedRootV2() {
 				namespace := ""
 				if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
 					namespace = cfg.AssetManager.Namespace
@@ -846,6 +950,9 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	}
 	if !present {
 		return VectorPartitionStatusV1{}, os.ErrNotExist
+	}
+	if entry, ok := loaded.state.Generations[generation]; ok && entry.Scope != nil {
+		return VectorPartitionStatusV1{}, fmt.Errorf("%w: generation %d has owner-local scope", ErrVectorPartitionManifestInvalid, generation)
 	}
 	manifest, err := vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
 	if err != nil {

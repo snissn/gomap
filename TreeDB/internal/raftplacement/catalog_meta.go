@@ -119,6 +119,29 @@ func (a *CatalogMetaAuthorityV1) CatalogMetaAppliedIndexV1() (uint64, bool) {
 	return a.applied, true
 }
 
+// AppliedCatalogMetaRecordV1 copies the committed catalog record and its
+// applied index under one lock. It omits lifecycle snapshot serialization;
+// callers still need a Raft read proof before trusting this local view.
+func (a *CatalogMetaAuthorityV1) AppliedCatalogMetaRecordV1(ctx context.Context) ([]byte, uint64, error) {
+	if a == nil || ctx == nil {
+		return nil, 0, ErrCatalogMetaUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	a.mu.RLock()
+	if a.record.Epoch == 0 {
+		a.mu.RUnlock()
+		return nil, 0, ErrCatalogMetaUnavailable
+	}
+	record, applied := bytes.Clone(a.recordBytes), a.applied
+	a.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	return record, applied, nil
+}
+
 func (a *CatalogMetaAuthorityV1) ExportCatalogMetaSnapshotBytesV1() ([]byte, error) {
 	s, err := a.ExportCatalogMetaSnapshotV1()
 	if err != nil {
@@ -776,6 +799,14 @@ func decodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
 	}
 	return record, nil
 }
+
+// DecodeCatalogMetaRecordV1 validates a canonical committed catalog record.
+// It is used by source holders that must derive immutable vector placement
+// from the fenced meta-Raft record rather than a caller-supplied catalog.
+func DecodeCatalogMetaRecordV1(raw []byte) (CatalogMetaRecordV1, error) {
+	return decodeCatalogMetaRecordV1(raw)
+}
+
 func catalogMetaDigestV1(record CatalogMetaRecordV1) (string, error) {
 	// Keep the digest input structurally separate from the wire record. Merely
 	// clearing record.Digest would still serialize `"digest":""`, contrary to

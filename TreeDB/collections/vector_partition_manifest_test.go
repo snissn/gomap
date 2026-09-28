@@ -3239,11 +3239,42 @@ func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
 func TestEncodeVectorPartitionManifestWithContextV1CancelsDuringLargeCanonicalSortScan(t *testing.T) {
 	m := scaledVectorPartitionManifestV1(32 << 10)
 	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 24}
-	if _, err := encodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
+	if _, err := EncodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
 		t.Fatalf("encode cancellation err=%v want context.Canceled", err)
 	}
 	if ctx.calls < ctx.cancelAfter {
 		t.Fatalf("context calls=%d want at least %d", ctx.calls, ctx.cancelAfter)
+	}
+}
+
+func TestEncodeVectorPartitionManifestWithContextV1CancellationPreservesInput(t *testing.T) {
+	m := scaledVectorPartitionManifestV1(32 << 10)
+	for left, right := 0, len(m.Memberships)-1; left < right; left, right = left+1, right-1 {
+		m.Memberships[left], m.Memberships[right] = m.Memberships[right], m.Memberships[left]
+	}
+	before := cloneVectorPartitionManifestForCheckpointV1(m)
+	limits := DefaultVectorPartitionManifestLimits()
+	preflight := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 1 << 30}
+	if err := preflightVectorPartitionManifestWithContextV1(preflight, m, limits); err != nil {
+		t.Fatal(err)
+	}
+	clone := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 1 << 30}
+	if _, err := cloneVectorPartitionManifestForCheckpointWithContextV1(clone, m); err != nil {
+		t.Fatal(err)
+	}
+	// Enter the large membership sort after preflight and the owned copy.
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: preflight.calls + clone.calls + 40}
+	if _, err := EncodeVectorPartitionManifestWithContextV1(ctx, m); !errors.Is(err, context.Canceled) {
+		t.Fatalf("encode cancellation err=%v want context.Canceled (calls=%d)", err, ctx.calls)
+	}
+	if !reflect.DeepEqual(m, before) {
+		t.Fatal("canceled manifest encoding changed caller-owned slices")
+	}
+	if _, err := EncodeVectorPartitionManifestV1(m); err != nil {
+		t.Fatalf("caller manifest unusable after cancellation: %v", err)
+	}
+	if !reflect.DeepEqual(m, before) {
+		t.Fatal("successful manifest encoding changed caller-owned slices")
 	}
 }
 

@@ -1,10 +1,152 @@
 package collections
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 )
+
+type scopedStageAuthorityFuncV1 func(VectorPartitionManifestV1, VectorPartitionLocalScopeV1) error
+
+func (f scopedStageAuthorityFuncV1) ValidateVectorPartitionScopedStageV1(_ context.Context, manifest VectorPartitionManifestV1, scope VectorPartitionLocalScopeV1) error {
+	return f(manifest, scope)
+}
+
+func TestPreparedVectorPartitionScopedManifestVerifiesHostedBytesV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, definition := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{
+		{id: "a", vector: []float32{1, 0, 0}},
+		{id: "b", vector: []float32{0, 1, 0}},
+	})
+	defer database.Close()
+	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := collection.VectorPartitionSourceIdentityV1(definition.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	ready.IndexName = definition.Name
+	ready.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(definition)
+	ready.SourceGeneration, ready.SourceChecksum, ready.SourceSchemaHash, ready.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	ready, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, database, collection, ready, 9711)
+	raw, err := EncodeVectorPartitionManifestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placementDigest, err := VectorPartitionPlacementDigestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := VectorPartitionLocalScopeV1{HostedGroup: "raft-a", Router: true, ManifestDigest: fmt.Sprintf("%x", sha256.Sum256(raw)), PlacementDigest: placementDigest}
+	checks := 0
+	authority := scopedStageAuthorityFuncV1(func(manifest VectorPartitionManifestV1, gotScope VectorPartitionLocalScopeV1) error {
+		checks++
+		if !vectorPartitionManifestCanonicalEqualV1(manifest, ready) || gotScope != scope {
+			return errors.New("wrong scoped stage authority input")
+		}
+		return nil
+	})
+	if err := collection.StageVectorPartitionScopedManifestWithContextV1(t.Context(), ready, scope, resources, authority); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 3 {
+		t.Fatalf("catalog checks=%d want 3", checks)
+	}
+	if _, err := collection.PreparedVectorPartitionManifestWithContextV1(t.Context(), ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("full-local prepared read accepted scoped generation: %v", err)
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(database.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenWithContext(t.Context(), ready.Collection, ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("full-local store open accepted scoped generation: %v", err)
+	}
+	if err := store.persistVerifiedVectorPartitionManifestLifecycleModeV1(ready, false); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("ordinary ready staging accepted scoped generation: %v", err)
+	}
+	if _, err := collection.VectorPartitionStatusV1(ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("full-local status accepted scoped generation: %v", err)
+	}
+	if router, _, err := collection.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(t.Context(), ready.IndexName, ready.Generation); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		if router != nil {
+			router.Close()
+		}
+		t.Fatalf("full-local prepared router accepted scoped generation: %v", err)
+	}
+	if err := store.persistVectorPartitionLifecycleOperationV1(ready.Collection, ready.IndexName, vectorPartitionLifecycleLocalActivateV1, ready.Generation, nil); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("local activation accepted scoped generation: %v", err)
+	}
+	got, gotScope, err := collection.PreparedVectorPartitionScopedManifestWithContextV1(t.Context(), ready.IndexName, ready.Generation)
+	if err != nil || !vectorPartitionManifestCanonicalEqualV1(got, ready) || gotScope != scope {
+		t.Fatalf("scoped prepared read scope=%+v err=%v", gotScope, err)
+	}
+	segment, err := columnAssetSegmentPath(database.ColumnAssetRootDir(), ready.Assets[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(segment); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := collection.PreparedVectorPartitionScopedManifestWithContextV1(t.Context(), ready.IndexName, ready.Generation); err == nil {
+		t.Fatal("scoped prepared read accepted missing hosted bytes")
+	}
+}
+
+func TestStageVectorPartitionScopedManifestRejectsChangedCatalogBeforePublicationV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, definition := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{
+		{id: "a", vector: []float32{1, 0, 0}},
+		{id: "b", vector: []float32{0, 1, 0}},
+	})
+	defer database.Close()
+	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := collection.VectorPartitionSourceIdentityV1(definition.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	ready.IndexName, ready.IndexDefinitionDigest = definition.Name, VectorIndexDefinitionDigestV1(definition)
+	ready.SourceGeneration, ready.SourceChecksum, ready.SourceSchemaHash, ready.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	ready, resources := vectorPartitionManifestWithFreshStableAssetsV1(t, database, collection, ready, 9712)
+	raw, err := EncodeVectorPartitionManifestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placementDigest, err := VectorPartitionPlacementDigestV1(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := VectorPartitionLocalScopeV1{HostedGroup: "raft-a", Router: true, ManifestDigest: fmt.Sprintf("%x", sha256.Sum256(raw)), PlacementDigest: placementDigest}
+	checks := 0
+	stale := errors.New("catalog moved")
+	authority := scopedStageAuthorityFuncV1(func(VectorPartitionManifestV1, VectorPartitionLocalScopeV1) error {
+		checks++
+		if checks == 2 {
+			return stale
+		}
+		return nil
+	})
+	if err := collection.StageVectorPartitionScopedManifestWithContextV1(t.Context(), ready, scope, resources, authority); !errors.Is(err, stale) || checks != 2 {
+		t.Fatalf("changed catalog stage err=%v checks=%d", err, checks)
+	}
+	store, err := OpenExistingVectorPartitionStoreV1(database.Dir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err == nil {
+		if _, err := store.Open(ready.Collection, ready.IndexName, ready.Generation); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("precommit catalog movement persisted scoped generation: %v", err)
+		}
+	}
+}
 
 func TestStageVectorPartitionManifestV1PublishesPreparedWithoutLocalActivation(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)

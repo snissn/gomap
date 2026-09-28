@@ -310,11 +310,25 @@ func vectorPartitionLifecycleOperationAlreadyAppliedV1(state vectorPartitionLife
 	entry, present := state.Generations[generation]
 	switch operation {
 	case vectorPartitionLifecycleBuildV1:
-		if !present || entry.Manifest == nil || entry.Manifest.State != "building" || entry.Deleting {
+		if !present || entry.Manifest == nil || entry.Scope != nil || entry.Manifest.State != "building" || entry.Deleting {
 			return false
 		}
 		manifest, err := DecodeVectorPartitionManifestV1(payload, DefaultVectorPartitionManifestLimits())
 		if err != nil {
+			return false
+		}
+		want, err := EncodeVectorPartitionManifestV1(cloneVectorPartitionManifestForCheckpointV1(manifest))
+		if err != nil {
+			return false
+		}
+		got, err := EncodeVectorPartitionManifestV1(cloneVectorPartitionManifestForCheckpointV1(*entry.Manifest))
+		return err == nil && bytes.Equal(got, want)
+	case vectorPartitionLifecycleScopedBuildV1:
+		if !present || entry.Manifest == nil || entry.Scope == nil || entry.Manifest.State != "building" || entry.Deleting {
+			return false
+		}
+		manifest, scope, err := decodeVectorPartitionScopedBuildPayloadV1(payload)
+		if err != nil || scope != *entry.Scope {
 			return false
 		}
 		want, err := EncodeVectorPartitionManifestV1(cloneVectorPartitionManifestForCheckpointV1(manifest))
@@ -374,7 +388,7 @@ func vectorPartitionLifecycleOperationAlreadyAppliedV1(state vectorPartitionLife
 		return vectorPartitionLifecycleRefsEqualV1(entry.Reclaim.OriginalRefs, reclaim.OriginalRefs) &&
 			vectorPartitionLifecycleRefsSupersetV1(entry.Reclaim.SupersededRefs, reclaim.SupersededRefs)
 	case vectorPartitionLifecycleDeleteCompleteV1:
-		return !present && generation != 0 && generation <= state.GenerationHighWater
+		return state.generationCompleteV1(generation)
 	default:
 		return false
 	}
@@ -586,7 +600,7 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionLifecycleOperationV1(coll
 	}
 
 	if loaded.checkpoint.Epoch == 0 {
-		if operation != vectorPartitionLifecycleBuildV1 || sequence != 1 {
+		if (operation != vectorPartitionLifecycleBuildV1 && operation != vectorPartitionLifecycleScopedBuildV1) || sequence != 1 {
 			return fmt.Errorf("%w: first lifecycle authority must be BUILD", ErrVectorPartitionManifestInvalid)
 		}
 		state, err := reduceVectorPartitionLifecycleChainV1([]vectorPartitionLifecycleRecordV1{record})
@@ -596,7 +610,7 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionLifecycleOperationV1(coll
 		return s.publishVectorPartitionLifecycleCheckpointV1(dir, loaded, vectorPartitionLifecycleCheckpointV1{Epoch: 1, State: state})
 	}
 
-	if operation == vectorPartitionLifecycleBuildV1 {
+	if operation == vectorPartitionLifecycleBuildV1 || operation == vectorPartitionLifecycleScopedBuildV1 {
 		canonical, _, err := canonicalVectorPartitionLifecycleCheckpointV1(vectorPartitionLifecycleCheckpointV1{Epoch: loaded.checkpoint.Epoch, State: loaded.state})
 		if err != nil {
 			return err

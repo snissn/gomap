@@ -1137,6 +1137,12 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	return encodeVectorPartitionManifestWithContextV1(context.Background(), m)
 }
 
+// EncodeVectorPartitionManifestWithContextV1 preserves the stable V1 encoding
+// while allowing callers to cancel large manifest preparation.
+func EncodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPartitionManifestV1) ([]byte, error) {
+	return encodeVectorPartitionManifestWithContextV1(ctx, m)
+}
+
 // encodeVectorPartitionManifestWithContextV1 preserves the stable V1 record
 // while polling cancellation throughout large-list sorting, digest
 // construction, validation, sizing, and binary emission.
@@ -1149,6 +1155,13 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	if err := preflightVectorPartitionManifestWithContextV1(ctx, m, limits); err != nil {
+		return nil, err
+	}
+	// Canonicalization sorts the manifest's slices in place. Keep the caller's
+	// manifest intact even when cancellation interrupts a merge pass.
+	var err error
+	m, err = cloneVectorPartitionManifestForCheckpointWithContextV1(ctx, m)
+	if err != nil {
 		return nil, err
 	}
 	if err := m.canonicalizeWithContextV1(ctx); err != nil {
@@ -2735,6 +2748,9 @@ func (s *VectorPartitionStoreV1) OpenWithContext(ctx context.Context, collection
 	}
 	if !present {
 		return VectorPartitionManifestV1{}, os.ErrNotExist
+	}
+	if entry, ok := loaded.state.Generations[generation]; ok && entry.Scope != nil {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: scoped generation requires scoped prepared read", ErrVectorPartitionManifestInvalid)
 	}
 	return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
 }
