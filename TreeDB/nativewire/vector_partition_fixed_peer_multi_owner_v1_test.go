@@ -25,18 +25,22 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false, false)
 }
 
 func TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false, false)
 }
 
 func TestMultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true, false)
 }
 
-func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower bool) {
+func TestMultiOwnerTCPDomainSearchRejectsMissingHostedOwnerAssetV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false, true)
+}
+
+func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower, missingOwnerAsset bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
@@ -342,11 +346,57 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	if searchErr == nil || len(partial.Neighbors) != 0 {
 		t.Fatalf("missing selected owner returned partial result: response=%+v err=%v", partial, searchErr)
 	}
+	missingAsset := ""
+	if missingOwnerAsset {
+		for _, asset := range seed.manifest.Assets {
+			if placements[asset.PartitionID] != "group-b" {
+				continue
+			}
+			rel := filepath.Join(filepath.FromSlash(asset.Ref.Namespace), "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
+			if hostedFiles["group-b"][rel] {
+				missingAsset = filepath.Join(backenddb.ColumnAssetRootDirPath(filepath.Join(configs[1].DataRoot, "group-b")), rel)
+				break
+			}
+		}
+		if missingAsset == "" {
+			t.Fatal("group-b has no declared hosted graph segment to remove")
+		}
+		if err := os.Remove(missingAsset); err != nil {
+			t.Fatalf("remove declared group-b graph segment: %v", err)
+		}
+		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed group-b graph segment still exists: %v", err)
+		}
+	}
 	processes[1] = fixedPeerStartTestProcessV1(t, configs[1])
 	fixedPeerWaitV1(t, ctx, func() bool {
 		status, err := client.Status(ctx, "owner-b")
 		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
 	})
+	if missingOwnerAsset {
+		if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err == nil {
+			t.Fatal("ACTIVE recovery accepted a missing declared group-b graph segment")
+		}
+		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing group-b graph segment was replaced during recovery: %v", err)
+		}
+		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[1].DataRoot, "group-b"), hostedFiles["group-b"], false)
+		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
+			t.Fatalf("unaffected owner-c lost readiness: %+v err=%v", report, err)
+		}
+		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[2].DataRoot, "group-c"), hostedFiles["group-c"], false)
+		fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(configs[1].DataRoot, "group-b"), seed.manifest.Collection, 0)
+		fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(configs[2].DataRoot, "group-c"), seed.manifest.Collection, 0)
+		request.Deadline = time.Now().Add(12 * time.Second)
+		partial, searchErr := publicClient.VectorSearchStrictV1(ctx, request)
+		if searchErr == nil || len(partial.Neighbors) != 0 {
+			t.Fatalf("missing declared owner asset returned partial result: response=%+v err=%v", partial, searchErr)
+		}
+		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
+			t.Fatalf("unaffected owner-c lost readiness after failed strict search: %+v err=%v", report, err)
+		}
+		return
+	}
 	fixedPeerWaitV1(t, ctx, func() bool {
 		report, err := client.ReadinessV1(ctx, "owner-b")
 		return err != nil && !report.Ready && len(report.Groups) == 1 && report.Groups[0].Ready &&
