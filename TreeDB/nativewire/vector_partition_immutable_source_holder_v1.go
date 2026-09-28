@@ -77,16 +77,22 @@ func newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(
 		// Decode the local applied catalog before source capture, then prove
 		// that this same node has applied the collection owner's read index.
 		// A final catalog proof below rejects any change to this snapshot.
-		snapshot, err := authority.ExportCatalogMetaSnapshotV1()
+		recordBytes, appliedIndex, err := authority.AppliedCatalogMetaRecordV1(ctx)
 		if err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		record, err := raftplacement.DecodeCatalogMetaRecordV1(snapshot.Record)
+		record, err := raftplacement.DecodeCatalogMetaRecordV1(recordBytes)
 		if err != nil || record.Epoch != identity.Index.CatalogEpoch || record.Digest != identity.Index.CatalogDigest {
+			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+		}
+		if err := ctx.Err(); err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		resolved, err := raftplacement.Validate(record.Catalog)
 		if err != nil {
+			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+		}
+		if err := ctx.Err(); err != nil {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		placementMode, ok := resolved.Placement(identity.Index.Collection)
@@ -155,7 +161,7 @@ func newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(
 		// All source, placement, and owner-set work precedes the short leader
 		// lease. Require the same applied catalog and same local data leader.
 		proof, err := provider.LinearizableCatalogMetaReadProofV1(ctx)
-		if err != nil || snapshot.AppliedIndex != proof.CatalogAppliedIndex || proof.NodeID != dataProof.NodeID {
+		if err != nil || appliedIndex != proof.CatalogAppliedIndex || proof.NodeID != dataProof.NodeID {
 			return zero, nil, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		if err := provider.ValidateCatalogMetaReadProofLeaseV1(proof); err != nil {

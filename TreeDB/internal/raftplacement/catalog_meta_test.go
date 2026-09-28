@@ -432,6 +432,34 @@ func TestCatalogMetaOwnerDispatchRevalidatesCompleteRoute(t *testing.T) {
 	}
 }
 
+func TestAppliedCatalogMetaRecordV1CancellationAndCopy(t *testing.T) {
+	a := NewCatalogMetaAuthorityV1()
+	if _, err := a.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {
+		t.Fatal(err)
+	}
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	if record, index, err := a.AppliedCatalogMetaRecordV1(canceled); !errors.Is(err, context.Canceled) || record != nil || index != 0 {
+		t.Fatalf("canceled record read: bytes=%d index=%d err=%v", len(record), index, err)
+	}
+	record, index, err := a.AppliedCatalogMetaRecordV1(t.Context())
+	if err != nil || index != 9 {
+		t.Fatalf("applied record read: index=%d err=%v", index, err)
+	}
+	decoded, err := DecodeCatalogMetaRecordV1(record)
+	if err != nil || decoded.Epoch != 1 {
+		t.Fatalf("decoded record epoch=%d err=%v", decoded.Epoch, err)
+	}
+	record[0] ^= 1
+	again, againIndex, err := a.AppliedCatalogMetaRecordV1(t.Context())
+	if err != nil || againIndex != 9 || bytes.Equal(record, again) {
+		t.Fatalf("record copy changed authority: index=%d err=%v", againIndex, err)
+	}
+	if _, err := DecodeCatalogMetaRecordV1(again); err != nil {
+		t.Fatalf("authority record changed: %v", err)
+	}
+}
+
 func TestCatalogMetaSnapshotInstallNeverMovesBackward(t *testing.T) {
 	source := NewCatalogMetaAuthorityV1()
 	if _, err := source.applyCommittedCatalogMetaV1(mustCatalogMetaCommand(t, 0, 1, validCatalog()), 9); err != nil {

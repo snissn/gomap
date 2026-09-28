@@ -221,8 +221,20 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	}
 	canceled, stop := context.WithCancel(ctx)
 	stop()
-	if _, _, err := prepare(canceled, identity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+	capturedAfterCancel := false
+	canceledPrepare, err := newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(collection, authority, provider,
+		func(context.Context, raftcluster.GroupID, string, uint64) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, collections.VectorPartitionManifestV1, error) {
+			capturedAfterCancel = true
+			return raftcluster.ReadIndexProof{}, raftcluster.AppliedProgress{}, collections.VectorPartitionManifestV1{}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := canceledPrepare(canceled, identity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("unavailable catalog proof accepted: %v", err)
+	}
+	if capturedAfterCancel {
+		t.Fatal("canceled preparation captured source")
 	}
 	if _, err := coordinator.BeginBuildV1(ctx, identity, groups, 0, mutationEpoch); err != nil {
 		t.Fatalf("verified immutable BUILD: %v", err)
