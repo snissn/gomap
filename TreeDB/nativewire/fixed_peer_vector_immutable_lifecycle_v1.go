@@ -67,8 +67,15 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 	if !ok || placement.Mode != raftplacement.PlacementModeCollectionV1 {
 		return zero, ErrFixedPeerVectorUnavailableV1
 	}
+	sourceLeader, err := r.immutableVectorOwnerLeaderV1(ctx, resolved, placement.GroupID)
+	if err != nil {
+		return zero, err
+	}
 	var prepareSource func(context.Context, raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error)
-	if r.vector.dataGroup == placement.GroupID {
+	if sourceLeader == r.config.NodeID {
+		if r.vector.dataGroup != placement.GroupID {
+			return zero, ErrFixedPeerVectorUnavailableV1
+		}
 		if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 			return zero, err
 		}
