@@ -233,6 +233,21 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
 		}
 	}
+	if separateLeaders {
+		// owner-b has a valid cluster certificate but is not the catalog
+		// leader. It may not request a source capture or publish BUILD.
+		wrongCaller, err := NewFixedPeerTCPClientV1(configs[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, captureErr := wrongCaller.call(ctx, "source-holder", "vector-lifecycle", fixedPeerRequestV1{
+			VectorLifecycle: &fixedPeerVectorLifecycleRequestV1{Action: fixedPeerVectorLifecycleCaptureSourceV1},
+		}, false)
+		wrongCaller.Close()
+		if !errors.Is(captureErr, errPeerAuthenticationV1) {
+			t.Fatalf("non-meta peer source capture: got %v, want peer authentication refusal", captureErr)
+		}
+	}
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("source-verified BUILD, hosted Stage, and ACTIVE: %v", err)
 	}

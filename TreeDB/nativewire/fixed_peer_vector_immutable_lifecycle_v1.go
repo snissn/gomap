@@ -20,6 +20,7 @@ const (
 	fixedPeerVectorLifecycleEnsureImmutableV1 fixedPeerVectorLifecycleActionV1 = "ensure-immutable"
 	fixedPeerVectorLifecycleStageImmutableV1  fixedPeerVectorLifecycleActionV1 = "stage-immutable"
 	fixedPeerVectorLifecycleWarmImmutableV1   fixedPeerVectorLifecycleActionV1 = "warm-immutable"
+	fixedPeerVectorLifecycleCaptureSourceV1   fixedPeerVectorLifecycleActionV1 = "capture-immutable-source"
 )
 
 type fixedPeerVectorLifecycleRequestV1 struct {
@@ -63,22 +64,25 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		return zero, err
 	}
 	placement, ok := resolved.Placement(vector.Collection)
-	if !ok || placement.Mode != raftplacement.PlacementModeCollectionV1 || r.vector.dataGroup != placement.GroupID {
-		// The current V1 source callback requires colocated meta and source-data
-		// leaders. A catalog-only leader cannot attest another node's source.
+	if !ok || placement.Mode != raftplacement.PlacementModeCollectionV1 {
 		return zero, ErrFixedPeerVectorUnavailableV1
 	}
-	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
-		return zero, err
+	var prepareSource func(context.Context, raftplacement.VectorPartitionLifecycleIdentityV1) (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error)
+	if r.vector.dataGroup == placement.GroupID {
+		if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+			return zero, err
+		}
+		collection, err := r.vector.manager.OpenCollection(vector.Collection.Collection)
+		if err != nil {
+			return zero, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+		}
+		if err := fixedPeerVectorImmutableDefinitionV1(collection.MetaView(), vector.Identity); err != nil {
+			return zero, err
+		}
+		prepareSource, err = NewVectorPartitionImmutableSourceHolderPreparationV1(r, vector.Collection)
+	} else {
+		prepareSource, err = newVectorPartitionRemoteSourceHolderPreparationV1(r, vector.Collection)
 	}
-	collection, err := r.vector.manager.OpenCollection(vector.Collection.Collection)
-	if err != nil {
-		return zero, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
-	}
-	if err := fixedPeerVectorImmutableDefinitionV1(collection.MetaView(), vector.Identity); err != nil {
-		return zero, err
-	}
-	prepareSource, err := NewVectorPartitionImmutableSourceHolderPreparationV1(r, vector.Collection)
 	if err != nil {
 		return zero, err
 	}

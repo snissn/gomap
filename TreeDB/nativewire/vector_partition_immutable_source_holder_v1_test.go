@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,23 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
+
+func TestFixedPeerVectorSourceAttestationHasIndependentWireBoundV1(t *testing.T) {
+	proof := &fixedPeerVectorSourceAttestationV1{
+		Immutable: raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{
+			ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+		},
+		OwnerSetDigest: strings.Repeat("c", 64), CatalogAppliedIndex: 1,
+		DataAppliedIndex: 1, SourceGroup: "group-d",
+	}
+	if err := boundFixedPeerVectorSourceAttestationV1(proof); err != nil {
+		t.Fatalf("compact source proof rejected: %v", err)
+	}
+	proof.SourceGroup = raftcluster.GroupID(strings.Repeat("x", fixedPeerVectorSourceAttestationMaxBytesV1))
+	if err := boundFixedPeerVectorSourceAttestationV1(proof); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("oversized source proof accepted: %v", err)
+	}
+}
 
 func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCatalogLeaderV1(t *testing.T) {
 	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
