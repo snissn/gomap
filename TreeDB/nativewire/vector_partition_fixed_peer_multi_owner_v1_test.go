@@ -483,6 +483,18 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("initial ACTIVE: %v", err)
 	}
+	// Owner followers do not open shard listeners during warm, but are ready
+	// once their local Raft state and the immutable ACTIVE record are current.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, node := range []raftcluster.NodeID{"owner-b-2", "owner-b-3"} {
+			report, err := client.ReadinessV1(ctx, node)
+			if err != nil || !report.Ready || len(report.Groups) != 1 ||
+				report.Groups[0].LeaderID != "owner-b" {
+				return false
+			}
+		}
+		return true
+	})
 	publicClient, err := DialContext(ctx, "tcp", configs[0].Vector.PublicAddresses["ingress"])
 	if err != nil {
 		t.Fatal(err)
@@ -515,9 +527,16 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 	if err == nil || len(partial.Neighbors) != 0 {
 		t.Fatalf("unstaged elected owner %s returned partial hits: response=%+v err=%v", elected, partial, err)
 	}
+	if report, err := client.ReadinessV1(ctx, elected); err == nil || report.Ready {
+		t.Fatalf("elected owner %s reported ready before listener warm: %+v err=%v", elected, report, err)
+	}
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("ACTIVE recovery on elected owner %s: %v", elected, err)
 	}
+	fixedPeerWaitV1(t, ctx, func() bool {
+		report, err := client.ReadinessV1(ctx, elected)
+		return err == nil && report.Ready && len(report.Groups) == 1 && report.Groups[0].LeaderID == elected
+	})
 	request.Deadline = time.Now().Add(12 * time.Second)
 	after, err := publicClient.VectorSearchStrictV1(ctx, request)
 	if err != nil || len(after.Neighbors) != len(before.Neighbors) || after.Counters.SelectedDomains != 2 ||
