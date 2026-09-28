@@ -2758,24 +2758,31 @@ lineage remain intact and affected page checksums are recomputed.
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
 `TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1` starts real separate
-source-holder, ingress-router, and two owner-leader processes. It checks a
+source-holder, ingress-router, and two owner-leader processes with the catalog
+and source-data leaders co-located. `TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1`
+uses verified peer credentials and puts the catalog leader on ingress while
+the source-data leader remains on the full-source holder. These tests check a
 multi-chunk domain, disjoint hosted-only files and zero source rows at serving
 nodes, real catalog BUILD/owner Stage/READY/PREPARE/ACTIVE, public strict-search
 IDs and scores against the existing local live coordinator on the same prepared
 generation with no intervening writes, one HNSW traversal per selected domain,
 no partial result when a selected owner is unavailable, and owner restart on
-the same generation. `TestFixedPeerImmutableDefinitionAndMutationRefusalV1`
+the same generation. The separate-leader test also rejects a credentialed
+non-catalog caller before BUILD; source-holder focused tests cover current FSM
+source binding, stale identity/catalog proof, cancellation, and bounded
+attestation size. `TestFixedPeerImmutableDefinitionAndMutationRefusalV1`
 checks the durable index epoch/incarnation admission and mutation refusal.
 Current-FSM-DB restore and stale shard-response tests cover bound-handle
 invalidation separately. Run the focused nativewire selectors on the exact
 candidate with:
 
 ```sh
-GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|MultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1|MultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
 ```
 
-This is a co-located source-data/catalog-leader support slice. A distinct
-catalog/data-leader test, stale-ACTIVE and corrupt-owner fault matrix, scoped
+This bounded profile uses loopback vector listeners with peer credentials;
+cross-host authenticated vector sockets are not qualified. A stale-ACTIVE and
+corrupt-owner fault matrix, scoped
 reclaim/reopen breadth, and matched enabled-path latency/CPU/alloc/RSS and
 catalog-RPC measurements remain #4809 acceptance work. Local-vs-TCP ID/score
 parity is not a holdout-recall or throughput result.
