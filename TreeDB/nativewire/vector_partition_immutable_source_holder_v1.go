@@ -98,11 +98,20 @@ func newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(
 			return zero, nil, ErrFixedPeerVectorProofStaleV1
 		}
 		// Collections in a local data-group DB are addressed by leaf name.
-		// Two full catalog references with that leaf cannot be distinguished
-		// by this V1 local source capture, even with a valid read proof.
+		// Only references that can use this data group share its leaf-name
+		// namespace. A same-named collection in another group has separate
+		// storage and cannot be confused with this source.
 		for _, placed := range record.Catalog.Placements {
-			if placed.Collection != collectionRef && placed.Collection.Collection == collectionRef.Collection {
+			if placed.Collection == collectionRef || placed.Collection.Collection != collectionRef.Collection {
+				continue
+			}
+			if placed.GroupID == placementMode.GroupID {
 				return zero, nil, ErrFixedPeerVectorProofStaleV1
+			}
+			for _, partition := range placed.TokenPartitions {
+				if partition.GroupID == placementMode.GroupID {
+					return zero, nil, ErrFixedPeerVectorProofStaleV1
+				}
 			}
 		}
 		dataProof, progress, manifest, err := capture(ctx, placementMode.GroupID, identity.Index.IndexName, identity.Generation)

@@ -107,6 +107,54 @@ func TestVectorPartitionImmutableSourceHolderPreparationUsesPreparedBytesAndCata
 	if _, _, err := ambiguousPrepare(ctx, ambiguousIdentity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("ambiguous same-name source accepted: %v", err)
 	}
+	// The same leaf in a different data group has a separate local DB and
+	// must not prevent this group's source holder from attesting its bytes.
+	otherGroupCatalog := record.Catalog
+	otherGroupCatalog.Placements = append(append([]raftplacement.CollectionPlacementV1(nil), record.Catalog.Placements...),
+		raftplacement.CollectionPlacementV1{Collection: otherCollection, GroupID: "group-b"})
+	otherGroupRecord, err := raftplacement.NewCatalogMetaRecordV1(1, otherGroupCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherGroupCtx, cancelOtherGroup := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancelOtherGroup()
+	otherGroupAuthority, otherGroupProvider := openVectorSourceHolderTestCatalogV1(t, otherGroupCtx, otherGroupRecord)
+	otherGroupPrepare, err := newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(collection, otherGroupAuthority, otherGroupProvider, sourceHolderTestCaptureV1(fixture.collection, dataReads))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherGroupIdentity := identity
+	otherGroupIdentity.Index.CatalogDigest = otherGroupRecord.Digest
+	if got, gotGroups, err := otherGroupPrepare(otherGroupCtx, otherGroupIdentity); err != nil || got.ManifestDigest != verified.ManifestDigest ||
+		got.PlacementDigest != verified.PlacementDigest || len(gotGroups) != len(groups) || gotGroups[0] != groups[0] || gotGroups[1] != groups[1] {
+		t.Fatalf("different-group same-name source proof=%+v groups=%v err=%v", got, gotGroups, err)
+	}
+	// A token-routed reference can still use this group's leaf-name DB.
+	// Reject it even though its CollectionPlacementV1.GroupID is empty.
+	sameLeafTokenCatalog := record.Catalog
+	split := ^uint64(0) / 2
+	sameLeafTokenCatalog.Placements = append(append([]raftplacement.CollectionPlacementV1(nil), record.Catalog.Placements...),
+		raftplacement.CollectionPlacementV1{Collection: otherCollection, Mode: raftplacement.PlacementModeTokenV1,
+			TokenPartitions: []raftplacement.TokenPartitionV1{
+				{ID: "token-0", GroupID: "group-a", Start: 0, End: split},
+				{ID: "token-1", GroupID: "group-b", Start: split + 1, End: ^uint64(0)},
+			}})
+	sameLeafTokenRecord, err := raftplacement.NewCatalogMetaRecordV1(1, sameLeafTokenCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLeafTokenCtx, cancelSameLeafToken := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancelSameLeafToken()
+	sameLeafTokenAuthority, sameLeafTokenProvider := openVectorSourceHolderTestCatalogV1(t, sameLeafTokenCtx, sameLeafTokenRecord)
+	sameLeafTokenPrepare, err := newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(collection, sameLeafTokenAuthority, sameLeafTokenProvider, sourceHolderTestCaptureV1(fixture.collection, dataReads))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLeafTokenIdentity := identity
+	sameLeafTokenIdentity.Index.CatalogDigest = sameLeafTokenRecord.Digest
+	if _, _, err := sameLeafTokenPrepare(sameLeafTokenCtx, sameLeafTokenIdentity); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("token-routed same-group leaf accepted: %v", err)
+	}
 	if _, err := newVectorPartitionImmutableSourceHolderPreparationWithCaptureV1(collection, authority, provider, nil); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
 		t.Fatalf("missing data read authority accepted: %v", err)
 	}
