@@ -504,7 +504,9 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 	}
 	request.Deadline = time.Now().Add(12 * time.Second)
 	after, err := publicClient.VectorSearchStrictV1(ctx, request)
-	if err != nil || len(after.Neighbors) != len(before.Neighbors) || after.Counters.SelectedDomains != 2 || after.Counters.RPCs != 2 {
+	if err != nil || len(after.Neighbors) != len(before.Neighbors) || after.Counters.SelectedDomains != 2 ||
+		after.Counters.Requests != 2 || after.Counters.RPCs != before.Counters.RPCs+1 ||
+		after.Counters.Retries != 1 || after.Counters.Redirects != 1 {
 		t.Fatalf("elected owner search before=%+v after=%+v err=%v", before, after, err)
 	}
 	for i := range before.Neighbors {
