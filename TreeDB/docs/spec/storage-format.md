@@ -382,7 +382,7 @@ never publishes the catalog record or applied index.
 
 The snapshot may also carry a base64-encoded `replica_replacements` payload:
 canonical JSON containing at most 128 group-ordered replacement BEGIN commands,
-each capped at 8 KiB, within the same 8 MiB outer bound. A BEGIN binds the fixed
+each capped at 24 KiB, within the same 8 MiB outer bound. A BEGIN binds the fixed
 configuration digest, current catalog epoch/digest, operation ID, group, old
 member and preauthorized new node/address. Exact retries preserve the original
 applied authority; altered, duplicated, omitted or foreign commands refuse.

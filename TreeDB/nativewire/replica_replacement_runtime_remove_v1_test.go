@@ -23,6 +23,61 @@ func TestReplacementCompletesOfflineOldAndSequentialSourceV1(t *testing.T) {
 	testReplacementPublicInstallV1(t, false, true, true)
 }
 
+func TestReplacementRequiresSelectedOldSourcePreparationV1(t *testing.T) {
+	for _, phase := range []raftplacement.ReplicaReplacementPhaseV1{raftplacement.ReplicaReplacementBegunV1, raftplacement.ReplicaReplacementSeededV1} {
+		t.Run(string(phase), func(t *testing.T) {
+			begin := replacementReceiverTestBeginV1(t)
+			state := raftplacement.ReplicaReplacementStateV1{Begin: begin, Phase: phase}
+			if phase == raftplacement.ReplicaReplacementSeededV1 {
+				state.Seed = &raftcluster.ReplacementSnapshotSeedV1{SourceNodeID: begin.OldNodeID}
+			}
+			var oldPrepared atomic.Bool
+			var sourceWork atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				id := raftcluster.NodeID(request.Header.Get("X-TreeDB-Node"))
+				reply := fixedPeerReplyV1{NodeID: id, ConfigDigest: begin.ConfigDigest}
+				switch request.URL.Path {
+				case "/v1/replacement-begin":
+				case "/v1/replacement-read":
+					reply.ReplacementState = &state
+				case "/v1/status":
+					reply.Status.CatalogRaft = raftcluster.RuntimeStatusV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID}
+				case "/v1/replacement-prepare":
+					if id == begin.OldNodeID && !oldPrepared.Load() {
+						reply.Error, reply.ErrorCode = raftcluster.ErrAdmissionUnavailable.Error(), raftcluster.ErrAdmissionUnavailable.Error()
+					}
+				case "/v1/replacement-receiver":
+				case "/v1/replacement-seed", "/v1/replacement-install":
+					sourceWork.Add(1)
+					reply.Error, reply.ErrorCode = raftcluster.ErrAdmissionUnavailable.Error(), raftcluster.ErrAdmissionUnavailable.Error()
+				default:
+					t.Errorf("unexpected request %s", request.URL.Path)
+				}
+				if err := json.NewEncoder(w).Encode(reply); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			address := strings.TrimPrefix(server.URL, "http://")
+			group := FixedPeerTCPGroupV1{ID: begin.GroupID, Peers: []raftcluster.Peer{{ID: begin.OldNodeID, Address: "127.0.0.1:7001"}, {ID: "survivor", Address: "127.0.0.1:7003"}}}
+			client := &FixedPeerTCPClientV1{config: FixedPeerTCPConfigV1{RequestTimeout: time.Second, Groups: []FixedPeerTCPGroupV1{group}}, digest: begin.ConfigDigest, http: server.Client(), readHTTP: server.Client(), addresses: map[raftcluster.NodeID]string{begin.OldNodeID: address, "survivor": address, begin.NewPeer.ID: address}, calls: make(chan struct{}, 4), readCalls: make(chan struct{}, 4)}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if _, err := client.PrepareReplicaReplacementV1(ctx, begin.OldNodeID, begin); err == nil || !strings.Contains(err.Error(), "prepare") {
+				t.Fatalf("unprepared source error=%v", err)
+			}
+			if got := sourceWork.Load(); got != 0 {
+				t.Fatalf("unprepared source started %d seed/install workers", got)
+			}
+			oldPrepared.Store(true)
+			_, _ = client.PrepareReplicaReplacementV1(ctx, begin.OldNodeID, begin)
+			if got := sourceWork.Load(); got != 1 {
+				t.Fatalf("same operation did not retry source work after preparation: %d", got)
+			}
+		})
+	}
+}
+
 func TestReplacementBeginRefusesUnreconstructablePeerCapabilitiesV1(t *testing.T) {
 	begin := replacementReceiverTestBeginV1(t)
 	defaults := raftcluster.DefaultFeatureSet()

@@ -536,6 +536,11 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 		if err != nil {
 			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement source leader: %w", err)
 		}
+		// An unavailable old voter may be skipped during peer preparation, but
+		// the selected seed leader must have admitted the target before it dials.
+		if _, err := c.call(ctx, leader, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
+			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement seed leader prepare: %w", err)
+		}
 		seedReply, err := c.pollReplacementV1(ctx, leader, "replacement-seed", raw)
 		if err != nil {
 			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement retained seed: %w", err)
@@ -562,6 +567,11 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement receiver status: %w", err)
 		}
 		if !receiver.ReplacementInstalled {
+			// The retained source may be the old voter skipped above. Preparing it
+			// before starting an install worker keeps a failed dial retryable.
+			if _, err := c.call(ctx, state.Seed.SourceNodeID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
+				return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement seed source prepare: %w", err)
+			}
 			_, installErr := c.pollReplacementV1(ctx, state.Seed.SourceNodeID, "replacement-install", raw)
 			receiver, err = c.pollReplacementV1(ctx, command.NewPeer.ID, "replacement-receiver", raw)
 			if err != nil || !receiver.ReplacementInstalled {
