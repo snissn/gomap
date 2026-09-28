@@ -388,7 +388,7 @@ func vectorPartitionLifecycleOperationAlreadyAppliedV1(state vectorPartitionLife
 		return vectorPartitionLifecycleRefsEqualV1(entry.Reclaim.OriginalRefs, reclaim.OriginalRefs) &&
 			vectorPartitionLifecycleRefsSupersetV1(entry.Reclaim.SupersededRefs, reclaim.SupersededRefs)
 	case vectorPartitionLifecycleDeleteCompleteV1:
-		return !present && generation != 0 && generation <= state.GenerationHighWater
+		return state.generationCompleteV1(generation)
 	default:
 		return false
 	}

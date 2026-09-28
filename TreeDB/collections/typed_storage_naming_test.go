@@ -332,7 +332,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Owner preparation and paged build/session consume the retained public schema API.
-	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Scoped preparation also reads the existing asset-manager configuration.
+	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
+	{path: "TreeDB/collections/vector_partition_scoped_stage_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	{path: "TreeDB/collections/vector_partition_paged_source_session_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_ann_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_domain_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

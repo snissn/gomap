@@ -663,16 +663,20 @@ these limits before allocation.
 VCP1 checkpoints use version 1, a SHA-256 checksum, a 30 MiB cap, at most two
 live generations, a first-generation floor, and separate monotonic generation
 and activation high-water fields. BUILD may choose any positive initial
-generation, but every successor is exactly the prior high water plus one.
-Therefore, an absent generation inside the floor/high-water interval is exact
-completed-deletion proof; lower never-created IDs are not accepted as
+generation, and every ordinary BUILD successor is exactly the prior high water
+plus one. An absent ordinary generation inside the floor/high-water interval
+is completed-deletion proof; lower never-created IDs are not accepted as
 idempotent cleanup retries. The activation watermark survives deletion of all
 live generation pointers. VLC1 version-1 records form a sequence- and
 previous-digest-bound immutable tail capped at 4 MiB per checkpoint epoch. The
 physical identity namespace is capped at 64 MiB and 4,096 entries.
 
 Immutable owner-local preparation adds VLC1 operation 8 (scoped BUILD) and
-VCP2 checkpoint version 2 only while a scoped generation is live. Each scoped
+VCP2 checkpoint version 2 while a scoped generation is live. A scoped BUILD
+may skip locally unhosted generations while remaining strictly monotonic;
+VCP3 records canonical skipped-generation ranges even after every local
+generation is deleted. A skipped ID is never mistaken for completed deletion
+or admitted later, and the range count is capped at 4,096. Each scoped
 generation carries one canonical VLS1 hosted-group/router flag and exact
 manifest/placement SHA-256 pair; ordinary VCP1 bytes and operation values are
 unchanged. The global VPM1 is retained rather than filtered. Local assets,
