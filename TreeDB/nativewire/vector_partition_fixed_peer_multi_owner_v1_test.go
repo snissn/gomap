@@ -25,14 +25,18 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false)
 }
 
 func TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false)
 }
 
-func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders bool) {
+func TestMultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true)
+}
+
+func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
@@ -63,6 +67,10 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	metaLeader := raftcluster.NodeID("source-holder")
 	if separateLeaders {
 		metaLeader = "ingress"
+		if sourceFollower {
+			configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
+			metaLeader = "source-follower"
+		}
 		ca := newPeerCAFixtureV1(t)
 		for i := range configs {
 			configs[i].Catalog.BootstrapNode = metaLeader
@@ -174,6 +182,10 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, int(seed.manifest.SourceRowCount))
 			continue
 		}
+		if config.NodeID == "source-follower" {
+			fixedPeerBootstrapHostedVectorMetadataV1(t, config, meta, filepath.Join(config.DataRoot, "group-d"))
+			continue
+		}
 		group := raftcluster.GroupID("group-a")
 		switch config.NodeID {
 		case "owner-b":
@@ -190,7 +202,14 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, 0)
 	}
 	processes := make([]*fixedPeerTestProcessV1, len(configs))
+	if sourceFollower {
+		// The meta bootstrap member must be running before quorum arrives.
+		processes[len(configs)-1] = fixedPeerStartTestProcessV1(t, configs[len(configs)-1])
+	}
 	for i, config := range configs {
+		if processes[i] != nil {
+			continue
+		}
 		processes[i] = fixedPeerStartTestProcessV1(t, config)
 	}
 	client, err := NewFixedPeerTCPClientV1(configs[0])
@@ -199,10 +218,12 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	}
 	defer client.Close()
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, id := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"} {
+		for _, config := range configs {
+			id := config.NodeID
 			status, err := client.Status(ctx, id)
 			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" ||
-				(separateLeaders && (status.CatalogRaft.LeaderID != metaLeader || (id == "source-holder" && status.Groups[0].LeaderID != "source-holder"))) {
+				(separateLeaders && (status.CatalogRaft.LeaderID != metaLeader ||
+					((id == "source-holder" || id == "source-follower") && status.Groups[0].LeaderID != "source-holder"))) {
 				return false
 			}
 		}
@@ -220,7 +241,8 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		t.Fatal(err)
 	}
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, id := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"} {
+		for _, config := range configs {
+			id := config.NodeID
 			status, err := client.Status(ctx, id)
 			if err != nil || status.Catalog.AppliedIndex == 0 || status.Catalog.Digest != record.Digest {
 				return false
@@ -361,6 +383,9 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		if config.NodeID == "source-holder" {
 			fixedPeerAssertSourceDocumentCountV1(t, filepath.Join(config.DataRoot, "group-d"), seed.manifest.Collection, int(seed.manifest.SourceRowCount))
 			continue
+		}
+		if config.NodeID == "source-follower" {
+			continue // a source-group follower may acquire the replicated source
 		}
 		group := raftcluster.GroupID("group-a")
 		switch config.NodeID {
@@ -888,6 +913,65 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 		}
 	}
 	return configs
+}
+
+// Keep the router in group-a while the meta leader is a follower of group-d.
+// The source-holder remains group-d's bootstrap leader. This exposes callback
+// selection that incorrectly treats local group membership as leadership.
+func fixedPeerAddSourceFollowerMetaLeaderV1(t testing.TB, configs []FixedPeerTCPConfigV1) []FixedPeerTCPConfigV1 {
+	t.Helper()
+	address := func() string {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return addr
+	}
+	const follower raftcluster.NodeID = "source-follower"
+	metaAddress, dataAddress, controlAddress, publicAddress := address(), address(), address(), address()
+	meta := configs[0].Catalog
+	meta.BootstrapNode = follower
+	meta.Peers = append(append([]raftcluster.Peer(nil), meta.Peers...), raftcluster.Peer{
+		ID: follower, Address: metaAddress, Capabilities: meta.Features,
+	})
+	groups := append([]FixedPeerTCPGroupV1(nil), configs[0].Groups...)
+	for i := range groups {
+		if groups[i].ID == "group-d" {
+			groups[i].Peers = append(append([]raftcluster.Peer(nil), groups[i].Peers...), raftcluster.Peer{ID: follower, Address: dataAddress})
+		}
+	}
+	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), FixedPeerTCPNodeV1{ID: follower, Address: controlAddress})
+	vector := *configs[0].Vector
+	vector.PublicAddresses = make(map[raftcluster.NodeID]string, len(configs[0].Vector.PublicAddresses)+1)
+	for node, addr := range configs[0].Vector.PublicAddresses {
+		vector.PublicAddresses[node] = addr
+	}
+	vector.PublicAddresses[follower] = publicAddress
+	vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), vector.Catalog.Groups...)
+	for i := range vector.Catalog.Groups {
+		if vector.Catalog.Groups[i].ID == "group-d" {
+			vector.Catalog.Groups[i].Members = append(append([]raftcluster.NodeID(nil), vector.Catalog.Groups[i].Members...), follower)
+		}
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(vector.Identity.Index.CatalogEpoch, vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector.Identity.Index.CatalogDigest = record.Digest
+	for i := range configs {
+		configs[i].Nodes, configs[i].Catalog, configs[i].Groups, configs[i].Vector = nodes, meta, groups, &vector
+	}
+	root := t.TempDir()
+	return append(configs, FixedPeerTCPConfigV1{
+		NodeID: follower, DataRoot: filepath.Join(root, "data"), RaftRoot: filepath.Join(root, "raft"),
+		ListenAddress: controlAddress, Nodes: nodes, Catalog: meta, Groups: groups,
+		RequestTimeout: configs[0].RequestTimeout, RaftTimeout: configs[0].RaftTimeout, Vector: &vector,
+		RaftListen: map[raftcluster.GroupID]string{"meta": metaAddress, "group-d": dataAddress},
+	})
 }
 
 // The fixture transfers only declared immutable search assets. In particular,
