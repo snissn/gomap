@@ -107,23 +107,36 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 		}
 		return result, nil
 	}
+	if record.State != raftplacement.VectorPartitionLifecycleBuildingV1 && record.State != raftplacement.VectorPartitionLifecycleStagedV1 &&
+		record.State != raftplacement.VectorPartitionLifecyclePreparedV1 {
+		return zero, raftplacement.ErrVectorPartitionLifecycleState
+	}
 	// The router is a local prepared asset too, but it is not a data-group
 	// readiness vote. Its stage must complete before activation.
 	if _, err := r.stageImmutableVectorOnNodeV1(ctx, vector.RouterNodeID); err != nil {
 		return zero, fmt.Errorf("immutable router stage: %w", err)
 	}
 	for _, owner := range owners {
-		group, ok := resolved.Group(owner)
-		if !ok || group.LeaderHint == "" {
-			return zero, ErrFixedPeerVectorWrongOwnerV1
+		leader, err := r.immutableVectorOwnerLeaderV1(ctx, resolved, owner)
+		if err != nil {
+			return zero, fmt.Errorf("immutable owner %s leader: %w", owner, err)
 		}
-		ready, err := r.stageImmutableVectorOnNodeV1(ctx, group.LeaderHint)
+		ready, err := r.stageImmutableVectorOnNodeV1(ctx, leader)
 		if err != nil {
 			return zero, fmt.Errorf("immutable owner %s stage: %w", owner, err)
 		}
 		if ready == nil || ready.GroupID != owner || ready.AppliedIndex == 0 ||
 			ready.AssetSetDigest != vectorPartitionM8GroupAssetSetDigestV1(string(owner), vector.Manifest) {
 			return zero, ErrFixedPeerVectorProofStaleV1
+		}
+		committed, err := immutableVectorReadyCommittedV1(record.ReadyGroups, *ready)
+		if err != nil {
+			return zero, err
+		}
+		if committed {
+			// A retry may observe a later owner log index. The original
+			// READY receipt is durable and must not be recommitted.
+			continue
 		}
 		record, err = lifecycle.RecordGroupReadyV1(ctx, vector.Identity, *ready)
 		if err != nil {
@@ -158,16 +171,31 @@ func (r *FixedPeerTCPRuntimeV1) ensureImmutableVectorLifecycleLeaderV1(ctx conte
 	return result, nil
 }
 
+// A fresh owner read proves that already-committed assets are still hosted and
+// applied. It cannot replace the original READY receipt after the log moves.
+func immutableVectorReadyCommittedV1(committed []raftplacement.VectorPartitionLifecycleGroupReadyV1, observed raftplacement.VectorPartitionLifecycleGroupReadyV1) (bool, error) {
+	for _, previous := range committed {
+		if previous.GroupID != observed.GroupID {
+			continue
+		}
+		if previous.AssetSetDigest != observed.AssetSetDigest || observed.AppliedIndex < previous.AppliedIndex {
+			return false, ErrFixedPeerVectorProofStaleV1
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // ACTIVE is durable before listeners can be opened. Warming through the
 // existing authenticated control path makes success mean that every owner can
 // actually accept a shard request; an interrupted warm remains safe to retry.
 func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorNodesV1(ctx context.Context, resolved raftplacement.ResolvedCatalogV1, owners []raftcluster.GroupID) error {
 	for _, owner := range owners {
-		group, ok := resolved.Group(owner)
-		if !ok || group.LeaderHint == "" {
-			return ErrFixedPeerVectorWrongOwnerV1
+		leader, err := r.immutableVectorOwnerLeaderV1(ctx, resolved, owner)
+		if err != nil {
+			return fmt.Errorf("owner %s leader: %w", owner, err)
 		}
-		if err := r.warmImmutableVectorOnNodeV1(ctx, group.LeaderHint); err != nil {
+		if err := r.warmImmutableVectorOnNodeV1(ctx, leader); err != nil {
 			return fmt.Errorf("owner %s: %w", owner, err)
 		}
 	}
@@ -177,6 +205,35 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorNodesV1(ctx context.Context, 
 		return fmt.Errorf("router: %w", err)
 	}
 	return nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) immutableVectorOwnerLeaderV1(ctx context.Context, resolved raftplacement.ResolvedCatalogV1, owner raftcluster.GroupID) (raftcluster.NodeID, error) {
+	group, ok := resolved.Group(owner)
+	if !ok || r == nil || r.client == nil {
+		return "", ErrFixedPeerVectorWrongOwnerV1
+	}
+	for _, fixed := range r.config.Groups {
+		if fixed.ID != owner {
+			continue
+		}
+		if len(fixed.Peers) != len(group.Members) {
+			return "", ErrFixedPeerVectorWrongOwnerV1
+		}
+		for _, peer := range fixed.Peers {
+			if !slices.Contains(group.Members, peer.ID) {
+				return "", ErrFixedPeerVectorWrongOwnerV1
+			}
+		}
+		leader, err := r.client.leader(ctx, fixed)
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(group.Members, leader) {
+			return "", ErrFixedPeerVectorWrongOwnerV1
+		}
+		return leader, nil
+	}
+	return "", ErrFixedPeerVectorWrongOwnerV1
 }
 
 func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorOnNodeV1(ctx context.Context, node raftcluster.NodeID) error {
