@@ -55,9 +55,10 @@ Rules of thumb:
   snapshots. Existing mutable inline identities keep their canonical bytes;
   older binaries are not promised to read snapshots containing the new fields.
 - Owner-local immutable vector-partition preparation adds VLS1 scope bytes in
-  VLC1 operation 8 and VCP2 checkpoints. Unscoped VCP1 encoding is unchanged;
-  older binaries are not promised to open scoped checkpoints. Rebuild prepared
-  local state rather than assuming cross-version compatibility.
+  VLC1 operation 8, VCP2 checkpoints, and VCP3 skipped-generation ranges.
+  Unscoped VCP1 encoding is unchanged; older binaries are not promised to open
+  VCP2 or VCP3. Rebuild prepared local state rather than assuming cross-version
+  compatibility.
 - If/when we stabilize formats, we’ll add:
   - an explicit version marker in metadata, and
   - a migration story (or a “rebuild required” guarantee).

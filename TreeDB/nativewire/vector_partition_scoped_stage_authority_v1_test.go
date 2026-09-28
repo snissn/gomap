@@ -105,6 +105,24 @@ func TestFixedPeerVectorScopedStageAuthorityFencesCatalogAndRouterOnlyV1(t *test
 	if err := newAdapter(advancingFence).ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || calls != 2 {
 		t.Fatalf("moved applied index err=%v calls=%d", err, calls)
 	}
+	calls = 0
+	crossCallFence := func(context.Context) (raftplacement.CatalogMetaStatusV1, error) {
+		calls++
+		moved := status
+		if calls > 2 {
+			moved.AppliedIndex++
+		}
+		return moved, nil
+	}
+	stage := newAdapter(crossCallFence)
+	for i := 0; i < 2; i++ {
+		if err := stage.ValidateVectorPartitionScopedStageV1(t.Context(), manifest, scope); err != nil {
+			t.Fatalf("unrelated catalog apply during Stage check %d: %v", i+1, err)
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("cross-call fences=%d want 4", calls)
+	}
 	for _, group := range []raftcluster.GroupID{"group-a", "group-b"} {
 		if _, err := coordinator.RecordGroupReadyV1(t.Context(), identity, raftplacement.VectorPartitionLifecycleGroupReadyV1{
 			GroupID: group, AppliedIndex: 1, AssetSetDigest: fmt.Sprintf("%064x", 3),

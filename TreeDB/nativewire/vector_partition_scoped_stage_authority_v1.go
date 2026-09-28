@@ -68,7 +68,7 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	if !sameScopedStageCatalogStatusV1(before, after) ||
-		(a.expected != nil && !sameScopedStageCatalogStatusV1(before, *a.expected)) {
+		(a.expected != nil && (before.Epoch != a.expected.Epoch || before.Digest != a.expected.Digest)) {
 		return ErrFixedPeerVectorProofStaleV1
 	}
 	if !ok || record.Identity != a.identity || record.Aborted ||
