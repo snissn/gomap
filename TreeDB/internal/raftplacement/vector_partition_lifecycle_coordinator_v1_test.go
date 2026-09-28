@@ -88,16 +88,19 @@ func TestVectorPartitionImmutableBeginRequiresVerifiedAuthorityV1(t *testing.T) 
 	if _, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) || committer.index != 1 {
 		t.Fatalf("unverified immutable begin err=%v committed index=%d", err, committer.index)
 	}
-	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
 		return VectorPartitionLifecycleImmutableAuthorityV1{
 			ManifestDigest: strings.Repeat("c", 64), PlacementDigest: identity.Immutable.PlacementDigest,
-		}, nil
+		}, groups, nil
 	}
 	if _, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) || committer.index != 1 {
 		t.Fatalf("mismatched source-holder proof err=%v committed index=%d", err, committer.index)
 	}
-	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
-		return identity.Immutable, nil
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
+		return identity.Immutable, []raftcluster.GroupID{"group-b", "group-a"}, nil
+	}
+	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) || committer.index != 1 {
+		t.Fatalf("subset of verified owner groups err=%v committed index=%d", err, committer.index)
 	}
 	record, err := coordinator.BeginBuildV1(t.Context(), identity, groups, 0, 1)
 	if err != nil || record.Identity != identity || committer.index != 2 {
@@ -113,11 +116,11 @@ func TestVectorPartitionImmutableBeginRejectsSourceMutationDuringPreparationV1(t
 		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
 	}
 	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
-	coordinator.PrepareImmutableV1 = func(ctx context.Context, _ VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
+	coordinator.PrepareImmutableV1 = func(ctx context.Context, _ VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
 		if _, err := coordinator.BeginRelevantCollectionMutationV1(ctx, identity.Index.Collection, strings.Repeat("c", 64)); err != nil {
-			return VectorPartitionLifecycleImmutableAuthorityV1{}, err
+			return VectorPartitionLifecycleImmutableAuthorityV1{}, nil, err
 		}
-		return identity.Immutable, nil
+		return identity.Immutable, []raftcluster.GroupID{"group-a"}, nil
 	}
 	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-a"}, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("stale source proof err=%v", err)

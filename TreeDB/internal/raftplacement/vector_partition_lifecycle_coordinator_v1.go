@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 // VectorPartitionLifecycleCommitterV1 is the narrow meta-Raft submission
@@ -29,9 +31,9 @@ type VectorPartitionLifecycleCoordinatorV1 struct {
 	// PrepareANNV2 derives the complete intended placement stream through the trusted planner boundary.
 	PrepareANNV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error)
 	// PrepareImmutableV1 must read a source-holder's staged, source-validated
-	// manifest and derive placement from fresh catalog authority. It must not
-	// echo the proposed identity or accept a configuration digest as proof.
-	PrepareImmutableV1 func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error)
+	// manifest and derive placement and its owner groups from fresh catalog
+	// authority. It must not echo the proposed identity or accept a configuration digest as proof.
+	PrepareImmutableV1 func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error)
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) validateConfiguredV1() error {
@@ -63,11 +65,22 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 		if err := c.validateImmutableBuildFreshnessV1(command); err != nil {
 			return VectorPartitionLifecycleRecordV1{}, err
 		}
-		verified, err := c.PrepareImmutableV1(ctx, command.Identity)
+		verified, verifiedGroups, err := c.PrepareImmutableV1(ctx, command.Identity)
 		if err != nil {
 			return VectorPartitionLifecycleRecordV1{}, err
 		}
 		if !isSHA256HexVectorPartitionV1(verified.ManifestDigest) || !isSHA256HexVectorPartitionV1(verified.PlacementDigest) || verified != command.Identity.Immutable {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		verifiedGroups, err = canonicalVectorPartitionLifecycleGroupsV1(verifiedGroups)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		requiredGroups, err := canonicalVectorPartitionLifecycleGroupsV1(command.RequiredGroups)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if !reflect.DeepEqual(verifiedGroups, requiredGroups) {
 			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
 		}
 		if err := c.validateImmutableBuildFreshnessV1(command); err != nil {

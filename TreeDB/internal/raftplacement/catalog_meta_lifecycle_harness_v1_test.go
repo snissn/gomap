@@ -79,8 +79,8 @@ func TestCatalogMetaLifecycleImmutableIdentitySurvivesReopenV1(t *testing.T) {
 		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
 	}
 	coordinator := harness.LifecycleCoordinator()
-	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, error) {
-		return identity.Immutable, nil
+	coordinator.PrepareImmutableV1 = func(context.Context, VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleImmutableAuthorityV1, []raftcluster.GroupID, error) {
+		return identity.Immutable, []raftcluster.GroupID{"group-a"}, nil
 	}
 	want, err := coordinator.BeginBuildV1(ctx, identity, []raftcluster.GroupID{"group-a"}, 0, 1)
 	if err != nil {
