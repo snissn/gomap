@@ -1478,12 +1478,12 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 		snapshotIdx, snapshotTerm := r.getLastSnapshot()
 
 		var prevLogTerm uint64
-		if a.PrevLogEntry == lastIdx {
-			prevLogTerm = lastTerm
-		} else if a.PrevLogEntry == snapshotIdx {
+		if a.PrevLogEntry == snapshotIdx {
 			// The installed snapshot is the authority for its boundary term.
-			// Its log entry may already have been compacted away.
+			// Its log entry may be compacted away or retained with a stale term.
 			prevLogTerm = snapshotTerm
+		} else if a.PrevLogEntry == lastIdx {
+			prevLogTerm = lastTerm
 		} else {
 			var prevLog Log
 			if err := r.logs.GetLog(a.PrevLogEntry, &prevLog); err != nil {

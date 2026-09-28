@@ -12,7 +12,7 @@ import (
 // configuration log at index 4 while the log store no longer contains 3.
 // Replication must use the installed snapshot's term for PrevLogEntry=3.
 func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
-	newFollower := func(t *testing.T) (*Raft, *InmemStore, *Log) {
+	newFollower := func(t *testing.T, retainedDivergentBoundary bool) (*Raft, *InmemStore, *Log) {
 		t.Helper()
 		_, transport := NewInmemTransport("follower")
 		config := DefaultConfig()
@@ -20,7 +20,11 @@ func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
 		configuration := Configuration{Servers: []Server{{ID: "follower", Address: "follower", Suffrage: Voter}}}
 		configurationLog := &Log{Index: 4, Term: 2, Type: LogConfiguration, Data: EncodeConfiguration(configuration)}
 		logs := NewInmemStore()
-		if err := logs.StoreLog(configurationLog); err != nil {
+		retainedLog := configurationLog
+		if retainedDivergentBoundary {
+			retainedLog = &Log{Index: 3, Term: 1, Type: LogNoop}
+		}
+		if err := logs.StoreLog(retainedLog); err != nil {
 			t.Fatal(err)
 		}
 		follower := &Raft{
@@ -38,12 +42,21 @@ func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
 		follower.setState(Follower)
 		follower.setCurrentTerm(2)
 		follower.setLastSnapshot(3, 2)
-		follower.setLastLog(4, 2)
+		follower.setLastLog(retainedLog.Index, retainedLog.Term)
 		follower.setLastApplied(3)
-		follower.setLatestConfiguration(configuration, 4)
+		configurationIndex := uint64(4)
+		if retainedDivergentBoundary {
+			configurationIndex = 3
+		}
+		follower.setLatestConfiguration(configuration, configurationIndex)
 		follower.setCommittedConfiguration(configuration, 3)
-		var compacted Log
-		if err := logs.GetLog(3, &compacted); err != ErrLogNotFound {
+		var boundary Log
+		err := logs.GetLog(3, &boundary)
+		if retainedDivergentBoundary {
+			if err != nil || boundary.Term == 2 {
+				t.Fatalf("divergent snapshot boundary must remain in log store: log=%+v err=%v", boundary, err)
+			}
+		} else if err != ErrLogNotFound {
 			t.Fatalf("snapshot boundary must be absent from log store: %v", err)
 		}
 		return follower, logs, configurationLog
@@ -73,7 +86,7 @@ func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
 	}
 
 	t.Run("exact installed boundary and subsequent command", func(t *testing.T) {
-		follower, logs, configurationLog := newFollower(t)
+		follower, logs, configurationLog := newFollower(t, false)
 		if response := appendTo(t, follower, request(3, 2, configurationLog)); !response.Success {
 			t.Fatalf("identical configuration after installed snapshot refused: %+v", response)
 		}
@@ -101,6 +114,28 @@ func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
 		}
 	})
 
+	t.Run("retained divergent log at installed boundary", func(t *testing.T) {
+		follower, logs, configurationLog := newFollower(t, true)
+		if response := appendTo(t, follower, request(3, 2, configurationLog)); !response.Success {
+			t.Fatalf("installed snapshot boundary term refused in favor of stale log: %+v", response)
+		}
+		if follower.getLastIndex() != 4 {
+			t.Fatalf("configuration after installed snapshot was not appended: last=%d", follower.getLastIndex())
+		}
+		var stored Log
+		if err := logs.GetLog(4, &stored); err != nil || stored.Term != configurationLog.Term {
+			t.Fatalf("post-snapshot configuration not stored: log=%+v err=%v", stored, err)
+		}
+	})
+
+	t.Run("retained divergent log does not authorize stale term", func(t *testing.T) {
+		follower, _, configurationLog := newFollower(t, true)
+		response := appendTo(t, follower, request(3, 1, configurationLog))
+		if response.Success || !response.NoRetryBackoff || follower.getLastIndex() != 3 {
+			t.Fatalf("stale retained boundary term accepted: response=%+v last=%d", response, follower.getLastIndex())
+		}
+	})
+
 	for _, test := range []struct {
 		name          string
 		previousIndex uint64
@@ -110,7 +145,7 @@ func TestRaft_AppendEntriesAtCompactedSnapshotBoundary(t *testing.T) {
 		{name: "older unknown predecessor", previousIndex: 2, previousTerm: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			follower, logs, configurationLog := newFollower(t)
+			follower, logs, configurationLog := newFollower(t, false)
 			response := appendTo(t, follower, request(test.previousIndex, test.previousTerm, configurationLog))
 			if response.Success || !response.NoRetryBackoff {
 				t.Fatalf("invalid predecessor accepted: %+v", response)
