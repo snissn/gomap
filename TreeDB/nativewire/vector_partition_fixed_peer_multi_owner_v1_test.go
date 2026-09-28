@@ -376,9 +376,10 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 		fixedPeerAssertSourceDocumentCountV1(t, root, seed.manifest.Collection, 0)
 	}
 	processes := make([]*fixedPeerTestProcessV1, len(configs))
-	for i, config := range configs[:4] {
-		processes[i] = fixedPeerStartTestProcessV1(t, config)
-	}
+	// Start the configured meta bootstrap first. Bringing a different voter
+	// up before it can let that voter win as soon as the fourth node supplies
+	// the 4-of-6 quorum, which would not exercise this V1 source-holder path.
+	processes[3] = fixedPeerStartTestProcessV1(t, configs[3])
 	defer func() {
 		for _, process := range processes {
 			if process != nil {
@@ -391,12 +392,32 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	// Ensure the source-holder's Raft bootstrap and listener are actually
+	// ready before other voters begin their election timers.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		_, statusErr := client.Status(ctx, "source-holder")
+		return statusErr == nil
+	})
+	for _, i := range []int{0, 1, 2} {
+		processes[i] = fixedPeerStartTestProcessV1(t, configs[i])
+	}
 	// Four meta voters form a quorum before the two extra owner voters start.
 	// The source holder must lead meta to run the trusted V1 BUILD callback.
-	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := client.Status(ctx, "source-holder")
-		return err == nil && status.CatalogRaft.LeaderID == "source-holder"
-	})
+	var observedMetaLeader raftcluster.NodeID
+	for observedMetaLeader != "source-holder" {
+		status, statusErr := client.Status(ctx, "source-holder")
+		if statusErr == nil {
+			observedMetaLeader = status.CatalogRaft.LeaderID
+		}
+		if observedMetaLeader == "source-holder" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("source-holder meta leadership: observed=%q last status error=%v: %v", observedMetaLeader, statusErr, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	processes[4] = fixedPeerStartTestProcessV1(t, configs[4])
 	// Two group-b voters form a quorum while the slower third voter is down.
 	// This makes the configured old hint the first owner leader.

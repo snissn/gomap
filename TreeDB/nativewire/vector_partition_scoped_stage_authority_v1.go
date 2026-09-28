@@ -127,6 +127,10 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 		if !scope.Router || slices.Contains(owners, a.hosted) {
 			return ErrFixedPeerVectorProofStaleV1
 		}
+	} else if !slices.Contains(owners, a.hosted) {
+		// An opened local data group is not authority to stage assets for a
+		// group outside this immutable generation's committed placement.
+		return ErrFixedPeerVectorProofStaleV1
 	}
 	if a.expected == nil {
 		a.expected = &before
