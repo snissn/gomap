@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,19 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			configs[i].Catalog.BootstrapNode = metaLeader
 			configs[i].ClusterID = "multi-owner-separate-leaders"
 			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			validated, _, err := validateFixedPeerConfigV1(configs[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(validated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Credentialed startup pairs empty roots before admitting data.
+			// Record that identity before trusted genesis populates DataRoot.
+			if err := preparePeerStorageV1(validated, raw); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	// Search the same immutable generation locally before the source holder is
