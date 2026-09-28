@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"os"
@@ -346,7 +347,7 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	if searchErr == nil || len(partial.Neighbors) != 0 {
 		t.Fatalf("missing selected owner returned partial result: response=%+v err=%v", partial, searchErr)
 	}
-	missingAsset := ""
+	missingAsset, missingAssetRel := "", ""
 	if missingOwnerAsset {
 		for _, asset := range seed.manifest.Assets {
 			if placements[asset.PartitionID] != "group-b" {
@@ -355,6 +356,7 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			rel := filepath.Join(filepath.FromSlash(asset.Ref.Namespace), "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
 			if hostedFiles["group-b"][rel] {
 				missingAsset = filepath.Join(backenddb.ColumnAssetRootDirPath(filepath.Join(configs[1].DataRoot, "group-b")), rel)
+				missingAssetRel = rel
 				break
 			}
 		}
@@ -380,7 +382,9 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing group-b graph segment was replaced during recovery: %v", err)
 		}
-		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[1].DataRoot, "group-b"), hostedFiles["group-b"], false)
+		remainingHosted := maps.Clone(hostedFiles["group-b"])
+		delete(remainingHosted, missingAssetRel)
+		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[1].DataRoot, "group-b"), remainingHosted, false)
 		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
 			t.Fatalf("unaffected owner-c lost readiness: %+v err=%v", report, err)
 		}
@@ -1094,6 +1098,7 @@ func fixedPeerCopyHostedVectorAssetsV1(t testing.TB, source, target string, mani
 
 func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map[string]bool, allFiles bool) {
 	t.Helper()
+	missing := maps.Clone(allowed)
 	walkRoot := backenddb.ColumnAssetRootDirPath(target)
 	if allFiles {
 		walkRoot = target
@@ -1112,6 +1117,7 @@ func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map
 		if !allowed[rel] {
 			return fmt.Errorf("non-hosted or source file in process root %q", rel)
 		}
+		delete(missing, rel)
 		info, err := entry.Info()
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("invalid hosted asset file %q: %v", rel, err)
@@ -1120,5 +1126,8 @@ func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for rel := range missing {
+		t.Fatalf("missing hosted asset file in process root %q", rel)
 	}
 }
