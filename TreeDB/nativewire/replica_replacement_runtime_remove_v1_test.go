@@ -346,6 +346,13 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 	}
 	metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
 	ApplyClusterRouteMetadata(&metadata, request, route)
+	// BEGIN2 is committed at the catalog leader, but this data source may
+	// still be applying it. A routed mutation must retain its single attempt:
+	// wait until the source can prove the exact route catalog generation.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := runtimes[find(source)].catalogFence(ctx)
+		return err == nil && status.Epoch == route.CatalogMetaEpoch && status.Digest == route.CatalogMetaDigest
+	})
 	sourceData = runtimes[find(source)].localDataV1(group.ID)
 	version, _, err := sourceData.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
