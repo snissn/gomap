@@ -29,6 +29,11 @@ type ReplacementSnapshotSeedV1 struct {
 	Manifest            SnapshotManifestV1    `json:"manifest"`
 }
 
+// ErrReplacementInstallNotSentV1 marks a leadership refusal before any native
+// InstallSnapshot RPC was sent. An exact-operation retry may reuse the retained
+// seed after leadership recovers; failures after the send remain ambiguous.
+var ErrReplacementInstallNotSentV1 = errors.New("raftcluster: replacement install not sent")
+
 func (s ReplacementSnapshotSeedV1) Validate() error {
 	if err := s.Manifest.Validate(s.Manifest.Scope); err != nil {
 		return err
@@ -360,6 +365,9 @@ func (p *HashicorpRaftProvider) InstallReplacementSeedV1(ctx context.Context, se
 	}
 	configuration, err := p.CommittedConfigurationV1(ctx)
 	if err != nil {
+		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrReadBarrierNotSatisfied) {
+			return errors.Join(ErrReplacementInstallNotSentV1, err)
+		}
 		return err
 	}
 	if configuration.ConfigurationIndex != seed.ConfigurationIndex {
@@ -381,7 +389,11 @@ func (p *HashicorpRaftProvider) InstallReplacementSeedV1(ctx context.Context, se
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer func() {
+		if reader != nil {
+			_ = reader.Close()
+		}
+	}()
 	metas, err := store.List()
 	if err != nil {
 		return err
@@ -400,7 +412,12 @@ func (p *HashicorpRaftProvider) InstallReplacementSeedV1(ctx context.Context, se
 		return err
 	}
 	if err := p.requireHashicorpReadIndexLeaderTerm(configuration.Term); err != nil {
-		return err
+		closeErr := reader.Close()
+		reader = nil
+		if closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+		return errors.Join(ErrReplacementInstallNotSentV1, err)
 	}
 	id := hraft.ServerID(p.cluster.NodeID)
 	address := transport.EncodePeer(id, transport.LocalAddr())

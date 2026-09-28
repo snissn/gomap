@@ -758,6 +758,9 @@ func TestFixedPeerTCPRemoteErrorClassesV1(t *testing.T) {
 	if code := fixedPeerErrorCodeV1(errors.Join(context.Canceled, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
 		t.Fatalf("ambiguous outcome lost: %s", code)
 	}
+	if code := fixedPeerErrorCodeV1(errors.Join(raftcluster.ErrReplacementInstallNotSentV1, raftcluster.ErrNotLeader)); code != raftcluster.ErrReplacementInstallNotSentV1.Error() {
+		t.Fatalf("proven pre-send refusal lost: %s", code)
+	}
 	if code := fixedPeerErrorCodeV1(errors.Join(ErrFixedPeerVectorUnavailableV1, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
 		t.Fatalf("post-commit vector failure lost: %s", code)
 	}

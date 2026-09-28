@@ -572,7 +572,28 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 			if _, err := c.call(ctx, state.Seed.SourceNodeID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
 				return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement seed source prepare: %w", err)
 			}
-			_, installErr := c.pollReplacementV1(ctx, state.Seed.SourceNodeID, "replacement-install", raw)
+			// The retained source can lose leadership between Seeded publication
+			// and its native install preflight. Retry only a proven pre-send
+			// refusal, with this same committed seed and a bounded control wait.
+			// Any sent or unknown result still requires receiver reconciliation.
+			// One control timeout can expire during a fresh Raft election. Give
+			// the exact pre-send refusal one more bounded window, never an
+			// unbounded retry or a retry of a possibly sent snapshot.
+			installDeadline := time.Now().Add(2 * c.config.RequestTimeout)
+			var installErr error
+			for {
+				_, installErr = c.pollReplacementV1(ctx, state.Seed.SourceNodeID, "replacement-install", raw)
+				if !errors.Is(installErr, raftcluster.ErrReplacementInstallNotSentV1) || !time.Now().Before(installDeadline) {
+					break
+				}
+				timer := time.NewTimer(10 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return raftcluster.CommittedRaftConfigurationV1{}, ctx.Err()
+				case <-timer.C:
+				}
+			}
 			receiver, err = c.pollReplacementV1(ctx, command.NewPeer.ID, "replacement-receiver", raw)
 			if err != nil || !receiver.ReplacementInstalled {
 				return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement native install: %w", errors.Join(installErr, err, raftcluster.ErrAdmissionUnavailable))

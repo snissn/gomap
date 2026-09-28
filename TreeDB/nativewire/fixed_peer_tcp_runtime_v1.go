@@ -1280,6 +1280,7 @@ func (c *FixedPeerTCPClientV1) Close() {
 var fixedPeerErrorsV1 = []error{
 	errPeerAuthenticationV1,
 	raftcluster.ErrCommitAmbiguous,
+	raftcluster.ErrReplacementInstallNotSentV1,
 	ErrFixedPeerVectorProofMissingV1, ErrFixedPeerVectorProofStaleV1, ErrFixedPeerVectorWrongOwnerV1, ErrFixedPeerVectorUnavailableV1, ErrFixedPeerVectorDocumentV1,
 	raftcluster.ErrNotLeader, raftcluster.ErrAdmissionUnavailable, raftcluster.ErrHashicorpRaftUnavailable,
 	raftcluster.ErrReadBarrierNotSatisfied, raftcluster.ErrCommitNotProven, raftcluster.ErrLocalApplyNotRecoverable, raftcluster.ErrUnsupportedSubmitAck,

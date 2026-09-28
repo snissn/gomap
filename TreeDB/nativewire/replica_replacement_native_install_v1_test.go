@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +25,20 @@ func (t replacementLostSeedReplyV1) InstallSnapshot(id hraft.ServerID, target hr
 	if err := t.Transport.InstallSnapshot(id, target, request, response, reader); err != nil {
 		return err
 	}
+	if !response.Success {
+		return nil
+	}
 	return errors.New("injected loss of completed seed reply")
+}
+
+type replacementCountSeedSendV1 struct {
+	hraft.Transport
+	sends *atomic.Int32
+}
+
+func (t replacementCountSeedSendV1) InstallSnapshot(id hraft.ServerID, target hraft.ServerAddress, request *hraft.InstallSnapshotRequest, response *hraft.InstallSnapshotResponse, reader io.Reader) error {
+	t.sends.Add(1)
+	return t.Transport.InstallSnapshot(id, target, request, response, reader)
 }
 
 func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
@@ -55,10 +69,10 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 		}
 		return db, fsm
 	}
-	openProvider := func(cfg raftcluster.Config, fsm *raftfsm.FSM, transport hraft.Transport, bootstrap bool) *raftcluster.HashicorpRaftProvider {
+	openProviderWithElection := func(cfg raftcluster.Config, fsm *raftfsm.FSM, transport hraft.Transport, bootstrap bool, election time.Duration) *raftcluster.HashicorpRaftProvider {
 		t.Helper()
 		rc := hraft.DefaultConfig()
-		rc.HeartbeatTimeout, rc.ElectionTimeout, rc.LeaderLeaseTimeout = 50*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond
+		rc.HeartbeatTimeout, rc.ElectionTimeout, rc.LeaderLeaseTimeout = election, election, election
 		rc.LogOutput = io.Discard
 		provider, err := raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: fsm, Transport: transport, RaftConfig: rc, Bootstrap: bootstrap})
 		if err != nil {
@@ -66,12 +80,15 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 		}
 		return provider
 	}
+	openProvider := func(cfg raftcluster.Config, fsm *raftfsm.FSM, transport hraft.Transport, bootstrap bool) *raftcluster.HashicorpRaftProvider {
+		return openProviderWithElection(cfg, fsm, transport, bootstrap, 50*time.Millisecond)
+	}
 	sourceConfig := config(old.ID, []raftcluster.Peer{old})
 	sourceDB, sourceFSM := openFSM(sourceConfig)
 	defer sourceDB.Close()
 	defer sourceFSM.Close()
 	source := openProvider(sourceConfig, sourceFSM, sourceTransport, true)
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	for {
 		status, err := source.RuntimeStatusV1(ctx)
 		if err != nil {
@@ -179,8 +196,43 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 	if err := gate.allowEnrollment(); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
 		t.Fatalf("uninstalled enrollment=%v", err)
 	}
-	if err := source.InstallReplacementSeedV1(ctx, seed, seedStore, replacementLostSeedReplyV1{sourceTransport}, old.ID, target); !errors.Is(err, raftcluster.ErrCommitAmbiguous) {
+	// Restart the retained source before its new election. This forces the
+	// leader-only preflight refusal without relying on a short election race;
+	// the exact retained seed must remain usable when leadership returns.
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source = openProviderWithElection(sourceConfig, sourceFSM, sourceTransport, false, time.Second)
+	// Shutdown closes the in-memory transport and clears its peer routes.
+	// Reconnect this test link before retrying against the same receiver.
+	sourceTransport.Connect(hraft.ServerAddress(target.Address), receiverTransport)
+	var sends atomic.Int32
+	counted := replacementCountSeedSendV1{Transport: sourceTransport, sends: &sends}
+	if err := source.InstallReplacementSeedV1(ctx, seed, seedStore, counted, old.ID, target); !errors.Is(err, raftcluster.ErrReplacementInstallNotSentV1) || !errors.Is(err, raftcluster.ErrNotLeader) {
+		t.Fatalf("pre-election install refusal=%v", err)
+	}
+	if sends.Load() != 0 || owner.record.Phase != replacementReceiverPreparedV1 {
+		t.Fatalf("pre-election refusal sent snapshot or changed receiver: sends=%d phase=%s", sends.Load(), owner.record.Phase)
+	}
+	for {
+		status, err := source.RuntimeStatusV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.State == "Leader" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := source.InstallReplacementSeedV1(ctx, seed, seedStore, replacementLostSeedReplyV1{Transport: counted}, old.ID, target); !errors.Is(err, raftcluster.ErrCommitAmbiguous) {
 		t.Fatalf("lost native response=%v", err)
+	}
+	if sends.Load() != 1 {
+		t.Fatalf("exact seed install sends=%d", sends.Load())
 	}
 	if owner.record.Phase != replacementReceiverInstalledV1 || gate.ordinaryAllowed() {
 		t.Fatal("native completion did not leave durable quarantined receipt")

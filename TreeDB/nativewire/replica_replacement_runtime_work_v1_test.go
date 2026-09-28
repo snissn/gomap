@@ -145,6 +145,62 @@ func TestReplacementNativeFailureRetainsSeedBudgetV1(t *testing.T) {
 	}
 }
 
+func TestReplacementInstallWorkerRetriesOnlyProvenPreSendRefusalV1(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		firstErr  error
+		retryable bool
+	}{
+		{"pre-send leadership loss", errors.Join(raftcluster.ErrReplacementInstallNotSentV1, raftcluster.ErrNotLeader), true},
+		{"unknown post-send result", raftcluster.ErrCommitAmbiguous, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := fixedPeerTestConfigsV1(t)[0]
+			cfg.ClusterID = "replacement-install-retry"
+			cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
+			runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			d := runtime.localDataV1(cfg.Groups[0].ID)
+			var attempts atomic.Int32
+			work := func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+				if attempts.Add(1) == 1 {
+					return nil, tc.firstErr
+				}
+				return nil, nil
+			}
+			var reply fixedPeerReplyV1
+			if err := d.replacementWorkV1("exact-operation", "install", work, &reply); err != nil || !reply.ReplacementPending {
+				t.Fatalf("first work: %+v %v", reply, err)
+			}
+			<-d.replacementWork.work.done
+			reply = fixedPeerReplyV1{}
+			err = d.replacementWorkV1("exact-operation", "install", work, &reply)
+			if tc.retryable {
+				if !errors.Is(err, raftcluster.ErrReplacementInstallNotSentV1) || reply.ReplacementPending || attempts.Load() != 1 {
+					t.Fatalf("pre-send refusal was not surfaced: %+v attempts=%d err=%v", reply, attempts.Load(), err)
+				}
+				reply = fixedPeerReplyV1{}
+				if err := d.replacementWorkV1("exact-operation", "install", work, &reply); err != nil || !reply.ReplacementPending {
+					t.Fatalf("pre-send exact retry: %+v %v", reply, err)
+				}
+				<-d.replacementWork.work.done
+				reply = fixedPeerReplyV1{}
+				if err := d.replacementWorkV1("exact-operation", "install", work, &reply); err != nil || reply.ReplacementPending {
+					t.Fatalf("completed exact retry: %+v %v", reply, err)
+				}
+				if attempts.Load() != 2 {
+					t.Fatalf("install attempts=%d", attempts.Load())
+				}
+			} else if !errors.Is(err, tc.firstErr) || attempts.Load() != 1 {
+				t.Fatalf("ambiguous install repeated: attempts=%d err=%v", attempts.Load(), err)
+			}
+		})
+	}
+}
+
 // The direct entry exercises worker ownership independently of catalog fixtures.
 // Production callers enter through the atomic canonical-BEGIN boundary above.
 func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {

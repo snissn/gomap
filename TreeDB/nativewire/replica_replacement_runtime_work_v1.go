@@ -105,10 +105,17 @@ func (d *fixedPeerDataV1) replacementWorkLockedV1(operation, phase string, prefl
 		select {
 		case <-current.done:
 			if current.phase == phase {
-				if current.cleanupErr == nil && phase == "seed" && errors.Is(current.err, raftcluster.ErrReadBarrierNotSatisfied) && !d.fsm.SnapshotWorkReleasePendingV1() {
-					// A known pre-Create refusal owns no native sink. The next
-					// exact-operation call may prove a newer command boundary.
+				seedRetry := phase == "seed" && errors.Is(current.err, raftcluster.ErrReadBarrierNotSatisfied) && !d.fsm.SnapshotWorkReleasePendingV1()
+				installRetry := phase == "install" && errors.Is(current.err, raftcluster.ErrReplacementInstallNotSentV1)
+				if current.cleanupErr == nil && (seedRetry || installRetry) {
+					// The seed refusal preceded native Create; the install refusal
+					// preceded native send. Neither can duplicate an in-flight operation.
 					d.replacementWork.work = nil
+					if installRetry {
+						// Surface this completed refusal to the client before its
+						// bounded retry starts another exact-operation worker.
+						return current.err
+					}
 				} else {
 					reply.ReplacementSeed = current.seed
 					return current.err

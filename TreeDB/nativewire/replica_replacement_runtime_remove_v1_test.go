@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,99 @@ import (
 
 func TestReplacementCompletesOfflineOldAndSequentialSourceV1(t *testing.T) {
 	testReplacementPublicInstallV1(t, false, true, true)
+}
+
+func TestReplacementPrepareRetriesOnlyExactPreSendInstallV1(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		recovers       bool
+		requestTimeout time.Duration
+	}{
+		{"leadership recovers", true, time.Second},
+		{"sustained follower", false, 100 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			begin := replacementReceiverBeginForTestV1()
+			seed, _, _ := replacementGateSeedForTestV1()
+			state := raftplacement.ReplicaReplacementStateV1{Begin: begin, Phase: raftplacement.ReplicaReplacementSeededV1, Seed: &seed}
+			cfg := fixedPeerTestConfigsV1(t)[0]
+			cfg.ClusterID = "replacement-presend-public"
+			cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
+			runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			worker := runtime.localDataV1(cfg.Groups[0].ID)
+			var installs, nativeSends, enrollments atomic.Int32
+			installed := false
+			var stateMu sync.Mutex
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				stateMu.Lock()
+				defer stateMu.Unlock()
+				id := raftcluster.NodeID(request.Header.Get("X-TreeDB-Node"))
+				reply := fixedPeerReplyV1{NodeID: id, ConfigDigest: begin.ConfigDigest}
+				switch request.URL.Path {
+				case "/v1/replacement-begin":
+				case "/v1/replacement-read":
+					reply.ReplacementState = &state
+				case "/v1/status":
+					reply.Status.CatalogRaft = raftcluster.RuntimeStatusV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID}
+				case "/v1/replacement-prepare", "/v1/replacement-allow":
+				case "/v1/replacement-receiver":
+					reply.ReplacementInstalled = installed
+				case "/v1/replacement-install":
+					workErr := worker.replacementWorkV1(begin.OperationID, "install", func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+						if installs.Add(1) == 1 || !tc.recovers {
+							return nil, errors.Join(raftcluster.ErrReplacementInstallNotSentV1, raftcluster.ErrNotLeader)
+						}
+						nativeSends.Add(1)
+						stateMu.Lock()
+						installed = true
+						stateMu.Unlock()
+						return nil, nil
+					}, &reply)
+					if workErr != nil {
+						reply.Error, reply.ErrorCode = workErr.Error(), fixedPeerErrorCodeV1(workErr)
+					}
+				case "/v1/replacement-advance":
+					var requestBody fixedPeerRequestV1
+					if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+						t.Error(err)
+					} else if next, err := raftplacement.DecodeReplicaReplacementStateV1(requestBody.Entry); err != nil {
+						t.Error(err)
+					} else {
+						state = next
+					}
+				case "/v1/replacement-enroll":
+					enrollments.Add(1)
+					reply.Membership = &raftcluster.CommittedRaftConfigurationV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID, ConfigurationIndex: 2, CommitIndex: 2, Members: []raftcluster.RaftMemberV1{{ID: begin.OldNodeID, Address: "127.0.0.1:7001", Voter: true}, {ID: "survivor", Address: "127.0.0.1:7003", Voter: true}, {ID: begin.NewPeer.ID, Address: begin.NewPeer.Address}}}
+				default:
+					t.Errorf("unexpected request %s", request.URL.Path)
+				}
+				if err := json.NewEncoder(w).Encode(reply); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			address := strings.TrimPrefix(server.URL, "http://")
+			group := FixedPeerTCPGroupV1{ID: begin.GroupID, Peers: []raftcluster.Peer{{ID: begin.OldNodeID, Address: "127.0.0.1:7001"}, {ID: "survivor", Address: "127.0.0.1:7003"}}}
+			client := &FixedPeerTCPClientV1{config: FixedPeerTCPConfigV1{RequestTimeout: tc.requestTimeout, Groups: []FixedPeerTCPGroupV1{group}}, digest: begin.ConfigDigest, http: server.Client(), readHTTP: server.Client(), addresses: map[raftcluster.NodeID]string{begin.OldNodeID: address, "survivor": address, begin.NewPeer.ID: address}, calls: make(chan struct{}, 4), readCalls: make(chan struct{}, 4)}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			start := time.Now()
+			membership, err := client.PrepareReplicaReplacementV1(ctx, begin.OldNodeID, begin)
+			if !tc.recovers {
+				if !errors.Is(err, raftcluster.ErrReplacementInstallNotSentV1) || installs.Load() < 2 || nativeSends.Load() != 0 || enrollments.Load() != 0 || time.Since(start) > time.Second {
+					t.Fatalf("sustained pre-send refusal: installs=%d sends=%d enrollments=%d elapsed=%s err=%v", installs.Load(), nativeSends.Load(), enrollments.Load(), time.Since(start), err)
+				}
+				return
+			}
+			if err != nil || installs.Load() != 2 || nativeSends.Load() != 1 || enrollments.Load() != 1 || len(membership.Members) != 3 || membership.Members[2].Voter {
+				t.Fatalf("exact pre-send retry: membership=%+v installs=%d sends=%d enrollments=%d err=%v", membership, installs.Load(), nativeSends.Load(), enrollments.Load(), err)
+			}
+		})
+	}
 }
 
 func TestReplacementRequiresSelectedOldSourcePreparationV1(t *testing.T) {
