@@ -24,6 +24,14 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false)
+}
+
+func TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true)
+}
+
+func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
@@ -51,6 +59,16 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
+	metaLeader := raftcluster.NodeID("source-holder")
+	if separateLeaders {
+		metaLeader = "ingress"
+		ca := newPeerCAFixtureV1(t)
+		for i := range configs {
+			configs[i].Catalog.BootstrapNode = metaLeader
+			configs[i].ClusterID = "multi-owner-separate-leaders"
+			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		}
+	}
 	// Search the same immutable generation locally before the source holder is
 	// closed. This is a result reference, not a substitute for the hosted-only
 	// process and wire assertions below.
@@ -169,7 +187,8 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, id := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"} {
 			status, err := client.Status(ctx, id)
-			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" {
+			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" ||
+				(separateLeaders && (status.CatalogRaft.LeaderID != metaLeader || (id == "source-holder" && status.Groups[0].LeaderID != "source-holder"))) {
 				return false
 			}
 		}
@@ -183,7 +202,7 @@ func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishCatalog(ctx, "source-holder", command); err != nil {
+	if _, err := client.PublishCatalog(ctx, metaLeader, command); err != nil {
 		t.Fatal(err)
 	}
 	fixedPeerWaitV1(t, ctx, func() bool {
