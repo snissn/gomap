@@ -320,8 +320,8 @@ func validateVectorPartitionSnapshotAssetsWithContextV1(ctx context.Context, roo
 					continue // A router-only ingress has no asset until READY.
 				}
 				namespace := assets[0].Ref.Namespace
-				if err := verifyVectorPartitionAssetsWithContextV1(context.Background(), filepath.Join(root, "column_assets"), namespace, assets); err != nil {
-					return fmt.Errorf("%w: snapshot scoped generation %d assets: %v", ErrVectorPartitionManifestInvalid, generation, err)
+				if err := verifyVectorPartitionAssetsWithContextV1(ctx, filepath.Join(root, "column_assets"), namespace, assets); err != nil {
+					return fmt.Errorf("%w: snapshot scoped generation %d assets: %w", ErrVectorPartitionManifestInvalid, generation, err)
 				}
 				continue
 			}
