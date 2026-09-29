@@ -1164,6 +1164,51 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 	if got, ok := follower.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
 		t.Fatalf("restored third=%+v available=%v want %+v", got, ok, third)
 	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(after, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	for i := range lifecycle.Records {
+		record := &lifecycle.Records[i]
+		if record.Identity.Generation != thirdIdentity.Generation {
+			continue
+		}
+		record.ReadyGroups[0].AssetSetDigest = strings.Repeat("f", 64)
+		record.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed = true
+	}
+	if !changed {
+		t.Fatal("cleaned-intermediate snapshot lacks active successor")
+	}
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged READY snapshot was not self-consistent: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("forged cleaned-intermediate READY changed during catch-up: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused forged READY snapshot mutated authority: %v", err)
+	}
 }
 
 func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *testing.T) {
