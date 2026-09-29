@@ -2837,6 +2837,17 @@ older unconfirmed predecessor substituted into that final confirmed snapshot,
 with spare applied entries and a fresh canonical-decoding precondition.
 Known-predecessor supersession chains retain bounded provenance limits; these
 checks do not authenticate all erased activation ordering.
+`TestCatalogSnapshotMixedBarrierInvalidationOrderingV1` uses real producers
+before each canonical short-budget refusal. It covers late invalidations above
+the final barrier or between its first retained BEGIN and final epoch, a jump
+below the retained window that still leaves an evicted entry to charge,
+multiple earlier/later known invalidations, new pending BEGINs, and locally
+pending confirmation displaced by later receipts. Genuine invalidation before
+many barriers and a pending-only barrier retain positive controls. Only
+invalidation epochs strictly below the earliest new retained BEGIN are
+compatible jump floors; the maximum qualifying candidate is used rather than
+the final maximum. This bounds a possible reducer history and does not
+authenticate actual erased ordering or command counts.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

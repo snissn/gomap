@@ -1298,18 +1298,42 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 	if len(barriers) == 0 {
 		return nil
 	}
-	// Only a previously known record whose validated successor invalidates it
-	// can explain a lifecycle epoch jump. Incoming-only records are not evidence.
-	var jumpEpochs map[CollectionRefV1]uint64
+	// A known invalidation can explain a possible preceding jump only below
+	// every newly retained BEGIN. A final higher epoch may have occurred later;
+	// it must not erase the distance cost of earlier, evicted barrier entries.
+	// This is retained-epoch compatibility, not authentication of erased order.
+	type jumpEvidence struct{ firstBegin, epoch uint64 }
+	var jumpEpochs map[CollectionRefV1]jumpEvidence
 	if len(records) != 0 {
 		for identity, prior := range a.lifecycle {
 			incoming, known := records[identity]
 			if known && incoming.Revision > prior.Revision && incoming.InvalidationEpoch > prior.InvalidationEpoch {
-				if jumpEpochs == nil {
-					jumpEpochs = make(map[CollectionRefV1]uint64)
-				}
 				collection := identity.Index.Collection
-				jumpEpochs[collection] = max(jumpEpochs[collection], incoming.InvalidationEpoch)
+				evidence, seen := jumpEpochs[collection]
+				if !seen {
+					barrier, exists := barriers[collection]
+					if !exists {
+						continue
+					}
+					old, known := a.collectionMutationBarriers[collection]
+					for _, receipt := range barrier.Completed {
+						if !known || receipt.Epoch > old.Epoch {
+							evidence.firstBegin = receipt.Epoch
+							break
+						}
+					}
+					if barrier.Pending && (!known || barrier.Epoch > old.Epoch) &&
+						(evidence.firstBegin == 0 || barrier.Epoch < evidence.firstBegin) {
+						evidence.firstBegin = barrier.Epoch
+					}
+					if jumpEpochs == nil {
+						jumpEpochs = make(map[CollectionRefV1]jumpEvidence)
+					}
+				}
+				if incoming.InvalidationEpoch < evidence.firstBegin {
+					evidence.epoch = max(evidence.epoch, incoming.InvalidationEpoch)
+				}
+				jumpEpochs[collection] = evidence
 			}
 		}
 	}
@@ -1345,7 +1369,7 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 			newBegins++
 		}
 		begins := newBegins
-		distanceEpoch := max(localEpoch, jumpEpochs[collection])
+		distanceEpoch := max(localEpoch, jumpEpochs[collection].epoch)
 		if incoming.Epoch > distanceEpoch {
 			begins = max(begins, incoming.Epoch-distanceEpoch)
 		}

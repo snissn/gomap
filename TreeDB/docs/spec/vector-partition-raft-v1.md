@@ -418,8 +418,15 @@ supply that cutover proof; locally PREPARED cutover/cleanup retains the proof.
 New collection barriers must fit the remaining applied-index advance even
 when lifecycle records change: BEGIN, CONFIRM, and replacement phases consume
 distinct entries. A validated invalidation advance of a locally known record
-can explain a mutation-epoch jump; incoming-only lifecycle records or fences
-cannot supply that evidence. Existing local effective epochs still reject
+can explain a possible mutation-epoch jump only when it is strictly below the
+earliest newly retained BEGIN (including a new pending BEGIN). Admission takes
+the maximum qualifying invalidation, preserving an earlier compatible jump
+when a later invalidation is ineligible. A confirmation of a locally pending
+operation is not a new BEGIN. Epoch distance still charges evicted commands
+after the compatible floor. This is retained-epoch compatibility with a
+reducer-reachable minimum history, not proof of actual erased ordering or
+command counts; incoming-only lifecycle records or fences cannot supply that
+evidence. Existing local effective epochs still reject
 stale retained receipts. Valid post-completion mutations and ordinary compacted
 cleanup remain accepted, subject to these retained-history limits.
 
