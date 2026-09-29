@@ -33,16 +33,30 @@ func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
 func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, completion ...bool) {
 	complete := len(completion) != 0 && completion[0]
 	configs := fixedPeerTestConfigsV1(t)
+	used := map[string]bool{}
+	for _, node := range configs[0].Nodes {
+		used[node.Address] = true
+	}
+	for _, group := range append([]FixedPeerTCPGroupV1{configs[0].Catalog}, configs[0].Groups...) {
+		for _, peer := range group.Peers {
+			used[peer.Address] = true
+		}
+	}
 	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		for {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := listener.Addr().String()
+			if err := listener.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !used[result] {
+				used[result] = true
+				return result
+			}
 		}
-		result := listener.Addr().String()
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return result
 	}
 	group := configs[0].Groups[1]
 	group.Peers = append([]raftcluster.Peer{configs[0].Groups[0].Peers[0]}, group.Peers...)
