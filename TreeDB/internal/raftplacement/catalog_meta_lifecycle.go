@@ -555,6 +555,60 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	return nil
 }
 
+// Ordinary same-epoch catch-up can compact a candidate through cleanup. Keep
+// the source and READY facts this follower actually committed, without trying
+// to authenticate history erased by a terminal snapshot. COMPLETE_CLEANUP
+// deliberately clears the required and READY sets, but not the source facts.
+func validateKnownVectorPartitionPreparationSnapshotV1(
+	oldRecords, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+) error {
+	for identity, old := range oldRecords {
+		if old.State != VectorPartitionLifecycleBuildingV1 && old.State != VectorPartitionLifecycleStagedV1 &&
+			old.State != VectorPartitionLifecyclePreparedV1 {
+			continue
+		}
+		incoming, ok := records[identity]
+		if !ok || incoming.Revision < old.Revision {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		if incoming.Revision == old.Revision {
+			if !equalVectorPartitionLifecycleRecordV1(old, incoming) {
+				return ErrVectorPartitionLifecycleConflict
+			}
+			continue
+		}
+		if incoming.Identity != old.Identity || incoming.Format != old.Format ||
+			incoming.PreviousActiveGeneration != old.PreviousActiveGeneration || incoming.MutationEpoch != old.MutationEpoch ||
+			!slices.Equal(incoming.SourceOwners, old.SourceOwners) || !slices.Equal(incoming.ANNOwners, old.ANNOwners) {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		if incoming.State == VectorPartitionLifecycleAbsentV1 {
+			continue
+		}
+		if !slices.Equal(incoming.RequiredGroups, old.RequiredGroups) ||
+			old.ReadySetDigest != "" && incoming.ReadySetDigest != old.ReadySetDigest {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		for _, ready := range old.ReadyGroups {
+			if !slices.Contains(incoming.ReadyGroups, ready) {
+				return ErrVectorPartitionLifecycleConflict
+			}
+		}
+	}
+	for identity, incoming := range records {
+		if _, known := oldRecords[identity]; known {
+			continue
+		}
+		switch incoming.State {
+		case VectorPartitionLifecycleBuildingV1, VectorPartitionLifecycleStagedV1, VectorPartitionLifecyclePreparedV1:
+			if !replicaReplacementNewLifecyclePreparationSnapshotV1(incoming) {
+				return ErrVectorPartitionLifecycleConflict
+			}
+		}
+	}
+	return nil
+}
+
 func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
 	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,

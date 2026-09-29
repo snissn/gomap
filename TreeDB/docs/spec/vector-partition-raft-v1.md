@@ -367,16 +367,17 @@ accepts only one replacement completion from the follower's exact committed
 BEGIN. The new catalog and rebound lifecycle must be deterministic, and the
 snapshot may add no lifecycle record or mutation fence. Compacted multi-epoch,
 unknown-BEGIN, and post-rebind lifecycle progress need further durable proof
-and fail closed on this path. At an unchanged catalog epoch, a snapshot must
-preserve locally committed BUILDING, STAGED, and PREPARED source and READY
-evidence while it remains in preparation or becomes ACTIVE. A locally known
-candidate may advance to RETIRED only by an exact ABORT reducer replay. A
-stateful follower refuses previously unknown terminal records, or new mutation
-fences without a matching locally known invalidation successor. Compacted
-candidate cleanup can erase the evidence needed for this check and is refused;
-the stopped follower needs log replay or rebuild. Fresh installation of a
-trusted snapshot remains possible. Durable provenance for these compacted
-histories remains part of #4811.
+and fail closed on this path. At an unchanged catalog epoch, pending or
+advancing replacement state requires strict lifecycle and mutation-fence
+successor evidence. A stateful follower can refuse a previously unknown
+terminal record or an unanchored fence in that replacement-sensitive path;
+log replay or rebuild may be needed after compacted history. Without a pending
+or advancing replacement, ordinary lifecycle catch-up retains the existing
+compacted-cutover behavior. It preserves the immutable source and owner facts
+of locally known BUILDING, STAGED, and PREPARED records, and their committed
+READY entries until COMPLETE_CLEANUP deliberately erases the READY set.
+Incoming-only terminal and fence history on that ordinary path has no durable
+provenance proof; closing that gap remains part of #4811.
 While a replica replacement is pending, new lifecycle transitions are refused
 so completion retains the ACTIVE evidence admitted at BEGIN; an exact retry of
 the last committed lifecycle command remains read-only.

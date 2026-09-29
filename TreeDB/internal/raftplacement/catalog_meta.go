@@ -680,18 +680,22 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		protectedRecords := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
-		for identity, current := range a.lifecycle {
-			if current.State == VectorPartitionLifecycleBuildingV1 || current.State == VectorPartitionLifecycleStagedV1 ||
-				current.State == VectorPartitionLifecyclePreparedV1 || current.State == VectorPartitionLifecycleActiveV1 || current.State == VectorPartitionLifecycleInvalidatedV1 ||
-				current.State == VectorPartitionLifecycleRetiredV1 || current.State == VectorPartitionLifecycleCleanableV1 ||
-				current.State == VectorPartitionLifecycleAbsentV1 {
-				protectedRecords[identity] = current
+		replacementSensitive := a.hasPendingReplicaReplacementLockedV1() || len(replacements) != len(a.replacements)
+		if !replacementSensitive {
+			for group, incoming := range replacements {
+				if !bytes.Equal(incoming, a.replacements[group]) {
+					replacementSensitive = true
+					break
+				}
 			}
 		}
-		if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
-			protectedRecords, lifecycle, mutationFences, collectionMutationBarriers,
-		); err != nil {
+		if replacementSensitive {
+			if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
+				a.lifecycle, lifecycle, mutationFences, collectionMutationBarriers,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+		} else if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 		a.replacements = replacements
