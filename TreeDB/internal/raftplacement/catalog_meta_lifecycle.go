@@ -1409,6 +1409,7 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 		fences[key] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: fence.Epoch, Pending: fence.Pending}
 	}
 	pendingMatches := make(map[vectorPartitionLifecycleServingKeyV1]int)
+	confirmedEpochs := make(map[vectorPartitionLifecycleServingKeyV1]uint64)
 	for _, record := range records {
 		key := vectorPartitionLifecycleServingKeyV1{Collection: record.Identity.Index.Collection, IndexName: record.Identity.Index.IndexName}
 		fence := fences[key]
@@ -1416,9 +1417,20 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 			record.InvalidationEpoch == fence.Epoch && !record.MutationConfirmed {
 			pendingMatches[key]++
 		}
+		if record.MutationConfirmed && record.InvalidationEpoch > confirmedEpochs[key] {
+			confirmedEpochs[key] = record.InvalidationEpoch
+		}
 	}
 	for key, fence := range fences {
 		if !fence.Pending {
+			if confirmedEpochs[key] != fence.Epoch {
+				return nil, nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict,
+					fmt.Errorf("confirmed mutation fence %d has no matching lifecycle evidence", fence.Epoch))
+			}
+			if identity, serving := activeNames[key]; serving && records[identity].MutationEpoch < fence.Epoch {
+				return nil, nil, nil, nil, nil, errors.Join(ErrVectorPartitionLifecycleConflict,
+					fmt.Errorf("active generation predates confirmed mutation fence %d", fence.Epoch))
+			}
 			continue
 		}
 		if _, serving := activeNames[key]; serving {

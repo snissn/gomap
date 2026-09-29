@@ -302,14 +302,14 @@ func TestCatalogReplicaReplacementActiveSameEpochSnapshotPreservesEvidenceV1(t *
 		t.Run(name, func(t *testing.T) {
 			a, _, active := activeReplicaReplacementAuthorityV1(t, true)
 			if name == "mutation fence" {
-				a.mu.Lock()
-				if a.mutationFences == nil {
-					a.mutationFences = make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1)
-				}
-				a.mutationFences[vectorPartitionLifecycleServingKeyV1{
-					Collection: active.Identity.Index.Collection, IndexName: active.Identity.Index.IndexName,
-				}] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: 11}
-				a.mu.Unlock()
+				applied := a.applied
+				invalidated := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+					command.Reason = "relevant mutation"
+					command.InvalidationEpoch = active.MutationEpoch + 1
+				}))
+				_ = catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+					command.MutationEpoch = invalidated.InvalidationEpoch
+				}))
 			}
 			if name == "completed mutation receipt" {
 				a.mu.Lock()
@@ -343,7 +343,7 @@ func TestCatalogReplicaReplacementActiveSameEpochSnapshotPreservesEvidenceV1(t *
 					t.Fatal(err)
 				}
 			case "mutation fence":
-				lifecycle.MutationFences[0].Epoch = 10
+				lifecycle.MutationFences[0].Epoch--
 			case "completed mutation receipt":
 				lifecycle.CollectionMutationBarriers[0].Completed[0].OperationDigest = strings.Repeat("f", 64)
 			}
@@ -356,8 +356,13 @@ func TestCatalogReplicaReplacementActiveSameEpochSnapshotPreservesEvidenceV1(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-				t.Fatalf("forged snapshot is not self-consistent: %v", err)
+			freshErr := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw)
+			if name == "mutation fence" {
+				if !errors.Is(freshErr, ErrVectorPartitionLifecycleConflict) {
+					t.Fatalf("fresh restore accepted unwitnessed fence: %v", freshErr)
+				}
+			} else if freshErr != nil {
+				t.Fatalf("forged snapshot is not self-consistent: %v", freshErr)
 			}
 			if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
 				t.Fatalf("same-epoch snapshot changed %s: %v", name, err)
@@ -412,8 +417,8 @@ func TestCatalogReplicaReplacementInvalidatedSameEpochSnapshotCannotReviveActive
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-		t.Fatalf("revival snapshot is not self-consistent: %v", err)
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("fresh restore accepted ACTIVE with a later confirmed fence: %v", err)
 	}
 	if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
 		t.Fatalf("snapshot revived invalidated generation: %v", err)
