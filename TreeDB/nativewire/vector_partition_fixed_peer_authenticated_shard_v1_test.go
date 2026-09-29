@@ -253,6 +253,15 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer topology.Close()
+	if _, ok := topology.listeners[group].(*peerNodeListenerV1); !ok {
+		t.Fatal("authenticated shard listener bypassed shared admission")
+	}
+	transport.admission.mu.Lock()
+	tracked := len(transport.admission.listeners)
+	transport.admission.mu.Unlock()
+	if tracked != 1 {
+		t.Fatalf("authenticated shard listener admission count=%d, want 1", tracked)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	identity, err := transport.ProbeShardEndpointV1(ctx, endpoint, node, group)
@@ -314,5 +323,15 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 	}
 	if stats := service.Stats(); stats.Requests != 1 || stats.Successes != 1 {
 		t.Fatalf("wrong-group request reached search service: %+v", stats)
+	}
+	if err := dispatcher.Close(); err != nil {
+		t.Fatalf("close authenticated dispatcher: %v", err)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatalf("close shared transport: %v", err)
+	}
+	if conn, err := net.DialTimeout("tcp", endpoint, time.Second); err == nil {
+		conn.Close()
+		t.Fatal("authenticated shard listener survived shared transport close")
 	}
 }

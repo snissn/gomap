@@ -241,7 +241,17 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return nil, fmt.Errorf("nativewire: production vector topology shard groups %q and %q share a listener", owner, shard.GroupID)
 		}
 		localListeners[listenerKey] = shard.GroupID
-		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID], h.identityProviders[shard.GroupID] = shard.Listener, shard.Service, shard.EndpointIdentity, shard.EndpointIdentityProvider
+		listener := shard.Listener
+		if opts.PeerTransport != nil {
+			if opts.PeerTransport.admission == nil || !opts.PeerTransport.groups[shard.GroupID][opts.PeerTransport.node] {
+				return nil, errPeerAuthenticationV1
+			}
+			listener, err = opts.PeerTransport.admission.listener(listener)
+			if err != nil {
+				return nil, err
+			}
+		}
+		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID], h.identityProviders[shard.GroupID] = listener, shard.Service, shard.EndpointIdentity, shard.EndpointIdentityProvider
 	}
 	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
 	var dispatcher *VectorPartitionShardSearchTCPDispatcherV1
