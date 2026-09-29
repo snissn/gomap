@@ -428,6 +428,11 @@ func (a *CatalogMetaAuthorityV1) rebindReplicaReplacementLifecycleLockedV1(next 
 	return validated, active, activeNames, raw, err
 }
 
+// A stateful follower can verify one compacted replacement completion only
+// when it already committed that exact BEGIN. The completion must be the sole
+// catalog change, and its lifecycle snapshot must be the deterministic rebind
+// of the follower's known records. Unknown terminal or fence history needs a
+// separate durable proof; this transition does not infer it from incoming data.
 func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(
 	next CatalogMetaRecordV1, resolved ResolvedCatalogV1, replacements map[raftcluster.GroupID][]byte,
 	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
@@ -438,116 +443,110 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
 	}
 	active := false
-	for _, record := range a.lifecycle {
-		active = active || record.State == VectorPartitionLifecycleActiveV1
+	for identity, record := range a.lifecycle {
+		if record.State == VectorPartitionLifecycleAbsentV1 {
+			continue
+		}
+		if record.State != VectorPartitionLifecycleActiveV1 || identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{}) {
+			return ErrVectorPartitionLifecycleGuard
+		}
+		active = true
 	}
 	if !active {
 		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
 	}
-	// The ordinary topology guard permits additions. A compacted replacement
-	// snapshot cannot establish whether an added route preceded an ACTIVE
-	// generation, so retain the exact old placement and group inventory.
-	if len(resolved.Groups) != len(a.resolved.Groups) || len(resolved.Placements) != len(a.resolved.Placements) ||
+	if next.Epoch != a.record.Epoch+1 ||
+		len(resolved.Groups) != len(a.resolved.Groups) ||
+		len(resolved.Placements) != len(a.resolved.Placements) ||
 		!reflect.DeepEqual(a.record.Catalog.Features, next.Catalog.Features) ||
-		!reflect.DeepEqual(a.record.Catalog.Placements, next.Catalog.Placements) {
+		!reflect.DeepEqual(a.record.Catalog.Placements, next.Catalog.Placements) ||
+		len(replacements) != len(a.replacements) {
 		return ErrVectorPartitionLifecycleGuard
 	}
-	finalReplacement := false
+	var changedGroup raftcluster.GroupID
 	for _, old := range a.resolved.Groups {
-		current := resolved.groups[old.ID]
-		rosterChanged := !equalCatalogMetaMembersV1(old.Members, current.Members)
-		if !rosterChanged {
-			if old.LeaderHint != current.LeaderHint {
-				state, err := decodeReplicaReplacementCurrentV1(replacements[old.ID])
-				if err != nil || current.LeaderHint != "" ||
-					!equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
-					return ErrCatalogMetaConflict
-				}
-				if state.Phase == ReplicaReplacementCompletedV1 {
-					if state.Result == nil || state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch {
-						return ErrCatalogMetaConflict
-					}
-				} else if state.Begin.ExpectedEpoch != next.Epoch || state.Begin.CatalogDigest != next.Digest {
-					return ErrCatalogMetaConflict
-				}
-				if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(old.ID, state.Begin); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		if current.LeaderHint != old.LeaderHint &&
-			(current.LeaderHint != "" || slices.Contains(current.Members, old.LeaderHint)) {
+		current, ok := resolved.groups[old.ID]
+		if !ok {
 			return ErrCatalogMetaConflict
 		}
-		state, err := decodeReplicaReplacementCurrentV1(replacements[old.ID])
-		if err != nil || !equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
-			return ErrCatalogMetaConflict
-		}
-		if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(old.ID, state.Begin); err != nil {
-			return err
-		}
-		if state.Phase == ReplicaReplacementCompletedV1 {
-			if state.Result == nil || state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch {
+		if equalCatalogMetaMembersV1(old.Members, current.Members) {
+			if old.LeaderHint != current.LeaderHint || !bytes.Equal(a.replacements[old.ID], replacements[old.ID]) {
 				return ErrCatalogMetaConflict
 			}
-		} else if state.Begin.ExpectedEpoch != next.Epoch || state.Begin.CatalogDigest != next.Digest {
-			return ErrCatalogMetaConflict
-		}
-	}
-	for group, raw := range replacements {
-		state, err := decodeReplicaReplacementCurrentV1(raw)
-		if err != nil {
-			return err
-		}
-		if state.Phase == ReplicaReplacementCompletedV1 {
-			if state.Result == nil || state.Result.Epoch <= a.record.Epoch {
-				continue
-			}
-			if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group, state.Begin); err != nil {
-				return err
-			}
-			if state.Result.Epoch == next.Epoch && state.Result.Digest == next.Digest {
-				finalReplacement = true
-			}
 			continue
 		}
-		if state.Begin.ExpectedEpoch <= a.record.Epoch {
-			continue
+		if changedGroup != "" {
+			return ErrVectorPartitionLifecycleGuard
 		}
-		if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group, state.Begin); err != nil {
-			return err
-		}
-		if state.Begin.ExpectedEpoch == next.Epoch && state.Begin.CatalogDigest == next.Digest && len(state.Peers) != 0 &&
-			equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), resolved.groups[group].Members) {
-			finalReplacement = true
-		}
+		changedGroup = old.ID
 	}
-	if !finalReplacement {
+	if changedGroup == "" {
 		return ErrVectorPartitionLifecycleGuard
 	}
-	// Replacement completion requires pending mutation work to be confirmed.
-	// A later collection operation has a retained completion receipt; an index
-	// fence has no such receipt, so a still-pending fence cannot prove that its
-	// predecessor was confirmed across this catalog-epoch change.
-	for collection, old := range a.collectionMutationBarriers {
-		if incoming := barriers[collection]; old.Pending && incoming.Pending && incoming.Epoch == old.Epoch {
-			return ErrVectorPartitionLifecycleGuard
-		}
+	oldRaw, known := a.replacements[changedGroup]
+	if !known {
+		return ErrVectorPartitionLifecycleGuard
 	}
-	for key, old := range a.mutationFences {
-		if incoming := fences[key]; old.Pending && incoming.Pending {
-			return ErrVectorPartitionLifecycleGuard
-		}
-	}
-	// Current-state replacement successors and the final rosters are checked by
-	// the snapshot installer. History may be compacted: the follower need not
-	// have seen BEGIN, nor every intervening completed catalog epoch.
-	expected, _, _, _, err := a.rebindReplicaReplacementLifecycleLockedV1(next)
+	oldState, err := decodeReplicaReplacementCurrentV1(oldRaw)
 	if err != nil {
 		return err
 	}
-	return a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(expected, records, fences, barriers)
+	incoming, err := decodeReplicaReplacementCurrentV1(replacements[changedGroup])
+	if err != nil {
+		return err
+	}
+	if oldState.Phase == ReplicaReplacementCompletedV1 ||
+		!sameReplicaReplacementBeginV1(oldState.Begin, incoming.Begin) ||
+		incoming.Phase != ReplicaReplacementCompletedV1 || incoming.Result == nil ||
+		incoming.Result.Epoch != next.Epoch || incoming.Result.Digest != next.Digest ||
+		oldState.Begin.ExpectedEpoch != a.record.Epoch || oldState.Begin.CatalogDigest != a.record.Digest ||
+		!equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(incoming.Peers), resolved.groups[changedGroup].Members) {
+		return ErrVectorPartitionLifecycleGuard
+	}
+	expectedCatalog, err := replicaReplacementCompletedCatalogV1(a.record, oldState.Begin)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expectedCatalog, next) {
+		return ErrCatalogMetaConflict
+	}
+	for identity, record := range a.lifecycle {
+		if record.State != VectorPartitionLifecycleActiveV1 {
+			continue
+		}
+		placement, ok := a.resolved.Placement(identity.Index.Collection)
+		if !ok || placement.GroupID == changedGroup {
+			return ErrVectorPartitionLifecycleGuard
+		}
+		for _, partition := range placement.TokenPartitions {
+			if partition.GroupID == changedGroup {
+				return ErrVectorPartitionLifecycleGuard
+			}
+		}
+	}
+	expectedRecords, _, _, _, err := a.rebindReplicaReplacementLifecycleLockedV1(next)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expectedRecords, records) || !reflect.DeepEqual(a.mutationFences, fences) {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	for _, fence := range fences {
+		if fence.Pending {
+			return ErrVectorPartitionLifecycleGuard
+		}
+	}
+	if len(barriers) != len(a.collectionMutationBarriers) {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	for key, old := range a.collectionMutationBarriers {
+		incoming, ok := barriers[key]
+		if !ok || !vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, incoming) ||
+			old.Pending && incoming.Pending && old.Epoch == incoming.Epoch {
+			return ErrVectorPartitionLifecycleGuard
+		}
+	}
+	return nil
 }
 
 func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
@@ -557,7 +556,22 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 ) error {
 	for identity, old := range expected {
 		incoming, ok := records[identity]
-		if !ok || !replicaReplacementLifecycleRecordSnapshotSuccessorV1(old, incoming, records, fences) {
+		if !ok {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		if old.State == VectorPartitionLifecycleBuildingV1 || old.State == VectorPartitionLifecycleStagedV1 || old.State == VectorPartitionLifecyclePreparedV1 {
+			// Terminal cleanup erases READY evidence. Preserve the existing
+			// same-epoch compacted restore behavior for that inherited case;
+			// relative preparation proof applies while the evidence survives.
+			if incoming.State == VectorPartitionLifecycleRetiredV1 || incoming.State == VectorPartitionLifecycleCleanableV1 || incoming.State == VectorPartitionLifecycleAbsentV1 {
+				continue
+			}
+			if !a.replicaReplacementKnownPreparationSnapshotSuccessorV1(old, incoming, expected, records, fences, barriers) {
+				return ErrVectorPartitionLifecycleConflict
+			}
+			continue
+		}
+		if !replicaReplacementLifecycleRecordSnapshotSuccessorV1(old, incoming, records, fences) {
 			return ErrVectorPartitionLifecycleConflict
 		}
 	}
@@ -591,6 +605,58 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 		}
 	}
 	return nil
+}
+
+// A same-epoch snapshot can advance a locally known candidate, but cannot
+// replace its committed source or READY receipts. Reconstructing the final
+// preparation/activation command also bounds its revision and command digest.
+func (a *CatalogMetaAuthorityV1) replicaReplacementKnownPreparationSnapshotSuccessorV1(
+	old, incoming VectorPartitionLifecycleRecordV1,
+	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+) bool {
+	if old.Revision == incoming.Revision {
+		return equalVectorPartitionLifecycleRecordV1(old, incoming)
+	}
+	if incoming.Identity != old.Identity || incoming.Format != old.Format ||
+		incoming.PreviousActiveGeneration != old.PreviousActiveGeneration || incoming.MutationEpoch != old.MutationEpoch ||
+		!slices.Equal(incoming.SourceOwners, old.SourceOwners) || !slices.Equal(incoming.ANNOwners, old.ANNOwners) ||
+		!slices.Equal(incoming.RequiredGroups, old.RequiredGroups) || len(incoming.ReadyGroups) < len(old.ReadyGroups) {
+		return false
+	}
+	for _, committed := range old.ReadyGroups {
+		if !slices.Contains(incoming.ReadyGroups, committed) {
+			return false
+		}
+	}
+	newReady := uint64(len(incoming.ReadyGroups) - len(old.ReadyGroups))
+	switch incoming.State {
+	case VectorPartitionLifecycleStagedV1:
+		if old.State == VectorPartitionLifecyclePreparedV1 || newReady == 0 ||
+			incoming.Revision != old.Revision+newReady {
+			return false
+		}
+		return replicaReplacementNewLifecyclePreparationSnapshotV1(incoming)
+	case VectorPartitionLifecyclePreparedV1:
+		if old.State == VectorPartitionLifecyclePreparedV1 ||
+			incoming.Revision != old.Revision+newReady+1 {
+			return false
+		}
+		return replicaReplacementNewLifecyclePreparationSnapshotV1(incoming)
+	case VectorPartitionLifecycleActiveV1:
+		if old.State == VectorPartitionLifecyclePreparedV1 && newReady != 0 {
+			return false
+		}
+		steps := newReady + 2 // PREPARE and ACTIVATE.
+		if old.State == VectorPartitionLifecyclePreparedV1 {
+			steps = 1
+		}
+		return incoming.Revision == old.Revision+steps &&
+			a.replicaReplacementNewLifecycleActiveSnapshotV1(incoming, expected, records, fences, barriers)
+	default:
+		return false
+	}
 }
 
 // A new ACTIVE generation has no local record to compare against. Reconstruct

@@ -2777,6 +2777,12 @@ reject direct ACTIVE READY/source forgeries while accepting genuine cutover
 and confirmed-fence controls. `TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1`
 preserves legitimate A-to-B-to-C catch-up with cleaned B; it does not establish
 durable activation provenance for arbitrary intermediate histories.
+The one-step forward snapshot test also rejects a self-canonical extra
+terminal record and confirmed fence. Same-epoch preparation tests accept
+committed STAGED-to-PREPARED progress but reject a rewrite of locally known
+READY evidence. The genuine compacted PREPARED-to-cleanup control remains
+accepted with the inherited terminal-provenance limit described in the
+protocol spec.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

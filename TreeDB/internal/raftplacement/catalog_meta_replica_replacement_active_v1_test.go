@@ -119,6 +119,45 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("one-step completion cannot introduce terminal history", func(t *testing.T) {
+		var forged CatalogMetaSnapshotV1
+		if err := json.Unmarshal(final, &forged); err != nil {
+			t.Fatal(err)
+		}
+		records, _, _, fences, barriers, err := decodeVectorPartitionLifecycleSnapshotV1(forged.VectorPartitionLifecycle, complete.Catalog.Record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal := cloneVectorPartitionLifecycleRecordV1(records[reboundAbsent])
+		terminal.Identity.Index.IndexName = "unseen-terminal"
+		terminal.InvalidationEpoch = math.MaxUint64
+		terminal.InvalidationReason = "forged-collection-mutation"
+		terminal.MutationConfirmed = true
+		records[terminal.Identity] = terminal
+		fences[vectorPartitionLifecycleServingKeyV1{Collection: terminal.Identity.Index.Collection, IndexName: terminal.Identity.Index.IndexName}] =
+			vectorPartitionLifecycleMutationFenceStateV1{Epoch: math.MaxUint64}
+		forged.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(records, fences, barriers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+			t.Fatalf("incoming terminal and fence are self-canonical: %v", err)
+		}
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("forward completion admitted unseen terminal and fence: %v", err)
+		}
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, pending) {
+			t.Fatalf("refusal mutated pending authority: %v", err)
+		}
+	})
 	fresh := NewCatalogMetaAuthorityV1()
 	if err := fresh.installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("fresh restore of completed roster and rebound ACTIVE: %v", err)
@@ -631,129 +670,13 @@ func TestCatalogReplicaReplacementActiveSnapshotAllowsSkippedCollectionMutationE
 	}
 }
 
+// A stateful ACTIVE follower only proves one replacement completion for a
+// locally admitted BEGIN. Other compacted histories need independent durable
+// provenance and remain fail closed; fresh restore still accepts a complete
+// trusted Raft snapshot.
 func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T) {
-	t.Run("completion then next begin", func(t *testing.T) {
-		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		completeReplicaReplacementForTestV1(t, leader, first)
-		second := first
-		second.OperationID = "replace-active-ann-owner-next"
-		second.ExpectedEpoch = leader.record.Epoch
-		second.CatalogDigest = leader.record.Digest
-		second.OldNodeID = first.NewPeer.ID
-		second.NewPeer = raftcluster.Peer{ID: "standby-two", Address: "127.0.0.1:19003"}
-		raw, err := EncodeReplicaReplacementBeginV1(second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
-			t.Fatal(err)
-		}
-		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
-			t.Fatal(err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore completion followed by next BEGIN: %v", err)
-		}
-		rebound := active.Identity
-		rebound.Index.CatalogEpoch = leader.record.Epoch
-		rebound.Index.CatalogDigest = leader.record.Digest
-		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
-		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
-			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
-		}
-	})
-
-	t.Run("round trip roster", func(t *testing.T) {
-		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		completeReplicaReplacementForTestV1(t, leader, first)
-		second := first
-		second.OperationID = "replace-active-ann-owner-return"
-		second.ExpectedEpoch = leader.record.Epoch
-		second.CatalogDigest = leader.record.Digest
-		second.OldNodeID = first.NewPeer.ID
-		second.NewPeer = raftcluster.Peer{ID: first.OldNodeID, Address: "127.0.0.1:20000"}
-		completeReplicaReplacementForTestV1(t, leader, second)
-		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
-			t.Fatal(err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore round-trip completed roster: %v", err)
-		}
-		rebound := active.Identity
-		rebound.Index.CatalogEpoch = leader.record.Epoch
-		rebound.Index.CatalogDigest = leader.record.Digest
-		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
-		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
-			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
-		}
-	})
-
-	t.Run("round trip roster then next begin", func(t *testing.T) {
-		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		completeReplicaReplacementForTestV1(t, leader, first)
-		second := first
-		second.OperationID = "replace-active-ann-owner-return-before-next"
-		second.ExpectedEpoch = leader.record.Epoch
-		second.CatalogDigest = leader.record.Digest
-		second.OldNodeID = first.NewPeer.ID
-		second.NewPeer = raftcluster.Peer{ID: first.OldNodeID, Address: "127.0.0.1:20000"}
-		completeReplicaReplacementForTestV1(t, leader, second)
-		third := first
-		third.OperationID = "replace-active-ann-owner-after-roundtrip"
-		third.ExpectedEpoch = leader.record.Epoch
-		third.CatalogDigest = leader.record.Digest
-		third.NewPeer = raftcluster.Peer{ID: "standby-two", Address: "127.0.0.1:19003"}
-		raw, err := EncodeReplicaReplacementBeginV1(third)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
-			t.Fatal(err)
-		}
-		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
-			t.Fatal(err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore completed round trip followed by BEGIN: %v", err)
-		}
-		rebound := active.Identity
-		rebound.Index.CatalogEpoch = leader.record.Epoch
-		rebound.Index.CatalogDigest = leader.record.Digest
-		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
-		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
-			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
-		}
-	})
-
-	t.Run("completion without local begin", func(t *testing.T) {
-		leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	t.Run("completion without locally admitted begin", func(t *testing.T) {
+		leader, begin, _ := activeReplicaReplacementAuthorityV1(t, true)
 		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil {
 			t.Fatal(err)
@@ -763,25 +686,30 @@ func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
+			t.Fatalf("fresh completed snapshot: %v", err)
+		}
 		follower := NewCatalogMetaAuthorityV1()
 		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
 			t.Fatal(err)
 		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore committed completion without local BEGIN: %v", err)
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("unanchored completion catch-up: %v", err)
 		}
-		rebound := active.Identity
-		rebound.Index.CatalogEpoch = leader.record.Epoch
-		rebound.Index.CatalogDigest = leader.record.Digest
-		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
-		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
-			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+			t.Fatalf("refusal mutated follower: %v", err)
 		}
 	})
-
 	t.Run("two completed epochs", func(t *testing.T) {
-		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		leader, first, _ := activeReplicaReplacementAuthorityV1(t, true)
+		firstRaw, err := EncodeReplicaReplacementBeginV1(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedCatalogMetaV1(firstRaw, leader.applied+1); err != nil {
+			t.Fatal(err)
+		}
+		pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -797,25 +725,30 @@ func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
+			t.Fatalf("fresh two-epoch snapshot: %v", err)
+		}
 		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
 			t.Fatal(err)
 		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore two committed replacement epochs: %v", err)
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("unanchored multi-epoch catch-up: %v", err)
 		}
-		rebound := active.Identity
-		rebound.Index.CatalogEpoch = leader.record.Epoch
-		rebound.Index.CatalogDigest = leader.record.Digest
-		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
-		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
-			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, pending) {
+			t.Fatalf("refusal mutated follower: %v", err)
 		}
 	})
-
-	t.Run("invalidation after completion", func(t *testing.T) {
+	t.Run("post-completion lifecycle progress", func(t *testing.T) {
 		leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		firstRaw, err := EncodeReplicaReplacementBeginV1(begin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedCatalogMetaV1(firstRaw, leader.applied+1); err != nil {
+			t.Fatal(err)
+		}
+		pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -823,152 +756,28 @@ func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T
 		identity := active.Identity
 		identity.Index.CatalogEpoch = leader.record.Epoch
 		identity.Index.CatalogDigest = leader.record.Digest
-		active, ok := leader.VectorPartitionLifecycleRecordV1(identity)
+		rebound, ok := leader.VectorPartitionLifecycleRecordV1(identity)
 		if !ok {
 			t.Fatal("completed authority lost ACTIVE record")
 		}
 		applied := leader.applied
-		invalidated := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
-			command.Reason = "relevant mutation"
-			command.InvalidationEpoch = active.MutationEpoch + 1
+		catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(rebound, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+			command.Reason = "later mutation"
+			command.InvalidationEpoch = rebound.MutationEpoch + 1
 		}))
 		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil {
 			t.Fatal(err)
 		}
 		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
 			t.Fatal(err)
 		}
-		var forged CatalogMetaSnapshotV1
-		if err := json.Unmarshal(final, &forged); err != nil {
-			t.Fatal(err)
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("unanchored post-rebind progress: %v", err)
 		}
-		var lifecycle vectorPartitionLifecycleSnapshotV1
-		if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
-			t.Fatal(err)
-		}
-		for i := range lifecycle.Records {
-			if lifecycle.Records[i].State != VectorPartitionLifecycleInvalidatedV1 {
-				continue
-			}
-			lifecycle.Records[i].ReadyGroups[0].AssetSetDigest = strings.Repeat("e", 64)
-			lifecycle.Records[i].ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(
-				lifecycle.Records[i].Identity, lifecycle.Records[i].RequiredGroups, lifecycle.Records[i].ReadyGroups)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forgedRaw, err := json.Marshal(forged)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-			t.Fatalf("forged READY receipt snapshot was not self-consistent: %v", err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
-			t.Fatalf("higher-revision invalidation changed committed READY receipt: %v", err)
-		}
-		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
-			t.Fatalf("refused higher-revision snapshot mutated authority: %v", err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-			t.Fatalf("restore committed post-completion invalidation: %v", err)
-		}
-		got, ok := follower.VectorPartitionLifecycleRecordV1(invalidated.Identity)
-		if !ok || !reflect.DeepEqual(got, invalidated) {
-			t.Fatalf("restored invalidation=%+v available=%v want %+v", got, ok, invalidated)
-		}
-	})
-
-	t.Run("source roster changed", func(t *testing.T) {
-		leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
-		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		completeReplicaReplacementForTestV1(t, leader, begin)
-		forged, err := leader.ExportCatalogMetaSnapshotV1()
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Forge a self-consistent completed source roster from the committed
-		// non-source evidence. It cannot be obtained through the live BEGIN guard.
-		catalog := cloneCatalog(leader.record.Catalog)
-		for i := range catalog.Groups {
-			if catalog.Groups[i].ID == "group-a" {
-				catalog.Groups[i].Members = []raftcluster.NodeID{"node-c", "source-spare"}
-				catalog.Groups[i].LeaderHint = ""
-			} else if catalog.Groups[i].ID == "group-b" {
-				catalog.Groups[i].Members = []raftcluster.NodeID{"node-b", "node-c"}
-				catalog.Groups[i].LeaderHint = "node-b"
-			}
-		}
-		record, err := NewCatalogMetaRecordV1(leader.record.Epoch, catalog)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forged.Record, err = encodeCatalogMetaRecordV1(record)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forged.LastCommand, err = EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{ExpectedEpoch: record.Epoch - 1, Record: record})
-		if err != nil {
-			t.Fatal(err)
-		}
-		state, err := leader.ReplicaReplacementStateV1("group-b")
-		if err != nil {
-			t.Fatal(err)
-		}
-		state.Begin.GroupID = "group-a"
-		state.Begin.OldNodeID = "node-a"
-		state.Begin.NewPeer = raftcluster.Peer{ID: "source-spare", Address: "127.0.0.1:19002"}
-		state.Seed.SourceNodeID = "node-a"
-		state.Seed.Manifest.NodeID = "node-a"
-		state.Seed.Manifest.GroupID = "group-a"
-		state.Tail.GroupID = "group-a"
-		state.Tail.LeaderID = "node-a"
-		state.Peers = []raftcluster.Peer{{ID: "node-c", Address: "127.0.0.1:20001"}, state.Begin.NewPeer}
-		state.Result.Digest = record.Digest
-		stateRaw, err := EncodeReplicaReplacementStateV1(state)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forged.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(map[raftcluster.GroupID][]byte{"group-a": stateRaw})
-		if err != nil {
-			t.Fatal(err)
-		}
-		active.Identity.Index.CatalogEpoch = record.Epoch
-		active.Identity.Index.CatalogDigest = record.Digest
-		active.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(active.Identity, active.RequiredGroups, active.ReadyGroups)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forged.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(
-			map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{active.Identity: active}, nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		forgedRaw, err := json.Marshal(forged)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-			t.Fatalf("forged source-roster snapshot was not self-consistent: %v", err)
-		}
-		follower := NewCatalogMetaAuthorityV1()
-		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
-			t.Fatal(err)
-		}
-		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
-			t.Fatalf("forward snapshot changed ACTIVE source roster: %v", err)
-		}
-		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
-			t.Fatalf("refused source-roster snapshot mutated authority: %v", err)
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, pending) {
+			t.Fatalf("refusal mutated follower: %v", err)
 		}
 	})
 }
@@ -1368,11 +1177,11 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 
 func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	completeReplicaReplacementForTestV1(t, leader, begin)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	completeReplicaReplacementForTestV1(t, leader, begin)
 	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
@@ -1471,11 +1280,11 @@ func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *te
 
 func TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	completeReplicaReplacementForTestV1(t, leader, begin)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	completeReplicaReplacementForTestV1(t, leader, begin)
 	completed, err := leader.ExportCatalogMetaSnapshotV1()
 	if err != nil {
 		t.Fatal(err)
@@ -1529,11 +1338,11 @@ func TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1(t
 
 func TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	complete := completeReplicaReplacementForTestV1(t, leader, begin)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	complete := completeReplicaReplacementForTestV1(t, leader, begin)
 	rebound := active.Identity
 	rebound.Index.CatalogEpoch = complete.Catalog.Record.Epoch
 	rebound.Index.CatalogDigest = complete.Catalog.Record.Digest
@@ -1612,11 +1421,11 @@ func TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1(t *testi
 
 func TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	complete := completeReplicaReplacementForTestV1(t, leader, begin)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	complete := completeReplicaReplacementForTestV1(t, leader, begin)
 	rebound := active.Identity
 	rebound.Index.CatalogEpoch = complete.Catalog.Record.Epoch
 	rebound.Index.CatalogDigest = complete.Catalog.Record.Digest
@@ -1834,11 +1643,11 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 
 func TestCatalogReplicaReplacementSnapshotValidatesNewPreparationV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	completeReplicaReplacementForTestV1(t, leader, begin)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	completeReplicaReplacementForTestV1(t, leader, begin)
 	identity := catalogMetaLifecycleTestIdentityV1(leader.record, active.Identity.Generation+1, 12)
 	identity.Immutable = active.Identity.Immutable
 	applied := leader.applied
@@ -1869,6 +1678,67 @@ func TestCatalogReplicaReplacementSnapshotValidatesNewPreparationV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("known staged candidate retains committed READY on prepare", func(t *testing.T) {
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(stagedRaw); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(valid); err != nil {
+			t.Fatalf("committed STAGED to PREPARED: %v", err)
+		}
+		changedReady := catalogMetaLifecycleTestCommandV1(building, VectorPartitionLifecycleRecordGroupReadyV1, func(command *VectorPartitionLifecycleCommandV1) {
+			command.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: "group-b", AppliedIndex: staged.ReadyGroups[0].AppliedIndex, AssetSetDigest: strings.Repeat("d", 64)}
+		})
+		changedStaged, err := ApplyVectorPartitionLifecycleCommandV1(building, changedReady)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changedDigest, err := VectorPartitionLifecycleReadySetDigestV1(identity, changedStaged.RequiredGroups, changedStaged.ReadyGroups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changedPrepared, err := ApplyVectorPartitionLifecycleCommandV1(changedStaged,
+			catalogMetaLifecycleTestCommandV1(changedStaged, VectorPartitionLifecyclePrepareV1, func(command *VectorPartitionLifecycleCommandV1) {
+				command.ReadySetDigest = changedDigest
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var forged CatalogMetaSnapshotV1
+		if err := json.Unmarshal(valid, &forged); err != nil {
+			t.Fatal(err)
+		}
+		var lifecycle vectorPartitionLifecycleSnapshotV1
+		if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+			t.Fatal(err)
+		}
+		for i := range lifecycle.Records {
+			if lifecycle.Records[i].Identity == identity {
+				lifecycle.Records[i] = changedPrepared
+			}
+		}
+		forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+			t.Fatalf("forged PREPARED is self-canonical: %v", err)
+		}
+		refusing := NewCatalogMetaAuthorityV1()
+		if err := refusing.installCatalogMetaSnapshotBytesV1(stagedRaw); err != nil {
+			t.Fatal(err)
+		}
+		if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("known STAGED READY was rewritten: %v", err)
+		}
+		if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, stagedRaw) {
+			t.Fatalf("refusal mutated committed STAGED: %v", err)
+		}
+	})
 	for _, tc := range []struct {
 		name string
 		raw  []byte
