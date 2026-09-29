@@ -369,20 +369,28 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotAdds
 		if err != nil {
 			return err
 		}
-		if oldRaw := a.replacements[group]; len(oldRaw) != 0 {
-			old, err := decodeReplicaReplacementCurrentV1(oldRaw)
-			if err != nil {
-				return err
-			}
-			if sameReplicaReplacementBeginV1(old.Begin, next.Begin) {
-				continue
-			}
-		}
-		if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+		if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group, next.Begin); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// BEGIN admission is a committed fact. A follower that already holds this
+// exact operation may have advanced its lifecycle or mutation barriers before
+// receiving a compacted completion snapshot; only a new BEGIN needs the
+// current-state admission guard again.
+func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group raftcluster.GroupID, begin ReplicaReplacementBeginV1) error {
+	if oldRaw := a.replacements[group]; len(oldRaw) != 0 {
+		old, err := decodeReplicaReplacementCurrentV1(oldRaw)
+		if err != nil {
+			return err
+		}
+		if sameReplicaReplacementBeginV1(old.Begin, begin) {
+			return nil
+		}
+	}
+	return a.validateReplicaReplacementLifecycleLockedV1(group)
 }
 
 func (a *CatalogMetaAuthorityV1) rebindReplicaReplacementLifecycleLockedV1(next CatalogMetaRecordV1) (
@@ -462,7 +470,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 				} else if state.Begin.ExpectedEpoch != next.Epoch || state.Begin.CatalogDigest != next.Digest {
 					return ErrCatalogMetaConflict
 				}
-				if err := a.validateReplicaReplacementLifecycleLockedV1(old.ID); err != nil {
+				if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(old.ID, state.Begin); err != nil {
 					return err
 				}
 			}
@@ -476,7 +484,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 		if err != nil || !equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
 			return ErrCatalogMetaConflict
 		}
-		if err := a.validateReplicaReplacementLifecycleLockedV1(old.ID); err != nil {
+		if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(old.ID, state.Begin); err != nil {
 			return err
 		}
 		if state.Phase == ReplicaReplacementCompletedV1 {
@@ -496,7 +504,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 			if state.Result == nil || state.Result.Epoch <= a.record.Epoch {
 				continue
 			}
-			if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+			if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group, state.Begin); err != nil {
 				return err
 			}
 			if state.Result.Epoch == next.Epoch && state.Result.Digest == next.Digest {
@@ -507,7 +515,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 		if state.Begin.ExpectedEpoch <= a.record.Epoch {
 			continue
 		}
-		if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+		if err := a.validateReplicaReplacementLifecycleSnapshotBeginLockedV1(group, state.Begin); err != nil {
 			return err
 		}
 		if state.Begin.ExpectedEpoch == next.Epoch && state.Begin.CatalogDigest == next.Digest && len(state.Peers) != 0 &&
@@ -517,6 +525,20 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	}
 	if !finalReplacement {
 		return ErrVectorPartitionLifecycleGuard
+	}
+	// Replacement completion requires pending mutation work to be confirmed.
+	// A later collection operation has a retained completion receipt; an index
+	// fence has no such receipt, so a still-pending fence cannot prove that its
+	// predecessor was confirmed across this catalog-epoch change.
+	for collection, old := range a.collectionMutationBarriers {
+		if incoming := barriers[collection]; old.Pending && incoming.Pending && incoming.Epoch == old.Epoch {
+			return ErrVectorPartitionLifecycleGuard
+		}
+	}
+	for key, old := range a.mutationFences {
+		if incoming := fences[key]; old.Pending && incoming.Pending {
+			return ErrVectorPartitionLifecycleGuard
+		}
 	}
 	// Current-state replacement successors and the final rosters are checked by
 	// the snapshot installer. History may be compacted: the follower need not
@@ -549,7 +571,7 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 				return ErrVectorPartitionLifecycleConflict
 			}
 		case VectorPartitionLifecycleActiveV1:
-			if !a.replicaReplacementNewLifecycleActiveSnapshotV1(incoming, expected, records, fences) {
+			if !a.replicaReplacementNewLifecycleActiveSnapshotV1(incoming, expected, records, fences, barriers) {
 				return ErrVectorPartitionLifecycleConflict
 			}
 		}
@@ -580,12 +602,13 @@ func (a *CatalogMetaAuthorityV1) replicaReplacementNewLifecycleActiveSnapshotV1(
 	record VectorPartitionLifecycleRecordV1,
 	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
 ) bool {
 	key := vectorPartitionLifecycleServingKeyV1{Collection: record.Identity.Index.Collection, IndexName: record.Identity.Index.IndexName}
 	if fence := fences[key]; fence.Pending || record.MutationEpoch < fence.Epoch {
 		return false
 	}
-	if barrier := a.collectionMutationBarriers[record.Identity.Index.Collection]; barrier.Pending || record.MutationEpoch < barrier.Epoch {
+	if barrier := barriers[record.Identity.Index.Collection]; barrier.Pending || record.MutationEpoch < barrier.Epoch {
 		return false
 	}
 	begin := VectorPartitionLifecycleCommandV1{

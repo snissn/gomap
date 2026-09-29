@@ -1701,6 +1701,59 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	if got, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, completed) {
 		t.Fatalf("catch-up snapshot differs from committed authority: %v", err)
 	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(completed, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if len(lifecycle.CollectionMutationBarriers) != 1 {
+		t.Fatalf("completed snapshot has %d collection barriers", len(lifecycle.CollectionMutationBarriers))
+	}
+	lifecycle.CollectionMutationBarriers[0].Pending = true
+	lifecycle.CollectionMutationBarriers[0].Completed = nil
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged missing-confirmation snapshot is not self-consistent: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("completion retained the same unconfirmed mutation: %v", err)
+	}
+	if got, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, pending) {
+		t.Fatalf("refused missing-confirmation snapshot mutated authority: %v", err)
+	}
+	// A distinct mutation can begin after completion and legitimately remain
+	// pending in the compacted snapshot seen by this same lagging follower.
+	mutation.Kind = vectorPartitionBeginCollectionMutationV1
+	mutation.CatalogEpoch, mutation.CatalogDigest = leader.record.Epoch, leader.record.Digest
+	mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+	mutation.MutationEpoch++
+	mutation.OperationDigest = strings.Repeat("d", 64)
+	commitMutation()
+	laterPending, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catchup := NewCatalogMetaAuthorityV1()
+	if err := catchup.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := catchup.installCatalogMetaSnapshotBytesV1(laterPending); err != nil {
+		t.Fatalf("later distinct pending mutation could not catch up: %v", err)
+	}
 }
 
 func TestCatalogReplicaReplacementSnapshotValidatesNewPreparationV1(t *testing.T) {
