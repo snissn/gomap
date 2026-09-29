@@ -686,6 +686,7 @@ func knownLifecycleSnapshotPreparedV1(old, incoming VectorPartitionLifecycleReco
 func validateKnownVectorPartitionPreparationSnapshotV1(
 	oldRecords, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	activeNames map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1,
 ) error {
 	var oldGenerations, nextGenerations map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1
 	for identity, old := range oldRecords {
@@ -709,6 +710,17 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 			return ErrVectorPartitionLifecycleConflict
 		}
 		terminal := incoming.State == VectorPartitionLifecycleInvalidatedV1 || incoming.State == VectorPartitionLifecycleRetiredV1 || incoming.State == VectorPartitionLifecycleCleanableV1 || incoming.State == VectorPartitionLifecycleAbsentV1
+		if terminal && !incoming.Aborted && old.PreviousActiveGeneration == 0 {
+			key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+			if activeIdentity, serving := activeNames[key]; serving && activeIdentity != identity {
+				predecessor, exists := records[activeIdentity]
+				// Initial activation needs the serving name vacated first. A
+				// known earlier invalidation also cannot exceed captured source.
+				if !exists || predecessor.State == VectorPartitionLifecycleActiveV1 || predecessor.InvalidationEpoch > old.MutationEpoch {
+					return ErrVectorPartitionLifecycleConflict
+				}
+			}
+		}
 		if terminal && !incoming.Aborted && old.PreviousActiveGeneration != 0 {
 			if oldGenerations == nil {
 				oldGenerations = lifecycleSnapshotGenerationIndexV1(oldRecords)

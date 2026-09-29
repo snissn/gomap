@@ -402,7 +402,10 @@ catch-up. Admission bounds their READY/PREPARE, abort or activation, and cleanup
 steps and checks the retained terminal command digest. ABSENT erases READY
 receipts: this proves bounded reducer reachability and retained source facts,
 not authentication of erased asset receipts. Named predecessor retirement must
-also be proved by the atomic reducer pair and its suffixes. A BUILDING/STAGED
+also be proved by the atomic reducer pair and its suffixes. An initial activation
+without a named predecessor must first vacate a locally known ACTIVE serving
+name, with an earlier invalidation compatible with its captured source epoch.
+A BUILDING/STAGED
 candidate whose newly acquired READY receipts were erased by ABSENT cannot
 supply that cutover proof; locally PREPARED cutover/cleanup retains the proof.
 New collection barriers must fit the remaining applied-index advance even

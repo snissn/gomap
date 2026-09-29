@@ -2819,10 +2819,16 @@ forged confirmed maximum-epoch barriers. ABSENT's erased READY receipts are not
 authenticated by these checks. These are snapshot-admission correctness tests;
 they make no runtime replacement or quantitative performance claim.
 The compacted-cutover test also refuses activation without predecessor
-retirement even when the forged snapshot offers spare applied entries.
+retirement even when the forged snapshot offers spare applied entries; its
+predecessor is independently invalidated and confirmed, so canonical decoding
+alone does not refuse the forgery.
 `TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1` uses an admitted legacy
 source-alias producer: unchanged history remains valid, but ambiguous
 Index+generation pairs deterministically receive no atomic-entry discount.
+`TestCatalogSnapshotInitialActivationServingNameGuardV1` refuses a canonical
+confirmed terminal candidate below an unchanged ACTIVE source watermark, while
+accepting genuine invalidation/confirmation/retirement followed by initial
+activation and a later confirmed mutation.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

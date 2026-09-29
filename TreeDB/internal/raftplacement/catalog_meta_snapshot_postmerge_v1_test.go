@@ -263,10 +263,20 @@ func TestCatalogSnapshotCompactedCutoverIndependentSuffixBudgetV1(t *testing.T) 
 	}))
 	current := postmergeSnapshotBytesV1(t, leader)
 	assertReplicaReplacementBudgetSnapshotV1(t, before, current, 2)
+	independent := NewCatalogMetaAuthorityV1()
+	if err := independent.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	independentApplied := independent.applied
+	invalidated := catalogMetaLifecycleApplyV1(t, independent, &independentApplied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "independent predecessor mutation", active.MutationEpoch+1
+	}))
+	invalidated = catalogMetaLifecycleApplyV1(t, independent, &independentApplied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = invalidated.InvalidationEpoch }))
+	assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, independent))
 	forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
 		for i := range lifecycle.Records {
 			if lifecycle.Records[i].Identity == active.Identity {
-				lifecycle.Records[i] = active
+				lifecycle.Records[i] = invalidated
 			}
 		}
 		// Spare budget cannot prove the omitted atomic predecessor retirement.
@@ -310,4 +320,60 @@ func TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1(t *testing.T) {
 			t.Fatalf("ambiguous pair discounted: %v", err)
 		}
 	}
+}
+
+func TestCatalogSnapshotInitialActivationServingNameGuardV1(t *testing.T) {
+	t.Run("unchanged higher-watermark ACTIVE", func(t *testing.T) {
+		leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+		applied := uint64(1)
+		active := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, catalogMetaLifecycleTestIdentityV1(catalog, 7, 11), 0, 20)
+		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 20 }))
+		candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, catalogMetaLifecycleTestIdentityV1(catalog, 8, 12), 0, 10)
+		before := postmergeSnapshotBytesV1(t, leader)
+		// The pure reducer can form these records; catalog ACTIVATE refuses them
+		// while the known serving name remains ACTIVE. Confirmed fence 11 is below
+		// old ACTIVE's captured watermark 20, so the forged snapshot is canonical.
+		var err error
+		for _, kind := range []VectorPartitionLifecycleCommandKindV1{VectorPartitionLifecycleActivateV1, VectorPartitionLifecycleInvalidateV1, VectorPartitionLifecycleConfirmMutationV1} {
+			c := catalogMetaLifecycleTestCommandV1(candidate, kind, func(c *VectorPartitionLifecycleCommandV1) {
+				switch kind {
+				case VectorPartitionLifecycleActivateV1:
+					c.MutationEpoch = 10
+				case VectorPartitionLifecycleInvalidateV1:
+					c.Reason, c.InvalidationEpoch = "forged initial activation", 11
+				case VectorPartitionLifecycleConfirmMutationV1:
+					c.MutationEpoch = 11
+				}
+			})
+			candidate, err = ApplyVectorPartitionLifecycleCommandV1(candidate, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		forged := postmergeRewriteSnapshotV1(t, before, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+			for i := range lifecycle.Records {
+				if lifecycle.Records[i].Identity == candidate.Identity {
+					lifecycle.Records[i] = candidate
+				}
+			}
+			lifecycle.MutationFences = []vectorPartitionLifecycleMutationFenceV1{{Collection: active.Identity.Index.Collection, IndexName: active.Identity.Index.IndexName, Epoch: 11}}
+			snapshot.AppliedIndex += 10
+		})
+		postmergeSnapshotRefusesV1(t, before, forged)
+	})
+	t.Run("vacated serving name", func(t *testing.T) {
+		leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+		applied := uint64(1)
+		active := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, catalogMetaLifecycleTestIdentityV1(catalog, 7, 11), 0, 9)
+		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 9 }))
+		candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, catalogMetaLifecycleTestIdentityV1(catalog, 8, 12), 0, 11)
+		before := postmergeSnapshotBytesV1(t, leader)
+		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) { c.Reason, c.InvalidationEpoch = "vacate serving name", 10 }))
+		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 10 }))
+		catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleRetireV1, nil))
+		candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 11 }))
+		candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) { c.Reason, c.InvalidationEpoch = "new serving mutation", 12 }))
+		catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 12 }))
+		assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+	})
 }

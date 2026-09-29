@@ -696,7 +696,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 				return CatalogMetaStatusV1{}, err
 			}
 		} else {
-			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle, mutationFences); err != nil {
+			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle, mutationFences, a.activeNames); err != nil {
 				return CatalogMetaStatusV1{}, err
 			}
 			knownServing := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(a.lifecycle))
