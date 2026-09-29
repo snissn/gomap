@@ -561,6 +561,26 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, nil, appliedIndex, replacementEntries)
 }
 
+type lifecycleSnapshotGenerationKeyV1 struct {
+	index      VectorPartitionLifecycleIndexIdentityV1
+	generation uint64
+}
+
+// Legacy records may share Index+generation with different source identities.
+// A zero identity marks that ambiguity; map iteration cannot select a proof.
+func lifecycleSnapshotGenerationIndexV1(records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1) map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1 {
+	indexed := make(map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1, len(records))
+	for identity := range records {
+		key := lifecycleSnapshotGenerationKeyV1{identity.Index, identity.Generation}
+		if _, duplicate := indexed[key]; duplicate {
+			indexed[key] = VectorPartitionLifecycleIdentityV1{}
+		} else {
+			indexed[key] = identity
+		}
+	}
+	return indexed
+}
+
 // Each lifecycle command advances one known record, except a reducer-proved
 // atomic cutover, which advances its predecessor and candidate together. Fence
 // changes are side effects. Incoming-only records and erased receipts do not
@@ -570,11 +590,7 @@ func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 	budget uint64,
 ) (uint64, error) {
-	type generationKey struct {
-		index      VectorPartitionLifecycleIndexIdentityV1
-		generation uint64
-	}
-	var generations map[generationKey]VectorPartitionLifecycleIdentityV1
+	var generations, incomingGenerations map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1
 	remaining := budget
 	for identity, prior := range old {
 		incoming, ok := next[identity]
@@ -584,15 +600,12 @@ func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 		distance := incoming.Revision - prior.Revision
 		if prior.State == VectorPartitionLifecycleActiveV1 && incoming.SupersededByGeneration != 0 {
 			if generations == nil {
-				generations = make(map[generationKey]VectorPartitionLifecycleIdentityV1)
-				for candidateIdentity, candidate := range old {
-					if candidate.State == VectorPartitionLifecycleBuildingV1 || candidate.State == VectorPartitionLifecycleStagedV1 || candidate.State == VectorPartitionLifecyclePreparedV1 {
-						generations[generationKey{candidateIdentity.Index, candidateIdentity.Generation}] = candidateIdentity
-					}
-				}
+				generations = lifecycleSnapshotGenerationIndexV1(old)
+				incomingGenerations = lifecycleSnapshotGenerationIndexV1(next)
 			}
-			candidateIdentity, known := generations[generationKey{identity.Index, incoming.SupersededByGeneration}]
-			if known && knownLifecycleSnapshotCutoverV1(prior, old[candidateIdentity], next, fences) {
+			candidateIdentity := generations[lifecycleSnapshotGenerationKeyV1{identity.Index, incoming.SupersededByGeneration}]
+			candidate, known := old[candidateIdentity]
+			if known && knownLifecycleSnapshotCutoverV1(prior, candidate, next, fences, generations, incomingGenerations) {
 				distance--
 			}
 		}
@@ -610,7 +623,14 @@ func knownLifecycleSnapshotCutoverV1(
 	previous, candidate VectorPartitionLifecycleRecordV1,
 	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	oldGenerations, nextGenerations map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1,
 ) bool {
+	for _, identity := range []VectorPartitionLifecycleIdentityV1{previous.Identity, candidate.Identity} {
+		key := lifecycleSnapshotGenerationKeyV1{identity.Index, identity.Generation}
+		if oldGenerations[key] != identity || nextGenerations[key] != identity {
+			return false
+		}
+	}
 	incoming, ok := records[candidate.Identity]
 	if !ok {
 		return false
@@ -667,6 +687,7 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 	oldRecords, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 ) error {
+	var oldGenerations, nextGenerations map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1
 	for identity, old := range oldRecords {
 		if old.State != VectorPartitionLifecycleBuildingV1 && old.State != VectorPartitionLifecycleStagedV1 &&
 			old.State != VectorPartitionLifecyclePreparedV1 {
@@ -686,6 +707,18 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 			incoming.PreviousActiveGeneration != old.PreviousActiveGeneration || incoming.MutationEpoch != old.MutationEpoch ||
 			!slices.Equal(incoming.SourceOwners, old.SourceOwners) || !slices.Equal(incoming.ANNOwners, old.ANNOwners) {
 			return ErrVectorPartitionLifecycleConflict
+		}
+		terminal := incoming.State == VectorPartitionLifecycleInvalidatedV1 || incoming.State == VectorPartitionLifecycleRetiredV1 || incoming.State == VectorPartitionLifecycleCleanableV1 || incoming.State == VectorPartitionLifecycleAbsentV1
+		if terminal && !incoming.Aborted && old.PreviousActiveGeneration != 0 {
+			if oldGenerations == nil {
+				oldGenerations = lifecycleSnapshotGenerationIndexV1(oldRecords)
+				nextGenerations = lifecycleSnapshotGenerationIndexV1(records)
+			}
+			previousIdentity := oldGenerations[lifecycleSnapshotGenerationKeyV1{identity.Index, old.PreviousActiveGeneration}]
+			previous, known := oldRecords[previousIdentity]
+			if !known || !knownLifecycleSnapshotCutoverV1(previous, old, records, fences, oldGenerations, nextGenerations) {
+				return ErrVectorPartitionLifecycleConflict
+			}
 		}
 		if incoming.State == VectorPartitionLifecycleAbsentV1 {
 			if !knownPreparationTerminalSnapshotV1(old, incoming, records, fences) {

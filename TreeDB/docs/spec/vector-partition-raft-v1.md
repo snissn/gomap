@@ -392,14 +392,19 @@ independently of lifecycle provenance. It then sums the revision advances of
 locally known lifecycle records. Two records share one entry only when the
 pure reducer reconstructs their atomic cutover and both resulting records
 have valid snapshot suffixes; independent commands within one Index do not
-share a cost. Mutation fence changes are side effects and add no separate
+share a cost. Pair identities must be unique at their full Index+generation;
+ambiguous legacy source aliases cannot select a cutover proof. Mutation fence
+changes are side effects and add no separate
 entry. This is a lower bound, not an exact command union for erased or
 incoming-only history.
 Known preparation records retain their source/identity facts through terminal
 catch-up. Admission bounds their READY/PREPARE, abort or activation, and cleanup
 steps and checks the retained terminal command digest. ABSENT erases READY
 receipts: this proves bounded reducer reachability and retained source facts,
-not authentication of erased asset receipts.
+not authentication of erased asset receipts. Named predecessor retirement must
+also be proved by the atomic reducer pair and its suffixes. A BUILDING/STAGED
+candidate whose newly acquired READY receipts were erased by ABSENT cannot
+supply that cutover proof; locally PREPARED cutover/cleanup retains the proof.
 New collection barriers must fit the remaining applied-index advance even
 when lifecycle records change: BEGIN, CONFIRM, and replacement phases consume
 distinct entries. A validated invalidation advance of a locally known record

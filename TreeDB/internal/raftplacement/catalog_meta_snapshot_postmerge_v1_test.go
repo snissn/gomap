@@ -261,5 +261,53 @@ func TestCatalogSnapshotCompactedCutoverIndependentSuffixBudgetV1(t *testing.T) 
 	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
 		c.Reason, c.InvalidationEpoch = "independent post-cutover suffix", candidate.MutationEpoch+1
 	}))
-	assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader), 2)
+	current := postmergeSnapshotBytesV1(t, leader)
+	assertReplicaReplacementBudgetSnapshotV1(t, before, current, 2)
+	forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+		for i := range lifecycle.Records {
+			if lifecycle.Records[i].Identity == active.Identity {
+				lifecycle.Records[i] = active
+			}
+		}
+		// Spare budget cannot prove the omitted atomic predecessor retirement.
+		snapshot.AppliedIndex += 10
+	})
+	t.Run("activation-without-predecessor-retirement", func(t *testing.T) { postmergeSnapshotRefusesV1(t, before, forged) })
+}
+
+// Legacy admission permits two source identities for one Index+generation.
+// That history remains canonical, but cannot select an atomic pair by map order.
+func TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1(t *testing.T) {
+	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	active := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, identity, 0, 9)
+	active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = active.MutationEpoch }))
+	candidateIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, candidateIdentity, active.Identity.Generation, 10)
+	aliasIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 13)
+	catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, aliasIdentity, active.Identity.Generation, 10)
+	before := cloneVectorPartitionLifecycleRecordsV1(leader.lifecycle)
+	beforeBytes := postmergeSnapshotBytesV1(t, leader)
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(beforeBytes); err != nil {
+		t.Fatalf("legacy source aliases not admitted: %v", err)
+	}
+	if cost, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(before, before, leader.mutationFences, 0); err != nil || cost != 0 {
+		t.Fatalf("unchanged legacy history: cost=%d err=%v", cost, err)
+	}
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.PreviousActiveGeneration, c.PreviousActiveRevision = active.Identity.Generation, active.Revision
+		c.MutationEpoch = candidate.MutationEpoch
+	}))
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(postmergeSnapshotBytesV1(t, leader)); err != nil {
+		t.Fatalf("legacy cutover producer not canonical: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if cost, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(before, leader.lifecycle, leader.mutationFences, 2); err != nil || cost != 2 {
+			t.Fatalf("ambiguous pair selected: cost=%d err=%v", cost, err)
+		}
+		if _, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(before, leader.lifecycle, leader.mutationFences, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("ambiguous pair discounted: %v", err)
+		}
+	}
 }

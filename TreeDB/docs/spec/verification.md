@@ -2818,6 +2818,11 @@ direct-invalidation epoch-jump producers, and refuses short mixed budgets and
 forged confirmed maximum-epoch barriers. ABSENT's erased READY receipts are not
 authenticated by these checks. These are snapshot-admission correctness tests;
 they make no runtime replacement or quantitative performance claim.
+The compacted-cutover test also refuses activation without predecessor
+retirement even when the forged snapshot offers spare applied entries.
+`TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1` uses an admitted legacy
+source-alias producer: unchanged history remains valid, but ambiguous
+Index+generation pairs deterministically receive no atomic-entry discount.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
