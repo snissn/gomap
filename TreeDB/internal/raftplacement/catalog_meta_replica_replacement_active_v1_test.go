@@ -204,6 +204,42 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	}
 }
 
+func TestCatalogReplicaReplacementActiveSnapshotRefusesSourceBeginV1(t *testing.T) {
+	a, _, _ := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(before, &forged); err != nil {
+		t.Fatal(err)
+	}
+	begin := activeReplicaReplacementBeginV1(a.record)
+	begin.OperationID = "replace-active-source"
+	begin.GroupID = "group-a"
+	begin.OldNodeID = "node-a"
+	begin.NewPeer = raftcluster.Peer{ID: "source-spare", Address: "127.0.0.1:19002"}
+	beginRaw, err := EncodeReplicaReplacementBeginV1(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(map[raftcluster.GroupID][]byte{begin.GroupID: beginRaw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.AppliedIndex++
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("same-epoch snapshot introduced source-group BEGIN: %v", err)
+	}
+	if retained, err := a.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused same-epoch source-group BEGIN mutated authority: %v", err)
+	}
+}
+
 func TestCatalogReplicaReplacementRefusesPendingMutationAndBuildingV1(t *testing.T) {
 	t.Run("pending-mutation", func(t *testing.T) {
 		a, begin, active := activeReplicaReplacementAuthorityV1(t, true)

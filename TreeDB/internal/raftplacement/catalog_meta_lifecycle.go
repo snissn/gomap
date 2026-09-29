@@ -360,6 +360,31 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleLockedV1(gro
 	return nil
 }
 
+// Snapshot restore may compact several committed commands. A replacement
+// operation absent from the local authority still needs the same lifecycle
+// admission as a committed BEGIN, even when the catalog epoch is unchanged.
+func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements map[raftcluster.GroupID][]byte) error {
+	for group, raw := range replacements {
+		next, err := decodeReplicaReplacementCurrentV1(raw)
+		if err != nil {
+			return err
+		}
+		if oldRaw := a.replacements[group]; len(oldRaw) != 0 {
+			old, err := decodeReplicaReplacementCurrentV1(oldRaw)
+			if err != nil {
+				return err
+			}
+			if sameReplicaReplacementBeginV1(old.Begin, next.Begin) {
+				continue
+			}
+		}
+		if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *CatalogMetaAuthorityV1) rebindReplicaReplacementLifecycleLockedV1(next CatalogMetaRecordV1) (
 	map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1,

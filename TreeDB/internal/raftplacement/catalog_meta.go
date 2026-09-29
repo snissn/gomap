@@ -677,6 +677,9 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 			}
 			return a.statusLocked(), nil
 		}
+		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
 		a.replacements = replacements
 		a.replacementBytes = uint64(len(snapshot.ReplicaReplacements))
 		a.lifecycle = lifecycle
@@ -693,7 +696,10 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err := validateReplicaReplacementSnapshotTopologyV1(a.resolved, resolved, replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		if err := validateReplicaReplacementLifecycleFeatureTransitionV1(a.record, record, a.replacements); err != nil {
+		if err := validateReplicaReplacementLifecycleFeatureTransitionV1(a.record, record, replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 		if err := a.validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(record, replacements, snapshot.VectorPartitionLifecycle); err != nil {
