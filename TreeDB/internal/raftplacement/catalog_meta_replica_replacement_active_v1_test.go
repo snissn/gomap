@@ -1612,6 +1612,95 @@ func TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1
 	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
 		t.Fatalf("refused stale new ACTIVE mutated follower: %v", err)
 	}
+	// The incoming collection barrier is authoritative for a new ACTIVE
+	// generation. A follower's older barrier must not admit stale source data.
+	forged = CatalogMetaSnapshotV1{}
+	if err := json.Unmarshal(honest, &forged); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle = vectorPartitionLifecycleSnapshotV1{}
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle.CollectionMutationBarriers = []vectorPartitionCollectionMutationBarrierV1{{
+		Collection: identity.Index.Collection, Epoch: candidate.MutationEpoch + 1,
+		Pending: true, OperationDigest: strings.Repeat("f", 64),
+	}}
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err = json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("incoming-barrier snapshot was not internally canonical: %v", err)
+	}
+	refusing = NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("new ACTIVE predating incoming collection barrier restored: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused incoming-barrier snapshot mutated follower: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMutationV1(t *testing.T) {
+	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	raw, err := EncodeReplicaReplacementBeginV1(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
+		t.Fatalf("admit replacement BEGIN: %v", err)
+	}
+	mutation := vectorPartitionCollectionMutationCommandV1{
+		Kind:         vectorPartitionBeginCollectionMutationV1,
+		Collection:   active.Identity.Index.Collection,
+		CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+		ExpectedMutationEpoch: active.MutationEpoch, MutationEpoch: active.MutationEpoch + 1,
+		OperationDigest: strings.Repeat("e", 64),
+	}
+	commitMutation := func() {
+		t.Helper()
+		raw, err := encodeVectorPartitionCollectionMutationCommandV1(mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+			t.Fatalf("commit %s: %v", mutation.Kind, err)
+		}
+	}
+	commitMutation()
+	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+		t.Fatalf("install admitted BEGIN and pending mutation: %v", err)
+	}
+	mutation.Kind = vectorPartitionConfirmCollectionMutationV1
+	mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+	commitMutation()
+	completeReplicaReplacementForTestV1(t, leader, begin)
+	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("completed snapshot is not internally canonical: %v", err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("already admitted BEGIN could not catch up after mutation confirmation: %v", err)
+	}
+	if got, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, completed) {
+		t.Fatalf("catch-up snapshot differs from committed authority: %v", err)
+	}
 }
 
 func TestCatalogReplicaReplacementSnapshotValidatesNewPreparationV1(t *testing.T) {
