@@ -565,7 +565,7 @@ func fixedPeerVectorLifecycleSpecV1(vector *FixedPeerTCPVectorConfigV1) ([]raftc
 }
 
 func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleLeaderV1(ctx context.Context) (raftplacement.CatalogMetaStatusV1, error) {
-	if r == nil || r.config.Vector == nil {
+	if r == nil || r.vector == nil || r.meta == nil || r.config.Vector == nil {
 		return raftplacement.CatalogMetaStatusV1{}, ErrFixedPeerVectorUnavailableV1
 	}
 	status := r.meta.RuntimeStatusV1()
@@ -601,6 +601,9 @@ func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleLeaderV1(ctx context.Contex
 }
 
 func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleV1(ctx context.Context) error {
+	if r == nil || r.vector == nil {
+		return ErrFixedPeerVectorUnavailableV1
+	}
 	leader, err := r.client.leader(ctx, r.config.Catalog)
 	if err != nil {
 		return err
@@ -700,6 +703,7 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		owners[partition.GroupID] = true
 	}
 	immutable := vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{})
+	standby := fixedPeerImmutableVectorStandbyV1(config) && len(localGroups) == 0
 	if len(owners) == 0 || (!immutable && len(owners) != 1) {
 		return errors.New("fixed-peer vector runtime requires exactly one owner group")
 	}
@@ -709,10 +713,10 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 			localDataGroups++
 		}
 	}
-	if localDataGroups != 1 {
+	if !standby && localDataGroups != 1 {
 		return errors.New("fixed-peer vector runtime requires exactly one local data group")
 	}
-	if !localGroups[config.Catalog.ID] {
+	if !standby && !localGroups[config.Catalog.ID] {
 		return errors.New("fixed-peer vector runtime requires local catalog authority")
 	}
 	for group := range owners {
@@ -851,6 +855,13 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	return nil
 }
 
+// A preauthorized Nodes-only spare retains the exact immutable config but has
+// no Raft membership or local vector assets until a later replacement phase.
+func fixedPeerImmutableVectorStandbyV1(config FixedPeerTCPConfigV1) bool {
+	return config.Credentials != nil && config.Vector != nil && len(config.RaftListen) == 0 &&
+		config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{})
+}
+
 // searchVectorPartitionStrictV1 keeps mutable search on the single owner whose
 // Raft barrier and fresh live pin authorize it. Immutable search is coordinated
 // at the public ingress and may dispatch to several independently hosted owners.
@@ -933,7 +944,7 @@ func fixedPeerVectorPublicErrorV1(err error) error {
 // configured owner leader. The receiving owner repeats the complete proof
 // validation inside its serialized preflight-to-consensus boundary.
 func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
-	if r == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
+	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
 	var group *FixedPeerTCPGroupV1

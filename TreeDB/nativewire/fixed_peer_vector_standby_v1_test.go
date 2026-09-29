@@ -47,9 +47,27 @@ func TestFixedPeerImmutableVectorNodesOnlyStandbyV1(t *testing.T) {
 	spare.ClusterID = "immutable-standby"
 	ca := newPeerCAFixtureV1(t)
 	spare.Credentials = ca.issue(t, spare.ClusterID, string(spareID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	incumbent := configs[0]
+	incumbent.ClusterID = spare.ClusterID
+	incumbent.Nodes = spare.Nodes
+	incumbent.Vector = spare.Vector
+	incumbent.Credentials = ca.issue(t, incumbent.ClusterID, string(incumbent.NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	incumbentIdentity, err := InspectFixedPeerTCPConfigV1(incumbent)
+	if err != nil {
+		t.Fatalf("incumbent rejected shared standby inventory: %v", err)
+	}
+	unauthenticated := spare
+	unauthenticated.Credentials = nil
+	if _, err := InspectFixedPeerTCPConfigV1(unauthenticated); err == nil {
+		t.Fatal("unauthenticated Nodes-only vector standby admitted")
+	}
 
-	if _, err := InspectFixedPeerTCPConfigV1(spare); err != nil {
+	standbyIdentity, err := InspectFixedPeerTCPConfigV1(spare)
+	if err != nil {
 		t.Fatalf("preauthorized standby rejected: %v", err)
+	}
+	if !standbyIdentity.Authenticated || incumbentIdentity.SharedSHA256 != standbyIdentity.SharedSHA256 {
+		t.Fatalf("standby does not share authenticated incumbent inventory: incumbent=%+v standby=%+v", incumbentIdentity, standbyIdentity)
 	}
 	client, err := NewFixedPeerTCPClientV1(spare)
 	if err != nil {
@@ -75,10 +93,16 @@ func TestFixedPeerImmutableVectorNodesOnlyStandbyV1(t *testing.T) {
 			t.Fatalf("standby opened a public vector listener: %v", err)
 		}
 		_ = publicListener.Close()
-		if _, err := runtime.searchVectorPartitionStrictV1(ctx, public.SearchRequestV1{}); err == nil {
-			t.Fatal("standby served strict vector search")
+		if _, err := runtime.searchVectorPartitionStrictV1(ctx, public.SearchRequestV1{}); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+			t.Fatalf("standby did not reject strict vector search as unavailable: %v", err)
 		}
-		if readiness, err := runtime.ReadinessV1(ctx); err == nil || readiness.Ready {
+		if _, err := runtime.SubmitVectorPartitionInsertV1(ctx, VectorPartitionRoutedInsertV1{OwnerGroup: "group-b"}); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+			t.Fatalf("standby forwarded vector mutation: %v", err)
+		}
+		if _, err := runtime.ensureVectorLifecycleLeaderV1(ctx); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+			t.Fatalf("standby claimed vector lifecycle authority: %v", err)
+		}
+		if readiness, err := runtime.ReadinessV1(ctx); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) || readiness.Ready {
 			t.Fatalf("standby claimed readiness: %+v, %v", readiness, err)
 		}
 		if _, err := runtime.validateReplacementBeginV1(raftplacement.ReplicaReplacementBeginV1{}); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
