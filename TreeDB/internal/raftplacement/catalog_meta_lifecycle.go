@@ -1293,17 +1293,22 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 		return ErrVectorPartitionLifecycleConflict
 	}
 	remaining -= reserved
+	if len(barriers) == 0 {
+		return nil
+	}
 	// Only a previously known record whose validated successor invalidates it
 	// can explain a lifecycle epoch jump. Incoming-only records are not evidence.
 	var jumpEpochs map[CollectionRefV1]uint64
-	for identity, prior := range a.lifecycle {
-		incoming, known := records[identity]
-		if known && incoming.Revision > prior.Revision && incoming.InvalidationEpoch > prior.InvalidationEpoch {
-			if jumpEpochs == nil {
-				jumpEpochs = make(map[CollectionRefV1]uint64)
+	if len(records) != 0 {
+		for identity, prior := range a.lifecycle {
+			incoming, known := records[identity]
+			if known && incoming.Revision > prior.Revision && incoming.InvalidationEpoch > prior.InvalidationEpoch {
+				if jumpEpochs == nil {
+					jumpEpochs = make(map[CollectionRefV1]uint64)
+				}
+				collection := identity.Index.Collection
+				jumpEpochs[collection] = max(jumpEpochs[collection], incoming.InvalidationEpoch)
 			}
-			collection := identity.Index.Collection
-			jumpEpochs[collection] = max(jumpEpochs[collection], incoming.InvalidationEpoch)
 		}
 	}
 	for collection, incoming := range barriers {
