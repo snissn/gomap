@@ -24,7 +24,7 @@ validates and hashes configuration without opening credentials, stores, listener
 or cloud resources. `-expected-binary-sha256` refuses a different executable
 before any network/store activity.
 
-The JSON is `nativewire.FixedPeerTCPConfigV1` (strict fields, maximum 1 MiB):
+The JSON is `nativewire.FixedPeerTCPConfigV1` (strict fields, maximum 8 MiB of config input, independent of the native frame and inspector-output limits):
 
 | Field | Contract |
 | --- | --- |

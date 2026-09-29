@@ -188,14 +188,16 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	}
 }
 
+const maxFixedPeerConfigBytes = 8 << 20
+
 func readConfig(reader io.Reader) (nativewire.FixedPeerTCPConfigV1, error) {
 	var config nativewire.FixedPeerTCPConfigV1
-	raw, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+	raw, err := io.ReadAll(io.LimitReader(reader, maxFixedPeerConfigBytes+1))
 	if err != nil {
 		return config, err
 	}
-	if len(raw) > 1<<20 {
-		return config, fmt.Errorf("configuration exceeds 1 MiB")
+	if len(raw) > maxFixedPeerConfigBytes {
+		return config, fmt.Errorf("configuration exceeds 8 MiB")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
