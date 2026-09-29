@@ -2755,6 +2755,18 @@ lineage remain intact and affected page checksums are recomputed.
   [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
   conformance from #4250 multi-host performance and #3983 fault evidence.
 
+## Immutable ACTIVE replacement authority continuity (#4811)
+
+`TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1` checks
+catalog epoch/digest rebinding of an immutable ACTIVE record, unchanged READY
+receipts, a new ready-set digest, exact retry, and pending/final snapshot replay.
+`TestCatalogReplicaReplacementRefusesPendingMutationAndBuildingV1` checks the
+pending-mutation, BUILDING, and source-group guards. The existing
+`TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1` checks that
+ordinary feature activation over older completed replacement evidence refuses
+both as a command and a forward snapshot. These are authority-only checks;
+fixed-peer vector replacement BEGIN remains unavailable.
+
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
 `TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1` starts real separate
