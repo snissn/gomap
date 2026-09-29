@@ -1535,6 +1535,10 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
 		t.Fatalf("admit replacement BEGIN: %v", err)
 	}
+	admitted, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
 	mutation := vectorPartitionCollectionMutationCommandV1{
 		Kind:         vectorPartitionBeginCollectionMutationV1,
 		Collection:   active.Identity.Index.Collection,
@@ -1574,6 +1578,16 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	}
 	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
 		t.Fatalf("already admitted BEGIN could not catch up after mutation confirmation: %v", err)
+	}
+	noBarrierFollower := NewCatalogMetaAuthorityV1()
+	if err := noBarrierFollower.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+		t.Fatal(err)
+	}
+	if err := noBarrierFollower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("admitted BEGIN could not catch up with a newly confirmed barrier: %v", err)
+	}
+	if got, err := noBarrierFollower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, completed) {
+		t.Fatalf("new-barrier catch-up differs from committed authority: %v", err)
 	}
 	if got, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, completed) {
 		t.Fatalf("catch-up snapshot differs from committed authority: %v", err)
@@ -1630,6 +1644,80 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	}
 	if err := catchup.installCatalogMetaSnapshotBytesV1(laterPending); err != nil {
 		t.Fatalf("later distinct pending mutation could not catch up: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnwitnessedCollectionBarrierV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := vectorPartitionCollectionMutationCommandV1{
+		Kind: vectorPartitionBeginCollectionMutationV1, Collection: active.Identity.Index.Collection,
+		CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+		ExpectedMutationEpoch: active.MutationEpoch, MutationEpoch: active.MutationEpoch + 1,
+		OperationDigest: strings.Repeat("e", 64),
+	}
+	for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
+		vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,
+	} {
+		mutation.Kind = kind
+		if kind == vectorPartitionConfirmCollectionMutationV1 {
+			mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+		}
+		raw, err := encodeVectorPartitionCollectionMutationCommandV1(mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+			t.Fatalf("commit %s: %v", kind, err)
+		}
+	}
+	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("real new collection barrier could not catch up: %v", err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(completed, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if len(lifecycle.CollectionMutationBarriers) != 1 || len(lifecycle.CollectionMutationBarriers[0].Completed) != 1 {
+		t.Fatalf("new barrier fixture=%+v", lifecycle.CollectionMutationBarriers)
+	}
+	lifecycle.CollectionMutationBarriers[0].Epoch = math.MaxUint64
+	lifecycle.CollectionMutationBarriers[0].Completed[0].Epoch = math.MaxUint64
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged barrier snapshot is not internally canonical: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("incoming-only MaxUint64 barrier restored: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused incoming-only barrier mutated authority: %v", err)
 	}
 }
 
