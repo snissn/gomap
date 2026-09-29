@@ -338,6 +338,60 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 			t.Fatalf("same-generation local parity at rank %d: remote=%+v local=%+v", i, remote, local)
 		}
 	}
+	if separateLeaders && !sourceFollower {
+		// The valid public request above used both owner shards. A node with a
+		// valid cluster certificate must still be unable to send group-c work
+		// directly to owner-b's authenticated shard endpoint.
+		transport, err := NewPeerTransportV1(configs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transport.Close()
+		endpoint := configs[0].Vector.ShardAddresses["group-b"]["owner-b"]
+		identity, err := transport.ProbeShardEndpointV1(ctx, endpoint, "owner-b", "group-b")
+		if err != nil || identity.GroupID != "group-b" {
+			t.Fatalf("owner-b authenticated shard probe: identity=%+v err=%v", identity, err)
+		}
+		conn, err := transport.dialScope(ctx, endpoint, "owner-b", "shard:group-b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			_ = conn.Close()
+			t.Fatal(err)
+		}
+		wrongOwner := vectorPartitionShardSearchRequestTestV1([]uint32{2})
+		wrongOwner.TargetGroupID, wrongOwner.TargetNodeID = "group-c", "owner-c"
+		wrongOwner.Database, wrongOwner.Catalog, wrongOwner.Collection = configs[0].Vector.Collection.Database, configs[0].Vector.Collection.Catalog, configs[0].Vector.Collection.Collection
+		wrongOwner.IndexName, wrongOwner.IndexDefinitionDigest = seed.manifest.IndexName, seed.manifest.IndexDefinitionDigest
+		wrongOwner.SourceGeneration, wrongOwner.SourceChecksum = seed.manifest.SourceGeneration, seed.manifest.SourceChecksum
+		wrongOwner.SourceSchemaHash, wrongOwner.SourceRowCount = seed.manifest.SourceSchemaHash, seed.manifest.SourceRowCount
+		wrongOwner.PartitionGeneration, wrongOwner.RouterGeneration = seed.manifest.Generation, seed.manifest.Generation
+		wrongOwner.DeadlineUnixNano = time.Now().Add(5 * time.Second).UnixNano()
+		if err := writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Request: &wrongOwner}, vectorPartitionShardSearchTCPMaxFrameBytesV1); err != nil {
+			_ = conn.Close()
+			t.Fatalf("write authenticated wrong-owner frame: %v", err)
+		}
+		_, readErr := readVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+		_ = conn.Close()
+		if readErr == nil {
+			t.Fatal("owner-b accepted authenticated group-c shard request")
+		}
+		var netErr net.Error
+		if errors.As(readErr, &netErr) && netErr.Timeout() {
+			t.Fatalf("owner-b did not promptly refuse wrong-owner shard request: %v", readErr)
+		}
+		request.Deadline = time.Now().Add(30 * time.Second)
+		afterFault, err := publicClient.VectorSearchStrictV1(ctx, request)
+		if err != nil || len(afterFault.Neighbors) != len(response.Neighbors) {
+			t.Fatalf("strict public search after wrong-owner refusal: response=%+v err=%v", afterFault, err)
+		}
+		for i := range response.Neighbors {
+			if afterFault.Neighbors[i] != response.Neighbors[i] {
+				t.Fatalf("wrong-owner fault changed strict result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], afterFault.Neighbors[i])
+			}
+		}
+	}
 	// Losing one selected owner must fail the whole public request; no partial
 	// hits from the surviving owner may escape. Reopen that owner on its original
 	// hosted-only assets and require the same generation/result again.
