@@ -166,14 +166,15 @@ func fixedPeerAssertInFlightActiveInvalidationV1(t *testing.T, ctx context.Conte
 	}
 	select {
 	case got := <-finished:
-		if got.err == nil || len(got.response.Neighbors) != 0 {
+		if !hasPublicVectorErrorCodeV1(got.err, public.ErrorGenerationMismatchV1) || len(got.response.Neighbors) != 0 {
 			t.Fatalf("strict search returned stale ACTIVE result after committed invalidation: response=%+v err=%v", got.response, got.err)
 		}
 	case <-ctx.Done():
 		t.Fatalf("strict search did not finish after owner release: %v", ctx.Err())
 	}
+	request.Deadline = time.Now().Add(30 * time.Second)
 	retry, err := client.VectorSearchStrictV1(ctx, request)
-	if err == nil || len(retry.Neighbors) != 0 {
+	if !hasPublicVectorErrorCodeV1(err, public.ErrorGenerationMismatchV1) || len(retry.Neighbors) != 0 {
 		t.Fatalf("strict search re-entered invalidated ACTIVE generation: response=%+v err=%v", retry, err)
 	}
 }
