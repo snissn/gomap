@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"os"
@@ -25,18 +26,22 @@ import (
 // This is the deployment test, not a local topology simulation. In particular,
 // a node may never receive another owner's graph segment during fixture setup.
 func TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false, false)
 }
 
 func TestMultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, false, false)
 }
 
 func TestMultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1(t *testing.T) {
-	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true)
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, true, true, false)
 }
 
-func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower bool) {
+func TestMultiOwnerTCPDomainSearchRejectsMissingHostedOwnerAssetV1(t *testing.T) {
+	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false, true)
+}
+
+func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower, missingOwnerAsset bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
@@ -342,11 +347,63 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	if searchErr == nil || len(partial.Neighbors) != 0 {
 		t.Fatalf("missing selected owner returned partial result: response=%+v err=%v", partial, searchErr)
 	}
+	missingAsset, missingAssetRel := "", ""
+	if missingOwnerAsset {
+		for _, asset := range seed.manifest.Assets {
+			if placements[asset.PartitionID] != "group-b" {
+				continue
+			}
+			rel := filepath.Join(filepath.FromSlash(asset.Ref.Namespace), "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
+			if hostedFiles["group-b"][rel] {
+				missingAsset = filepath.Join(backenddb.ColumnAssetRootDirPath(filepath.Join(configs[1].DataRoot, "group-b")), rel)
+				missingAssetRel = rel
+				break
+			}
+		}
+		if missingAsset == "" {
+			t.Fatal("group-b has no declared hosted graph segment to remove")
+		}
+		if err := os.Remove(missingAsset); err != nil {
+			t.Fatalf("remove declared group-b graph segment: %v", err)
+		}
+		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed group-b graph segment still exists: %v", err)
+		}
+	}
 	processes[1] = fixedPeerStartTestProcessV1(t, configs[1])
 	fixedPeerWaitV1(t, ctx, func() bool {
 		status, err := client.Status(ctx, "owner-b")
 		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
 	})
+	if missingOwnerAsset {
+		_, recoveryErr := client.EnsureImmutableVectorLifecycleV1(ctx)
+		var remoteErr *fixedPeerRemoteErrorV1
+		missingFile := strings.ToLower(fmt.Sprint(recoveryErr))
+		if !errors.As(recoveryErr, &remoteErr) || remoteErr.code != "rejected" ||
+			(!strings.Contains(missingFile, "no such file") &&
+				!strings.Contains(missingFile, "cannot find the file")) {
+			t.Fatalf("ACTIVE recovery did not reject the missing declared group-b graph segment: %v", recoveryErr)
+		}
+		if _, err := os.Stat(missingAsset); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing group-b graph segment was replaced during recovery: %v", err)
+		}
+		remainingHosted := maps.Clone(hostedFiles["group-b"])
+		delete(remainingHosted, missingAssetRel)
+		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[1].DataRoot, "group-b"), remainingHosted, false)
+		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
+			t.Fatalf("unaffected owner-c lost readiness: %+v err=%v", report, err)
+		}
+		fixedPeerAssertHostedVectorFilesV1(t, filepath.Join(configs[2].DataRoot, "group-c"), hostedFiles["group-c"], false)
+		request.Deadline = time.Now().Add(12 * time.Second)
+		partial, searchErr := publicClient.VectorSearchStrictV1(ctx, request)
+		if !hasPublicVectorErrorCodeV1(searchErr, public.ErrorUnavailableV1) || len(partial.Neighbors) != 0 {
+			t.Fatalf("missing declared owner asset returned partial result: response=%+v err=%v", partial, searchErr)
+		}
+		if report, err := client.ReadinessV1(ctx, "owner-c"); err != nil || !report.Ready {
+			t.Fatalf("unaffected owner-c lost readiness after failed strict search: %+v err=%v", report, err)
+		}
+		return
+	}
 	fixedPeerWaitV1(t, ctx, func() bool {
 		report, err := client.ReadinessV1(ctx, "owner-b")
 		return err != nil && !report.Ready && len(report.Groups) == 1 && report.Groups[0].Ready &&
@@ -1046,6 +1103,7 @@ func fixedPeerCopyHostedVectorAssetsV1(t testing.TB, source, target string, mani
 
 func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map[string]bool, allFiles bool) {
 	t.Helper()
+	missing := maps.Clone(allowed)
 	walkRoot := backenddb.ColumnAssetRootDirPath(target)
 	if allFiles {
 		walkRoot = target
@@ -1064,6 +1122,7 @@ func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map
 		if !allowed[rel] {
 			return fmt.Errorf("non-hosted or source file in process root %q", rel)
 		}
+		delete(missing, rel)
 		info, err := entry.Info()
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("invalid hosted asset file %q: %v", rel, err)
@@ -1072,5 +1131,8 @@ func fixedPeerAssertHostedVectorFilesV1(t testing.TB, target string, allowed map
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for rel := range missing {
+		t.Fatalf("missing hosted asset file in process root %q", rel)
 	}
 }

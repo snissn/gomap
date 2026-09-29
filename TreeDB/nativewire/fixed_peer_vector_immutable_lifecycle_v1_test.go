@@ -16,22 +16,9 @@ import (
 )
 
 func TestImmutableVectorOwnerLeaderIgnoresStaleCatalogHintV1(t *testing.T) {
-	config := fixedPeerTestConfigsV1(t)[0]
 	var members []raftcluster.NodeID
-	for _, group := range config.Groups {
-		if group.ID == "group-b" {
-			for _, peer := range group.Peers {
-				members = append(members, peer.ID)
-			}
-		}
-	}
-	if len(members) != 2 {
-		t.Fatalf("owner fixture has %d members, want two", len(members))
-	}
-	for i := range config.Nodes {
-		if config.Nodes[i].ID != members[0] && config.Nodes[i].ID != members[1] {
-			continue
-		}
+	servers := make([]*httptest.Server, 2)
+	for i := range servers {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 			_, _ = io.Copy(io.Discard, request.Body)
 			if request.URL.Path != "/v1/status" {
@@ -44,7 +31,25 @@ func TestImmutableVectorOwnerLeaderIgnoresStaleCatalogHintV1(t *testing.T) {
 			})
 		}))
 		t.Cleanup(server.Close)
-		config.Nodes[i].Address = strings.TrimPrefix(server.URL, "http://")
+		servers[i] = server
+	}
+	config := fixedPeerTestConfigsV1(t)[0]
+	for _, group := range config.Groups {
+		if group.ID == "group-b" {
+			for _, peer := range group.Peers {
+				members = append(members, peer.ID)
+			}
+		}
+	}
+	if len(members) != 2 {
+		t.Fatalf("owner fixture has %d members, want two", len(members))
+	}
+	for i := range config.Nodes {
+		for memberIndex, member := range members {
+			if config.Nodes[i].ID == member {
+				config.Nodes[i].Address = strings.TrimPrefix(servers[memberIndex].URL, "http://")
+			}
+		}
 	}
 	client, err := NewFixedPeerTCPClientV1(config)
 	if err != nil {
