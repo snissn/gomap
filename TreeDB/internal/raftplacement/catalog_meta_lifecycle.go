@@ -548,33 +548,38 @@ func vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, next vecto
 	if next.Epoch < old.Epoch {
 		return false
 	}
-	// Begin/confirm append one receipt per epoch and retain the newest 64.
-	// Preserve every old receipt that cannot yet have been evicted.
-	completed := next.Epoch - old.Epoch
-	if completed > maxVectorPartitionCollectionCompletedMutationsV1+1 {
-		completed = maxVectorPartitionCollectionCompletedMutationsV1 + 1
+	// Mutation epochs can jump to a lifecycle invalidation epoch. Count only
+	// receipts visible after the old barrier; each confirmation appends one.
+	firstNew := 0
+	for firstNew < len(next.Completed) && next.Completed[firstNew].Epoch < old.Epoch {
+		firstNew++
+	}
+	if !old.Pending && firstNew < len(next.Completed) && next.Completed[firstNew].Epoch == old.Epoch {
+		firstNew++
+	}
+	completed := len(next.Completed) - firstNew
+	retained := len(old.Completed)
+	if completed >= maxVectorPartitionCollectionCompletedMutationsV1 {
+		retained = 0
+	} else if retained > maxVectorPartitionCollectionCompletedMutationsV1-completed {
+		retained = maxVectorPartitionCollectionCompletedMutationsV1 - completed
+	}
+	if firstNew != retained || !slices.Equal(old.Completed[len(old.Completed)-retained:], next.Completed[:retained]) {
+		return false
 	}
 	if old.Pending {
-		completed++
-	}
-	if next.Pending {
-		if completed == 0 {
-			return false
+		if next.Epoch == old.Epoch && next.Pending {
+			return completed == 0
 		}
-		completed--
-	}
-	if completed > maxVectorPartitionCollectionCompletedMutationsV1 {
-		completed = maxVectorPartitionCollectionCompletedMutationsV1
-	}
-	retained := len(old.Completed)
-	if completed >= uint64(maxVectorPartitionCollectionCompletedMutationsV1) {
-		retained = 0
-	} else if retained > maxVectorPartitionCollectionCompletedMutationsV1-int(completed) {
-		retained = maxVectorPartitionCollectionCompletedMutationsV1 - int(completed)
-	}
-	want := retained + int(completed)
-	if len(next.Completed) != want || !slices.Equal(old.Completed[len(old.Completed)-retained:], next.Completed[:retained]) {
-		return false
+		// Confirming the pending operation precedes the next BEGIN. Its receipt
+		// may be absent only when 64 later receipts have displaced it.
+		if completed < maxVectorPartitionCollectionCompletedMutationsV1 || next.Completed[firstNew].Epoch == old.Epoch {
+			if completed == 0 || next.Completed[firstNew] != (vectorPartitionCollectionCompletedMutationV1{
+				Epoch: old.Epoch, OperationDigest: old.OperationDigest,
+			}) {
+				return false
+			}
+		}
 	}
 	return true
 }
