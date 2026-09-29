@@ -86,6 +86,73 @@ func hasPublicErrorCodeV1(err error, want public.ErrorCodeV1) bool {
 	return errors.As(err, &apiErr) && apiErr.Code == want
 }
 
+type recordingVectorMutationSubmitterV1 struct{ owners []raftcluster.GroupID }
+
+func (s *recordingVectorMutationSubmitterV1) SubmitVectorPartitionInsertV1(_ context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
+	s.owners = append(s.owners, request.OwnerGroup)
+	return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: errors.New("recorded routed insert")}
+}
+
+func TestMultiOwnerANNRoutesRefusedBeforeCanonicalCommitV1(t *testing.T) {
+	topology, base, _ := newVectorPartitionProductionTopologyTwoGroupTestV1(t)
+	defer topology.Close()
+	coordinator := topology.Coordinator()
+	manifest := coordinator.placement
+	router := coordinator.routerSource.(*testVectorPartitionCoordinatorRouterSourceV1).router
+	for _, route := range []uint32{0, 1} {
+		_, group, err := vectorPartitionMutationOwnerV1(router.status.Manifest, manifest, route)
+		if err != nil || group != raftcluster.GroupID([]string{"group-a", "group-b"}[route]) {
+			t.Fatalf("ANN route %d owner=%q err=%v", route, group, err)
+		}
+	}
+	// This fixture map shows the stable ID owner; it is not committed authority.
+	canonical := raftplacement.SourceShardMapV2{
+		Format: raftplacement.SourceShardMapFormatV2, Collection: manifest.Collection,
+		Epoch: 1, TokenAlgorithm: raftplacement.DocumentIDTokenAlgorithmV2,
+		Shards: []raftplacement.SourceShardV2{{ShardID: "source-a", GroupID: "group-a", Start: 0, End: ^uint64(0)}},
+	}
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}}, {ID: "group-b", Members: []raftcluster.NodeID{"node-b"}}},
+		Placements: []raftplacement.CollectionPlacementV1{{Collection: manifest.Collection, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := catalog.CanonicalSourceShardMapV2(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerMap, err := catalog.ValidateSourceShardMapV2(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := ownerMap.ResolveDocumentID([]byte("same-id"))
+	if err != nil || owner.GroupID != "group-a" {
+		t.Fatalf("canonical ID owner=%+v err=%v", owner, err)
+	}
+	submitter := &recordingVectorMutationSubmitterV1{}
+	backend := &VectorPartitionPublicBackendV1{opts: VectorPartitionPublicBackendOptionsV1{
+		Topology: topology, RequestBase: base, MutationSubmitter: submitter,
+		Identity: raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{IndexName: base.IndexName}, Generation: 7},
+	}}
+	service, err := public.NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, vector := range [][]float32{{1, 0}, {0, 1}} {
+		router.partitions[0].PartitionID = uint32(i)
+		request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: base.IndexName, Generation: 7},
+			IdempotencyKey: []byte(fmt.Sprintf("same-id-attempt-%d", i)), ID: []byte("same-id"), Vector: vector,
+			Document: []byte(fmt.Sprintf(`{"embedding":[%d,%d]}`, int(vector[0]), int(vector[1]))), Deadline: time.Now().Add(time.Second)}
+		if _, err := service.Insert(t.Context(), request); !hasPublicErrorCodeV1(err, public.ErrorUnavailableV1) {
+			t.Fatalf("ANN route %d admitted a write without canonical commit/projection: %v", i, err)
+		}
+	}
+	if len(submitter.owners) != 0 {
+		t.Fatalf("ANN routes reached authoritative apply with owners %v without one canonical owner", submitter.owners)
+	}
+}
+
 func TestVectorPartitionMutationOwnerUsesDomainPackMappingV1(t *testing.T) {
 	manifest := collections.VectorPartitionManifestV1{
 		PartitionCount: 3, DomainCount: 2,

@@ -94,8 +94,12 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 }
 
 func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
-	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed || b.opts.MutationSubmitter == nil {
+	if b == nil || b.opts.Topology == nil || b.opts.MutationSubmitter == nil {
 		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: errors.New("production vector mutation route is unavailable")}
+	}
+	topologyStatus := b.opts.Topology.Status()
+	if topologyStatus.Closed || len(topologyStatus.Endpoints) != 1 {
+		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: errors.New("multi-owner vector mutation requires canonical commit and durable projection")}
 	}
 	if err := b.checkID(request.Generation); err != nil {
 		return public.InsertResponseV1{}, err
