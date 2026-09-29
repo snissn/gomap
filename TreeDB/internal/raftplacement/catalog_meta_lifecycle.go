@@ -444,42 +444,66 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 		!reflect.DeepEqual(a.record.Catalog.Placements, next.Catalog.Placements) {
 		return ErrVectorPartitionLifecycleGuard
 	}
-	changed := false
-	finalCompletion := false
+	finalReplacement := false
 	for _, old := range a.resolved.Groups {
 		current := resolved.groups[old.ID]
-		if equalCatalogMetaMembersV1(old.Members, current.Members) {
+		rosterChanged := !equalCatalogMetaMembersV1(old.Members, current.Members)
+		if !rosterChanged {
 			if old.LeaderHint != current.LeaderHint {
-				return ErrCatalogMetaConflict
+				state, err := decodeReplicaReplacementCurrentV1(replacements[old.ID])
+				if err != nil || current.LeaderHint != "" ||
+					state.Phase != ReplicaReplacementCompletedV1 || state.Result == nil ||
+					state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch ||
+					!equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
+					return ErrCatalogMetaConflict
+				}
+				if err := a.validateReplicaReplacementLifecycleLockedV1(old.ID); err != nil {
+					return err
+				}
 			}
 			continue
 		}
-		changed = true
 		if current.LeaderHint != old.LeaderHint &&
 			(current.LeaderHint != "" || slices.Contains(current.Members, old.LeaderHint)) {
 			return ErrCatalogMetaConflict
 		}
 		state, err := decodeReplicaReplacementCurrentV1(replacements[old.ID])
-		if err != nil || state.Phase != ReplicaReplacementCompletedV1 || state.Result == nil ||
-			state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch ||
-			!equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
+		if err != nil || !equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
 			return ErrCatalogMetaConflict
 		}
 		if err := a.validateReplicaReplacementLifecycleLockedV1(old.ID); err != nil {
 			return err
 		}
+		if state.Phase == ReplicaReplacementCompletedV1 {
+			if state.Result == nil || state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch {
+				return ErrCatalogMetaConflict
+			}
+		} else if state.Begin.ExpectedEpoch != next.Epoch || state.Begin.CatalogDigest != next.Digest {
+			return ErrCatalogMetaConflict
+		}
 	}
-	for _, raw := range replacements {
+	for group, raw := range replacements {
 		state, err := decodeReplicaReplacementCurrentV1(raw)
 		if err != nil {
 			return err
 		}
+		if state.Begin.ExpectedEpoch <= a.record.Epoch {
+			continue
+		}
+		if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+			return err
+		}
 		if state.Phase == ReplicaReplacementCompletedV1 && state.Result != nil &&
 			state.Result.Epoch == next.Epoch && state.Result.Digest == next.Digest {
-			finalCompletion = true
+			finalReplacement = true
+		}
+		if state.Phase != ReplicaReplacementCompletedV1 && state.Begin.ExpectedEpoch == next.Epoch &&
+			state.Begin.CatalogDigest == next.Digest && len(state.Peers) != 0 &&
+			equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), resolved.groups[group].Members) {
+			finalReplacement = true
 		}
 	}
-	if !changed || !finalCompletion {
+	if !finalReplacement {
 		return ErrVectorPartitionLifecycleGuard
 	}
 	// Current-state replacement successors and the final rosters are checked by
@@ -489,6 +513,14 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	if err != nil {
 		return err
 	}
+	return a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(expected, records, fences, barriers)
+}
+
+func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
+	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+) error {
 	for identity, old := range expected {
 		incoming, ok := records[identity]
 		if !ok || !replicaReplacementLifecycleRecordSnapshotSuccessorV1(old, incoming, records, fences) {
@@ -504,11 +536,47 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	for collection, old := range a.collectionMutationBarriers {
 		incoming, ok := barriers[collection]
 		if !ok || incoming.Epoch < old.Epoch || incoming.Epoch == old.Epoch &&
-			(old.OperationDigest != incoming.OperationDigest || !old.Pending && incoming.Pending) {
+			(old.OperationDigest != incoming.OperationDigest || !old.Pending && incoming.Pending) ||
+			!vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, incoming) {
 			return ErrVectorPartitionLifecycleConflict
 		}
 	}
 	return nil
+}
+
+func vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, next vectorPartitionCollectionMutationBarrierStateV1) bool {
+	if next.Epoch < old.Epoch {
+		return false
+	}
+	// Begin/confirm append one receipt per epoch and retain the newest 64.
+	// Preserve every old receipt that cannot yet have been evicted.
+	completed := next.Epoch - old.Epoch
+	if completed > maxVectorPartitionCollectionCompletedMutationsV1+1 {
+		completed = maxVectorPartitionCollectionCompletedMutationsV1 + 1
+	}
+	if old.Pending {
+		completed++
+	}
+	if next.Pending {
+		if completed == 0 {
+			return false
+		}
+		completed--
+	}
+	if completed > maxVectorPartitionCollectionCompletedMutationsV1 {
+		completed = maxVectorPartitionCollectionCompletedMutationsV1
+	}
+	retained := len(old.Completed)
+	if completed >= uint64(maxVectorPartitionCollectionCompletedMutationsV1) {
+		retained = 0
+	} else if retained > maxVectorPartitionCollectionCompletedMutationsV1-int(completed) {
+		retained = maxVectorPartitionCollectionCompletedMutationsV1 - int(completed)
+	}
+	want := retained + int(completed)
+	if len(next.Completed) != want || !slices.Equal(old.Completed[len(old.Completed)-retained:], next.Completed[:retained]) {
+		return false
+	}
+	return true
 }
 
 // A compacted snapshot may include committed non-serving lifecycle commands
