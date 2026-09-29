@@ -545,7 +545,7 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 		}
 		switch incoming.State {
 		case VectorPartitionLifecycleBuildingV1, VectorPartitionLifecycleStagedV1, VectorPartitionLifecyclePreparedV1:
-			if !replicaReplacementNewLifecyclePreparationSnapshotV1(incoming, a.record) {
+			if !replicaReplacementNewLifecyclePreparationSnapshotV1(incoming) {
 				return ErrVectorPartitionLifecycleConflict
 			}
 		}
@@ -569,26 +569,14 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 
 // A snapshot can compact the commands that created a new candidate. Rebuild
 // its preparation through the pure reducer to reject records that no command
-// sequence could produce. The last command may precede the catalog rebind, so
-// try only the incoming and locally known predecessor catalog identities. This
-// checks shape and command digests, not whether opaque attestations committed.
-func replicaReplacementNewLifecyclePreparationSnapshotV1(record VectorPartitionLifecycleRecordV1, previous CatalogMetaRecordV1) bool {
-	if replicaReplacementNewLifecyclePreparationAtIdentityV1(record, record.Identity) {
-		return true
-	}
-	if previous.Epoch == 0 || previous.Epoch == record.Identity.Index.CatalogEpoch {
-		return false
-	}
-	predecessor := record.Identity
-	predecessor.Index.CatalogEpoch = previous.Epoch
-	predecessor.Index.CatalogDigest = previous.Digest
-	return replicaReplacementNewLifecyclePreparationAtIdentityV1(record, predecessor)
-}
-
-func replicaReplacementNewLifecyclePreparationAtIdentityV1(record VectorPartitionLifecycleRecordV1, identity VectorPartitionLifecycleIdentityV1) bool {
+// sequence could produce. Replacement completion excludes non-ACTIVE
+// candidates, so a newly introduced preparation starts at the incoming
+// catalog identity. This checks shape and command digests, not whether opaque
+// source or asset attestations were actually committed.
+func replicaReplacementNewLifecyclePreparationSnapshotV1(record VectorPartitionLifecycleRecordV1) bool {
 	begin := VectorPartitionLifecycleCommandV1{
 		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
-		Identity: identity, RequiredGroups: record.RequiredGroups,
+		Identity: record.Identity, RequiredGroups: record.RequiredGroups,
 		PreviousActiveGeneration: record.PreviousActiveGeneration, MutationEpoch: record.MutationEpoch,
 		SourceOwners: record.SourceOwners, ANNOwners: record.ANNOwners,
 	}
@@ -597,14 +585,13 @@ func replicaReplacementNewLifecyclePreparationAtIdentityV1(record VectorPartitio
 		return false
 	}
 	if record.State == VectorPartitionLifecycleBuildingV1 {
-		building.Identity = record.Identity
 		return equalVectorPartitionLifecycleRecordV1(building, record)
 	}
 	current := building
 	for _, ready := range record.ReadyGroups {
 		current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
 			Kind: VectorPartitionLifecycleRecordGroupReadyV1, ExpectedRevision: current.Revision,
-			ExpectedState: current.State, Identity: identity, GroupReady: ready,
+			ExpectedState: current.State, Identity: record.Identity, GroupReady: ready,
 		})
 		if err != nil {
 			return false
@@ -613,18 +600,16 @@ func replicaReplacementNewLifecyclePreparationAtIdentityV1(record VectorPartitio
 	if record.State == VectorPartitionLifecyclePreparedV1 {
 		current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
 			Kind: VectorPartitionLifecyclePrepareV1, ExpectedRevision: current.Revision,
-			ExpectedState: current.State, Identity: identity, ReadySetDigest: record.ReadySetDigest,
+			ExpectedState: current.State, Identity: record.Identity, ReadySetDigest: record.ReadySetDigest,
 		})
 		if err != nil {
 			return false
 		}
-		current.Identity = record.Identity
 		return equalVectorPartitionLifecycleRecordV1(current, record)
 	}
 	// READY commands may arrive in any order. Replaying once proves the
 	// resulting STAGED fields; one of the possible final READY commands must
 	// also match the retained last-command digest.
-	current.Identity = record.Identity
 	current.LastCommandDigest = record.LastCommandDigest
 	if !equalVectorPartitionLifecycleRecordV1(current, record) {
 		return false
@@ -636,7 +621,7 @@ func replicaReplacementNewLifecyclePreparationAtIdentityV1(record VectorPartitio
 	for _, ready := range record.ReadyGroups {
 		command, err := EncodeVectorPartitionLifecycleCommandV1(VectorPartitionLifecycleCommandV1{
 			Kind: VectorPartitionLifecycleRecordGroupReadyV1, ExpectedRevision: record.Revision - 1,
-			ExpectedState: expectedState, Identity: identity, GroupReady: ready,
+			ExpectedState: expectedState, Identity: record.Identity, GroupReady: ready,
 		})
 		if err == nil && sha256HexVectorPartitionLifecycleV1(command) == record.LastCommandDigest {
 			return true
