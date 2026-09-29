@@ -662,14 +662,51 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 		if next.SupersededByGeneration == 0 || next.State == VectorPartitionLifecycleInvalidatedV1 {
 			return false
 		}
-		found := false
-		for identity := range records {
-			if identity.Index == next.Identity.Index && identity.Generation == next.SupersededByGeneration {
-				found = true
+		previous := next
+		generation := next.SupersededByGeneration
+		proved := false
+		for steps := 0; steps < len(records); steps++ {
+			_, successor, found := findVectorPartitionLifecycleGenerationLockedV1(records, next.Identity.Index, generation)
+			if !found || generation <= previous.Identity.Generation ||
+				successor.PreviousActiveGeneration != previous.Identity.Generation ||
+				successor.Aborted || successor.Identity.SourceFormat == 2 {
+				return false
+			}
+			switch successor.State {
+			case VectorPartitionLifecycleActiveV1:
+				// Immediate cutover gives both records the same command digest.
+				if previous.State == VectorPartitionLifecycleRetiredV1 && previous.LastCommandDigest != successor.LastCommandDigest {
+					return false
+				}
+				proved = true
+			case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1,
+				VectorPartitionLifecycleCleanableV1, VectorPartitionLifecycleAbsentV1:
+				if successor.InvalidationEpoch != 0 {
+					key := vectorPartitionLifecycleServingKeyV1{Collection: successor.Identity.Index.Collection, IndexName: successor.Identity.Index.IndexName}
+					fence, ok := fences[key]
+					if !ok || successor.SupersededByGeneration != 0 ||
+						successor.InvalidationEpoch <= successor.MutationEpoch || successor.InvalidationReason == "" ||
+						fence.Epoch < successor.InvalidationEpoch ||
+						(successor.State != VectorPartitionLifecycleInvalidatedV1 && !successor.MutationConfirmed) ||
+						(fence.Epoch == successor.InvalidationEpoch && fence.Pending == successor.MutationConfirmed) {
+						return false
+					}
+					proved = true
+				} else if successor.SupersededByGeneration != 0 &&
+					successor.State != VectorPartitionLifecycleInvalidatedV1 && successor.InvalidationReason == "" {
+					previous = successor
+					generation = successor.SupersededByGeneration
+				} else {
+					return false
+				}
+			default:
+				return false
+			}
+			if proved {
 				break
 			}
 		}
-		if !found {
+		if !proved {
 			return false
 		}
 	} else {
