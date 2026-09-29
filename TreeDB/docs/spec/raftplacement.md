@@ -317,6 +317,21 @@ This issue deliberately does not add live membership changes, rebalance or
 migration, a second production Raft topology, or the vector-specific lifecycle
 state machine.
 
+### Immutable ACTIVE lifecycle continuity during replica replacement (#4811)
+
+The catalog authority permits a replacement BEGIN for a non-source group while
+an immutable generation is ACTIVE only when no collection or index mutation is
+pending and every live lifecycle record is immutable ACTIVE. BUILDING and other
+live states refuse. Completion changes the catalog epoch and digest, rebinds
+all lifecycle identities (including ABSENT records), and recalculates each
+ACTIVE ready-set digest. Source, asset, and READY receipts remain unchanged.
+Snapshot restore accepts that epoch transition only with the exact completed
+replacement roster and deterministic lifecycle rebind; ordinary catalog
+publication remains blocked by live lifecycle state. Activating the lifecycle
+feature over older completed replacement evidence is also refused. The fixed-peer
+runtime still refuses vector replacement BEGIN, so this authority continuity
+does not enable usable replica replacement or owner cutover.
+
 ## Vector partition placement (M1)
 
 `VectorPartitionPlacementRecordV1` validates a complete generation-bound

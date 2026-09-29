@@ -2758,6 +2758,52 @@ lineage remain intact and affected page checksums are recomputed.
   [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
   conformance from #4250 multi-host performance and #3983 fault evidence.
 
+## Immutable ACTIVE replacement authority continuity (#4811)
+
+`TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1` checks
+catalog epoch/digest rebinding of an immutable ACTIVE record, unchanged READY
+receipts, a new ready-set digest, exact retry, and pending/final snapshot replay.
+`TestCatalogReplicaReplacementRefusesPendingMutationAndBuildingV1` checks the
+pending-mutation, BUILDING, and source-group guards. The existing
+`TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1` checks that
+ordinary feature activation over older completed replacement evidence refuses
+both as a command and a forward snapshot. These are authority-only checks;
+fixed-peer vector replacement BEGIN remains unavailable.
+`TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
+requires exact reducer revision distance across a compacted snapshot.
+`TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and
+`TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1`
+reject direct ACTIVE READY/source forgeries while accepting genuine cutover
+and confirmed-fence controls. `TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1`
+preserves legitimate A-to-B-to-C catch-up with cleaned B; it does not establish
+durable activation provenance for arbitrary intermediate histories.
+The one-step forward snapshot test also rejects a self-canonical extra
+terminal record and confirmed fence. Same-epoch preparation tests accept
+committed STAGED-to-PREPARED progress but reject a rewrite of locally known
+READY evidence. The genuine compacted PREPARED-to-cleanup control remains
+accepted with the inherited terminal-provenance limit described in the
+protocol spec.
+The collection-barrier snapshot tests accept valid post-completion mutations,
+reject unwitnessed epoch jumps and stale receipts without mutating authority,
+and cover empty authority maps and the bounded receipt window.
+`TestCatalogReplicaReplacementPendingRefusesNewCollectionMutationV1` refuses a
+new BEGIN before barrier debt while retaining exact BEGIN/CONFIRM retries.
+`TestCatalogReplicaReplacementSnapshotReservesEveryPhaseV1` accepts genuine
+known/unknown same-epoch phase catch-up and anchored completion, while refusing
+one missing applied entry across every mandatory phase and post-completion
+BEGIN/CONFIRM. These refusals preserve the local exported snapshot.
+`TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmationV1`
+constructs canonical old admitted state explicitly; it tests owned confirmation
+and bounded catch-up, not current admission, actual data outcome, or migration.
+The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
+Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
+history and reject its one/five-entry snapshots without authority mutation.
+Two independent known indexes require the sum of their revision lower bounds;
+a two-record atomic cutover remains accepted with one entry. The bound uses
+per-full-Index maxima and leaves the stated erased/unknown/mixed-barrier
+provenance limits intact. Existing ordinary cleanup, A-to-B-to-C cutover, and
+mixed 65-barrier catch-up remain positive controls.
+
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
 `TestMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1` starts real separate

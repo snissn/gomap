@@ -325,6 +325,9 @@ func ApplyVectorPartitionLifecycleCommandV1(record VectorPartitionLifecycleRecor
 		if err := current.CanActivate(command.Identity, command.PreviousActiveGeneration, command.MutationEpoch); err != nil {
 			return VectorPartitionLifecycleRecordV1{}, err
 		}
+		if command.ReadySetDigest != current.ReadySetDigest {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
+		}
 		next.State = VectorPartitionLifecycleActiveV1
 	case VectorPartitionLifecycleAbortBuildV1:
 		next.State = VectorPartitionLifecycleRetiredV1
@@ -424,6 +427,9 @@ func ApplyVectorPartitionLifecycleCutoverV1(previous, candidate VectorPartitionL
 	}
 	if err := newRecord.CanActivate(command.Identity, command.PreviousActiveGeneration, command.MutationEpoch); err != nil {
 		return VectorPartitionLifecycleRecordV1{}, VectorPartitionLifecycleRecordV1{}, err
+	}
+	if command.ReadySetDigest != newRecord.ReadySetDigest {
+		return VectorPartitionLifecycleRecordV1{}, VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
 	}
 
 	nextOld := oldRecord
@@ -647,7 +653,7 @@ func validateVectorPartitionLifecycleCommandShapeV1(c VectorPartitionLifecycleCo
 	case VectorPartitionLifecycleActivateV1:
 		if c.ExpectedState != VectorPartitionLifecyclePreparedV1 || c.MutationEpoch == 0 ||
 			(c.PreviousActiveGeneration == 0) != (c.PreviousActiveRevision == 0) ||
-			c.GroupReady != zeroReady || c.ReadySetDigest != "" || c.Reason != "" || c.InvalidationEpoch != 0 || c.References != zeroRefs || c.GroupID != "" || len(c.RequiredGroups) != 0 {
+			c.GroupReady != zeroReady || !isSHA256HexVectorPartitionV1(c.ReadySetDigest) || c.Reason != "" || c.InvalidationEpoch != 0 || c.References != zeroRefs || c.GroupID != "" || len(c.RequiredGroups) != 0 {
 			return errors.Join(ErrInvalidVectorPartitionLifecycle, fmt.Errorf("invalid activate command shape"))
 		}
 	case VectorPartitionLifecycleAbortBuildV1:

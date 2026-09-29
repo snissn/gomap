@@ -62,7 +62,7 @@ func validateReplicaReplacementStateCatalogV1(state ReplicaReplacementStateV1, r
 			return err
 		}
 	} else {
-		if state.Result == nil || state.Result.Epoch > record.Epoch || state.Result.Epoch == record.Epoch && state.Result.Digest != record.Digest || catalogMetaFeatureEnabledV1(record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+		if state.Result == nil || state.Result.Epoch > record.Epoch || state.Result.Epoch == record.Epoch && state.Result.Digest != record.Digest {
 			return ErrCatalogMetaConflict
 		}
 	}
@@ -75,6 +75,18 @@ func validateReplicaReplacementStateCatalogV1(state ReplicaReplacementStateV1, r
 				return nil
 			}
 		}
+		return ErrCatalogMetaConflict
+	}
+	return nil
+}
+
+// A completed replacement may remain in a lifecycle-bearing catalog, but an
+// ordinary catalog transition cannot activate that feature over older
+// replacement evidence that was committed without it.
+func validateReplicaReplacementLifecycleFeatureTransitionV1(current, next CatalogMetaRecordV1, replacements map[raftcluster.GroupID][]byte) error {
+	if len(replacements) != 0 &&
+		!catalogMetaFeatureEnabledV1(current.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) &&
+		catalogMetaFeatureEnabledV1(next.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
 		return ErrCatalogMetaConflict
 	}
 	return nil
@@ -242,31 +254,18 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementCompleteV1(raw 
 	if state.Result.ConfigurationIndex != old.Result.ConfigurationIndex || !replicaReplacementCompletedPeersV1(old, state.Peers) {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 	}
-	catalog, _, err := canonicalCatalogMetaCatalogV1(a.record.Catalog)
-	if err != nil {
-		return CatalogMetaStatusV1{}, err
-	}
-	for i := range catalog.Groups {
-		if catalog.Groups[i].ID == state.Begin.GroupID {
-			for j, id := range catalog.Groups[i].Members {
-				if id == state.Begin.OldNodeID {
-					catalog.Groups[i].Members[j] = state.Begin.NewPeer.ID
-				}
-			}
-			slices.Sort(catalog.Groups[i].Members)
-			if catalog.Groups[i].LeaderHint == state.Begin.OldNodeID {
-				catalog.Groups[i].LeaderHint = ""
-			}
-		}
-	}
-	expected, err := NewCatalogMetaRecordV1(a.record.Epoch+1, catalog)
+	expected, err := replicaReplacementCompletedCatalogV1(a.record, state.Begin)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
 	if !reflect.DeepEqual(expected, command.Catalog.Record) || command.Catalog.ExpectedEpoch != a.record.Epoch || validateReplicaReplacementStateCatalogV1(state, expected) != nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 	}
-	if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
+	if err := a.validateReplicaReplacementLifecycleLockedV1(state.Begin.GroupID); err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	updatedLifecycle, updatedActive, updatedActiveNames, lifecycle, err := a.rebindReplicaReplacementLifecycleLockedV1(expected)
+	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
 	nextRaw, _ := EncodeReplicaReplacementStateV1(state)
@@ -287,10 +286,6 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementCompleteV1(raw 
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
-	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
-	if err != nil {
-		return CatalogMetaStatusV1{}, err
-	}
 	snapshot := CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: index, Record: recordRaw, LastCommand: last, ReplicaReplacements: replacements, VectorPartitionLifecycle: lifecycle}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
@@ -308,7 +303,30 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementCompleteV1(raw 
 	}
 	a.record, a.recordBytes, a.command, a.resolved = expected, recordRaw, last, resolved
 	a.replacements, a.replacementBytes, a.applied = records, uint64(len(replacements)), index
+	a.lifecycle, a.active, a.activeNames, a.lifecycleBytes = updatedLifecycle, updatedActive, updatedActiveNames, uint64(len(lifecycle))
 	return a.statusLocked(), nil
+}
+
+func replicaReplacementCompletedCatalogV1(current CatalogMetaRecordV1, begin ReplicaReplacementBeginV1) (CatalogMetaRecordV1, error) {
+	catalog, _, err := canonicalCatalogMetaCatalogV1(current.Catalog)
+	if err != nil {
+		return CatalogMetaRecordV1{}, err
+	}
+	for i := range catalog.Groups {
+		if catalog.Groups[i].ID != begin.GroupID {
+			continue
+		}
+		for j, id := range catalog.Groups[i].Members {
+			if id == begin.OldNodeID {
+				catalog.Groups[i].Members[j] = begin.NewPeer.ID
+			}
+		}
+		slices.Sort(catalog.Groups[i].Members)
+		if catalog.Groups[i].LeaderHint == begin.OldNodeID {
+			catalog.Groups[i].LeaderHint = ""
+		}
+	}
+	return NewCatalogMetaRecordV1(current.Epoch+1, catalog)
 }
 
 func replicaReplacementSnapshotSuccessorV1(oldRaw, nextRaw []byte) bool {

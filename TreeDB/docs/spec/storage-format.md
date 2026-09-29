@@ -380,6 +380,12 @@ generation record at the same mutation epoch and cannot coexist with an active
 generation. The snapshot is installed all-or-nothing; invalid lifecycle state
 never publishes the catalog record or applied index.
 
+The pre-alpha lifecycle `ACTIVATE` command includes the generation's
+`ready_set_digest`. Both standalone activation and atomic cutover require it
+to match the prepared record, so their retained command digest binds the READY
+set. Older ACTIVATE command bytes are not accepted by this build; rebuild old
+test databases rather than migrating their Raft logs or snapshots.
+
 The snapshot may also carry a base64-encoded `replica_replacements` payload:
 canonical JSON containing at most 128 group-ordered replacement BEGIN commands,
 each capped at 24 KiB, within the same 8 MiB outer bound. A BEGIN binds the fixed

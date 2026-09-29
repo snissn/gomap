@@ -16,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
-func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
+func removedReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
 	t.Helper()
 	raw, _ := EncodeReplicaReplacementBeginV1(begin)
 	if _, err := a.applyCommittedCatalogMetaV1(raw, a.applied+1); err != nil {
@@ -68,7 +68,13 @@ func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err = EncodeReplicaReplacementCompleteV1(complete)
+	return complete
+}
+
+func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
+	t.Helper()
+	complete := removedReplicaReplacementForTestV1(t, a, begin)
+	raw, err := EncodeReplicaReplacementCompleteV1(complete)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +87,10 @@ func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1
 func TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1(t *testing.T) {
 	a, first := replicaReplacementAuthorityForTestV1(t)
 	original := a.record.Catalog
+	initialSnapshot, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, _ := EncodeReplicaReplacementBeginV1(first)
 	if _, err := a.applyCommittedCatalogMetaV1(raw, 2); err != nil {
 		t.Fatal(err)
@@ -186,6 +196,36 @@ func TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1(t *testing.T
 	unsupported, _ := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{ExpectedEpoch: a.record.Epoch, Record: record})
 	if _, err := a.applyCommittedCatalogMetaV1(unsupported, a.applied+1); err == nil {
 		t.Fatal("incompatible feature activation accepted")
+	}
+	// A lagging authority must refuse the same feature activation when it
+	// arrives as a complete snapshot rather than a catalog command.
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(snapshot, &forged); err != nil {
+		t.Fatal(err)
+	}
+	forged.Record, err = encodeCatalogMetaRecordV1(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.LastCommand = unsupported
+	forged.AppliedIndex++
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrCatalogMetaConflict) {
+		t.Fatalf("incompatible feature activation snapshot: %v", err)
+	}
+	lagging := NewCatalogMetaAuthorityV1()
+	if err := lagging.installCatalogMetaSnapshotBytesV1(initialSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := lagging.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrCatalogMetaConflict) {
+		t.Fatalf("incoming completed replacement activated feature: %v", err)
+	}
+	laggingRaw, err := lagging.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil || !bytes.Equal(laggingRaw, initialSnapshot) {
+		t.Fatalf("refused incoming replacement mutated authority: %v", err)
 	}
 	unchanged, _ := a.ExportCatalogMetaSnapshotBytesV1()
 	if !bytes.Equal(snapshot, unchanged) {
