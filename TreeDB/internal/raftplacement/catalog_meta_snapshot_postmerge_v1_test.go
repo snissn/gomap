@@ -1,0 +1,198 @@
+package raftplacement
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"math"
+	"strings"
+	"testing"
+)
+
+func postmergeSnapshotBytesV1(t *testing.T, a *CatalogMetaAuthorityV1) []byte {
+	t.Helper()
+	raw, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func postmergeSnapshotRefusesV1(t *testing.T, before, forged []byte) {
+	t.Helper()
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forged); err != nil {
+		t.Fatalf("forged snapshot is not self-canonical: %v", err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(forged); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("unreachable snapshot accepted: %v", err)
+	}
+	if after := postmergeSnapshotBytesV1(t, follower); !bytes.Equal(before, after) {
+		t.Fatal("refusal mutated authority")
+	}
+}
+
+func postmergeRewriteSnapshotV1(t *testing.T, raw []byte, mutate func(*CatalogMetaSnapshotV1, *vectorPartitionLifecycleSnapshotV1)) []byte {
+	t.Helper()
+	var snapshot CatalogMetaSnapshotV1
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(snapshot.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	mutate(&snapshot, &lifecycle)
+	var err error
+	snapshot.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+// Locally committed preparation cannot disappear through a self-canonical
+// terminal record whose revision and final command skip mandatory reducers.
+func TestCatalogSnapshotKnownPreparationCleanupReachabilityV1(t *testing.T) {
+	for _, state := range []VectorPartitionLifecycleStateV1{VectorPartitionLifecycleBuildingV1, VectorPartitionLifecycleStagedV1, VectorPartitionLifecyclePreparedV1} {
+		t.Run(string(state), func(t *testing.T) {
+			leader, _, record := activeReplicaReplacementAuthorityV1(t, false)
+			applied := leader.applied
+			if state != VectorPartitionLifecycleBuildingV1 {
+				record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleRecordGroupReadyV1, func(c *VectorPartitionLifecycleCommandV1) {
+					c.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: "group-b", AppliedIndex: applied, AssetSetDigest: strings.Repeat("c", 64)}
+				}))
+			}
+			if state == VectorPartitionLifecyclePreparedV1 {
+				digest, err := VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecyclePrepareV1, func(c *VectorPartitionLifecycleCommandV1) { c.ReadySetDigest = digest }))
+			}
+			before := postmergeSnapshotBytesV1(t, leader)
+			oldRevision := record.Revision
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleAbortBuildV1, func(c *VectorPartitionLifecycleCommandV1) { c.Reason = "postmerge cleanup control" }))
+			retired := postmergeSnapshotBytesV1(t, leader)
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleMarkCleanableV1, nil))
+			cleanable := postmergeSnapshotBytesV1(t, leader)
+			for _, group := range record.RequiredGroups {
+				record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleRecordGroupCleanupV1, func(c *VectorPartitionLifecycleCommandV1) { c.GroupID = group }))
+			}
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleCompleteCleanupV1, nil))
+			absent := postmergeSnapshotBytesV1(t, leader)
+			for _, control := range [][]byte{retired, cleanable, absent} {
+				assertReplicaReplacementBudgetSnapshotV1(t, before, control)
+			}
+			for _, tc := range []struct {
+				name     string
+				raw      []byte
+				revision uint64
+			}{
+				{"retired-final-digest", retired, oldRevision + 1},
+				{"cleanable-skipped-revision", cleanable, oldRevision + 1},
+				{"absent-one-revision", absent, oldRevision + 1},
+				{"absent-final-digest", absent, record.Revision},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					forged := postmergeRewriteSnapshotV1(t, tc.raw, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+						lifecycle.Records[0].Revision = tc.revision
+						lifecycle.Records[0].LastCommandDigest = strings.Repeat("e", 64)
+						if tc.name == "absent-one-revision" {
+							var baseline CatalogMetaSnapshotV1
+							if err := json.Unmarshal(before, &baseline); err != nil {
+								t.Fatal(err)
+							}
+							snapshot.AppliedIndex = baseline.AppliedIndex + 1
+						}
+					})
+					postmergeSnapshotRefusesV1(t, before, forged)
+				})
+			}
+		})
+	}
+}
+
+func TestCatalogSnapshotIndependentSameIndexLifecycleBudgetV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	identity := active.Identity
+	identity.Generation++
+	applied := leader.applied
+	candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, identity, active.Identity.Generation, active.MutationEpoch+1)
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.PreviousActiveGeneration, c.PreviousActiveRevision = active.Identity.Generation, active.Revision
+		c.MutationEpoch = candidate.MutationEpoch
+	}))
+	retired, ok := leader.VectorPartitionLifecycleRecordV1(active.Identity)
+	if !ok {
+		t.Fatal("cutover predecessor missing")
+	}
+	before := postmergeSnapshotBytesV1(t, leader)
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(retired, VectorPartitionLifecycleMarkCleanableV1, nil))
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "independent successor invalidation", candidate.MutationEpoch+1
+	}))
+	current := postmergeSnapshotBytesV1(t, leader)
+	assertReplicaReplacementBudgetSnapshotV1(t, before, current, 1)
+}
+
+func postmergeCommitCollectionMutationV1(t *testing.T, a *CatalogMetaAuthorityV1, c vectorPartitionCollectionMutationCommandV1) {
+	t.Helper()
+	raw, err := encodeVectorPartitionCollectionMutationCommandV1(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.applyCommittedVectorPartitionCollectionMutationV1(raw, a.applied+1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCatalogSnapshotMixedLifecycleBarrierProgressV1(t *testing.T) {
+	for _, mode := range []string{"collection-mutation", "direct-invalidation-jump"} {
+		t.Run(mode, func(t *testing.T) {
+			leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+			before := postmergeSnapshotBytesV1(t, leader)
+			applied := leader.applied
+			epoch := active.MutationEpoch + 1
+			if mode == "direct-invalidation-jump" {
+				epoch += 100
+			}
+			mutation := vectorPartitionCollectionMutationCommandV1{
+				Kind: vectorPartitionBeginCollectionMutationV1, Collection: active.Identity.Index.Collection,
+				CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+				ExpectedMutationEpoch: active.MutationEpoch, MutationEpoch: epoch, OperationDigest: strings.Repeat("e", 64),
+			}
+			if mode == "collection-mutation" {
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+				applied = leader.applied
+			}
+			active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+				c.Reason, c.InvalidationEpoch = "mixed lifecycle control", epoch
+			}))
+			invalidated := postmergeSnapshotBytesV1(t, leader)
+			active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = epoch }))
+			if mode == "direct-invalidation-jump" {
+				mutation.ExpectedMutationEpoch, mutation.MutationEpoch = epoch, epoch+1
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+			}
+			mutation.Kind, mutation.ExpectedMutationEpoch = vectorPartitionConfirmCollectionMutationV1, mutation.MutationEpoch
+			postmergeCommitCollectionMutationV1(t, leader, mutation)
+			current := postmergeSnapshotBytesV1(t, leader)
+			assertReplicaReplacementBudgetSnapshotV1(t, before, current, 3)
+			forged := postmergeRewriteSnapshotV1(t, invalidated, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+				lifecycle.CollectionMutationBarriers = []vectorPartitionCollectionMutationBarrierV1{{
+					Collection: active.Identity.Index.Collection, Epoch: math.MaxUint64, OperationDigest: strings.Repeat("f", 64),
+					Completed: []vectorPartitionCollectionCompletedMutationV1{{Epoch: math.MaxUint64, OperationDigest: strings.Repeat("f", 64)}},
+				}}
+			})
+			t.Run("confirmed-max-epoch", func(t *testing.T) { postmergeSnapshotRefusesV1(t, before, forged) })
+		})
+	}
+}
