@@ -397,6 +397,88 @@ func TestCatalogReplicaReplacementInvalidatedSameEpochSnapshotAcceptsConfirmatio
 	}
 }
 
+func TestCatalogReplicaReplacementCleanupSnapshotCannotReviveActiveV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	activeRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := leader.applied
+	record := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = active.MutationEpoch + 1
+	}))
+	record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = record.InvalidationEpoch
+	}))
+	confirmedRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(confirmedRaw); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		kind  VectorPartitionLifecycleCommandKindV1
+		group raftcluster.GroupID
+	}{
+		{kind: VectorPartitionLifecycleRetireV1},
+		{kind: VectorPartitionLifecycleMarkCleanableV1},
+		{kind: VectorPartitionLifecycleRecordGroupCleanupV1, group: "group-b"},
+		{kind: VectorPartitionLifecycleCompleteCleanupV1},
+	}
+	for _, step := range steps {
+		record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, step.kind, func(command *VectorPartitionLifecycleCommandV1) {
+			command.GroupID = step.group
+		}))
+		currentRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(currentRaw); err != nil {
+			t.Fatalf("restore %s: %v", record.State, err)
+		}
+		if got, ok := follower.VectorPartitionLifecycleRecordV1(record.Identity); !ok || !reflect.DeepEqual(got, record) {
+			t.Fatalf("restored %s=%+v available=%v want %+v", record.State, got, ok, record)
+		}
+		var forged, current CatalogMetaSnapshotV1
+		if err := json.Unmarshal(activeRaw, &forged); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(currentRaw, &current); err != nil {
+			t.Fatal(err)
+		}
+		var oldLifecycle, currentLifecycle vectorPartitionLifecycleSnapshotV1
+		if err := json.Unmarshal(forged.VectorPartitionLifecycle, &oldLifecycle); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(current.VectorPartitionLifecycle, &currentLifecycle); err != nil {
+			t.Fatal(err)
+		}
+		oldLifecycle.MutationFences = currentLifecycle.MutationFences
+		oldLifecycle.CollectionMutationBarriers = currentLifecycle.CollectionMutationBarriers
+		forged.VectorPartitionLifecycle, err = json.Marshal(oldLifecycle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged.AppliedIndex = current.AppliedIndex + 1
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+			t.Fatalf("forged %s revival snapshot is not self-consistent: %v", record.State, err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("snapshot revived %s generation: %v", record.State, err)
+		}
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, currentRaw) {
+			t.Fatalf("refused %s revival mutated follower: %v", record.State, err)
+		}
+	}
+}
+
 func TestCatalogReplicaReplacementActiveSnapshotAllowsSkippedCollectionMutationEpochV1(t *testing.T) {
 	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
 	collection := active.Identity.Index.Collection

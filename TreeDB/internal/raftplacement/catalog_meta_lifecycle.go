@@ -597,9 +597,10 @@ func vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, next vecto
 }
 
 // A compacted snapshot may include committed non-serving lifecycle commands
-// after an ACTIVE catalog rebind. The immutable source and READY receipts may
-// not be replaced; only the reducer's invalidation/retirement/cleanup fields
-// may advance. Same-revision records must still match exactly.
+// after an ACTIVE catalog rebind or subsequent cleanup. The immutable source
+// and READY receipts may not be replaced; only reducer-reachable
+// invalidation/retirement/cleanup fields may advance. Same-revision records
+// must still match exactly.
 func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 	old, next VectorPartitionLifecycleRecordV1,
 	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
@@ -608,23 +609,56 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 	if next.Revision == old.Revision {
 		return reflect.DeepEqual(old, next)
 	}
-	if next.Revision < old.Revision ||
-		(old.State != VectorPartitionLifecycleActiveV1 && old.State != VectorPartitionLifecycleInvalidatedV1) ||
-		next.State == VectorPartitionLifecycleActiveV1 || next.Aborted {
+	if next.Revision < old.Revision || next.State == VectorPartitionLifecycleActiveV1 ||
+		old.State == VectorPartitionLifecycleAbsentV1 || next.Aborted != old.Aborted {
 		return false
 	}
-	if old.State == VectorPartitionLifecycleInvalidatedV1 &&
-		(next.InvalidationEpoch != old.InvalidationEpoch || next.InvalidationReason != old.InvalidationReason ||
-			old.MutationConfirmed && !next.MutationConfirmed || next.SupersededByGeneration != old.SupersededByGeneration) {
+	if old.State != VectorPartitionLifecycleActiveV1 &&
+		(old.State != VectorPartitionLifecycleInvalidatedV1 && old.State != VectorPartitionLifecycleRetiredV1 && old.State != VectorPartitionLifecycleCleanableV1 ||
+			next.InvalidationEpoch != old.InvalidationEpoch || next.InvalidationReason != old.InvalidationReason ||
+			old.MutationConfirmed && !next.MutationConfirmed || next.SupersededByGeneration != old.SupersededByGeneration ||
+			next.RetirementReason != old.RetirementReason) {
 		return false
 	}
-	switch next.State {
-	case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1,
-		VectorPartitionLifecycleCleanableV1, VectorPartitionLifecycleAbsentV1:
+	// The reducer can only advance through invalidation, retirement, and
+	// cleanup. A compacted snapshot may skip intermediate commands.
+	switch old.State {
+	case VectorPartitionLifecycleActiveV1:
+		if next.State != VectorPartitionLifecycleInvalidatedV1 && next.State != VectorPartitionLifecycleRetiredV1 &&
+			next.State != VectorPartitionLifecycleCleanableV1 && next.State != VectorPartitionLifecycleAbsentV1 {
+			return false
+		}
+	case VectorPartitionLifecycleInvalidatedV1:
+		if next.State != VectorPartitionLifecycleInvalidatedV1 && next.State != VectorPartitionLifecycleRetiredV1 &&
+			next.State != VectorPartitionLifecycleCleanableV1 && next.State != VectorPartitionLifecycleAbsentV1 {
+			return false
+		}
+	case VectorPartitionLifecycleRetiredV1:
+		if next.State != VectorPartitionLifecycleCleanableV1 && next.State != VectorPartitionLifecycleAbsentV1 {
+			return false
+		}
+	case VectorPartitionLifecycleCleanableV1:
+		if next.State != VectorPartitionLifecycleCleanableV1 && next.State != VectorPartitionLifecycleAbsentV1 {
+			return false
+		}
 	default:
 		return false
 	}
-	if next.InvalidationEpoch == 0 {
+	if next.State == VectorPartitionLifecycleCleanableV1 {
+		if old.State == VectorPartitionLifecycleCleanableV1 && len(next.CleanedGroups) <= len(old.CleanedGroups) {
+			return false
+		}
+		for _, group := range old.CleanedGroups {
+			if !containsVectorPartitionLifecycleGroupV1(next.CleanedGroups, group) {
+				return false
+			}
+		}
+	}
+	if next.Aborted {
+		if old.State != VectorPartitionLifecycleRetiredV1 && old.State != VectorPartitionLifecycleCleanableV1 {
+			return false
+		}
+	} else if next.InvalidationEpoch == 0 {
 		if next.SupersededByGeneration == 0 || next.State == VectorPartitionLifecycleInvalidatedV1 {
 			return false
 		}

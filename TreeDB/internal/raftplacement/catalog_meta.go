@@ -682,7 +682,9 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		}
 		protectedRecords := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
 		for identity, current := range a.lifecycle {
-			if current.State == VectorPartitionLifecycleActiveV1 || current.State == VectorPartitionLifecycleInvalidatedV1 {
+			if current.State == VectorPartitionLifecycleActiveV1 || current.State == VectorPartitionLifecycleInvalidatedV1 ||
+				current.State == VectorPartitionLifecycleRetiredV1 || current.State == VectorPartitionLifecycleCleanableV1 ||
+				current.State == VectorPartitionLifecycleAbsentV1 {
 				protectedRecords[identity] = current
 			}
 		}
