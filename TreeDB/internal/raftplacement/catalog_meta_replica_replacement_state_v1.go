@@ -187,6 +187,38 @@ func replicaReplacementSnapshotExtendsV1(old, next []byte) bool {
 	return err == nil && replicaReplacementStateExtendsV1(a, b)
 }
 
+// Snapshot admission already validates identity and successor evidence. This
+// lower bound reserves the entries required by the sequential phase reducer,
+// using budget subtraction so several operations cannot overflow the total.
+func replicaReplacementSnapshotEntryCostV1(old, next map[raftcluster.GroupID][]byte, budget uint64) (uint64, error) {
+	remaining := budget
+	for group, raw := range next {
+		if bytes.Equal(raw, old[group]) {
+			continue
+		}
+		incoming, err := decodeReplicaReplacementCurrentV1(raw)
+		if err != nil {
+			return 0, err
+		}
+		// A newly observed operation requires BEGIN and all earlier phases.
+		entries := replacementPhaseOrdinalV1(incoming.Phase) + 1
+		if priorRaw := old[group]; len(priorRaw) != 0 {
+			prior, err := decodeReplicaReplacementCurrentV1(priorRaw)
+			if err != nil {
+				return 0, err
+			}
+			if sameReplicaReplacementBeginV1(prior.Begin, incoming.Begin) {
+				entries = replacementPhaseOrdinalV1(incoming.Phase) - replacementPhaseOrdinalV1(prior.Phase)
+			}
+		}
+		if entries < 0 || uint64(entries) > remaining {
+			return 0, ErrVectorPartitionLifecycleConflict
+		}
+		remaining -= uint64(entries)
+	}
+	return budget - remaining, nil
+}
+
 func (a *CatalogMetaAuthorityV1) ReplicaReplacementStateV1(group raftcluster.GroupID) (ReplicaReplacementStateV1, error) {
 	if a == nil {
 		return ReplicaReplacementStateV1{}, ErrCatalogMetaUnavailable

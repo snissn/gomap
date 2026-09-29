@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"sync"
 
@@ -375,6 +376,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
+		if err := validateReplicaReplacementLifecycleFeatureTransitionV1(a.record, command.Record, a.replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
 		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
@@ -674,6 +678,70 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 			}
 			return a.statusLocked(), nil
 		}
+		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		replacementSensitive := a.hasPendingReplicaReplacementLockedV1() || len(replacements) != len(a.replacements)
+		if !replacementSensitive {
+			for group, incoming := range replacements {
+				if !bytes.Equal(incoming, a.replacements[group]) {
+					replacementSensitive = true
+					break
+				}
+			}
+		}
+		if replacementSensitive {
+			if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
+				a.lifecycle, lifecycle, mutationFences, collectionMutationBarriers, false,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+		} else {
+			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+			knownServing := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(a.lifecycle))
+			for identity, record := range a.lifecycle {
+				if record.State != VectorPartitionLifecycleBuildingV1 && record.State != VectorPartitionLifecycleStagedV1 &&
+					record.State != VectorPartitionLifecyclePreparedV1 {
+					knownServing[identity] = record
+				}
+			}
+			if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
+				knownServing, lifecycle, mutationFences, collectionMutationBarriers, true,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+		}
+		// Every mandatory phase consumes its own entry, including BEGIN for an
+		// operation unknown locally. Reserve these even for mixed histories.
+		replacementEntries, err := replicaReplacementSnapshotEntryCostV1(
+			a.replacements, replacements, snapshot.AppliedIndex-a.applied,
+		)
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		// Known revisions retain a conservative lifecycle-entry lower bound
+		// even when mixed histories cannot authenticate every barrier command.
+		lifecycleEntries, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(
+			a.lifecycle, lifecycle, snapshot.AppliedIndex-a.applied-replacementEntries,
+		)
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		reservedEntries := replacementEntries + lifecycleEntries
+		// With unchanged lifecycle and fences, every newly observed barrier
+		// epoch needs committed mutation entries. Mixed compacted histories
+		// cannot be costed from the retained barrier window alone.
+		sameLifecycle := reflect.DeepEqual(a.lifecycle, lifecycle) || len(a.lifecycle) == 0 && len(lifecycle) == 0
+		sameFences := reflect.DeepEqual(a.mutationFences, mutationFences) || len(a.mutationFences) == 0 && len(mutationFences) == 0
+		if sameLifecycle && sameFences {
+			if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
+				collectionMutationBarriers, snapshot.AppliedIndex, reservedEntries,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+		}
 		a.replacements = replacements
 		a.replacementBytes = uint64(len(snapshot.ReplicaReplacements))
 		a.lifecycle = lifecycle
@@ -690,7 +758,15 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err := validateReplicaReplacementSnapshotTopologyV1(a.resolved, resolved, replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
+		if err := validateReplicaReplacementLifecycleFeatureTransitionV1(a.record, record, replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		if err := a.validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(
+			record, resolved, replacements, lifecycle, mutationFences, collectionMutationBarriers, snapshot.AppliedIndex,
+		); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 	}

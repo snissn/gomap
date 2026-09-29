@@ -246,6 +246,12 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionCollectionMutation
 			}
 			return a.statusLocked(), nil
 		}
+		// Admission must refuse before creating durable debt: the pending
+		// replacement freezes the subsequent ACTIVE invalidation. Exact retries
+		// above and owned CONFIRM below remain available for committed barriers.
+		if a.hasPendingReplicaReplacementLockedV1() {
+			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("replica replacement freezes new collection mutations"))
+		}
 		if current.Pending {
 			return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("collection mutation epoch %d is pending", current.Epoch))
 		}

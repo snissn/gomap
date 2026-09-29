@@ -298,6 +298,10 @@ func TestVectorPartitionCollectionMutationCompletedReplayWindowIsBoundedV1(t *te
 	committer := &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}
 	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: committer}
 	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	before, err := authority.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
 	operations := make([]string, maxVectorPartitionCollectionCompletedMutationsV1+2)
 	for i := range operations {
 		operations[i] = fmt.Sprintf("%064x", i+1)
@@ -322,6 +326,17 @@ func TestVectorPartitionCollectionMutationCompletedReplayWindowIsBoundedV1(t *te
 	}
 	if _, err := authority.ExportCatalogMetaSnapshotV1(); err != nil {
 		t.Fatalf("bounded history snapshot: %v", err)
+	}
+	final, err := authority.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("compacted completed-operation window catch-up: %v", err)
 	}
 }
 

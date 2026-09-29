@@ -127,9 +127,6 @@ func validateReplicaReplacementCatalogV1(command ReplicaReplacementBeginV1, reco
 	if command.ExpectedEpoch != record.Epoch || command.CatalogDigest != record.Digest {
 		return ErrCatalogMetaStaleEpoch
 	}
-	if catalogMetaFeatureEnabledV1(record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
-		return errors.Join(ErrUnsupportedFeature, fmt.Errorf("lifecycle-bearing replica replacement is not activated"))
-	}
 	for _, group := range record.Catalog.Groups {
 		if group.ID != command.GroupID {
 			continue
@@ -190,7 +187,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 	if err := validateReplicaReplacementCatalogV1(command, a.record); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
-	if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
+	if err := a.validateReplicaReplacementLifecycleLockedV1(command.GroupID); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
 	for _, existing := range a.replacements {
