@@ -1190,6 +1190,7 @@ func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *te
 	if err := json.Unmarshal(completed, &forged); err != nil {
 		t.Fatal(err)
 	}
+	forged.AppliedIndex++
 	var lifecycle vectorPartitionLifecycleSnapshotV1
 	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
 		t.Fatal(err)
@@ -1289,6 +1290,7 @@ func TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	completed.AppliedIndex++
 	var lifecycle vectorPartitionLifecycleSnapshotV1
 	if err := json.Unmarshal(completed.VectorPartitionLifecycle, &lifecycle); err != nil {
 		t.Fatal(err)
