@@ -278,6 +278,9 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("source-verified BUILD, hosted Stage, and ACTIVE: %v", err)
 	}
+	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); faultDir != "" {
+		fixedPeerWaitActiveInvalidationFileV1(t, ctx, faultDir, "hook-ready")
+	}
 	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
 		if report, err := client.ReadinessV1(ctx, node); err != nil || !report.Ready {
 			t.Fatalf("warmed %s readiness: %+v err=%v", node, report, err)
@@ -337,6 +340,10 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		if remote.ID != local.ID || math.Abs(float64(remote.Score-local.Score)) > 1e-5 {
 			t.Fatalf("same-generation local parity at rank %d: remote=%+v local=%+v", i, remote, local)
 		}
+	}
+	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); faultDir != "" {
+		fixedPeerAssertInFlightActiveInvalidationV1(t, ctx, faultDir, client, publicClient, request)
+		return
 	}
 	if separateLeaders && !sourceFollower {
 		// The valid public request above used both owner shards. A node with a
