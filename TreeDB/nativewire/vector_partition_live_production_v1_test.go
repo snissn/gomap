@@ -679,6 +679,24 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersV1(t testing.TB, document
 
 func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
+	dimensions := len(documents[0].vector)
+	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
+	if len(documents) > 4 {
+		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
+	}
+	if ownerSeparated {
+		// This trusted genesis creates its first index with the collection. The
+		// command-WAL seed cannot issue a later unframed schema mutation, so
+		// persist the initial epoch in the genesis metadata itself.
+		definition.SchemaGeneration = 1
+	}
+	return newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, columns, owners, commandWAL, ownerSeparated, definition)
+}
+
+// The supplied definition is declared before trusted genesis creates the index.
+// Existing fixture wrappers retain their original definition and epoch defaults.
+func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool, definition collections.VectorIndexDefinition) vectorPartitionLiveProductionFixtureV1 {
+	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
@@ -691,16 +709,6 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 		t.Fatal(err)
 	}
 	dimensions := len(documents[0].vector)
-	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
-	if len(documents) > 4 {
-		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
-	}
-	if ownerSeparated {
-		// This trusted genesis creates its first index with the collection. The
-		// command-WAL seed cannot issue a later unframed schema mutation, so
-		// persist the initial epoch in the genesis metadata itself.
-		definition.SchemaGeneration = 1
-	}
 	if columns == nil {
 		columns = &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}
 	}
