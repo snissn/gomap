@@ -1839,6 +1839,45 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	if bytes.Equal(firstSeenBefore, final) {
 		t.Fatal("terminal fixture did not advance")
 	}
+	knownActive, _, serving := activeReplicaReplacementAuthorityV1(t, true)
+	knownBefore, err := knownActive.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sameKey CatalogMetaSnapshotV1
+	if err := json.Unmarshal(knownBefore, &sameKey); err != nil {
+		t.Fatal(err)
+	}
+	knownRecords, _, _, knownFences, knownBarriers, err := decodeVectorPartitionLifecycleSnapshotV1(sameKey.VectorPartitionLifecycle, knownActive.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := cloneVectorPartitionLifecycleRecordV1(terminal)
+	unrelated.Identity = serving.Identity
+	unrelated.Identity.Generation++
+	unrelated.MutationEpoch = serving.MutationEpoch - 1
+	unrelated.InvalidationEpoch = serving.MutationEpoch
+	knownRecords[unrelated.Identity] = unrelated
+	knownFences[vectorPartitionLifecycleServingKeyV1{Collection: serving.Identity.Index.Collection, IndexName: serving.Identity.Index.IndexName}] =
+		vectorPartitionLifecycleMutationFenceStateV1{Epoch: serving.MutationEpoch}
+	sameKey.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(knownRecords, knownFences, knownBarriers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameKey.AppliedIndex++
+	sameKeyRaw, err := json.Marshal(sameKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(sameKeyRaw); err != nil {
+		t.Fatalf("same-key terminal fixture is not canonical: %v", err)
+	}
+	if err := knownActive.installCatalogMetaSnapshotBytesV1(sameKeyRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("unrelated terminal witnessed known ACTIVE fence: %v", err)
+	}
+	if retained, err := knownActive.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, knownBefore) {
+		t.Fatalf("same-key refusal changed local authority: %v", err)
+	}
 	pending, begin, _ := activeReplicaReplacementAuthorityV1(t, true)
 	rawBegin, err := EncodeReplicaReplacementBeginV1(begin)
 	if err != nil {
