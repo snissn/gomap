@@ -487,18 +487,25 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 		if err != nil {
 			return err
 		}
+		if state.Phase == ReplicaReplacementCompletedV1 {
+			if state.Result == nil || state.Result.Epoch <= a.record.Epoch {
+				continue
+			}
+			if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
+				return err
+			}
+			if state.Result.Epoch == next.Epoch && state.Result.Digest == next.Digest {
+				finalReplacement = true
+			}
+			continue
+		}
 		if state.Begin.ExpectedEpoch <= a.record.Epoch {
 			continue
 		}
 		if err := a.validateReplicaReplacementLifecycleLockedV1(group); err != nil {
 			return err
 		}
-		if state.Phase == ReplicaReplacementCompletedV1 && state.Result != nil &&
-			state.Result.Epoch == next.Epoch && state.Result.Digest == next.Digest {
-			finalReplacement = true
-		}
-		if state.Phase != ReplicaReplacementCompletedV1 && state.Begin.ExpectedEpoch == next.Epoch &&
-			state.Begin.CatalogDigest == next.Digest && len(state.Peers) != 0 &&
+		if state.Begin.ExpectedEpoch == next.Epoch && state.Begin.CatalogDigest == next.Digest && len(state.Peers) != 0 &&
 			equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), resolved.groups[group].Members) {
 			finalReplacement = true
 		}
