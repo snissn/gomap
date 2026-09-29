@@ -58,7 +58,7 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 		!utf8.ValidString(c.DataRoot) || !utf8.ValidString(c.RaftRoot) {
 		return invalid("local path or address exceeds byte budget")
 	}
-	budget := fixedPeerMaxConfigBytesV1 - 1024 - 6*(len(c.DataRoot)+len(c.RaftRoot)+len(c.ListenAddress)+len(c.NodeID)+len(c.ClusterID))
+	budget := fixedPeerMaxConfigInventoryBytesV1 - 1024 - 6*(len(c.DataRoot)+len(c.RaftRoot)+len(c.ListenAddress)+len(c.NodeID)+len(c.ClusterID))
 	if c.Credentials != nil {
 		if c.ClusterID == "" {
 			return invalid("TLS requires explicit stable cluster identity")
