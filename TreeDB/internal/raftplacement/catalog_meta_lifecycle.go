@@ -1210,7 +1210,7 @@ func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionServingAuthoritySnapshot
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	retainedWireBytes := uint64(len(a.recordBytes)+len(a.command)) + a.lifecycleBytes
+	retainedWireBytes := uint64(len(a.recordBytes)+len(a.command)) + a.lifecycleBytes + a.replacementBytes
 	if requiredAppliedIndex == 0 || a.applied != requiredAppliedIndex || expected.Catalog.AppliedIndex != requiredAppliedIndex ||
 		a.record.Epoch != expected.Catalog.Epoch || a.record.Digest != expected.Catalog.Digest ||
 		a.record.Catalog.Features.ConfigVersion != expected.Catalog.Features.ConfigVersion ||
