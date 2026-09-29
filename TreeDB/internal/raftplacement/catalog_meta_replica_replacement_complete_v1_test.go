@@ -187,6 +187,25 @@ func TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1(t *testing.T
 	if _, err := a.applyCommittedCatalogMetaV1(unsupported, a.applied+1); err == nil {
 		t.Fatal("incompatible feature activation accepted")
 	}
+	// A lagging authority must refuse the same feature activation when it
+	// arrives as a complete snapshot rather than a catalog command.
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(snapshot, &forged); err != nil {
+		t.Fatal(err)
+	}
+	forged.Record, err = encodeCatalogMetaRecordV1(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.LastCommand = unsupported
+	forged.AppliedIndex++
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrCatalogMetaConflict) {
+		t.Fatalf("incompatible feature activation snapshot: %v", err)
+	}
 	unchanged, _ := a.ExportCatalogMetaSnapshotBytesV1()
 	if !bytes.Equal(snapshot, unchanged) {
 		t.Fatal("refused activation mutated authority")

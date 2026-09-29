@@ -80,6 +80,18 @@ func validateReplicaReplacementStateCatalogV1(state ReplicaReplacementStateV1, r
 	return nil
 }
 
+// A completed replacement may remain in a lifecycle-bearing catalog, but an
+// ordinary catalog transition cannot activate that feature over older
+// replacement evidence that was committed without it.
+func validateReplicaReplacementLifecycleFeatureTransitionV1(current, next CatalogMetaRecordV1, replacements map[raftcluster.GroupID][]byte) error {
+	if len(replacements) != 0 &&
+		!catalogMetaFeatureEnabledV1(current.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) &&
+		catalogMetaFeatureEnabledV1(next.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+		return ErrCatalogMetaConflict
+	}
+	return nil
+}
+
 func EncodeReplicaReplacementCompleteV1(command ReplicaReplacementCompleteV1) ([]byte, error) {
 	command.Format, command.Kind = CatalogMetaFormatV1, ReplicaReplacementCompleteKindV1
 	state, err := EncodeReplicaReplacementStateV1(command.State)
