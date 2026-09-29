@@ -211,7 +211,7 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 	defer transport.Close()
 	group := config.Groups[0].ID
 	node := config.NodeID
-	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "catalog", Collection: "docs"}
+	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
 	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
 		Groups:     []raftplacement.GroupV1{{ID: group, Members: []raftcluster.NodeID{node}, LeaderHint: node}},
 		Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: group, Mode: raftplacement.PlacementModeCollectionV1}},
@@ -220,9 +220,9 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	placement := raftplacement.VectorPartitionPlacementRecordV1{
-		Collection: ref, IndexName: "embedding", IndexDefinitionDigest: strings.Repeat("a", 64),
-		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4,
-		PartitionGeneration: 5, PartitionCount: 1,
+		Collection: ref, IndexName: "embedding", IndexDefinitionDigest: vectorPartitionShardSearchDigestTestV1,
+		SourceGeneration: 11, SourceChecksum: 22, SourceSchemaHash: 33, SourceRowCount: 5,
+		PartitionGeneration: 7, PartitionCount: 1,
 		Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: group}},
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -230,9 +230,15 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := listener.Addr().String()
-	service := &VectorPartitionShardSearchServiceV1{
-		localGroup: group, localNodeID: node, limits: DefaultVectorPartitionShardSearchLimitsV1(),
-		route: vectorPartitionShardSearchRouteV1{placement: placement, hints: map[raftcluster.GroupID]raftcluster.NodeID{group: node}},
+	_, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t, placement.Partitions,
+		map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"local-hit"}, [][]float32{{1, 0}})})
+	coordinator.proof.NodeID, coordinator.progress.NodeID = node, node
+	service, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
+		Catalog: catalog, Placement: placement, LocalNodeID: node, LocalGroupID: group,
+		ReadCoordinator: coordinator, GenerationSource: source,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	topology, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
 		Catalog: catalog, Placement: placement,
@@ -252,6 +258,20 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 	identity, err := transport.ProbeShardEndpointV1(ctx, endpoint, node, group)
 	if err != nil || identity.GroupID != string(group) || identity.InstanceIdentity != "installed" {
 		t.Fatalf("authenticated topology probe identity=%+v err=%v", identity, err)
+	}
+	dispatcher, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport,
+		map[raftcluster.GroupID]string{group: endpoint},
+		map[raftcluster.GroupID]map[raftcluster.NodeID]string{group: {node: endpoint}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	request.TargetNodeID = node
+	response, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, request)
+	if err != nil || len(response.Partials) != 1 || len(response.Partials[0].Neighbors) != 1 ||
+		response.Partials[0].Neighbors[0].ID != "local-hit" || response.Proof.GroupID != group || response.Proof.ServingNode != node {
+		t.Fatalf("authenticated same-group search response=%+v err=%v", response, err)
 	}
 	plain, err := net.Dial("tcp", endpoint)
 	if err != nil {
@@ -283,7 +303,6 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	request := vectorPartitionShardSearchRequestTestV1([]uint32{1})
 	request.TargetGroupID = "different-group"
 	err = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Request: &request}, vectorPartitionShardSearchTCPMaxFrameBytesV1)
 	if err == nil {
@@ -292,5 +311,8 @@ func TestProductionTopologyAuthenticatedShardBoundaryV1(t *testing.T) {
 	_ = conn.Close()
 	if err == nil {
 		t.Fatal("authenticated shard accepted a wrong-group request")
+	}
+	if stats := service.Stats(); stats.Requests != 1 || stats.Successes != 1 {
+		t.Fatalf("wrong-group request reached search service: %+v", stats)
 	}
 }
