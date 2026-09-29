@@ -103,7 +103,7 @@ func (c VectorPartitionLifecycleCoordinatorV1) ActivateV1(ctx context.Context, i
 	if r.State == VectorPartitionLifecycleActiveV1 {
 		return r, nil
 	}
-	cmd := VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: r.Revision, ExpectedState: r.State, Identity: identity, PreviousActiveGeneration: r.PreviousActiveGeneration, MutationEpoch: r.MutationEpoch}
+	cmd := VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: r.Revision, ExpectedState: r.State, Identity: identity, PreviousActiveGeneration: r.PreviousActiveGeneration, MutationEpoch: r.MutationEpoch, ReadySetDigest: r.ReadySetDigest}
 	for _, status := range c.Authority.VectorPartitionLifecycleStatusesV1() {
 		if status.Active && status.Identity.Index == identity.Index {
 			cmd.PreviousActiveGeneration, cmd.PreviousActiveRevision = status.Identity.Generation, status.Revision

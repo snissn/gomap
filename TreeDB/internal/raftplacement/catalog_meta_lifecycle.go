@@ -548,6 +548,10 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 			if !replicaReplacementNewLifecyclePreparationSnapshotV1(incoming) {
 				return ErrVectorPartitionLifecycleConflict
 			}
+		case VectorPartitionLifecycleActiveV1:
+			if !a.replicaReplacementNewLifecycleActiveSnapshotV1(incoming, expected, records, fences) {
+				return ErrVectorPartitionLifecycleConflict
+			}
 		}
 	}
 	for key, old := range a.mutationFences {
@@ -565,6 +569,97 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 		}
 	}
 	return nil
+}
+
+// A new ACTIVE generation has no local record to compare against. Reconstruct
+// its reducer preparation and activation command at this catalog identity.
+// A direct cutover must also carry the same READY-bound command digest on the
+// previously ACTIVE local record. Older cleaned cutovers have overwritten that
+// digest, so their separate terminal-successor check remains the authority.
+func (a *CatalogMetaAuthorityV1) replicaReplacementNewLifecycleActiveSnapshotV1(
+	record VectorPartitionLifecycleRecordV1,
+	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+) bool {
+	key := vectorPartitionLifecycleServingKeyV1{Collection: record.Identity.Index.Collection, IndexName: record.Identity.Index.IndexName}
+	if fence := fences[key]; fence.Pending || record.MutationEpoch < fence.Epoch {
+		return false
+	}
+	if barrier := a.collectionMutationBarriers[record.Identity.Index.Collection]; barrier.Pending || record.MutationEpoch < barrier.Epoch {
+		return false
+	}
+	begin := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: record.Identity, RequiredGroups: record.RequiredGroups,
+		PreviousActiveGeneration: record.PreviousActiveGeneration, MutationEpoch: record.MutationEpoch,
+		SourceOwners: record.SourceOwners, ANNOwners: record.ANNOwners,
+	}
+	current, err := ApplyVectorPartitionLifecycleCommandV1(VectorPartitionLifecycleRecordV1{}, begin)
+	if err != nil {
+		return false
+	}
+	for _, ready := range record.ReadyGroups {
+		current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
+			Kind: VectorPartitionLifecycleRecordGroupReadyV1, ExpectedRevision: current.Revision,
+			ExpectedState: current.State, Identity: record.Identity, GroupReady: ready,
+		})
+		if err != nil {
+			return false
+		}
+	}
+	current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecyclePrepareV1, ExpectedRevision: current.Revision,
+		ExpectedState: current.State, Identity: record.Identity, ReadySetDigest: record.ReadySetDigest,
+	})
+	if err != nil || record.Revision != current.Revision+1 {
+		return false
+	}
+	// The cutover command's previous revision is available only when the
+	// predecessor remains the locally known ACTIVE generation.
+	var previousRevision uint64
+	if record.PreviousActiveGeneration != 0 {
+		_, incomingPrevious, found := findVectorPartitionLifecycleGenerationLockedV1(records, record.Identity.Index, record.PreviousActiveGeneration)
+		if !found || incomingPrevious.SupersededByGeneration != record.Identity.Generation ||
+			(incomingPrevious.State != VectorPartitionLifecycleRetiredV1 && incomingPrevious.State != VectorPartitionLifecycleCleanableV1 &&
+				incomingPrevious.State != VectorPartitionLifecycleAbsentV1) {
+			return false
+		}
+		previousIdentity, previous, found := findVectorPartitionLifecycleGenerationLockedV1(expected, record.Identity.Index, record.PreviousActiveGeneration)
+		if found && previous.State == VectorPartitionLifecycleActiveV1 {
+			previousRevision = previous.Revision
+			currentPrevious, ok := records[previousIdentity]
+			if !ok || currentPrevious.State != VectorPartitionLifecycleRetiredV1 || currentPrevious.Revision != previous.Revision+1 {
+				previousRevision = 0
+			}
+		}
+	}
+	if record.PreviousActiveGeneration != 0 && previousRevision == 0 {
+		// A later compacted cutover can leave only terminal predecessors. Its
+		// provenance remains bounded by the existing terminal successor check
+		// for a locally known ACTIVE generation.
+		for _, old := range expected {
+			if old.Identity.Index == record.Identity.Index && old.State == VectorPartitionLifecycleActiveV1 {
+				return true
+			}
+		}
+		return false
+	}
+	command := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: current.Revision,
+		ExpectedState: current.State, Identity: record.Identity,
+		PreviousActiveGeneration: record.PreviousActiveGeneration,
+		PreviousActiveRevision:   previousRevision, MutationEpoch: record.MutationEpoch,
+		ReadySetDigest: record.ReadySetDigest,
+	}
+	raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
+	if err != nil || sha256HexVectorPartitionLifecycleV1(raw) != record.LastCommandDigest {
+		return false
+	}
+	if previousRevision != 0 {
+		previousIdentity, _, _ := findVectorPartitionLifecycleGenerationLockedV1(expected, record.Identity.Index, record.PreviousActiveGeneration)
+		return records[previousIdentity].LastCommandDigest == record.LastCommandDigest
+	}
+	return true
 }
 
 // A snapshot can compact the commands that created a new candidate. Rebuild
@@ -720,7 +815,8 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 	}
 	// Every committed reducer transition advances the revision once. A
 	// compacted snapshot can omit intermediate states, but cannot reach a
-	// later state with fewer revisions than those transitions require.
+	// later state with a different revision distance: retries do not advance
+	// revisions, and each committed transition advances exactly once.
 	required := uint64(len(old.RequiredGroups))
 	cleaned := uint64(len(old.CleanedGroups))
 	nextCleaned := uint64(len(next.CleanedGroups))
@@ -783,7 +879,7 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 			minimum = 1 + required - cleaned
 		}
 	}
-	if next.Revision-old.Revision < minimum {
+	if next.Revision-old.Revision != minimum {
 		return false
 	}
 	if next.State == VectorPartitionLifecycleCleanableV1 {

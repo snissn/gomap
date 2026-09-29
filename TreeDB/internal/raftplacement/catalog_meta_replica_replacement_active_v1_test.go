@@ -1108,6 +1108,64 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCompactedCutoverCleanupV1(t *te
 	}
 }
 
+func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t *testing.T) {
+	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	firstIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	first := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, firstIdentity, 0, 9)
+	first = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(first, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	second := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, secondIdentity, firstIdentity.Generation, 10)
+	second = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(second, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.PreviousActiveGeneration = firstIdentity.Generation
+		command.PreviousActiveRevision = first.Revision
+		command.MutationEpoch = 10
+	}))
+	thirdIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 9, 13)
+	third := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, thirdIdentity, secondIdentity.Generation, 11)
+	third = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(third, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.PreviousActiveGeneration = secondIdentity.Generation
+		command.PreviousActiveRevision = second.Revision
+		command.MutationEpoch = 11
+	}))
+	second, ok := leader.VectorPartitionLifecycleRecordV1(secondIdentity)
+	if !ok || second.State != VectorPartitionLifecycleRetiredV1 {
+		t.Fatalf("second cutover left candidate %+v, ok=%v", second, ok)
+	}
+	for _, kind := range []VectorPartitionLifecycleCommandKindV1{
+		VectorPartitionLifecycleMarkCleanableV1, VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCompleteCleanupV1,
+	} {
+		second = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(second, kind, func(command *VectorPartitionLifecycleCommandV1) {
+			if kind == VectorPartitionLifecycleRecordGroupCleanupV1 {
+				command.GroupID = "group-a"
+			}
+		}))
+	}
+	if second.State != VectorPartitionLifecycleAbsentV1 || second.SupersededByGeneration != thirdIdentity.Generation {
+		t.Fatalf("second cleanup=%+v", second)
+	}
+	after, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(after); err != nil {
+		t.Fatalf("restore genuine cleaned intermediate cutover: %v", err)
+	}
+	if got, ok := follower.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
+		t.Fatalf("restored third=%+v available=%v want %+v", got, ok, third)
+	}
+}
+
 func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()

@@ -178,6 +178,11 @@ func TestVectorPartitionLifecycleV1AtomicCutoverRetiresPreviousActive(t *testing
 	if _, _, err := ApplyVectorPartitionLifecycleCutoverV1(previous, candidate, stale); !errors.Is(err, ErrVectorPartitionLifecycleStale) {
 		t.Fatalf("stale previous active revision err=%v", err)
 	}
+	changedReady := cutover
+	changedReady.ReadySetDigest = strings.Repeat("f", 64)
+	if _, _, err := ApplyVectorPartitionLifecycleCutoverV1(previous, candidate, changedReady); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("cutover accepted a different READY commitment: %v", err)
+	}
 
 	retired, active, err := ApplyVectorPartitionLifecycleCutoverV1(previous, candidate, cutover)
 	if err != nil {
@@ -348,6 +353,7 @@ func TestVectorPartitionLifecycleV1CommandStateMatrix(t *testing.T) {
 					command.ReadySetDigest = strings.Repeat("a", 64)
 				case VectorPartitionLifecycleActivateV1:
 					command.MutationEpoch = 10
+					command.ReadySetDigest = strings.Repeat("a", 64)
 				case VectorPartitionLifecycleAbortBuildV1:
 					command.Reason = "abort"
 				case VectorPartitionLifecycleInvalidateV1:
@@ -605,6 +611,9 @@ func vectorPartitionLifecycleTestRecordAtStateV1(t *testing.T, state VectorParti
 func vectorPartitionLifecycleTestCommandV1(record VectorPartitionLifecycleRecordV1, kind VectorPartitionLifecycleCommandKindV1, mutate func(*VectorPartitionLifecycleCommandV1)) VectorPartitionLifecycleCommandV1 {
 	command := VectorPartitionLifecycleCommandV1{
 		Kind: kind, ExpectedRevision: record.Revision, ExpectedState: record.State, Identity: record.Identity,
+	}
+	if kind == VectorPartitionLifecycleActivateV1 {
+		command.ReadySetDigest = record.ReadySetDigest
 	}
 	if mutate != nil {
 		mutate(&command)

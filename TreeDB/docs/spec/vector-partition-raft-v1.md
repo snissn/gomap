@@ -351,6 +351,17 @@ request and response proof, while local asset opening continues to validate
 the manifest digest. They are never compared as though they were the same
 hash.
 
+The replicated ACTIVATE command carries that lifecycle ready-set digest and
+checks it against the prepared generation. During authority snapshot catch-up,
+a newly introduced ACTIVE generation must have reducer-reachable preparation,
+a fresh source mutation epoch, and an ACTIVATE command digest consistent with
+its retained record. A direct atomic A-to-B cutover also checks the same
+digest on the retired A record. A cleaned intermediate generation in a
+compacted multi-cutover chain no longer retains its activation command digest;
+this checkpoint preserves the existing catch-up path but does not prove that
+intermediate activation's READY provenance. Durable provenance for that case
+remains part of #4811. Fixed-peer runtime replacement BEGIN remains refused.
+
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated
 placement, then M7 validates that router against catalog authority before any

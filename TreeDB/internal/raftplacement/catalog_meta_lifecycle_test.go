@@ -858,6 +858,9 @@ func catalogMetaLifecycleTestCommandV1(
 	command := VectorPartitionLifecycleCommandV1{
 		Kind: kind, ExpectedRevision: record.Revision, ExpectedState: record.State, Identity: record.Identity,
 	}
+	if kind == VectorPartitionLifecycleActivateV1 {
+		command.ReadySetDigest = record.ReadySetDigest
+	}
 	if mutate != nil {
 		mutate(&command)
 	}

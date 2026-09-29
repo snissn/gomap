@@ -2769,6 +2769,14 @@ pending-mutation, BUILDING, and source-group guards. The existing
 ordinary feature activation over older completed replacement evidence refuses
 both as a command and a forward snapshot. These are authority-only checks;
 fixed-peer vector replacement BEGIN remains unavailable.
+`TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
+requires exact reducer revision distance across a compacted snapshot.
+`TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and
+`TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1`
+reject direct ACTIVE READY/source forgeries while accepting genuine cutover
+and confirmed-fence controls. `TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1`
+preserves legitimate A-to-B-to-C catch-up with cleaned B; it does not establish
+durable activation provenance for arbitrary intermediate histories.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
