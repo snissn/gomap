@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 func fixedPeerIdentityV1(value string) bool {
@@ -122,9 +123,8 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 			return invalid("vector inventory exceeds byte budget")
 		}
 		if c.Credentials != nil {
-			// The public and shard vector protocols have no TLS handshake. In
-			// authenticated peer mode they may only be exposed on this host;
-			// the control/Raft listeners still authenticate their peers.
+			// The public vector protocol remains local in authenticated peer
+			// mode. Immutable shard serving uses the authenticated peer transport.
 			loopback := func(address string) bool {
 				parsed, err := netip.ParseAddrPort(address)
 				return err == nil && parsed.Addr().IsLoopback()
@@ -136,7 +136,11 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 			}
 			for _, members := range c.Vector.ShardAddresses {
 				for _, address := range members {
-					if !loopback(address) {
+					if c.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+						if !peerPrivateEndpointV1(address) {
+							return invalid("authenticated immutable vector shard listener must be private or loopback")
+						}
+					} else if !loopback(address) {
 						return invalid("authenticated vector shard listener must be loopback")
 					}
 				}
