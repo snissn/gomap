@@ -214,36 +214,52 @@ func (r *FixedPeerTCPRuntimeV1) immutableActiveVectorRecordV1(ctx context.Contex
 	if r == nil || r.config.Vector == nil || len(owners) == 0 {
 		return zero, ErrFixedPeerVectorUnavailableV1
 	}
-	before, err := r.catalogFence(ctx)
+	fence, err := r.catalogFence(ctx)
 	if err != nil {
 		return zero, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	identity := r.config.Vector.Identity
-	if before.AppliedIndex == 0 || before.Epoch != identity.Index.CatalogEpoch || before.Digest != identity.Index.CatalogDigest {
+	if fence.AppliedIndex == 0 || fence.Epoch != identity.Index.CatalogEpoch || fence.Digest != identity.Index.CatalogDigest {
 		return zero, ErrFixedPeerVectorProofStaleV1
 	}
-	record, exists := r.authority.VectorPartitionLifecycleRecordV1(identity)
-	after, err := r.catalogFence(ctx)
+	// The exact-index snapshot reads catalog and lifecycle under one lock;
+	// an apply between the fence and snapshot fails closed.
+	snapshot, err := r.authority.VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+		ctx, fence.AppliedIndex, identity.Index.Collection, identity.Index.IndexName, identity.Generation,
+		identity.Index.IndexDefinitionDigest, identity.Source.Generation, identity.Source.Checksum,
+		identity.Source.SchemaHash, identity.Source.RowCount,
+	)
 	if err != nil {
 		return zero, errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
-	if !sameScopedStageCatalogStatusV1(before, after) || !exists || record.Identity != identity || record.Aborted ||
+	if !sameScopedStageCatalogStatusV1(fence, snapshot.Catalog) || snapshot.Identity != identity {
+		return zero, ErrFixedPeerVectorProofStaleV1
+	}
+	if err := r.validateImmutableActiveVectorRecordV1(snapshot.Record, owners); err != nil {
+		return zero, err
+	}
+	return snapshot.Record, nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) validateImmutableActiveVectorRecordV1(record raftplacement.VectorPartitionLifecycleRecordV1, owners []raftcluster.GroupID) error {
+	identity := r.config.Vector.Identity
+	if record.Identity != identity || record.Aborted ||
 		record.State != raftplacement.VectorPartitionLifecycleActiveV1 || record.InvalidationEpoch != 0 ||
 		!slices.Equal(record.RequiredGroups, owners) || len(record.ReadyGroups) != len(owners) || record.ReadySetDigest == "" {
-		return zero, ErrFixedPeerVectorProofStaleV1
+		return ErrFixedPeerVectorProofStaleV1
 	}
 	for i, owner := range owners {
 		ready := record.ReadyGroups[i]
 		if ready.GroupID != owner || ready.AppliedIndex == 0 ||
 			ready.AssetSetDigest != vectorPartitionM8GroupAssetSetDigestV1(string(owner), r.config.Vector.Manifest) {
-			return zero, ErrFixedPeerVectorProofStaleV1
+			return ErrFixedPeerVectorProofStaleV1
 		}
 	}
 	digest, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(identity, owners, record.ReadyGroups)
 	if err != nil || digest != record.ReadySetDigest {
-		return zero, ErrFixedPeerVectorProofStaleV1
+		return ErrFixedPeerVectorProofStaleV1
 	}
-	return record, nil
+	return nil
 }
 
 func fixedPeerVectorImmutableDefinitionV1(meta collections.CollectionMeta, identity raftplacement.VectorPartitionLifecycleIdentityV1) error {

@@ -883,6 +883,11 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		if err != nil {
 			return public.SearchResponseV1{}, err
 		}
+		// The ACTIVE grant checked on entry can be invalidated while remote
+		// owners search. Fence it again before exposing any merged result.
+		if _, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
 		if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
