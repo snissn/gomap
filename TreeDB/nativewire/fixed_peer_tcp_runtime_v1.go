@@ -569,7 +569,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		r.listener = &peerSecureListenerV1{Listener: r.listener, security: client.security, admission: client.peerTransport.admission, scope: "control"}
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
-	if r.config.Vector != nil {
+	if r.config.Vector != nil && !fixedPeerImmutableVectorStandbyV1(r.config) {
 		r.vector, err = openFixedPeerVectorRuntimeV1(r)
 		if err != nil {
 			return fail(err)

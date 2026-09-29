@@ -107,6 +107,10 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		report.Error = "node is draining or closed"
 		return report, raftcluster.ErrAdmissionUnavailable
 	}
+	if fixedPeerImmutableVectorStandbyV1(r.config) {
+		report.Error = ErrFixedPeerVectorUnavailableV1.Error()
+		return report, ErrFixedPeerVectorUnavailableV1
+	}
 	var catalog raftplacement.CatalogMetaStatusV1
 	var err error
 	if r.meta == nil {
