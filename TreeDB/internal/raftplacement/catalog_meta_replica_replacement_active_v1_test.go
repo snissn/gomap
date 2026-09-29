@@ -2,6 +2,7 @@ package raftplacement
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -54,6 +55,26 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if before.State != VectorPartitionLifecycleActiveV1 {
 		t.Fatalf("fixture state=%q", before.State)
 	}
+	// A terminal tombstone is retained alongside ACTIVE state. Completion must
+	// rebind it too, or the exported snapshot cannot be restored.
+	absent := cloneVectorPartitionLifecycleRecordV1(before)
+	absent.Identity.Index.IndexName = "retired-embedding"
+	absent.State = VectorPartitionLifecycleAbsentV1
+	absent.CleanupComplete = true
+	absent.RequiredGroups = nil
+	absent.ReadyGroups = nil
+	absent.ReadySetDigest = ""
+	if _, err := EncodeVectorPartitionLifecycleRecordV1(absent); err != nil {
+		t.Fatalf("terminal tombstone fixture: %v", err)
+	}
+	a.mu.Lock()
+	a.lifecycle[absent.Identity] = absent
+	lifecycleRaw, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
+	a.lifecycleBytes = uint64(len(lifecycleRaw))
+	a.mu.Unlock()
+	if err != nil {
+		t.Fatalf("terminal tombstone snapshot: %v", err)
+	}
 	raw, err := EncodeReplicaReplacementBeginV1(begin)
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +105,12 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if _, old := a.VectorPartitionLifecycleRecordV1(before.Identity); old {
 		t.Fatal("old catalog identity still admitted")
 	}
+	reboundAbsent := absent.Identity
+	reboundAbsent.Index.CatalogEpoch = complete.Catalog.Record.Epoch
+	reboundAbsent.Index.CatalogDigest = complete.Catalog.Record.Digest
+	if got, ok := a.VectorPartitionLifecycleRecordV1(reboundAbsent); !ok || got.State != VectorPartitionLifecycleAbsentV1 {
+		t.Fatalf("terminal tombstone was not rebound: %+v available=%v", got, ok)
+	}
 	if err := catalogMetaLifecycleValidateSearchV1(a, rebound, after.ReadySetDigest); err != nil {
 		t.Fatalf("rebound ACTIVE authority: %v", err)
 	}
@@ -91,9 +118,41 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	fresh := NewCatalogMetaAuthorityV1()
+	if err := fresh.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("fresh restore of completed roster and rebound ACTIVE: %v", err)
+	}
+	if err := catalogMetaLifecycleValidateSearchV1(fresh, rebound, after.ReadySetDigest); err != nil {
+		t.Fatalf("freshly restored ACTIVE authority: %v", err)
+	}
 	restored := NewCatalogMetaAuthorityV1()
 	if err := restored.installCatalogMetaSnapshotBytesV1(pending); err != nil {
 		t.Fatalf("restore pending: %v", err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(final, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var forgedLifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &forgedLifecycle); err != nil {
+		t.Fatal(err)
+	}
+	forgedLifecycle.Records[0].ReadyGroups[0].AssetSetDigest = strings.Repeat("e", 64)
+	forgedLifecycle.Records[0].ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(
+		forgedLifecycle.Records[0].Identity, forgedLifecycle.Records[0].RequiredGroups, forgedLifecycle.Records[0].ReadyGroups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.VectorPartitionLifecycle, err = json.Marshal(forgedLifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("replacement snapshot changed committed READY receipt: %v", err)
 	}
 	if err := restored.installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("restore completion: %v", err)

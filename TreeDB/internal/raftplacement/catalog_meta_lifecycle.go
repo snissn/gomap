@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -310,6 +311,143 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleCatalogTransiti
 		if record.State != VectorPartitionLifecycleAbsentV1 {
 			return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("catalog transition blocked by generation %d in state %q", identity.Generation, record.State))
 		}
+	}
+	return nil
+}
+
+// Replica replacement changes only one group's roster. An immutable ACTIVE
+// generation may retain its source and READY evidence across that catalog
+// change; ordinary catalog publication still uses the stricter guard above.
+func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleLockedV1(group raftcluster.GroupID) error {
+	if !catalogMetaFeatureEnabledV1(a.record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
+	}
+	for _, barrier := range a.collectionMutationBarriers {
+		if barrier.Pending {
+			return ErrVectorPartitionLifecycleGuard
+		}
+	}
+	for _, fence := range a.mutationFences {
+		if fence.Pending {
+			return ErrVectorPartitionLifecycleGuard
+		}
+	}
+	active := false
+	for identity, record := range a.lifecycle {
+		if record.Identity != identity {
+			return ErrVectorPartitionLifecycleIdentity
+		}
+		if record.State == VectorPartitionLifecycleAbsentV1 {
+			continue
+		}
+		if record.State != VectorPartitionLifecycleActiveV1 || identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{}) {
+			return ErrVectorPartitionLifecycleGuard
+		}
+		placement, ok := a.resolved.Placement(identity.Index.Collection)
+		if !ok || placement.GroupID == group {
+			return ErrVectorPartitionLifecycleGuard
+		}
+		for _, partition := range placement.TokenPartitions {
+			if partition.GroupID == group {
+				return ErrVectorPartitionLifecycleGuard
+			}
+		}
+		active = true
+	}
+	if !active {
+		return errors.Join(ErrUnsupportedFeature, fmt.Errorf("lifecycle-bearing replica replacement requires an immutable ACTIVE generation"))
+	}
+	return nil
+}
+
+func (a *CatalogMetaAuthorityV1) rebindReplicaReplacementLifecycleLockedV1(next CatalogMetaRecordV1) (
+	map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1,
+	map[vectorPartitionLifecycleServingKeyV1]VectorPartitionLifecycleIdentityV1,
+	[]byte, error,
+) {
+	if len(a.lifecycle) == 0 {
+		raw, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
+		return a.lifecycle, a.active, a.activeNames, raw, err
+	}
+	records := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(a.lifecycle))
+	for _, original := range a.lifecycle {
+		record := cloneVectorPartitionLifecycleRecordV1(original)
+		record.Identity.Index.CatalogEpoch = next.Epoch
+		record.Identity.Index.CatalogDigest = next.Digest
+		if record.State == VectorPartitionLifecycleActiveV1 {
+			var err error
+			record.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+		}
+		if _, duplicate := records[record.Identity]; duplicate {
+			return nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
+		}
+		records[record.Identity] = record
+	}
+	raw, err := encodeVectorPartitionLifecycleSnapshotV1(records, a.mutationFences, a.collectionMutationBarriers)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	validated, active, activeNames, _, _, err := decodeVectorPartitionLifecycleSnapshotV1(raw, next)
+	return validated, active, activeNames, raw, err
+}
+
+func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(
+	next CatalogMetaRecordV1, replacements map[raftcluster.GroupID][]byte, lifecycle []byte,
+) error {
+	if !catalogMetaFeatureEnabledV1(a.record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
+	}
+	active := false
+	for _, record := range a.lifecycle {
+		active = active || record.State == VectorPartitionLifecycleActiveV1
+	}
+	if !active {
+		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
+	}
+	if next.Epoch != a.record.Epoch+1 {
+		return ErrVectorPartitionLifecycleGuard
+	}
+	var completedGroup raftcluster.GroupID
+	for group, raw := range replacements {
+		state, err := decodeReplicaReplacementCurrentV1(raw)
+		if err != nil {
+			return err
+		}
+		if state.Phase != ReplicaReplacementCompletedV1 || state.Result == nil || state.Result.Epoch != next.Epoch {
+			continue
+		}
+		priorRaw := a.replacements[group]
+		prior, err := decodeReplicaReplacementCurrentV1(priorRaw)
+		if err != nil || prior.Phase == ReplicaReplacementCompletedV1 || !sameReplicaReplacementBeginV1(prior.Begin, state.Begin) ||
+			state.Result.Digest != next.Digest || completedGroup != "" {
+			return ErrCatalogMetaConflict
+		}
+		completedGroup = group
+	}
+	if completedGroup == "" {
+		return ErrVectorPartitionLifecycleGuard
+	}
+	completed, err := decodeReplicaReplacementCurrentV1(replacements[completedGroup])
+	if err != nil {
+		return err
+	}
+	expectedCatalog, err := replicaReplacementCompletedCatalogV1(a.record, completed.Begin)
+	if err != nil || !reflect.DeepEqual(expectedCatalog, next) {
+		return ErrCatalogMetaConflict
+	}
+	if err := a.validateReplicaReplacementLifecycleLockedV1(completedGroup); err != nil {
+		return err
+	}
+	_, _, _, expected, err := a.rebindReplicaReplacementLifecycleLockedV1(next)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(expected, lifecycle) {
+		return ErrVectorPartitionLifecycleConflict
 	}
 	return nil
 }
