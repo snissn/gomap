@@ -720,8 +720,8 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		// Known revisions retain a conservative lifecycle-entry lower bound
-		// even when mixed histories cannot authenticate every barrier command.
+		// Reserve proof-conditioned known lifecycle costs; unavailable overlap
+		// proofs can refuse a tight budget for compacted cutover histories.
 		lifecycleEntries, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(
 			a.lifecycle, lifecycle, mutationFences, snapshot.AppliedIndex-a.applied-replacementEntries,
 		)
