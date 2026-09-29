@@ -402,13 +402,16 @@ func TestCatalogSnapshotMixedBarrierInvalidationOrderingV1(t *testing.T) {
 		earlyEpoch   uint64
 		lateEpoch    uint64
 		localPending bool
+		finalPending bool
 	}{
-		{"late-above-final", 100, 0, 1000, false},
-		{"late-between-retained-and-final", 100, 0, 70, false},
-		{"late-below-retained-with-evicted-entry", 100, 0, 44, false},
-		{"early-and-late-known-records", 65, 100, 1000, false},
-		{"old-pending-confirmation-evicted-late", 100, 0, 1000, true},
-		{"old-pending-confirmation-evicted-early", 65, 100, 0, true},
+		{"late-above-final", 100, 0, 1000, false, false},
+		{"late-between-retained-and-final", 100, 0, 70, false, false},
+		{"late-below-retained-with-evicted-entry", 100, 0, 44, false, false},
+		{"early-and-late-known-records", 65, 100, 1000, false, false},
+		{"old-pending-confirmation-evicted-late", 100, 0, 1000, true, false},
+		{"old-pending-confirmation-evicted-early", 65, 100, 0, true, false},
+		{"new-pending-late-invalidation", 100, 0, 1000, false, true},
+		{"early-jump-new-pending-only", 0, 100, 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
@@ -461,6 +464,13 @@ func TestCatalogSnapshotMixedBarrierInvalidationOrderingV1(t *testing.T) {
 				postmergeCommitCollectionMutationV1(t, leader, mutation)
 				effective++
 			}
+			if tc.finalPending {
+				mutation.Kind = vectorPartitionBeginCollectionMutationV1
+				mutation.ExpectedMutationEpoch, mutation.MutationEpoch = effective, effective+1
+				mutation.OperationDigest = strings.Repeat("d", 64)
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+				effective++
+			}
 			if tc.lateEpoch != 0 {
 				invalidate(late, tc.lateEpoch)
 				knownEntries += 2
@@ -470,7 +480,14 @@ func TestCatalogSnapshotMixedBarrierInvalidationOrderingV1(t *testing.T) {
 			// The retained window contains the final 64 confirmations. A possible
 			// preceding jump must be below its first new BEGIN. This is a minimum
 			// compatible history, not authentication of the actual erased order.
-			firstBegin := effective - maxVectorPartitionCollectionCompletedMutationsV1 + 1
+			firstBegin := effective
+			if tc.pairs != 0 {
+				confirmedEpoch := effective
+				if tc.finalPending {
+					confirmedEpoch--
+				}
+				firstBegin = confirmedEpoch - min(tc.pairs, maxVectorPartitionCollectionCompletedMutationsV1) + 1
+			}
 			floor := localEpoch
 			for _, epoch := range []uint64{tc.earlyEpoch, tc.lateEpoch} {
 				if epoch < firstBegin && epoch > floor {
@@ -478,6 +495,9 @@ func TestCatalogSnapshotMixedBarrierInvalidationOrderingV1(t *testing.T) {
 				}
 			}
 			required := knownEntries + 2*(effective-floor)
+			if tc.finalPending {
+				required-- // The new pending BEGIN has no CONFIRM yet.
+			}
 			if tc.localPending {
 				required++ // The locally committed BEGIN still needs its CONFIRM.
 			}
