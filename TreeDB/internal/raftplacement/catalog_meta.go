@@ -702,7 +702,9 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		if err := a.validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(record, replacements, snapshot.VectorPartitionLifecycle); err != nil {
+		if err := a.validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(
+			record, resolved, replacements, lifecycle, mutationFences, collectionMutationBarriers,
+		); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 	}

@@ -329,12 +329,135 @@ func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T
 		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
 			t.Fatal(err)
 		}
+		var forged CatalogMetaSnapshotV1
+		if err := json.Unmarshal(final, &forged); err != nil {
+			t.Fatal(err)
+		}
+		var lifecycle vectorPartitionLifecycleSnapshotV1
+		if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+			t.Fatal(err)
+		}
+		for i := range lifecycle.Records {
+			if lifecycle.Records[i].State != VectorPartitionLifecycleInvalidatedV1 {
+				continue
+			}
+			lifecycle.Records[i].ReadyGroups[0].AssetSetDigest = strings.Repeat("e", 64)
+			lifecycle.Records[i].ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(
+				lifecycle.Records[i].Identity, lifecycle.Records[i].RequiredGroups, lifecycle.Records[i].ReadyGroups)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+			t.Fatalf("forged READY receipt snapshot was not self-consistent: %v", err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("higher-revision invalidation changed committed READY receipt: %v", err)
+		}
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+			t.Fatalf("refused higher-revision snapshot mutated authority: %v", err)
+		}
 		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
 			t.Fatalf("restore committed post-completion invalidation: %v", err)
 		}
 		got, ok := follower.VectorPartitionLifecycleRecordV1(invalidated.Identity)
 		if !ok || !reflect.DeepEqual(got, invalidated) {
 			t.Fatalf("restored invalidation=%+v available=%v want %+v", got, ok, invalidated)
+		}
+	})
+
+	t.Run("source roster changed", func(t *testing.T) {
+		leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		completeReplicaReplacementForTestV1(t, leader, begin)
+		forged, err := leader.ExportCatalogMetaSnapshotV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Forge a self-consistent completed source roster from the committed
+		// non-source evidence. It cannot be obtained through the live BEGIN guard.
+		catalog := cloneCatalog(leader.record.Catalog)
+		for i := range catalog.Groups {
+			if catalog.Groups[i].ID == "group-a" {
+				catalog.Groups[i].Members = []raftcluster.NodeID{"node-c", "source-spare"}
+				catalog.Groups[i].LeaderHint = ""
+			} else if catalog.Groups[i].ID == "group-b" {
+				catalog.Groups[i].Members = []raftcluster.NodeID{"node-b", "node-c"}
+				catalog.Groups[i].LeaderHint = "node-b"
+			}
+		}
+		record, err := NewCatalogMetaRecordV1(leader.record.Epoch, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged.Record, err = encodeCatalogMetaRecordV1(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged.LastCommand, err = EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{ExpectedEpoch: record.Epoch - 1, Record: record})
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := leader.ReplicaReplacementStateV1("group-b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Begin.GroupID = "group-a"
+		state.Begin.OldNodeID = "node-a"
+		state.Begin.NewPeer = raftcluster.Peer{ID: "source-spare", Address: "127.0.0.1:19002"}
+		state.Seed.SourceNodeID = "node-a"
+		state.Seed.Manifest.NodeID = "node-a"
+		state.Seed.Manifest.GroupID = "group-a"
+		state.Tail.GroupID = "group-a"
+		state.Tail.LeaderID = "node-a"
+		state.Peers = []raftcluster.Peer{{ID: "node-c", Address: "127.0.0.1:20001"}, state.Begin.NewPeer}
+		state.Result.Digest = record.Digest
+		stateRaw, err := EncodeReplicaReplacementStateV1(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(map[raftcluster.GroupID][]byte{"group-a": stateRaw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		active.Identity.Index.CatalogEpoch = record.Epoch
+		active.Identity.Index.CatalogDigest = record.Digest
+		active.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(active.Identity, active.RequiredGroups, active.ReadyGroups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(
+			map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{active.Identity: active}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forgedRaw, err := json.Marshal(forged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+			t.Fatalf("forged source-roster snapshot was not self-consistent: %v", err)
+		}
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("forward snapshot changed ACTIVE source roster: %v", err)
+		}
+		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+			t.Fatalf("refused source-roster snapshot mutated authority: %v", err)
 		}
 	})
 }
