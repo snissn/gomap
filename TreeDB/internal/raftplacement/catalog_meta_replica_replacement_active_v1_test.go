@@ -926,3 +926,112 @@ func TestCatalogReplicaReplacementRefusesPendingMutationAndBuildingV1(t *testing
 		}
 	})
 }
+
+func TestCatalogReplicaReplacementSnapshotRejectsUnactivatedSupersessionV1(t *testing.T) {
+	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	candidateIdentity := catalogMetaLifecycleTestIdentityV1(leader.record, active.Identity.Generation+1, 12)
+	candidateIdentity.Immutable = active.Identity.Immutable
+	applied := leader.applied
+	candidate := catalogMetaLifecycleApplyV1(t, leader, &applied, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: candidateIdentity, RequiredGroups: []raftcluster.GroupID{"group-b"},
+		PreviousActiveGeneration: active.Identity.Generation, MutationEpoch: active.MutationEpoch + 1,
+	})
+	if candidate.State != VectorPartitionLifecycleBuildingV1 {
+		t.Fatalf("candidate state=%q", candidate.State)
+	}
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeReplicaReplacementForTestV1(t, leader, begin)
+	forged, err := leader.ExportCatalogMetaSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	for i := range lifecycle.Records {
+		if lifecycle.Records[i].Identity.Generation == active.Identity.Generation {
+			lifecycle.Records[i].State = VectorPartitionLifecycleRetiredV1
+			lifecycle.Records[i].SupersededByGeneration = candidateIdentity.Generation
+			lifecycle.Records[i].Revision++
+			lifecycle.Records[i].LastCommandDigest = strings.Repeat("f", 64)
+		}
+	}
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged snapshot was not internally canonical: %v", err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("unactivated successor retired serving generation: %v", err)
+	}
+	if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused snapshot mutated authority: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotAcceptsCompactedCutoverCleanupV1(t *testing.T) {
+	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	applied := uint64(1)
+	oldIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
+	old := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, oldIdentity, 0, 9)
+	old = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(old, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	newIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 8, 12)
+	candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, newIdentity, oldIdentity.Generation, 10)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.PreviousActiveGeneration = oldIdentity.Generation
+		command.PreviousActiveRevision = old.Revision
+		command.MutationEpoch = 10
+	}))
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = 11
+	}))
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 11
+	}))
+	for _, kind := range []VectorPartitionLifecycleCommandKindV1{
+		VectorPartitionLifecycleRetireV1, VectorPartitionLifecycleMarkCleanableV1,
+		VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCompleteCleanupV1,
+	} {
+		candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, kind, func(command *VectorPartitionLifecycleCommandV1) {
+			if kind == VectorPartitionLifecycleRecordGroupCleanupV1 {
+				command.GroupID = "group-a"
+			}
+		}))
+	}
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("restore compacted cutover through successor cleanup: %v", err)
+	}
+	if got, ok := follower.VectorPartitionLifecycleRecordV1(newIdentity); !ok || !reflect.DeepEqual(got, candidate) || got.State != VectorPartitionLifecycleAbsentV1 {
+		t.Fatalf("restored successor=%+v available=%v want %+v", got, ok, candidate)
+	}
+}
