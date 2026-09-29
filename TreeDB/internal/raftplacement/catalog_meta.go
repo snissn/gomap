@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"sync"
 
@@ -723,7 +724,9 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		// With unchanged lifecycle and fences, every newly observed barrier
 		// epoch needs committed mutation entries. Mixed compacted histories
 		// cannot be costed from the retained barrier window alone.
-		if reflect.DeepEqual(a.lifecycle, lifecycle) && reflect.DeepEqual(a.mutationFences, mutationFences) {
+		sameLifecycle := reflect.DeepEqual(a.lifecycle, lifecycle) || len(a.lifecycle) == 0 && len(lifecycle) == 0
+		sameFences := reflect.DeepEqual(a.mutationFences, mutationFences) || len(a.mutationFences) == 0 && len(mutationFences) == 0
+		if sameLifecycle && sameFences {
 			if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
 				collectionMutationBarriers, snapshot.AppliedIndex, replacementEntries,
 			); err != nil {

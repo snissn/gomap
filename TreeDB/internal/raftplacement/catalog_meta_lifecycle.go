@@ -1027,6 +1027,11 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 		confirmations := uint64(0)
 		for _, receipt := range incoming.Completed {
 			if !known || receipt.Epoch > old.Epoch {
+				// A newly observed BEGIN cannot predate the collection epoch
+				// already established by the local committed state.
+				if receipt.Epoch <= localEpoch {
+					return ErrVectorPartitionLifecycleConflict
+				}
 				newBegins++
 				confirmations++
 			} else if old.Pending && receipt.Epoch == old.Epoch {

@@ -1747,6 +1747,153 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnwitnessedCollectionB
 	}
 }
 
+func TestCatalogReplicaReplacementSameEpochSnapshotCountsBarrierFromEmptyAuthorityV1(t *testing.T) {
+	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11).Index.Collection
+	mutation := vectorPartitionCollectionMutationCommandV1{
+		Kind: vectorPartitionBeginCollectionMutationV1, Collection: collection,
+		CatalogEpoch: catalog.Epoch, CatalogDigest: catalog.Digest,
+		ExpectedMutationEpoch: 0, MutationEpoch: 1, OperationDigest: strings.Repeat("f", 64),
+	}
+	for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
+		vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,
+	} {
+		mutation.Kind = kind
+		if kind == vectorPartitionConfirmCollectionMutationV1 {
+			mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+		}
+		raw, err := encodeVectorPartitionCollectionMutationCommandV1(mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+			t.Fatalf("commit %s: %v", kind, err)
+		}
+	}
+	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	if len(follower.lifecycle) != 0 || len(follower.mutationFences) != 0 || follower.lifecycle != nil || follower.mutationFences != nil {
+		t.Fatalf("expected empty constructor maps, lifecycle=%v fences=%v", follower.lifecycle, follower.mutationFences)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("genuine barrier from empty authority: %v", err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(completed, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if len(lifecycle.CollectionMutationBarriers) != 1 || len(lifecycle.CollectionMutationBarriers[0].Completed) != 1 {
+		t.Fatalf("completed barrier fixture=%+v", lifecycle.CollectionMutationBarriers)
+	}
+	lifecycle.CollectionMutationBarriers[0].Epoch = math.MaxUint64
+	lifecycle.CollectionMutationBarriers[0].Completed[0].Epoch = math.MaxUint64
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged barrier snapshot is not internally canonical: %v", err)
+	}
+	refusing, _ := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("empty authority accepted forged MaxUint64 barrier: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused barrier mutated empty authority: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotRejectsReceiptBeforeLocalEpochV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := vectorPartitionCollectionMutationCommandV1{
+		Kind: vectorPartitionBeginCollectionMutationV1, Collection: active.Identity.Index.Collection,
+		CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+		ExpectedMutationEpoch: active.MutationEpoch, MutationEpoch: active.MutationEpoch + 1,
+		OperationDigest: strings.Repeat("e", 64),
+	}
+	for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
+		vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,
+	} {
+		mutation.Kind = kind
+		if kind == vectorPartitionConfirmCollectionMutationV1 {
+			mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+		}
+		raw, err := encodeVectorPartitionCollectionMutationCommandV1(mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+			t.Fatalf("commit %s: %v", kind, err)
+		}
+	}
+	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("real epoch %d mutation catch-up: %v", mutation.MutationEpoch, err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(completed, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if len(lifecycle.CollectionMutationBarriers) != 1 || len(lifecycle.CollectionMutationBarriers[0].Completed) != 1 {
+		t.Fatalf("completed barrier fixture=%+v", lifecycle.CollectionMutationBarriers)
+	}
+	lifecycle.CollectionMutationBarriers[0].Completed = append([]vectorPartitionCollectionCompletedMutationV1{{
+		Epoch: 2, OperationDigest: strings.Repeat("d", 64),
+	}}, lifecycle.CollectionMutationBarriers[0].Completed...)
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.AppliedIndex += 2 // Four entries could pay for two BEGIN/CONFIRM pairs, but epoch 2 is stale.
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged barrier snapshot is not internally canonical: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("receipt before local epoch restored: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused stale receipt mutated authority: %v", err)
+	}
+}
+
 func TestCatalogReplicaReplacementSnapshotCountsRetainedCollectionBeginsV1(t *testing.T) {
 	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
 	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
