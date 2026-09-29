@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -201,6 +202,62 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	status, _ := restored.Status()
 	if _, err := restored.applyCommittedCatalogMetaV1(completeRaw, status.AppliedIndex+1); err != nil {
 		t.Fatalf("exact completion retry: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotRejectsUnwitnessedConfirmedFenceV1(t *testing.T) {
+	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	beginRaw, err := EncodeReplicaReplacementBeginV1(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leader.applyCommittedCatalogMetaV1(beginRaw, leader.applied+1); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeReplicaReplacementForTestV1(t, leader, begin)
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(final, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle.MutationFences = append(lifecycle.MutationFences, vectorPartitionLifecycleMutationFenceV1{
+		Collection: active.Identity.Index.Collection, IndexName: active.Identity.Index.IndexName,
+		Epoch: math.MaxUint64,
+	})
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("fresh restore accepted unwitnessed confirmed fence: %v", err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("forward restore accepted unwitnessed confirmed fence: %v", err)
+	}
+	if got, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, pending) {
+		t.Fatalf("refusal changed follower state: %v", err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("genuine completion snapshot: %v", err)
 	}
 }
 
@@ -476,6 +533,20 @@ func TestCatalogReplicaReplacementCleanupSnapshotCannotReviveActiveV1(t *testing
 		if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, currentRaw) {
 			t.Fatalf("refused %s revival mutated follower: %v", record.State, err)
 		}
+	}
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateFollower := NewCatalogMetaAuthorityV1()
+	if err := lateFollower.installCatalogMetaSnapshotBytesV1(activeRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := lateFollower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("compacted confirmed fence and cleanup: %v", err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("fresh restore of confirmed fence and cleaned record: %v", err)
 	}
 }
 
