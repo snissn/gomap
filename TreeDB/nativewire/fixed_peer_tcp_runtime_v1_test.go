@@ -856,6 +856,7 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixedPeerActiveInvalidationChildV1(runtime)
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)

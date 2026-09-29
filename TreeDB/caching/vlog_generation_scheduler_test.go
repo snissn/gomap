@@ -1009,6 +1009,9 @@ func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesSnapshotAndPreservesN
 	for db.vlogGenerationMaintenanceAcquired.Load() == before && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
+	for db.deferredVectorBuildVlogMaintenanceDebt.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got != 1 {
 		t.Fatalf("scheduled follow-up acquisitions=%d want 1", got)
 	}

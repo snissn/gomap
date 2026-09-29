@@ -365,8 +365,8 @@ func captureProductionDictionaryAuthority(t productionAuthorityContext) (*rootpu
 	if err != nil {
 		return nil, err
 	}
-	t.Cleanup(func() { _ = database.Close() })
 	store := dictdb.New(database.backend)
+	t.Cleanup(func() { _ = database.Close() })
 	t.Cleanup(func() { _ = store.Close() })
 	dictionary := make([]byte, 4096)
 	for i := range dictionary {
