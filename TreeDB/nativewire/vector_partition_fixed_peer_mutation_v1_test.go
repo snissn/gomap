@@ -269,8 +269,27 @@ func TestFixedPeerVectorRuntimeDisablesSnapshotCommandsV1(t *testing.T) {
 }
 
 func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorReadyFixtureV1 {
+	return fixedPeerVectorReadyWithSourceGroupV1(t, ctx, "group-b")
+}
+
+func fixedPeerVectorReadyWithSourceGroupV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID) fixedPeerVectorReadyFixtureV1 {
+	return fixedPeerVectorReadyWithSourcePlacementV1(t, ctx, sourceGroup, raftplacement.PlacementModeCollectionV1)
+}
+
+func fixedPeerVectorReadyWithSourcePlacementV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID, mode raftplacement.PlacementModeV1) fixedPeerVectorReadyFixtureV1 {
 	t.Helper()
 	seed := fixedPeerVectorSeedV1(t)
+	switch mode {
+	case raftplacement.PlacementModeCollectionV1:
+		seed.catalog.Placements[0].GroupID = sourceGroup
+	case raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1:
+		seed.catalog.Placements[0].Mode = mode
+		seed.catalog.Placements[0].GroupID = ""
+		seed.catalog.Placements[0].RouteKey = raftplacement.RouteKeyDocumentIDV1
+		seed.catalog.Placements[0].TokenPartitions = []raftplacement.TokenPartitionV1{{ID: "token-0", GroupID: sourceGroup, Start: 0, End: ^uint64(0)}}
+	default:
+		t.Fatalf("unsupported fixture source placement %q", mode)
+	}
 	configs := fixedPeerVectorTestConfigsV1(t, seed)
 	for _, config := range configs {
 		group := "group-b"
@@ -441,6 +460,78 @@ func (f fixedPeerVectorReadyFixtureV1) RequireOwnerDocuments(t testing.TB, prese
 
 func (f fixedPeerVectorReadyFixtureV1) SearchRequest(query []float32, topK int) public.SearchRequestV1 {
 	return public.SearchRequestV1{Version: 1, Generation: f.Generation, Query: query, Metric: public.MetricCosineV1, TopK: topK, Probes: 1, EfSearch: 8, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 16}, Deadline: time.Now().Add(30 * time.Second)}
+}
+
+// A single ANN owner can differ from the committed source collection owner.
+// The public write must refuse before committing a canonical document to the
+// ANN group; a later source/projection protocol is required to admit this case.
+func TestVectorPartitionPublicInsertRefusesSplitSourceAndANNOwnerV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	fixture := fixedPeerVectorReadyWithSourceGroupV1(t, ctx, "group-a")
+	client, err := DialContext(ctx, "tcp", fixture.IngressPublicAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	before, err := fixture.client.Status(ctx, "owner-1")
+	if err != nil || len(before.Groups) != 1 {
+		t.Fatalf("owner before insert: status=%+v err=%v", before, err)
+	}
+	request := public.InsertRequestV1{
+		Version: 1, Generation: fixture.Generation,
+		IdempotencyKey: []byte("split-source-ann-attempt"), ID: []byte("split-source-ann-document"),
+		Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"split-source-ann"}`),
+		Deadline: time.Now().Add(30 * time.Second),
+	}
+	result, err := client.VectorInsertV1(ctx, request)
+	if err == nil {
+		fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
+		fixture.RequireOwnerDocuments(t, request.ID)
+		t.Fatalf("public insert committed canonical document to ANN group %q although catalog source is group-a: %+v", result.OwnerGroup, result)
+	}
+	if !hasPublicVectorErrorCodeV1(err, public.ErrorUnavailableV1) {
+		t.Fatalf("split source/ANN insert error=%v, want unavailable before commit", err)
+	}
+	after, err := fixture.client.Status(ctx, "owner-1")
+	if err != nil || len(after.Groups) != 1 {
+		t.Fatalf("owner after refusal: status=%+v err=%v", after, err)
+	}
+	if before.Groups[0].CommitIndex != after.Groups[0].CommitIndex ||
+		before.Groups[0].RaftAppliedIndex != after.Groups[0].RaftAppliedIndex ||
+		before.Groups[0].Applied.Index != after.Groups[0].Applied.Index {
+		t.Fatalf("split source/ANN refusal advanced ANN Raft: before=%+v after=%+v", before.Groups[0], after.Groups[0])
+	}
+	fixture.RequireNoWrongGroupMutation(t, ctx, request.ID)
+	fixture.RequireOwnerDocuments(t, []byte("base-x"), request.ID)
+}
+
+func TestVectorPartitionPublicInsertWithColocatedTokenSourceV1(t *testing.T) {
+	for _, mode := range []raftplacement.PlacementModeV1{raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			fixture := fixedPeerVectorReadyWithSourcePlacementV1(t, ctx, "group-b", mode)
+			client, err := DialContext(ctx, "tcp", fixture.IngressPublicAddress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			request := public.InsertRequestV1{
+				Version: 1, Generation: fixture.Generation,
+				IdempotencyKey: []byte("colocated-" + string(mode)), ID: []byte("colocated-" + string(mode)),
+				Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"colocated-token"}`),
+				Deadline: time.Now().Add(30 * time.Second),
+			}
+			result, err := client.VectorInsertV1(ctx, request)
+			if err != nil || result.OwnerGroup != "group-b" || !result.ProductionConsensus || result.CommitIndex <= 1 {
+				t.Fatalf("colocated %s source insert result=%+v err=%v", mode, result, err)
+			}
+			fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
+			fixture.RequireNoWrongGroupMutation(t, ctx, request.ID)
+			fixture.RequireOwnerDocuments(t, request.ID)
+		})
+	}
 }
 
 // The ingress process owns no partition selected by this vector. The write
