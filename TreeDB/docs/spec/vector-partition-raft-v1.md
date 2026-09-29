@@ -388,19 +388,25 @@ committed barriers. This provides no automatic data-outcome proof or migration
 for old pending histories; unconfirmed debt still blocks completion.
 Snapshot catch-up reserves one entry for every mandatory replacement phase
 advance, and BEGIN for a newly observed operation. It checks this lower bound
-independently of lifecycle provenance. It then reserves a conservative known
-lifecycle lower bound: the largest revision advance among locally known records
-of each full Index identity, summed across independent indexes. An atomic
-cutover advances two records within one Index in one entry; mutation fence
-changes are side effects of those same commands and add no separate cost.
-This bound applies even to mixed histories. It does not recover exact command
-union counts for erased same-index intermediate generations or authenticate
-incoming-only lifecycle history. When lifecycle records and mutation fences
-are unchanged, newly observed collection barriers must fit the remaining
-applied-index advance: BEGIN, CONFIRM, and all replacement phases consume
-distinct entries, including phases hidden before catalog completion. Valid
-post-completion mutations remain accepted. Mixed compacted lifecycle histories
-retain the provenance limits above.
+independently of lifecycle provenance. It then sums the revision advances of
+locally known lifecycle records. Two records share one entry only when the
+pure reducer reconstructs their atomic cutover and both resulting records
+have valid snapshot suffixes; independent commands within one Index do not
+share a cost. Mutation fence changes are side effects and add no separate
+entry. This is a lower bound, not an exact command union for erased or
+incoming-only history.
+Known preparation records retain their source/identity facts through terminal
+catch-up. Admission bounds their READY/PREPARE, abort or activation, and cleanup
+steps and checks the retained terminal command digest. ABSENT erases READY
+receipts: this proves bounded reducer reachability and retained source facts,
+not authentication of erased asset receipts.
+New collection barriers must fit the remaining applied-index advance even
+when lifecycle records change: BEGIN, CONFIRM, and replacement phases consume
+distinct entries. A validated invalidation advance of a locally known record
+can explain a mutation-epoch jump; incoming-only lifecycle records or fences
+cannot supply that evidence. Existing local effective epochs still reject
+stale retained receipts. Valid post-completion mutations and ordinary compacted
+cleanup remain accepted, subject to these retained-history limits.
 
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated

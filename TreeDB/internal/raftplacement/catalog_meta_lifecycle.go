@@ -558,31 +558,44 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	if err != nil {
 		return err
 	}
-	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, appliedIndex, replacementEntries)
+	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, nil, appliedIndex, replacementEntries)
 }
 
-// Each lifecycle entry advances one record, or two records of the same Index
-// during atomic cutover. The largest known revision distance per Index is a
-// conservative entry lower bound; different Index commands cannot overlap.
-// Fence changes are side effects, not additional entries. Erased intermediate
-// histories and incoming-only records do not provide an exact command union.
+// Each lifecycle command advances one known record, except a reducer-proved
+// atomic cutover, which advances its predecessor and candidate together. Fence
+// changes are side effects. Incoming-only records and erased receipts do not
+// provide an exact command union.
 func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 	old, next map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 	budget uint64,
 ) (uint64, error) {
-	maxima := make(map[VectorPartitionLifecycleIndexIdentityV1]uint64)
+	type generationKey struct {
+		index      VectorPartitionLifecycleIndexIdentityV1
+		generation uint64
+	}
+	var generations map[generationKey]VectorPartitionLifecycleIdentityV1
+	remaining := budget
 	for identity, prior := range old {
 		incoming, ok := next[identity]
 		if !ok || incoming.Revision < prior.Revision {
 			return 0, ErrVectorPartitionLifecycleConflict
 		}
 		distance := incoming.Revision - prior.Revision
-		if distance > maxima[identity.Index] {
-			maxima[identity.Index] = distance
+		if prior.State == VectorPartitionLifecycleActiveV1 && incoming.SupersededByGeneration != 0 {
+			if generations == nil {
+				generations = make(map[generationKey]VectorPartitionLifecycleIdentityV1)
+				for candidateIdentity, candidate := range old {
+					if candidate.State == VectorPartitionLifecycleBuildingV1 || candidate.State == VectorPartitionLifecycleStagedV1 || candidate.State == VectorPartitionLifecyclePreparedV1 {
+						generations[generationKey{candidateIdentity.Index, candidateIdentity.Generation}] = candidateIdentity
+					}
+				}
+			}
+			candidateIdentity, known := generations[generationKey{identity.Index, incoming.SupersededByGeneration}]
+			if known && knownLifecycleSnapshotCutoverV1(prior, old[candidateIdentity], next, fences) {
+				distance--
+			}
 		}
-	}
-	remaining := budget
-	for _, distance := range maxima {
 		if distance > remaining {
 			return 0, ErrVectorPartitionLifecycleConflict
 		}
@@ -591,12 +604,68 @@ func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 	return budget - remaining, nil
 }
 
+// Only an actual reducer cutover and two validated suffixes permit sharing an
+// entry. The final ACTIVATE digest may have been overwritten by later cleanup.
+func knownLifecycleSnapshotCutoverV1(
+	previous, candidate VectorPartitionLifecycleRecordV1,
+	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+) bool {
+	incoming, ok := records[candidate.Identity]
+	if !ok {
+		return false
+	}
+	prepared, ok := knownLifecycleSnapshotPreparedV1(candidate, incoming)
+	if !ok {
+		return false
+	}
+	retired, active, err := ApplyVectorPartitionLifecycleCutoverV1(previous, prepared, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: prepared.Revision,
+		ExpectedState: VectorPartitionLifecyclePreparedV1, Identity: prepared.Identity,
+		PreviousActiveGeneration: previous.Identity.Generation, PreviousActiveRevision: previous.Revision,
+		MutationEpoch: prepared.MutationEpoch, ReadySetDigest: prepared.ReadySetDigest,
+	})
+	return err == nil && replicaReplacementLifecycleRecordSnapshotSuccessorV1(retired, records[previous.Identity], records, fences) &&
+		replicaReplacementLifecycleRecordSnapshotSuccessorV1(active, incoming, records, fences)
+}
+
+// Reconstruct only retained preparation receipts. ABSENT can use a locally
+// PREPARED record; it cannot supply erased new READY receipts for cutover proof.
+func knownLifecycleSnapshotPreparedV1(old, incoming VectorPartitionLifecycleRecordV1) (VectorPartitionLifecycleRecordV1, bool) {
+	current := old
+	if current.State == VectorPartitionLifecyclePreparedV1 {
+		return current, true
+	}
+	if current.State != VectorPartitionLifecycleBuildingV1 && current.State != VectorPartitionLifecycleStagedV1 || incoming.State == VectorPartitionLifecycleAbsentV1 {
+		return current, false
+	}
+	var err error
+	for _, ready := range incoming.ReadyGroups {
+		if slices.Contains(old.ReadyGroups, ready) {
+			continue
+		}
+		current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
+			Kind: VectorPartitionLifecycleRecordGroupReadyV1, ExpectedRevision: current.Revision,
+			ExpectedState: current.State, Identity: current.Identity, GroupReady: ready,
+		})
+		if err != nil {
+			return current, false
+		}
+	}
+	current, err = ApplyVectorPartitionLifecycleCommandV1(current, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecyclePrepareV1, ExpectedRevision: current.Revision,
+		ExpectedState: current.State, Identity: current.Identity, ReadySetDigest: incoming.ReadySetDigest,
+	})
+	return current, err == nil
+}
+
 // Ordinary same-epoch catch-up can compact a candidate through cleanup. Keep
 // the source and READY facts this follower actually committed, without trying
 // to authenticate history erased by a terminal snapshot. COMPLETE_CLEANUP
 // deliberately clears the required and READY sets, but not the source facts.
 func validateKnownVectorPartitionPreparationSnapshotV1(
 	oldRecords, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 ) error {
 	for identity, old := range oldRecords {
 		if old.State != VectorPartitionLifecycleBuildingV1 && old.State != VectorPartitionLifecycleStagedV1 &&
@@ -619,6 +688,9 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 			return ErrVectorPartitionLifecycleConflict
 		}
 		if incoming.State == VectorPartitionLifecycleAbsentV1 {
+			if !knownPreparationTerminalSnapshotV1(old, incoming, records, fences) {
+				return ErrVectorPartitionLifecycleConflict
+			}
 			continue
 		}
 		if !slices.Equal(incoming.RequiredGroups, old.RequiredGroups) ||
@@ -627,6 +699,12 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 		}
 		for _, ready := range old.ReadyGroups {
 			if !slices.Contains(incoming.ReadyGroups, ready) {
+				return ErrVectorPartitionLifecycleConflict
+			}
+		}
+		switch incoming.State {
+		case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1, VectorPartitionLifecycleCleanableV1:
+			if !knownPreparationTerminalSnapshotV1(old, incoming, records, fences) {
 				return ErrVectorPartitionLifecycleConflict
 			}
 		}
@@ -643,6 +721,130 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 		}
 	}
 	return nil
+}
+
+// Terminal catch-up proves source facts and bounded reducer reachability, not
+// READY receipts erased by COMPLETE_CLEANUP. Retained final commands are still
+// reproducible from the terminal revision and fields.
+func knownPreparationTerminalSnapshotV1(old, incoming VectorPartitionLifecycleRecordV1,
+	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
+) bool {
+	if incoming.Revision <= old.Revision {
+		return false
+	}
+	if !incoming.Aborted {
+		if old.Identity.SourceFormat == 2 {
+			return false
+		}
+		steps := uint64(len(old.RequiredGroups)-len(old.ReadyGroups)) + 2
+		if old.State == VectorPartitionLifecyclePreparedV1 {
+			steps = 1
+		}
+		if steps >= incoming.Revision-old.Revision {
+			return false
+		}
+		active := old
+		active.State, active.Revision = VectorPartitionLifecycleActiveV1, old.Revision+steps
+		if incoming.State != VectorPartitionLifecycleAbsentV1 {
+			prepared, ok := knownLifecycleSnapshotPreparedV1(old, incoming)
+			if !ok {
+				return false
+			}
+			active = prepared
+			active.State, active.Revision = VectorPartitionLifecycleActiveV1, prepared.Revision+1
+		}
+		if !replicaReplacementLifecycleRecordSnapshotSuccessorV1(active, incoming, records, fences) {
+			return false
+		}
+		// A superseded RETIRED record's final command activates another generation;
+		// the shared serving-successor check validates that cutover chain instead.
+		return incoming.State == VectorPartitionLifecycleRetiredV1 && incoming.SupersededByGeneration != 0 || knownPreparationTerminalCommandDigestV1(incoming, old.State)
+	}
+	if incoming.InvalidationEpoch != 0 || incoming.InvalidationReason != "" || incoming.MutationConfirmed || incoming.SupersededByGeneration != 0 || validateVectorPartitionLifecycleReasonV1(incoming.RetirementReason) != nil {
+		return false
+	}
+	// ABORT can follow additional READY commands and, when all groups are ready,
+	// PREPARE. Cleanup then consumes one entry per group and one completion.
+	var preparation, suffix uint64
+	abortState := old.State
+	if incoming.State == VectorPartitionLifecycleAbsentV1 {
+		suffix = 3 + uint64(len(old.RequiredGroups))
+		distance := incoming.Revision - old.Revision
+		if distance < suffix {
+			return false
+		}
+		preparation = distance - suffix
+		maximum := uint64(0)
+		if old.State != VectorPartitionLifecyclePreparedV1 {
+			maximum = uint64(len(old.RequiredGroups)-len(old.ReadyGroups)) + 1
+		}
+		if preparation > maximum {
+			return false
+		}
+	} else {
+		preparation = uint64(len(incoming.ReadyGroups) - len(old.ReadyGroups))
+		if preparation > 0 {
+			abortState = VectorPartitionLifecycleStagedV1
+		}
+		if old.State != VectorPartitionLifecyclePreparedV1 && incoming.ReadySetDigest != "" {
+			digest, err := VectorPartitionLifecycleReadySetDigestV1(incoming.Identity, incoming.RequiredGroups, incoming.ReadyGroups)
+			if err != nil || digest != incoming.ReadySetDigest {
+				return false
+			}
+			preparation++
+			abortState = VectorPartitionLifecyclePreparedV1
+		}
+		switch incoming.State {
+		case VectorPartitionLifecycleRetiredV1:
+			suffix = 1
+		case VectorPartitionLifecycleCleanableV1:
+			suffix = 2 + uint64(len(incoming.CleanedGroups))
+		default:
+			return false
+		}
+		if incoming.Revision-old.Revision != preparation+suffix {
+			return false
+		}
+	}
+	return knownPreparationTerminalCommandDigestV1(incoming, abortState)
+}
+
+func knownPreparationTerminalCommandDigestV1(record VectorPartitionLifecycleRecordV1, abortState VectorPartitionLifecycleStateV1) bool {
+	command := VectorPartitionLifecycleCommandV1{Identity: record.Identity, ExpectedRevision: record.Revision - 1}
+	switch record.State {
+	case VectorPartitionLifecycleAbsentV1:
+		command.Kind, command.ExpectedState = VectorPartitionLifecycleCompleteCleanupV1, VectorPartitionLifecycleCleanableV1
+	case VectorPartitionLifecycleCleanableV1:
+		if len(record.CleanedGroups) != 0 {
+			command.Kind, command.ExpectedState = VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCleanableV1
+			for _, group := range record.CleanedGroups {
+				command.GroupID = group
+				raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
+				if err == nil && sha256HexVectorPartitionLifecycleV1(raw) == record.LastCommandDigest {
+					return true
+				}
+			}
+			return false
+		}
+		command.Kind, command.ExpectedState = VectorPartitionLifecycleMarkCleanableV1, VectorPartitionLifecycleRetiredV1
+	case VectorPartitionLifecycleRetiredV1:
+		if record.Aborted {
+			command.Kind, command.ExpectedState, command.Reason = VectorPartitionLifecycleAbortBuildV1, abortState, record.RetirementReason
+		} else {
+			command.Kind, command.ExpectedState = VectorPartitionLifecycleRetireV1, VectorPartitionLifecycleInvalidatedV1
+		}
+	case VectorPartitionLifecycleInvalidatedV1:
+		if record.MutationConfirmed {
+			command.Kind, command.ExpectedState, command.MutationEpoch = VectorPartitionLifecycleConfirmMutationV1, VectorPartitionLifecycleInvalidatedV1, record.InvalidationEpoch
+		} else {
+			command.Kind, command.ExpectedState, command.Reason, command.InvalidationEpoch = VectorPartitionLifecycleInvalidateV1, VectorPartitionLifecycleActiveV1, record.InvalidationReason, record.InvalidationEpoch
+		}
+	default:
+		return false
+	}
+	raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
+	return err == nil && sha256HexVectorPartitionLifecycleV1(raw) == record.LastCommandDigest
 }
 
 func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
@@ -712,21 +914,20 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 			knownKeys[vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}] = true
 		}
 		for identity, incoming := range records {
-			if _, known := expected[identity]; known || incoming.State != VectorPartitionLifecycleAbsentV1 {
+			if _, known := expected[identity]; known {
 				continue
 			}
 			key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
-			if knownKeys[key] {
-				old, known := a.lifecycle[identity]
-				if !known || old.State != VectorPartitionLifecycleBuildingV1 && old.State != VectorPartitionLifecycleStagedV1 &&
-					old.State != VectorPartitionLifecyclePreparedV1 {
-					continue
-				}
+			old, locallyKnown := a.lifecycle[identity]
+			preparation := locallyKnown && (old.State == VectorPartitionLifecycleBuildingV1 || old.State == VectorPartitionLifecycleStagedV1 || old.State == VectorPartitionLifecyclePreparedV1)
+			// Ordinary admission already validated this known preparation's
+			// activation/terminal bridge before checking shared fence witnesses.
+			preparationWitness := preparation && incoming.Revision > old.Revision && !incoming.Aborted && incoming.InvalidationEpoch > old.MutationEpoch
+			if !preparationWitness && (incoming.State != VectorPartitionLifecycleAbsentV1 || knownKeys[key]) {
+				continue
 			}
 			fence, ok := fences[key]
 			if ok && incoming.InvalidationEpoch == fence.Epoch && incoming.MutationConfirmed != fence.Pending {
-				// Ordinary first-seen completed cleanup already accepted this
-				// self-consistent terminal witness before replacement validation.
 				witnesses[key] = true
 			}
 		}
@@ -1030,12 +1231,12 @@ func vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, next vecto
 	return true
 }
 
-// When lifecycle and fence state is unchanged (or exactly rebound by a catalog
-// completion), the applied-index advance bounds hidden collection mutation
-// BEGIN and CONFIRM commands. Mixed lifecycle histories need more provenance
-// than the bounded completed-operation window retains.
+// Barrier BEGIN and CONFIRM are separate committed entries even in mixed
+// lifecycle histories. The retained receipt window and epoch distance bound
+// their cost; validated known invalidation advances can explain epoch jumps.
 func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgressLockedV1(
 	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	appliedIndex uint64,
 	reserved uint64,
 ) error {
@@ -1047,6 +1248,19 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 		return ErrVectorPartitionLifecycleConflict
 	}
 	remaining -= reserved
+	// Only a previously known record whose validated successor invalidates it
+	// can explain a lifecycle epoch jump. Incoming-only records are not evidence.
+	var jumpEpochs map[CollectionRefV1]uint64
+	for identity, prior := range a.lifecycle {
+		incoming, known := records[identity]
+		if known && incoming.Revision > prior.Revision && incoming.InvalidationEpoch > prior.InvalidationEpoch {
+			if jumpEpochs == nil {
+				jumpEpochs = make(map[CollectionRefV1]uint64)
+			}
+			collection := identity.Index.Collection
+			jumpEpochs[collection] = max(jumpEpochs[collection], incoming.InvalidationEpoch)
+		}
+	}
 	for collection, incoming := range barriers {
 		old, known := a.collectionMutationBarriers[collection]
 		if known && reflect.DeepEqual(old, incoming) {
@@ -1079,8 +1293,9 @@ func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgre
 			newBegins++
 		}
 		begins := newBegins
-		if incoming.Epoch > localEpoch {
-			begins = max(begins, incoming.Epoch-localEpoch)
+		distanceEpoch := max(localEpoch, jumpEpochs[collection])
+		if incoming.Epoch > distanceEpoch {
+			begins = max(begins, incoming.Epoch-distanceEpoch)
 		}
 		if (!known || incoming.Epoch > old.Epoch) && begins == 0 {
 			begins = 1

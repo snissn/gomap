@@ -196,3 +196,70 @@ func TestCatalogSnapshotMixedLifecycleBarrierProgressV1(t *testing.T) {
 		})
 	}
 }
+
+// Ordinary catch-up may pass through activation and then erase its READY sets.
+// These snapshots are produced by real authority commands, not projections.
+func TestCatalogSnapshotKnownPreparationServingCatchupV1(t *testing.T) {
+	for _, state := range []VectorPartitionLifecycleStateV1{VectorPartitionLifecycleBuildingV1, VectorPartitionLifecycleStagedV1, VectorPartitionLifecyclePreparedV1} {
+		t.Run(string(state), func(t *testing.T) {
+			leader, _, record := activeReplicaReplacementAuthorityV1(t, false)
+			applied := leader.applied
+			var before []byte
+			if state == VectorPartitionLifecycleBuildingV1 {
+				before = postmergeSnapshotBytesV1(t, leader)
+			}
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleRecordGroupReadyV1, func(c *VectorPartitionLifecycleCommandV1) {
+				c.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: "group-b", AppliedIndex: applied, AssetSetDigest: strings.Repeat("c", 64)}
+			}))
+			if state == VectorPartitionLifecycleStagedV1 {
+				before = postmergeSnapshotBytesV1(t, leader)
+			}
+			digest, err := VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecyclePrepareV1, func(c *VectorPartitionLifecycleCommandV1) { c.ReadySetDigest = digest }))
+			if state == VectorPartitionLifecyclePreparedV1 {
+				before = postmergeSnapshotBytesV1(t, leader)
+			}
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = record.MutationEpoch }))
+			assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+				c.Reason, c.InvalidationEpoch = "serving catch-up", record.MutationEpoch+1
+			}))
+			assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+			record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = record.InvalidationEpoch }))
+			assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+			for _, kind := range []VectorPartitionLifecycleCommandKindV1{VectorPartitionLifecycleRetireV1, VectorPartitionLifecycleMarkCleanableV1, VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCompleteCleanupV1} {
+				record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, kind, func(c *VectorPartitionLifecycleCommandV1) {
+					if kind == VectorPartitionLifecycleRecordGroupCleanupV1 {
+						c.GroupID = "group-b"
+					}
+				}))
+				assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+			}
+		})
+	}
+}
+
+func TestCatalogSnapshotCompactedCutoverIndependentSuffixBudgetV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	identity := active.Identity
+	identity.Generation++
+	applied := leader.applied
+	candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, identity, active.Identity.Generation, active.MutationEpoch+1)
+	before := postmergeSnapshotBytesV1(t, leader)
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.PreviousActiveGeneration, c.PreviousActiveRevision = active.Identity.Generation, active.Revision
+		c.MutationEpoch = candidate.MutationEpoch
+	}))
+	retired, ok := leader.VectorPartitionLifecycleRecordV1(active.Identity)
+	if !ok {
+		t.Fatal("missing cutover predecessor")
+	}
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(retired, VectorPartitionLifecycleMarkCleanableV1, nil))
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "independent post-cutover suffix", candidate.MutationEpoch+1
+	}))
+	assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader), 2)
+}

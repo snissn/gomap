@@ -2798,11 +2798,26 @@ and bounded catch-up, not current admission, actual data outcome, or migration.
 The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
 Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
 history and reject its one/five-entry snapshots without authority mutation.
-Two independent known indexes require the sum of their revision lower bounds;
-a two-record atomic cutover remains accepted with one entry. The bound uses
-per-full-Index maxima and leaves the stated erased/unknown/mixed-barrier
-provenance limits intact. Existing ordinary cleanup, A-to-B-to-C cutover, and
-mixed 65-barrier catch-up remain positive controls.
+Known records require the sum of their revision advances, including independent
+commands within the same Index. A pure-reducer-proved two-record atomic cutover
+shares one entry; both compacted suffixes must validate even when ACTIVATE's
+digest has been overwritten. Incoming-only and erased history remain lower-bound
+provenance limits. Existing ordinary cleanup, A-to-B-to-C cutover, and mixed
+65-barrier catch-up remain positive controls.
+`TestCatalogSnapshotKnownPreparationCleanupReachabilityV1` uses real BUILDING,
+STAGED, and PREPARED abort/cleanup producers and refuses skipped terminal
+revisions or forged final command digests without authority mutation.
+`TestCatalogSnapshotKnownPreparationServingCatchupV1` retains genuine preparation
+through activation, invalidation, confirmation, retirement, and completed cleanup.
+`TestCatalogSnapshotIndependentSameIndexLifecycleBudgetV1` refuses two independent
+same-index commands in one applied entry.
+`TestCatalogSnapshotCompactedCutoverIndependentSuffixBudgetV1` preserves atomic
+cutover sharing while charging independent commands on both resulting records.
+`TestCatalogSnapshotMixedLifecycleBarrierProgressV1` accepts genuine mutation and
+direct-invalidation epoch-jump producers, and refuses short mixed budgets and
+forged confirmed maximum-epoch barriers. ABSENT's erased READY receipts are not
+authenticated by these checks. These are snapshot-admission correctness tests;
+they make no runtime replacement or quantitative performance claim.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
