@@ -715,8 +715,10 @@ func validateKnownVectorPartitionPreparationSnapshotV1(
 			if activeIdentity, serving := activeNames[key]; serving && activeIdentity != identity {
 				predecessor, exists := records[activeIdentity]
 				// Initial activation needs the serving name vacated first. A
-				// known earlier invalidation also cannot exceed captured source.
-				if !exists || predecessor.State == VectorPartitionLifecycleActiveV1 || predecessor.InvalidationEpoch > old.MutationEpoch {
+				// known earlier invalidation must be confirmed and cannot exceed
+				// captured source. A newer fence cannot discharge its retained debt.
+				if !exists || predecessor.State == VectorPartitionLifecycleActiveV1 || predecessor.InvalidationEpoch > old.MutationEpoch ||
+					predecessor.InvalidationEpoch != 0 && !predecessor.MutationConfirmed {
 					return ErrVectorPartitionLifecycleConflict
 				}
 			}

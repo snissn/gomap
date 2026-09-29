@@ -2801,8 +2801,12 @@ history and reject its one/five-entry snapshots without authority mutation.
 Known records require the sum of their revision advances, including independent
 commands within the same Index. A pure-reducer-proved two-record atomic cutover
 shares one entry; both compacted suffixes must validate even when ACTIVATE's
-digest has been overwritten. Incoming-only and erased history remain lower-bound
-provenance limits. Existing ordinary cleanup, A-to-B-to-C cutover, and mixed
+digest has been overwritten. Accounting is conditioned on retained overlap
+proofs, not an unconditional mathematical lower bound. Discounts start from
+locally ACTIVE predecessors; tight budgets can refuse multiple compacted
+cutovers through already locally PREPARED candidates whose further overlaps
+cannot be proved. Incoming-only and erased history retain provenance limits.
+Existing ordinary cleanup, incoming-only A-to-B-to-C cutover, and mixed
 65-barrier catch-up remain positive controls.
 `TestCatalogSnapshotKnownPreparationCleanupReachabilityV1` uses real BUILDING,
 STAGED, and PREPARED abort/cleanup producers and refuses skipped terminal
@@ -2828,7 +2832,11 @@ Index+generation pairs deterministically receive no atomic-entry discount.
 `TestCatalogSnapshotInitialActivationServingNameGuardV1` refuses a canonical
 confirmed terminal candidate below an unchanged ACTIVE source watermark, while
 accepting genuine invalidation/confirmation/retirement followed by initial
-activation and a later confirmed mutation.
+activation and a later confirmed mutation. It also refuses a genuinely produced
+older unconfirmed predecessor substituted into that final confirmed snapshot,
+with spare applied entries and a fresh canonical-decoding precondition.
+Known-predecessor supersession chains retain bounded provenance limits; these
+checks do not authenticate all erased activation ordering.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

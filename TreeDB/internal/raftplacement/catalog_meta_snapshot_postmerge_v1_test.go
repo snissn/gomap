@@ -369,11 +369,27 @@ func TestCatalogSnapshotInitialActivationServingNameGuardV1(t *testing.T) {
 		candidate := catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, catalogMetaLifecycleTestIdentityV1(catalog, 8, 12), 0, 11)
 		before := postmergeSnapshotBytesV1(t, leader)
 		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) { c.Reason, c.InvalidationEpoch = "vacate serving name", 10 }))
+		unconfirmed := active
 		active = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 10 }))
 		catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleRetireV1, nil))
 		candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 11 }))
 		candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) { c.Reason, c.InvalidationEpoch = "new serving mutation", 12 }))
 		catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = 12 }))
-		assertReplicaReplacementBudgetSnapshotV1(t, before, postmergeSnapshotBytesV1(t, leader))
+		current := postmergeSnapshotBytesV1(t, leader)
+		assertReplicaReplacementBudgetSnapshotV1(t, before, current)
+		t.Run("older retained unconfirmed debt", func(t *testing.T) {
+			// The final confirmed fence at 12 makes this earlier unconfirmed
+			// INVALIDATED record at 10 canonical. It cannot prove the serving
+			// name was available to ACTIVATE while its mutation debt was pending.
+			forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+				for i := range lifecycle.Records {
+					if lifecycle.Records[i].Identity == unconfirmed.Identity {
+						lifecycle.Records[i] = unconfirmed
+					}
+				}
+				snapshot.AppliedIndex += 10
+			})
+			postmergeSnapshotRefusesV1(t, before, forged)
+		})
 	})
 }

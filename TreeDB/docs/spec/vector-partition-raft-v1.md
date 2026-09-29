@@ -395,8 +395,12 @@ have valid snapshot suffixes; independent commands within one Index do not
 share a cost. Pair identities must be unique at their full Index+generation;
 ambiguous legacy source aliases cannot select a cutover proof. Mutation fence
 changes are side effects and add no separate
-entry. This is a lower bound, not an exact command union for erased or
-incoming-only history.
+entry. This accounting is conditioned on retained overlap proofs, not an
+unconditional mathematical lower bound or an exact erased command union.
+Discounts start from locally ACTIVE predecessors; a tight budget can refuse
+compacted multiple cutovers through candidates already locally PREPARED when
+their additional overlaps cannot be proved. Incoming-only history supplies no
+additional overlap proof.
 Known preparation records retain their source/identity facts through terminal
 catch-up. Admission bounds their READY/PREPARE, abort or activation, and cleanup
 steps and checks the retained terminal command digest. ABSENT erases READY
@@ -404,7 +408,10 @@ receipts: this proves bounded reducer reachability and retained source facts,
 not authentication of erased asset receipts. Named predecessor retirement must
 also be proved by the atomic reducer pair and its suffixes. An initial activation
 without a named predecessor must first vacate a locally known ACTIVE serving
-name, with an earlier invalidation compatible with its captured source epoch.
+name, with any earlier invalidation confirmed and compatible with its captured
+source epoch. A newer confirmed fence does not discharge that retained debt.
+Supersession chains that vacate a known predecessor retain the existing bounded
+provenance limits; admission does not authenticate all erased activation order.
 A BUILDING/STAGED
 candidate whose newly acquired READY receipts were erased by ABSENT cannot
 supply that cutover proof; locally PREPARED cutover/cleanup retains the proof.
