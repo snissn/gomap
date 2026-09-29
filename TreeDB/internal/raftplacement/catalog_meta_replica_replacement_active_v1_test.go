@@ -988,7 +988,7 @@ func TestCatalogReplicaReplacementSnapshotRejectsUnactivatedSupersessionV1(t *te
 	}
 }
 
-func TestCatalogReplicaReplacementSnapshotAcceptsCompactedCutoverCleanupV1(t *testing.T) {
+func TestCatalogReplicaReplacementSnapshotRefusesCompactedCutoverCleanupV1(t *testing.T) {
 	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	applied := uint64(1)
 	oldIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
@@ -1070,19 +1070,26 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCompactedCutoverCleanupV1(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	fresh := NewCatalogMetaAuthorityV1()
+	if err := fresh.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("fresh restore of compacted cleanup: %v", err)
+	}
+	if got, ok := fresh.VectorPartitionLifecycleRecordV1(newIdentity); !ok || !reflect.DeepEqual(got, candidate) || got.State != VectorPartitionLifecycleAbsentV1 {
+		t.Fatalf("fresh restored successor=%+v available=%v want %+v", got, ok, candidate)
+	}
 	follower := NewCatalogMetaAuthorityV1()
 	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
 		t.Fatal(err)
 	}
-	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
-		t.Fatalf("restore compacted cutover through successor cleanup: %v", err)
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("stateful compacted cleanup without retained proof: %v", err)
 	}
-	if got, ok := follower.VectorPartitionLifecycleRecordV1(newIdentity); !ok || !reflect.DeepEqual(got, candidate) || got.State != VectorPartitionLifecycleAbsentV1 {
-		t.Fatalf("restored successor=%+v available=%v want %+v", got, ok, candidate)
+	if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused compacted cleanup mutated authority: %v", err)
 	}
 }
 
-func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t *testing.T) {
+func TestCatalogReplicaReplacementSnapshotRefusesCleanedIntermediateCutoverV1(t *testing.T) {
 	leader, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	applied := uint64(1)
 	firstIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
@@ -1143,15 +1150,22 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 		"retired": retiredSnapshot, "cleanable": cleanableSnapshot, "absent": after,
 	} {
 		t.Run(name, func(t *testing.T) {
+			fresh := NewCatalogMetaAuthorityV1()
+			if err := fresh.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+				t.Fatalf("fresh restore of genuine intermediate cutover: %v", err)
+			}
+			if got, ok := fresh.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
+				t.Fatalf("fresh restored third=%+v available=%v want %+v", got, ok, third)
+			}
 			follower := NewCatalogMetaAuthorityV1()
 			if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
 				t.Fatal(err)
 			}
-			if err := follower.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
-				t.Fatalf("restore genuine intermediate cutover: %v", err)
+			if err := follower.installCatalogMetaSnapshotBytesV1(snapshot); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+				t.Fatalf("stateful intermediate cutover without retained proof: %v", err)
 			}
-			if got, ok := follower.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
-				t.Fatalf("restored third=%+v available=%v want %+v", got, ok, third)
+			if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+				t.Fatalf("refused intermediate cutover mutated authority: %v", err)
 			}
 			var forged CatalogMetaSnapshotV1
 			if err := json.Unmarshal(snapshot, &forged); err != nil {
