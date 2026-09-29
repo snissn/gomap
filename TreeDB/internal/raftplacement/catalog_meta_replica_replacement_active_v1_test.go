@@ -1839,3 +1839,170 @@ func TestCatalogReplicaReplacementSnapshotValidatesNewPreparationV1(t *testing.T
 		})
 	}
 }
+
+func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := leader.applied
+	terminal := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = math.MaxUint64
+	}))
+	terminal = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(terminal, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = math.MaxUint64
+	}))
+	for _, step := range []struct {
+		kind  VectorPartitionLifecycleCommandKindV1
+		group raftcluster.GroupID
+	}{
+		{kind: VectorPartitionLifecycleRetireV1},
+		{kind: VectorPartitionLifecycleMarkCleanableV1},
+		{kind: VectorPartitionLifecycleRecordGroupCleanupV1, group: "group-b"},
+		{kind: VectorPartitionLifecycleCompleteCleanupV1},
+	} {
+		terminal = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(terminal, step.kind, func(command *VectorPartitionLifecycleCommandV1) {
+			command.GroupID = step.group
+		}))
+	}
+	if terminal.State != VectorPartitionLifecycleAbsentV1 || !terminal.MutationConfirmed || terminal.InvalidationEpoch != math.MaxUint64 {
+		t.Fatalf("reducer did not retain the confirmed terminal witness: %+v", terminal)
+	}
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := NewCatalogMetaAuthorityV1()
+	if err := known.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := known.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("genuine compacted MaxUint64 invalidation: %v", err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("fresh restore of genuine terminal witness: %v", err)
+	}
+
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(before, &forged); err != nil {
+		t.Fatal(err)
+	}
+	records, _, _, fences, barriers, err := decodeVectorPartitionLifecycleSnapshotV1(forged.VectorPartitionLifecycle, leader.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := cloneVectorPartitionLifecycleRecordV1(terminal)
+	unknown.Identity.Index.IndexName = "unknown-terminal"
+	records[unknown.Identity] = unknown
+	fences[vectorPartitionLifecycleServingKeyV1{Collection: unknown.Identity.Index.Collection, IndexName: unknown.Identity.Index.IndexName}] =
+		vectorPartitionLifecycleMutationFenceStateV1{Epoch: math.MaxUint64}
+	forged.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(records, fences, barriers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.AppliedIndex++
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged terminal and fence are self-canonical: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("unknown same-epoch terminal and confirmed fence restored: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refusal changed local authority: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSameEpochSnapshotPreservesAbortedPreparationV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	identity := catalogMetaLifecycleTestIdentityV1(leader.record, active.Identity.Generation+1, 12)
+	identity.Immutable = active.Identity.Immutable
+	applied := leader.applied
+	building := catalogMetaLifecycleApplyV1(t, leader, &applied, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-b"},
+		PreviousActiveGeneration: active.Identity.Generation, MutationEpoch: active.MutationEpoch + 1,
+	})
+	staged := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(building, VectorPartitionLifecycleRecordGroupReadyV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: "group-b", AppliedIndex: applied, AssetSetDigest: strings.Repeat("c", 64)}
+	}))
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(staged, VectorPartitionLifecycleAbortBuildV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "cancelled build"
+	}))
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := NewCatalogMetaAuthorityV1()
+	if err := known.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := known.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("committed STAGED to aborted RETIRED: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*VectorPartitionLifecycleRecordV1)
+	}{
+		{"READY asset", func(record *VectorPartitionLifecycleRecordV1) {
+			record.ReadyGroups[0].AssetSetDigest = strings.Repeat("d", 64)
+		}},
+		{"source epoch", func(record *VectorPartitionLifecycleRecordV1) { record.MutationEpoch++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var forged CatalogMetaSnapshotV1
+			if err := json.Unmarshal(final, &forged); err != nil {
+				t.Fatal(err)
+			}
+			var lifecycle vectorPartitionLifecycleSnapshotV1
+			if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for i := range lifecycle.Records {
+				if lifecycle.Records[i].Identity == identity {
+					lifecycle.Records[i] = cloneVectorPartitionLifecycleRecordV1(retired)
+					tc.mutate(&lifecycle.Records[i])
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("aborted candidate missing")
+			}
+			forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forgedRaw, err := json.Marshal(forged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+				t.Fatalf("forged terminal is self-canonical: %v", err)
+			}
+			refusing := NewCatalogMetaAuthorityV1()
+			if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+				t.Fatal(err)
+			}
+			if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+				t.Fatalf("aborted candidate changed committed %s: %v", tc.name, err)
+			}
+			if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+				t.Fatalf("refusal changed committed STAGED candidate: %v", err)
+			}
+		})
+	}
+}
