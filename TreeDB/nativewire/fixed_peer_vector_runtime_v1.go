@@ -1148,9 +1148,7 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if catalog.Epoch != request.CatalogProof.Epoch || catalog.Digest != request.CatalogProof.Digest {
 		return ErrFixedPeerVectorProofStaleV1
 	}
-	source, err := r.authority.Route(ctx, request.CatalogProof, raftplacement.RouteRequestV1{
-		Collection: vector.Collection, Shape: raftplacement.RouteShapeCollectionV1,
-	})
+	source, err := r.authority.RouteDocumentToken(ctx, request.CatalogProof, vector.Collection, raftplacement.DocumentIDTokenV1(request.Request.ID))
 	if err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}

@@ -273,9 +273,23 @@ func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorRe
 }
 
 func fixedPeerVectorReadyWithSourceGroupV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID) fixedPeerVectorReadyFixtureV1 {
+	return fixedPeerVectorReadyWithSourcePlacementV1(t, ctx, sourceGroup, raftplacement.PlacementModeCollectionV1)
+}
+
+func fixedPeerVectorReadyWithSourcePlacementV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID, mode raftplacement.PlacementModeV1) fixedPeerVectorReadyFixtureV1 {
 	t.Helper()
 	seed := fixedPeerVectorSeedV1(t)
-	seed.catalog.Placements[0].GroupID = sourceGroup
+	switch mode {
+	case raftplacement.PlacementModeCollectionV1:
+		seed.catalog.Placements[0].GroupID = sourceGroup
+	case raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1:
+		seed.catalog.Placements[0].Mode = mode
+		seed.catalog.Placements[0].GroupID = ""
+		seed.catalog.Placements[0].RouteKey = raftplacement.RouteKeyDocumentIDV1
+		seed.catalog.Placements[0].TokenPartitions = []raftplacement.TokenPartitionV1{{ID: "token-0", GroupID: sourceGroup, Start: 0, End: ^uint64(0)}}
+	default:
+		t.Fatalf("unsupported fixture source placement %q", mode)
+	}
 	configs := fixedPeerVectorTestConfigsV1(t, seed)
 	for _, config := range configs {
 		group := "group-b"
@@ -490,6 +504,34 @@ func TestVectorPartitionPublicInsertRefusesSplitSourceAndANNOwnerV1(t *testing.T
 	}
 	fixture.RequireNoWrongGroupMutation(t, ctx, request.ID)
 	fixture.RequireOwnerDocuments(t, []byte("base-x"), request.ID)
+}
+
+func TestVectorPartitionPublicInsertWithColocatedTokenSourceV1(t *testing.T) {
+	for _, mode := range []raftplacement.PlacementModeV1{raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			fixture := fixedPeerVectorReadyWithSourcePlacementV1(t, ctx, "group-b", mode)
+			client, err := DialContext(ctx, "tcp", fixture.IngressPublicAddress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			request := public.InsertRequestV1{
+				Version: 1, Generation: fixture.Generation,
+				IdempotencyKey: []byte("colocated-" + string(mode)), ID: []byte("colocated-" + string(mode)),
+				Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"colocated-token"}`),
+				Deadline: time.Now().Add(30 * time.Second),
+			}
+			result, err := client.VectorInsertV1(ctx, request)
+			if err != nil || result.OwnerGroup != "group-b" || !result.ProductionConsensus || result.CommitIndex <= 1 {
+				t.Fatalf("colocated %s source insert result=%+v err=%v", mode, result, err)
+			}
+			fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
+			fixture.RequireNoWrongGroupMutation(t, ctx, request.ID)
+			fixture.RequireOwnerDocuments(t, request.ID)
+		})
+	}
 }
 
 // The ingress process owns no partition selected by this vector. The write
