@@ -2742,6 +2742,9 @@ lineage remain intact and affected page checksums are recomputed.
   Raft, snapshot, native/shard boundaries; identity/group denial; bounded sockets,
   bytes and proposal/snapshot lifetimes; hot-group/cold-group progress; cancellation;
   quorum-backed readiness, drain, immutable configuration and paired-root loss.
+- `TreeDB/nativewire/vector_partition_fixed_peer_authenticated_shard_v1_test.go`:
+  private authenticated immutable shard topology, wrong certificate/group and
+  plaintext refusal, plus an environment-gated two-host asset/search proof.
 - `cmd/treedb-fixed-peer/operations_test.go`: plaintext refuses by default and
   executable identity mismatch refuses before stores/network work.
 - `scripts/treedb_peer_ec2_test.py`: failure-domain/capacity/cost refusal,

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 var errPeerAuthenticationV1 = errors.New("nativewire: peer authentication failed")
@@ -139,6 +140,13 @@ func newPeerTransportSecurityV1(config FixedPeerTCPConfigV1) (*peerTransportSecu
 	addresses := []string{config.ListenAddress}
 	for _, address := range config.RaftListen {
 		addresses = append(addresses, address)
+	}
+	if config.Vector != nil && config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		for _, members := range config.Vector.ShardAddresses {
+			if address := members[config.NodeID]; address != "" {
+				addresses = append(addresses, address)
+			}
+		}
 	}
 	for _, address := range addresses {
 		host, _, err := net.SplitHostPort(address)
