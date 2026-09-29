@@ -1138,6 +1138,11 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 	if !ok || second.State != VectorPartitionLifecycleRetiredV1 {
 		t.Fatalf("second cutover left candidate %+v, ok=%v", second, ok)
 	}
+	retiredSnapshot, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanableSnapshot []byte
 	for _, kind := range []VectorPartitionLifecycleCommandKindV1{
 		VectorPartitionLifecycleMarkCleanableV1, VectorPartitionLifecycleRecordGroupCleanupV1, VectorPartitionLifecycleCompleteCleanupV1,
 	} {
@@ -1146,6 +1151,12 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 				command.GroupID = "group-a"
 			}
 		}))
+		if kind == VectorPartitionLifecycleRecordGroupCleanupV1 {
+			cleanableSnapshot, err = leader.ExportCatalogMetaSnapshotBytesV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if second.State != VectorPartitionLifecycleAbsentV1 || second.SupersededByGeneration != thirdIdentity.Generation {
 		t.Fatalf("second cleanup=%+v", second)
@@ -1154,60 +1165,128 @@ func TestCatalogReplicaReplacementSnapshotAcceptsCleanedIntermediateCutoverV1(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	follower := NewCatalogMetaAuthorityV1()
-	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
-		t.Fatal(err)
-	}
-	if err := follower.installCatalogMetaSnapshotBytesV1(after); err != nil {
-		t.Fatalf("restore genuine cleaned intermediate cutover: %v", err)
-	}
-	if got, ok := follower.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
-		t.Fatalf("restored third=%+v available=%v want %+v", got, ok, third)
-	}
-	var forged CatalogMetaSnapshotV1
-	if err := json.Unmarshal(after, &forged); err != nil {
-		t.Fatal(err)
-	}
-	var lifecycle vectorPartitionLifecycleSnapshotV1
-	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
-		t.Fatal(err)
-	}
-	changed := false
-	for i := range lifecycle.Records {
-		record := &lifecycle.Records[i]
-		if record.Identity.Generation != thirdIdentity.Generation {
-			continue
-		}
-		record.ReadyGroups[0].AssetSetDigest = strings.Repeat("f", 64)
-		record.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
-		if err != nil {
-			t.Fatal(err)
-		}
-		changed = true
-	}
-	if !changed {
-		t.Fatal("cleaned-intermediate snapshot lacks active successor")
-	}
-	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	forgedRaw, err := json.Marshal(forged)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-		t.Fatalf("forged READY snapshot was not self-consistent: %v", err)
-	}
-	refusing := NewCatalogMetaAuthorityV1()
-	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
-		t.Fatal(err)
-	}
-	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
-		t.Fatalf("forged cleaned-intermediate READY changed during catch-up: %v", err)
-	}
-	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
-		t.Fatalf("refused forged READY snapshot mutated authority: %v", err)
+	for name, snapshot := range map[string][]byte{
+		"retired": retiredSnapshot, "cleanable": cleanableSnapshot, "absent": after,
+	} {
+		t.Run(name, func(t *testing.T) {
+			follower := NewCatalogMetaAuthorityV1()
+			if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+				t.Fatal(err)
+			}
+			if err := follower.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+				t.Fatalf("restore genuine intermediate cutover: %v", err)
+			}
+			if got, ok := follower.VectorPartitionLifecycleRecordV1(thirdIdentity); !ok || !reflect.DeepEqual(got, third) {
+				t.Fatalf("restored third=%+v available=%v want %+v", got, ok, third)
+			}
+			var forged CatalogMetaSnapshotV1
+			if err := json.Unmarshal(snapshot, &forged); err != nil {
+				t.Fatal(err)
+			}
+			var lifecycle vectorPartitionLifecycleSnapshotV1
+			if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+				t.Fatal(err)
+			}
+			changed := false
+			for i := range lifecycle.Records {
+				record := &lifecycle.Records[i]
+				if record.Identity.Generation != thirdIdentity.Generation {
+					continue
+				}
+				record.ReadyGroups[0].AssetSetDigest = strings.Repeat("f", 64)
+				record.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(record.Identity, record.RequiredGroups, record.ReadyGroups)
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed = true
+			}
+			if !changed {
+				t.Fatal("intermediate snapshot lacks active successor")
+			}
+			forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forgedRaw, err := json.Marshal(forged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+				t.Fatalf("forged READY snapshot was not self-consistent: %v", err)
+			}
+			refusing := NewCatalogMetaAuthorityV1()
+			if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+				t.Fatal(err)
+			}
+			if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+				t.Fatalf("forged intermediate READY changed during catch-up: %v", err)
+			}
+			if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+				t.Fatalf("refused forged READY snapshot mutated authority: %v", err)
+			}
+			if name == "absent" {
+				return // Cleanup erases the intermediate's required-group count.
+			}
+			var inflated CatalogMetaSnapshotV1
+			if err := json.Unmarshal(snapshot, &inflated); err != nil {
+				t.Fatal(err)
+			}
+			var inflatedLifecycle vectorPartitionLifecycleSnapshotV1
+			if err := json.Unmarshal(inflated.VectorPartitionLifecycle, &inflatedLifecycle); err != nil {
+				t.Fatal(err)
+			}
+			var successor *VectorPartitionLifecycleRecordV1
+			var predecessor *VectorPartitionLifecycleRecordV1
+			for i := range inflatedLifecycle.Records {
+				record := &inflatedLifecycle.Records[i]
+				switch record.Identity.Generation {
+				case secondIdentity.Generation:
+					predecessor = record
+				case thirdIdentity.Generation:
+					successor = record
+				}
+			}
+			if predecessor == nil || successor == nil {
+				t.Fatal("compacted snapshot lacks cutover records")
+			}
+			predecessor.Revision += 2
+			activate := VectorPartitionLifecycleCommandV1{
+				Kind:             VectorPartitionLifecycleActivateV1,
+				ExpectedRevision: successor.Revision - 1, ExpectedState: VectorPartitionLifecyclePreparedV1,
+				Identity: successor.Identity, PreviousActiveGeneration: secondIdentity.Generation,
+				PreviousActiveRevision: uint64(len(predecessor.RequiredGroups)) + 5,
+				MutationEpoch:          successor.MutationEpoch, ReadySetDigest: successor.ReadySetDigest,
+			}
+			encoded, err := EncodeVectorPartitionLifecycleCommandV1(activate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successor.LastCommandDigest = sha256HexVectorPartitionLifecycleV1(encoded)
+			if name == "retired" {
+				predecessor.LastCommandDigest = successor.LastCommandDigest
+			}
+			inflated.VectorPartitionLifecycle, err = json.Marshal(inflatedLifecycle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inflatedRaw, err := json.Marshal(inflated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(inflatedRaw); err != nil {
+				t.Fatalf("inflated-revision snapshot was not self-consistent: %v", err)
+			}
+			refusing = NewCatalogMetaAuthorityV1()
+			if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+				t.Fatal(err)
+			}
+			if err := refusing.installCatalogMetaSnapshotBytesV1(inflatedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+				t.Fatalf("inflated intermediate revision changed during catch-up: %v", err)
+			}
+			if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+				t.Fatalf("refused inflated-revision snapshot mutated authority: %v", err)
+			}
+		})
 	}
 }
 

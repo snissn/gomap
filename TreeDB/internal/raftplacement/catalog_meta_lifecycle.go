@@ -614,9 +614,8 @@ func (a *CatalogMetaAuthorityV1) replicaReplacementNewLifecycleActiveSnapshotV1(
 	if err != nil || record.Revision != current.Revision+1 {
 		return false
 	}
-	// The cutover command's previous revision is available only when the
-	// predecessor remains the locally known ACTIVE generation.
 	var previousRevision uint64
+	var previousDigest string
 	if record.PreviousActiveGeneration != 0 {
 		_, incomingPrevious, found := findVectorPartitionLifecycleGenerationLockedV1(records, record.Identity.Index, record.PreviousActiveGeneration)
 		if !found || incomingPrevious.SupersededByGeneration != record.Identity.Generation ||
@@ -624,25 +623,51 @@ func (a *CatalogMetaAuthorityV1) replicaReplacementNewLifecycleActiveSnapshotV1(
 				incomingPrevious.State != VectorPartitionLifecycleAbsentV1) {
 			return false
 		}
-		previousIdentity, previous, found := findVectorPartitionLifecycleGenerationLockedV1(expected, record.Identity.Index, record.PreviousActiveGeneration)
+		// Each committed command increments Revision. Cleanup erases READY
+		// groups, but its terminal revision still retains the cutover revision.
+		switch incomingPrevious.State {
+		case VectorPartitionLifecycleRetiredV1:
+			if incomingPrevious.Revision <= 1 {
+				return false
+			}
+			previousRevision = incomingPrevious.Revision - 1
+			previousDigest = incomingPrevious.LastCommandDigest
+		case VectorPartitionLifecycleCleanableV1:
+			distance := uint64(2 + len(incomingPrevious.CleanedGroups))
+			if incomingPrevious.Revision <= distance {
+				return false
+			}
+			previousRevision = incomingPrevious.Revision - distance
+		case VectorPartitionLifecycleAbsentV1:
+			// With N required groups, activation reaches revision N+3.
+			// Cutover, mark-cleanable, N cleanups, and completion add
+			// another N+3; ABSENT therefore retains twice that revision.
+			if incomingPrevious.Revision < 8 || incomingPrevious.Revision%2 != 0 {
+				return false
+			}
+			previousRevision = incomingPrevious.Revision / 2
+		}
+		if len(incomingPrevious.RequiredGroups) != 0 &&
+			previousRevision != uint64(len(incomingPrevious.RequiredGroups))+3 {
+			return false
+		}
+		_, previous, found := findVectorPartitionLifecycleGenerationLockedV1(expected, record.Identity.Index, record.PreviousActiveGeneration)
 		if found && previous.State == VectorPartitionLifecycleActiveV1 {
-			previousRevision = previous.Revision
-			currentPrevious, ok := records[previousIdentity]
-			if !ok || currentPrevious.State != VectorPartitionLifecycleRetiredV1 || currentPrevious.Revision != previous.Revision+1 {
-				previousRevision = 0
+			if previous.Revision != previousRevision {
+				return false
+			}
+		} else {
+			locallyActive := false
+			for _, old := range expected {
+				if old.Identity.Index == record.Identity.Index && old.State == VectorPartitionLifecycleActiveV1 {
+					locallyActive = true
+					break
+				}
+			}
+			if !locallyActive {
+				return false
 			}
 		}
-	}
-	if record.PreviousActiveGeneration != 0 && previousRevision == 0 {
-		// A later compacted cutover can leave only terminal predecessors. Its
-		// provenance remains bounded by the existing terminal successor check
-		// for a locally known ACTIVE generation.
-		for _, old := range expected {
-			if old.Identity.Index == record.Identity.Index && old.State == VectorPartitionLifecycleActiveV1 {
-				return true
-			}
-		}
-		return false
 	}
 	command := VectorPartitionLifecycleCommandV1{
 		Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: current.Revision,
@@ -655,9 +680,8 @@ func (a *CatalogMetaAuthorityV1) replicaReplacementNewLifecycleActiveSnapshotV1(
 	if err != nil || sha256HexVectorPartitionLifecycleV1(raw) != record.LastCommandDigest {
 		return false
 	}
-	if previousRevision != 0 {
-		previousIdentity, _, _ := findVectorPartitionLifecycleGenerationLockedV1(expected, record.Identity.Index, record.PreviousActiveGeneration)
-		return records[previousIdentity].LastCommandDigest == record.LastCommandDigest
+	if previousDigest != "" && previousDigest != record.LastCommandDigest {
+		return false
 	}
 	return true
 }
