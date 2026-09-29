@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -392,4 +393,104 @@ func TestCatalogSnapshotInitialActivationServingNameGuardV1(t *testing.T) {
 			postmergeSnapshotRefusesV1(t, before, forged)
 		})
 	})
+}
+
+func TestCatalogSnapshotMixedBarrierInvalidationOrderingV1(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pairs        uint64
+		earlyEpoch   uint64
+		lateEpoch    uint64
+		localPending bool
+	}{
+		{"late-above-final", 100, 0, 1000, false},
+		{"late-between-retained-and-final", 100, 0, 70, false},
+		{"late-below-retained-with-evicted-entry", 100, 0, 44, false},
+		{"early-and-late-known-records", 65, 100, 1000, false},
+		{"old-pending-confirmation-evicted-late", 100, 0, 1000, true},
+		{"old-pending-confirmation-evicted-early", 65, 100, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+			applied := leader.applied
+			late := active
+			if tc.earlyEpoch != 0 && tc.lateEpoch != 0 {
+				identity := active.Identity
+				identity.Index.IndexName = "embedding-late"
+				late = catalogMetaLifecycleBuildPreparedV1(t, leader, &applied, identity, 0, active.MutationEpoch)
+				late = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(late, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = active.MutationEpoch }))
+			}
+			mutation := vectorPartitionCollectionMutationCommandV1{
+				Collection:   active.Identity.Index.Collection,
+				CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+			}
+			localEpoch := active.MutationEpoch
+			if tc.localPending {
+				mutation.Kind = vectorPartitionBeginCollectionMutationV1
+				mutation.ExpectedMutationEpoch, mutation.MutationEpoch = localEpoch, localEpoch+1
+				mutation.OperationDigest = strings.Repeat("e", 64)
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+				localEpoch++
+			}
+			before := postmergeSnapshotBytesV1(t, leader)
+			invalidate := func(record VectorPartitionLifecycleRecordV1, epoch uint64) {
+				applied = leader.applied
+				record = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+					c.Reason, c.InvalidationEpoch = "retained barrier ordering", epoch
+				}))
+				catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(record, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = epoch }))
+			}
+			knownEntries := uint64(0)
+			effective := localEpoch
+			if tc.earlyEpoch != 0 {
+				invalidate(active, tc.earlyEpoch)
+				knownEntries += 2
+				effective = tc.earlyEpoch
+			}
+			if tc.localPending {
+				mutation.Kind = vectorPartitionConfirmCollectionMutationV1
+				mutation.ExpectedMutationEpoch = mutation.MutationEpoch
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+			}
+			for i := uint64(0); i < tc.pairs; i++ {
+				mutation.Kind = vectorPartitionBeginCollectionMutationV1
+				mutation.ExpectedMutationEpoch, mutation.MutationEpoch = effective, effective+1
+				mutation.OperationDigest = fmt.Sprintf("%064x", i+1)
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+				mutation.Kind, mutation.ExpectedMutationEpoch = vectorPartitionConfirmCollectionMutationV1, mutation.MutationEpoch
+				postmergeCommitCollectionMutationV1(t, leader, mutation)
+				effective++
+			}
+			if tc.lateEpoch != 0 {
+				invalidate(late, tc.lateEpoch)
+				knownEntries += 2
+			}
+			current := postmergeSnapshotBytesV1(t, leader)
+			t.Run("genuine producer", func(t *testing.T) { assertReplicaReplacementBudgetSnapshotV1(t, before, current) })
+			// The retained window contains the final 64 confirmations. A possible
+			// preceding jump must be below its first new BEGIN. This is a minimum
+			// compatible history, not authentication of the actual erased order.
+			firstBegin := effective - maxVectorPartitionCollectionCompletedMutationsV1 + 1
+			floor := localEpoch
+			for _, epoch := range []uint64{tc.earlyEpoch, tc.lateEpoch} {
+				if epoch < firstBegin && epoch > floor {
+					floor = epoch
+				}
+			}
+			required := knownEntries + 2*(effective-floor)
+			if tc.localPending {
+				required++ // The locally committed BEGIN still needs its CONFIRM.
+			}
+			t.Run("one missing compatible entry", func(t *testing.T) {
+				var baseline CatalogMetaSnapshotV1
+				if err := json.Unmarshal(before, &baseline); err != nil {
+					t.Fatal(err)
+				}
+				forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, _ *vectorPartitionLifecycleSnapshotV1) {
+					snapshot.AppliedIndex = baseline.AppliedIndex + required - 1
+				})
+				postmergeSnapshotRefusesV1(t, before, forged)
+			})
+		})
+	}
 }
