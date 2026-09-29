@@ -452,9 +452,14 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 			if old.LeaderHint != current.LeaderHint {
 				state, err := decodeReplicaReplacementCurrentV1(replacements[old.ID])
 				if err != nil || current.LeaderHint != "" ||
-					state.Phase != ReplicaReplacementCompletedV1 || state.Result == nil ||
-					state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch ||
 					!equalCatalogMetaMembersV1(replicaReplacementPeerIDsV1(state.Peers), current.Members) {
+					return ErrCatalogMetaConflict
+				}
+				if state.Phase == ReplicaReplacementCompletedV1 {
+					if state.Result == nil || state.Result.Epoch <= a.record.Epoch || state.Result.Epoch > next.Epoch {
+						return ErrCatalogMetaConflict
+					}
+				} else if state.Begin.ExpectedEpoch != next.Epoch || state.Begin.CatalogDigest != next.Digest {
 					return ErrCatalogMetaConflict
 				}
 				if err := a.validateReplicaReplacementLifecycleLockedV1(old.ID); err != nil {
@@ -603,8 +608,14 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 	if next.Revision == old.Revision {
 		return reflect.DeepEqual(old, next)
 	}
-	if next.Revision < old.Revision || old.State != VectorPartitionLifecycleActiveV1 ||
+	if next.Revision < old.Revision ||
+		(old.State != VectorPartitionLifecycleActiveV1 && old.State != VectorPartitionLifecycleInvalidatedV1) ||
 		next.State == VectorPartitionLifecycleActiveV1 || next.Aborted {
+		return false
+	}
+	if old.State == VectorPartitionLifecycleInvalidatedV1 &&
+		(next.InvalidationEpoch != old.InvalidationEpoch || next.InvalidationReason != old.InvalidationReason ||
+			old.MutationConfirmed && !next.MutationConfirmed || next.SupersededByGeneration != old.SupersededByGeneration) {
 		return false
 	}
 	switch next.State {

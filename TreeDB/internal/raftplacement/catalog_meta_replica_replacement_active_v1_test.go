@@ -366,6 +366,37 @@ func TestCatalogReplicaReplacementInvalidatedSameEpochSnapshotCannotReviveActive
 	}
 }
 
+func TestCatalogReplicaReplacementInvalidatedSameEpochSnapshotAcceptsConfirmationV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	applied := leader.applied
+	invalidated := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = active.MutationEpoch + 1
+	}))
+	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = invalidated.InvalidationEpoch
+	}))
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("restore confirmed mutation after invalidation: %v", err)
+	}
+	got, ok := follower.VectorPartitionLifecycleRecordV1(confirmed.Identity)
+	if !ok || !reflect.DeepEqual(got, confirmed) {
+		t.Fatalf("restored confirmation=%+v available=%v want %+v", got, ok, confirmed)
+	}
+}
+
 func TestCatalogReplicaReplacementActiveSnapshotAllowsSkippedCollectionMutationEpochV1(t *testing.T) {
 	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
 	collection := active.Identity.Index.Collection

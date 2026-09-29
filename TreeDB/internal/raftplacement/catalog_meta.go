@@ -680,14 +680,14 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err := a.validateReplicaReplacementLifecycleSnapshotAddsLockedV1(replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		activeRecords := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
+		protectedRecords := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1)
 		for identity, current := range a.lifecycle {
-			if current.State == VectorPartitionLifecycleActiveV1 {
-				activeRecords[identity] = current
+			if current.State == VectorPartitionLifecycleActiveV1 || current.State == VectorPartitionLifecycleInvalidatedV1 {
+				protectedRecords[identity] = current
 			}
 		}
 		if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
-			activeRecords, lifecycle, mutationFences, collectionMutationBarriers,
+			protectedRecords, lifecycle, mutationFences, collectionMutationBarriers,
 		); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
