@@ -718,6 +718,74 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 	default:
 		return false
 	}
+	// Every committed reducer transition advances the revision once. A
+	// compacted snapshot can omit intermediate states, but cannot reach a
+	// later state with fewer revisions than those transitions require.
+	required := uint64(len(old.RequiredGroups))
+	cleaned := uint64(len(old.CleanedGroups))
+	nextCleaned := uint64(len(next.CleanedGroups))
+	var minimum uint64
+	switch old.State {
+	case VectorPartitionLifecycleActiveV1:
+		switch next.State {
+		case VectorPartitionLifecycleInvalidatedV1:
+			minimum = 1
+			if next.MutationConfirmed {
+				minimum++
+			}
+		case VectorPartitionLifecycleRetiredV1:
+			minimum = 1 // Atomic cutover.
+			if next.SupersededByGeneration == 0 {
+				minimum = 3 // Invalidate, confirm, retire.
+			}
+		case VectorPartitionLifecycleCleanableV1:
+			minimum = 2 + nextCleaned // Cutover, mark cleanable, group cleanup.
+			if next.SupersededByGeneration == 0 {
+				minimum += 2 // Invalidate and confirm before retirement.
+			}
+		case VectorPartitionLifecycleAbsentV1:
+			minimum = 3 + required // Cutover, mark cleanable, cleanup, complete.
+			if next.SupersededByGeneration == 0 {
+				minimum += 2
+			}
+		}
+	case VectorPartitionLifecycleInvalidatedV1:
+		confirmation := uint64(0)
+		if !old.MutationConfirmed {
+			confirmation = 1
+		}
+		switch next.State {
+		case VectorPartitionLifecycleInvalidatedV1:
+			if confirmation == 0 || !next.MutationConfirmed {
+				return false
+			}
+			minimum = confirmation
+		case VectorPartitionLifecycleRetiredV1:
+			minimum = confirmation + 1
+		case VectorPartitionLifecycleCleanableV1:
+			minimum = confirmation + 2 + nextCleaned
+		case VectorPartitionLifecycleAbsentV1:
+			minimum = confirmation + 3 + required
+		}
+	case VectorPartitionLifecycleRetiredV1:
+		if next.State == VectorPartitionLifecycleCleanableV1 {
+			minimum = 1 + nextCleaned
+		} else {
+			minimum = 2 + required
+		}
+	case VectorPartitionLifecycleCleanableV1:
+		if next.State == VectorPartitionLifecycleCleanableV1 {
+			if nextCleaned <= cleaned {
+				return false
+			}
+			minimum = nextCleaned - cleaned
+		} else {
+			minimum = 1 + required - cleaned
+		}
+	}
+	if next.Revision-old.Revision < minimum {
+		return false
+	}
 	if next.State == VectorPartitionLifecycleCleanableV1 {
 		if old.State == VectorPartitionLifecycleCleanableV1 && len(next.CleanedGroups) <= len(old.CleanedGroups) {
 			return false

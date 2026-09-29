@@ -1128,11 +1128,13 @@ func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *te
 		t.Fatal(err)
 	}
 	found := false
+	var rebound VectorPartitionLifecycleRecordV1
 	for i := range lifecycle.Records {
 		if lifecycle.Records[i].Identity.Generation != active.Identity.Generation {
 			continue
 		}
 		record := &lifecycle.Records[i]
+		rebound = *record
 		record.State = VectorPartitionLifecycleAbsentV1
 		record.Revision++ // Cleanup needs multiple committed reducer commands.
 		record.InvalidationEpoch = record.MutationEpoch + 1
@@ -1173,6 +1175,39 @@ func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *te
 	}
 	if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
 		t.Fatalf("refused cleanup jump mutated follower: %v", err)
+	}
+	// The actual reducer path may be compacted into one snapshot and must
+	// remain restorable despite skipping all intermediate snapshot installs.
+	applied := leader.applied
+	real := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(rebound, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = rebound.MutationEpoch + 1
+	}))
+	real = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(real, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = real.InvalidationEpoch
+	}))
+	for _, step := range []struct {
+		kind  VectorPartitionLifecycleCommandKindV1
+		group raftcluster.GroupID
+	}{
+		{kind: VectorPartitionLifecycleRetireV1},
+		{kind: VectorPartitionLifecycleMarkCleanableV1},
+		{kind: VectorPartitionLifecycleRecordGroupCleanupV1, group: "group-b"},
+		{kind: VectorPartitionLifecycleCompleteCleanupV1},
+	} {
+		real = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(real, step.kind, func(command *VectorPartitionLifecycleCommandV1) {
+			command.GroupID = step.group
+		}))
+	}
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("restore genuine compacted cleanup: %v", err)
+	}
+	if got, ok := follower.VectorPartitionLifecycleRecordV1(real.Identity); !ok || !reflect.DeepEqual(got, real) {
+		t.Fatalf("restored cleanup=%+v available=%v want %+v", got, ok, real)
 	}
 }
 
