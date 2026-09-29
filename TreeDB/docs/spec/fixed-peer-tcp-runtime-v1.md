@@ -143,8 +143,9 @@ one per listener. Borrowed client close closes its HTTP pools, not the node hand
 Credentialed immutable shard listeners may use canonical private or loopback
 addresses only after the fixed-peer topology binds that shared authenticated
 transport. The public vector listener remains loopback; credentialed legacy
-mutable shard listeners remain loopback. Shard TLS authenticates node and group
-before a request reaches search serving, with no plaintext fallback.
+mutable shard listeners remain loopback. Shard TLS authenticates the inventory
+node before serving; the endpoint and request proof separately bind the group.
+There is no plaintext fallback.
 Credential paths and limits stay local; authenticated mode and cluster identity
 are bound into the shared digest. Replace credential contents at the same paths
 and restart one compatible voter at a time; there is no live credential watcher.
