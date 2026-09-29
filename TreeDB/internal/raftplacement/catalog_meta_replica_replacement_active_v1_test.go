@@ -129,6 +129,37 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if err := restored.installCatalogMetaSnapshotBytesV1(pending); err != nil {
 		t.Fatalf("restore pending: %v", err)
 	}
+	var forbidden CatalogMetaSnapshotV1
+	if err := json.Unmarshal(final, &forbidden); err != nil {
+		t.Fatal(err)
+	}
+	forbiddenRecords, err := decodeReplicaReplacementSnapshotV1(forbidden.ReplicaReplacements, complete.Catalog.Record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbiddenBegin := activeReplicaReplacementBeginV1(complete.Catalog.Record)
+	forbiddenBegin.OperationID = "replace-active-source"
+	forbiddenBegin.GroupID = "group-a"
+	forbiddenBegin.OldNodeID = "node-a"
+	forbiddenBegin.NewPeer = raftcluster.Peer{ID: "source-spare", Address: "127.0.0.1:19002"}
+	forbiddenRecords[forbiddenBegin.GroupID], err = EncodeReplicaReplacementBeginV1(forbiddenBegin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(forbiddenRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbiddenRaw, err := json.Marshal(forbidden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.installCatalogMetaSnapshotBytesV1(forbiddenRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("completion snapshot introduced source-group BEGIN: %v", err)
+	}
+	if retained, err := restored.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, pending) {
+		t.Fatalf("refused source-group BEGIN mutated authority: %v", err)
+	}
 	var forged CatalogMetaSnapshotV1
 	if err := json.Unmarshal(final, &forged); err != nil {
 		t.Fatal(err)
