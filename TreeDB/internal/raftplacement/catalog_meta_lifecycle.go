@@ -561,6 +561,36 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, appliedIndex, replacementEntries)
 }
 
+// Each lifecycle entry advances one record, or two records of the same Index
+// during atomic cutover. The largest known revision distance per Index is a
+// conservative entry lower bound; different Index commands cannot overlap.
+// Fence changes are side effects, not additional entries. Erased intermediate
+// histories and incoming-only records do not provide an exact command union.
+func knownVectorPartitionLifecycleSnapshotEntryCostV1(
+	old, next map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
+	budget uint64,
+) (uint64, error) {
+	maxima := make(map[VectorPartitionLifecycleIndexIdentityV1]uint64)
+	for identity, prior := range old {
+		incoming, ok := next[identity]
+		if !ok || incoming.Revision < prior.Revision {
+			return 0, ErrVectorPartitionLifecycleConflict
+		}
+		distance := incoming.Revision - prior.Revision
+		if distance > maxima[identity.Index] {
+			maxima[identity.Index] = distance
+		}
+	}
+	remaining := budget
+	for _, distance := range maxima {
+		if distance > remaining {
+			return 0, ErrVectorPartitionLifecycleConflict
+		}
+		remaining -= distance
+	}
+	return budget - remaining, nil
+}
+
 // Ordinary same-epoch catch-up can compact a candidate through cleanup. Keep
 // the source and READY facts this follower actually committed, without trying
 // to authenticate history erased by a terminal snapshot. COMPLETE_CLEANUP

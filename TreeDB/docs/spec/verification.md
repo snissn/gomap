@@ -2796,6 +2796,13 @@ BEGIN/CONFIRM. These refusals preserve the local exported snapshot.
 constructs canonical old admitted state explicitly; it tests owned confirmation
 and bounded catch-up, not current admission, actual data outcome, or migration.
 The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
+Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
+history and reject its one/five-entry snapshots without authority mutation.
+Two independent known indexes require the sum of their revision lower bounds;
+a two-record atomic cutover remains accepted with one entry. The bound uses
+per-full-Index maxima and leaves the stated erased/unknown/mixed-barrier
+provenance limits intact. Existing ordinary cleanup, A-to-B-to-C cutover, and
+mixed 65-barrier catch-up remain positive controls.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

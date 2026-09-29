@@ -721,6 +721,15 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
+		// Known revisions retain a conservative lifecycle-entry lower bound
+		// even when mixed histories cannot authenticate every barrier command.
+		lifecycleEntries, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(
+			a.lifecycle, lifecycle, snapshot.AppliedIndex-a.applied-replacementEntries,
+		)
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		reservedEntries := replacementEntries + lifecycleEntries
 		// With unchanged lifecycle and fences, every newly observed barrier
 		// epoch needs committed mutation entries. Mixed compacted histories
 		// cannot be costed from the retained barrier window alone.
@@ -728,7 +737,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		sameFences := reflect.DeepEqual(a.mutationFences, mutationFences) || len(a.mutationFences) == 0 && len(mutationFences) == 0
 		if sameLifecycle && sameFences {
 			if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
-				collectionMutationBarriers, snapshot.AppliedIndex, replacementEntries,
+				collectionMutationBarriers, snapshot.AppliedIndex, reservedEntries,
 			); err != nil {
 				return CatalogMetaStatusV1{}, err
 			}

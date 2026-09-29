@@ -388,8 +388,15 @@ committed barriers. This provides no automatic data-outcome proof or migration
 for old pending histories; unconfirmed debt still blocks completion.
 Snapshot catch-up reserves one entry for every mandatory replacement phase
 advance, and BEGIN for a newly observed operation. It checks this lower bound
-independently of lifecycle provenance. When lifecycle records and mutation
-fences are unchanged, newly observed collection barriers must fit the remaining
+independently of lifecycle provenance. It then reserves a conservative known
+lifecycle lower bound: the largest revision advance among locally known records
+of each full Index identity, summed across independent indexes. An atomic
+cutover advances two records within one Index in one entry; mutation fence
+changes are side effects of those same commands and add no separate cost.
+This bound applies even to mixed histories. It does not recover exact command
+union counts for erased same-index intermediate generations or authenticate
+incoming-only lifecycle history. When lifecycle records and mutation fences
+are unchanged, newly observed collection barriers must fit the remaining
 applied-index advance: BEGIN, CONFIRM, and all replacement phases consume
 distinct entries, including phases hidden before catalog completion. Valid
 post-completion mutations remain accepted. Mixed compacted lifecycle histories
