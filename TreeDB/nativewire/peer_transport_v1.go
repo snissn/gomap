@@ -177,6 +177,10 @@ func (p *PeerTransportV1) DialNativeContextV1(ctx context.Context, address strin
 // Coordinators authenticate as inventory nodes; the existing M5 proof still
 // authorizes the requested ownership epoch and read.
 func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTransportV1, endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
+	return newAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport, endpoints, nodeEndpoints, DefaultVectorPartitionCoordinatorLimitsV1().MaxConcurrentRequests, DefaultVectorPartitionShardSearchLimitsV1())
+}
+
+func newAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTransportV1, endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxPoolConnections int, limits VectorPartitionShardSearchLimitsV1) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if transport == nil || transport.security == nil || len(endpoints) == 0 || len(endpoints) > 128 || len(nodeEndpoints) != len(endpoints) {
 		return nil, errPeerAuthenticationV1
 	}
@@ -206,7 +210,7 @@ func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTr
 			return nil, fmt.Errorf("%w: shard fallback lacks an authenticated group owner", raftcluster.ErrInvalidConfig)
 		}
 	}
-	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints, nodeEndpoints)
+	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(endpoints, nodeEndpoints, maxPoolConnections, limits)
 	if err != nil {
 		return nil, err
 	}

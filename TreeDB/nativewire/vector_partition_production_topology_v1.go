@@ -37,6 +37,9 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	ReplicatedLifecycle VectorPartitionReplicatedLifecycleAuthorityV1
 	Endpoints           map[raftcluster.GroupID]string
 	NodeEndpoints       map[raftcluster.GroupID]map[raftcluster.NodeID]string
+	// PeerTransport authenticates shard traffic for fixed-peer production nodes.
+	// Standalone topology callers retain their existing trusted-network mode.
+	PeerTransport *PeerTransportV1
 	// Fixed-peer immutable serving uses this only after a socket failure.
 	transportLeaderResolver func(context.Context, raftcluster.GroupID, raftcluster.NodeID) (raftcluster.NodeID, error)
 	Shards                  []VectorPartitionProductionShardV1
@@ -62,6 +65,7 @@ type VectorPartitionProductionTopologyV1 struct {
 	authorization     *vectorPartitionAuthorizationOverlayV1
 	searchPublication sync.Mutex
 	strictKey         []byte
+	peerTransport     *PeerTransportV1
 	dispatcher        *VectorPartitionShardSearchTCPDispatcherV1
 	listeners         map[raftcluster.GroupID]net.Listener
 	endpoints         map[raftcluster.GroupID]string
@@ -102,7 +106,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if opts.ShardIdleTimeout == 0 {
 		opts.ShardIdleTimeout = 30 * time.Second
 	}
-	h := &VectorPartitionProductionTopologyV1{listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), identityProviders: make(map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
+	h := &VectorPartitionProductionTopologyV1{peerTransport: opts.PeerTransport, listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), identityProviders: make(map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -237,10 +241,25 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 			return nil, fmt.Errorf("nativewire: production vector topology shard groups %q and %q share a listener", owner, shard.GroupID)
 		}
 		localListeners[listenerKey] = shard.GroupID
-		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID], h.identityProviders[shard.GroupID] = shard.Listener, shard.Service, shard.EndpointIdentity, shard.EndpointIdentityProvider
+		listener := shard.Listener
+		if opts.PeerTransport != nil {
+			if opts.PeerTransport.admission == nil || !opts.PeerTransport.groups[shard.GroupID][opts.PeerTransport.node] {
+				return nil, errPeerAuthenticationV1
+			}
+			listener, err = opts.PeerTransport.admission.listener(listener)
+			if err != nil {
+				return nil, err
+			}
+		}
+		h.listeners[shard.GroupID], h.services[shard.GroupID], h.identities[shard.GroupID], h.identityProviders[shard.GroupID] = listener, shard.Service, shard.EndpointIdentity, shard.EndpointIdentityProvider
 	}
 	maxPoolConnections := coordinatorLimits.MaxConcurrentRequests
-	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
+	var dispatcher *VectorPartitionShardSearchTCPDispatcherV1
+	if opts.PeerTransport != nil {
+		dispatcher, err = newAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(opts.PeerTransport, h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
+	} else {
+		dispatcher, err = newVectorPartitionShardSearchTCPDispatcherV1(h.endpoints, opts.NodeEndpoints, maxPoolConnections, shardLimits)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +356,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				defer h.wg.Done()
 				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, EndpointIdentityProvider: h.identityProviders[group], MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
+				(VectorPartitionShardSearchTCPServerV1{PeerTransport: h.peerTransport, PeerGroupID: group, Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, EndpointIdentityProvider: h.identityProviders[group], MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
 			}()
 		}
 	}()

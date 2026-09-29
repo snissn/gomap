@@ -109,6 +109,10 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 			endpoints[owner] = vector.ShardAddresses[owner][r.parent.config.NodeID]
 		}
 	}
+	peerTransport := r.parent.PeerTransportV1()
+	if r.parent.config.Credentials != nil && peerTransport == nil {
+		return nil, errPeerAuthenticationV1
+	}
 	topologyOptions := VectorPartitionProductionTopologyOptionsV1{
 		ConstructionContext: ctx,
 		Catalog:             resolved,
@@ -117,6 +121,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		ReplicatedLifecycle: lifecycle,
 		Endpoints:           endpoints,
 		NodeEndpoints:       nodeEndpoints,
+		PeerTransport:       peerTransport,
 		transportLeaderResolver: func(ctx context.Context, group raftcluster.GroupID, _ raftcluster.NodeID) (raftcluster.NodeID, error) {
 			leader, err := r.parent.immutableVectorOwnerLeaderV1(ctx, resolved, group)
 			if err != nil {

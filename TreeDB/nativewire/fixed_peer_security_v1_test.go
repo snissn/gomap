@@ -51,7 +51,7 @@ func newPeerCAFixtureV1(t testing.TB) *peerCAFixtureV1 {
 	return &peerCAFixtureV1{key: caKey, certificate: ca, der: caDER}
 }
 
-func (ca *peerCAFixtureV1) issue(t testing.TB, cluster, node string, notBefore, notAfter time.Time) *PeerCredentialsV1 {
+func (ca *peerCAFixtureV1) issue(t testing.TB, cluster, node string, notBefore, notAfter time.Time, addresses ...net.IP) *PeerCredentialsV1 {
 	t.Helper()
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -62,7 +62,10 @@ func (ca *peerCAFixtureV1) issue(t testing.TB, cluster, node string, notBefore, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf := &x509.Certificate{SerialNumber: serial, NotBefore: notBefore, NotAfter: notAfter, URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
+	if len(addresses) == 0 {
+		addresses = []net.IP{net.ParseIP("127.0.0.1")}
+	}
+	leaf := &x509.Certificate{SerialNumber: serial, NotBefore: notBefore, NotAfter: notAfter, URIs: []*url.URL{identity}, IPAddresses: addresses, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca.certificate, &leafKey.PublicKey, ca.key)
 	if err != nil {
 		t.Fatal(err)
