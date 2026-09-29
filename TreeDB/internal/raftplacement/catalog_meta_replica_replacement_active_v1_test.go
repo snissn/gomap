@@ -1757,7 +1757,7 @@ func TestCatalogReplicaReplacementSameEpochSnapshotCountsBarrierFromEmptyAuthori
 	mutation := vectorPartitionCollectionMutationCommandV1{
 		Kind: vectorPartitionBeginCollectionMutationV1, Collection: collection,
 		CatalogEpoch: catalog.Epoch, CatalogDigest: catalog.Digest,
-		ExpectedMutationEpoch: 0, MutationEpoch: 1, OperationDigest: strings.Repeat("f", 64),
+		ExpectedMutationEpoch: 1, MutationEpoch: 2, OperationDigest: strings.Repeat("f", 64),
 	}
 	for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
 		vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,

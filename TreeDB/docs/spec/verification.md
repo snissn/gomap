@@ -2783,6 +2783,11 @@ committed STAGED-to-PREPARED progress but reject a rewrite of locally known
 READY evidence. The genuine compacted PREPARED-to-cleanup control remains
 accepted with the inherited terminal-provenance limit described in the
 protocol spec.
+The collection-barrier snapshot tests accept an admitted replacement's newly
+confirmed barrier, reject unwitnessed epoch jumps and stale receipts without
+mutating authority, and cover empty authority maps and the bounded receipt
+window. BEGIN, CONFIRM, and replacement completion consume distinct applied
+entries.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

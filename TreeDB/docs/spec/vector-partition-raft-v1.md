@@ -381,6 +381,10 @@ provenance proof; closing that gap remains part of #4811.
 While a replica replacement is pending, new lifecycle transitions are refused
 so completion retains the ACTIVE evidence admitted at BEGIN; an exact retry of
 the last committed lifecycle command remains read-only.
+When lifecycle records and mutation fences are unchanged, newly observed
+collection barriers must fit the snapshot's applied-index advance, including
+BEGIN and CONFIRM entries and replacement completion. Mixed compacted lifecycle
+histories retain the provenance limits above.
 
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated
