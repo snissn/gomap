@@ -529,8 +529,8 @@ func TestCatalogReplicaReplacementCleanupSnapshotCannotReviveActiveV1(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-			t.Fatalf("forged %s revival snapshot is not self-consistent: %v", record.State, err)
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+			t.Fatalf("fresh restore accepted %s revival without confirmed-fence evidence: %v", record.State, err)
 		}
 		if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
 			t.Fatalf("snapshot revived %s generation: %v", record.State, err)
@@ -1675,8 +1675,8 @@ func TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
-		t.Fatalf("forged snapshot was not internally canonical: %v", err)
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("fresh restore accepted new ACTIVE predating confirmed fence: %v", err)
 	}
 	refusing := NewCatalogMetaAuthorityV1()
 	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
