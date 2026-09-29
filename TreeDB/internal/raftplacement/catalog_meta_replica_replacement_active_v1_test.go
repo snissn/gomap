@@ -240,7 +240,153 @@ func TestCatalogReplicaReplacementActiveSnapshotRefusesSourceBeginV1(t *testing.
 	}
 }
 
+func TestCatalogReplicaReplacementActiveSameEpochSnapshotPreservesEvidenceV1(t *testing.T) {
+	for _, name := range []string{"ready receipt", "mutation fence", "completed mutation receipt"} {
+		t.Run(name, func(t *testing.T) {
+			a, _, active := activeReplicaReplacementAuthorityV1(t, true)
+			if name == "mutation fence" {
+				a.mu.Lock()
+				if a.mutationFences == nil {
+					a.mutationFences = make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1)
+				}
+				a.mutationFences[vectorPartitionLifecycleServingKeyV1{
+					Collection: active.Identity.Index.Collection, IndexName: active.Identity.Index.IndexName,
+				}] = vectorPartitionLifecycleMutationFenceStateV1{Epoch: 11}
+				a.mu.Unlock()
+			}
+			if name == "completed mutation receipt" {
+				a.mu.Lock()
+				if a.collectionMutationBarriers == nil {
+					a.collectionMutationBarriers = make(map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1)
+				}
+				a.collectionMutationBarriers[active.Identity.Index.Collection] = vectorPartitionCollectionMutationBarrierStateV1{
+					Epoch: 10, Pending: true, OperationDigest: strings.Repeat("e", 64),
+					Completed: []vectorPartitionCollectionCompletedMutationV1{{Epoch: 9, OperationDigest: strings.Repeat("d", 64)}},
+				}
+				a.mu.Unlock()
+			}
+			before, err := a.ExportCatalogMetaSnapshotBytesV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var forged CatalogMetaSnapshotV1
+			if err := json.Unmarshal(before, &forged); err != nil {
+				t.Fatal(err)
+			}
+			var lifecycle vectorPartitionLifecycleSnapshotV1
+			if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "ready receipt":
+				lifecycle.Records[0].ReadyGroups[0].AssetSetDigest = strings.Repeat("f", 64)
+				lifecycle.Records[0].ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(
+					lifecycle.Records[0].Identity, lifecycle.Records[0].RequiredGroups, lifecycle.Records[0].ReadyGroups)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "mutation fence":
+				lifecycle.MutationFences[0].Epoch = 10
+			case "completed mutation receipt":
+				lifecycle.CollectionMutationBarriers[0].Completed[0].OperationDigest = strings.Repeat("f", 64)
+			}
+			forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forged.AppliedIndex++
+			forgedRaw, err := json.Marshal(forged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+				t.Fatalf("forged snapshot is not self-consistent: %v", err)
+			}
+			if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+				t.Fatalf("same-epoch snapshot changed %s: %v", name, err)
+			}
+			if retained, err := a.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+				t.Fatalf("refused same-epoch %s mutated authority: %v", name, err)
+			}
+		})
+	}
+}
+
 func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T) {
+	t.Run("completion then next begin", func(t *testing.T) {
+		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
+		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		completeReplicaReplacementForTestV1(t, leader, first)
+		second := first
+		second.OperationID = "replace-active-ann-owner-next"
+		second.ExpectedEpoch = leader.record.Epoch
+		second.CatalogDigest = leader.record.Digest
+		second.OldNodeID = first.NewPeer.ID
+		second.NewPeer = raftcluster.Peer{ID: "standby-two", Address: "127.0.0.1:19003"}
+		raw, err := EncodeReplicaReplacementBeginV1(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
+			t.Fatal(err)
+		}
+		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+			t.Fatalf("restore completion followed by next BEGIN: %v", err)
+		}
+		rebound := active.Identity
+		rebound.Index.CatalogEpoch = leader.record.Epoch
+		rebound.Index.CatalogDigest = leader.record.Digest
+		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
+		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
+			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
+		}
+	})
+
+	t.Run("round trip roster", func(t *testing.T) {
+		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
+		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		completeReplicaReplacementForTestV1(t, leader, first)
+		second := first
+		second.OperationID = "replace-active-ann-owner-return"
+		second.ExpectedEpoch = leader.record.Epoch
+		second.CatalogDigest = leader.record.Digest
+		second.OldNodeID = first.NewPeer.ID
+		second.NewPeer = raftcluster.Peer{ID: first.OldNodeID, Address: "127.0.0.1:20000"}
+		completeReplicaReplacementForTestV1(t, leader, second)
+		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+			t.Fatalf("restore round-trip completed roster: %v", err)
+		}
+		rebound := active.Identity
+		rebound.Index.CatalogEpoch = leader.record.Epoch
+		rebound.Index.CatalogDigest = leader.record.Digest
+		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
+		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
+			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
+		}
+	})
+
 	t.Run("completion without local begin", func(t *testing.T) {
 		leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
 		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
