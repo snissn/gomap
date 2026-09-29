@@ -312,6 +312,60 @@ func TestCatalogReplicaReplacementActiveSameEpochSnapshotPreservesEvidenceV1(t *
 	}
 }
 
+func TestCatalogReplicaReplacementInvalidatedSameEpochSnapshotCannotReviveActiveV1(t *testing.T) {
+	a, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	activeRaw, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := a.applied
+	invalidated := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "relevant mutation"
+		command.InvalidationEpoch = active.MutationEpoch + 1
+	}))
+	_ = catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = invalidated.InvalidationEpoch
+	}))
+	before, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forged, current CatalogMetaSnapshotV1
+	if err := json.Unmarshal(activeRaw, &forged); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(before, &current); err != nil {
+		t.Fatal(err)
+	}
+	var activeLifecycle, currentLifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &activeLifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(current.VectorPartitionLifecycle, &currentLifecycle); err != nil {
+		t.Fatal(err)
+	}
+	activeLifecycle.MutationFences = currentLifecycle.MutationFences
+	activeLifecycle.CollectionMutationBarriers = currentLifecycle.CollectionMutationBarriers
+	forged.VectorPartitionLifecycle, err = json.Marshal(activeLifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.AppliedIndex = current.AppliedIndex + 1
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("revival snapshot is not self-consistent: %v", err)
+	}
+	if err := a.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("snapshot revived invalidated generation: %v", err)
+	}
+	if retained, err := a.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused revival mutated authority: %v", err)
+	}
+}
+
 func TestCatalogReplicaReplacementActiveSnapshotAllowsSkippedCollectionMutationEpochV1(t *testing.T) {
 	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
 	collection := active.Identity.Index.Collection
@@ -453,6 +507,52 @@ func TestCatalogReplicaReplacementActiveSnapshotCompactedRecoveryV1(t *testing.T
 		}
 		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
 			t.Fatalf("restore round-trip completed roster: %v", err)
+		}
+		rebound := active.Identity
+		rebound.Index.CatalogEpoch = leader.record.Epoch
+		rebound.Index.CatalogDigest = leader.record.Digest
+		got, ok := follower.VectorPartitionLifecycleRecordV1(rebound)
+		if !ok || got.State != VectorPartitionLifecycleActiveV1 || !reflect.DeepEqual(got.ReadyGroups, active.ReadyGroups) {
+			t.Fatalf("restored ACTIVE receipts=%+v available=%v", got, ok)
+		}
+	})
+
+	t.Run("round trip roster then next begin", func(t *testing.T) {
+		leader, first, active := activeReplicaReplacementAuthorityV1(t, true)
+		before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		completeReplicaReplacementForTestV1(t, leader, first)
+		second := first
+		second.OperationID = "replace-active-ann-owner-return-before-next"
+		second.ExpectedEpoch = leader.record.Epoch
+		second.CatalogDigest = leader.record.Digest
+		second.OldNodeID = first.NewPeer.ID
+		second.NewPeer = raftcluster.Peer{ID: first.OldNodeID, Address: "127.0.0.1:20000"}
+		completeReplicaReplacementForTestV1(t, leader, second)
+		third := first
+		third.OperationID = "replace-active-ann-owner-after-roundtrip"
+		third.ExpectedEpoch = leader.record.Epoch
+		third.CatalogDigest = leader.record.Digest
+		third.NewPeer = raftcluster.Peer{ID: "standby-two", Address: "127.0.0.1:19003"}
+		raw, err := EncodeReplicaReplacementBeginV1(third)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := leader.applyCommittedCatalogMetaV1(raw, leader.applied+1); err != nil {
+			t.Fatal(err)
+		}
+		final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		follower := NewCatalogMetaAuthorityV1()
+		if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+			t.Fatal(err)
+		}
+		if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+			t.Fatalf("restore completed round trip followed by BEGIN: %v", err)
 		}
 		rebound := active.Identity
 		rebound.Index.CatalogEpoch = leader.record.Epoch
