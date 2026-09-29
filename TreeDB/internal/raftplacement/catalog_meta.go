@@ -712,6 +712,24 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 				return CatalogMetaStatusV1{}, err
 			}
 		}
+		// A changed replacement state requires at least one committed entry per
+		// operation before any newly observed collection mutation entries.
+		replacementEntries := uint64(0)
+		for group, incoming := range replacements {
+			if !bytes.Equal(incoming, a.replacements[group]) {
+				replacementEntries++
+			}
+		}
+		// With unchanged lifecycle and fences, every newly observed barrier
+		// epoch needs committed mutation entries. Mixed compacted histories
+		// cannot be costed from the retained barrier window alone.
+		if reflect.DeepEqual(a.lifecycle, lifecycle) && reflect.DeepEqual(a.mutationFences, mutationFences) {
+			if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
+				collectionMutationBarriers, snapshot.AppliedIndex, replacementEntries,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+		}
 		a.replacements = replacements
 		a.replacementBytes = uint64(len(snapshot.ReplicaReplacements))
 		a.lifecycle = lifecycle
@@ -735,7 +753,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 			return CatalogMetaStatusV1{}, err
 		}
 		if err := a.validateReplicaReplacementLifecycleSnapshotTransitionLockedV1(
-			record, resolved, replacements, lifecycle, mutationFences, collectionMutationBarriers,
+			record, resolved, replacements, lifecycle, mutationFences, collectionMutationBarriers, snapshot.AppliedIndex,
 		); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}

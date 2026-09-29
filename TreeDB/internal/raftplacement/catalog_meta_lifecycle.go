@@ -444,6 +444,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+	appliedIndex uint64,
 ) error {
 	if !catalogMetaFeatureEnabledV1(a.record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
 		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
@@ -542,9 +543,6 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 			return ErrVectorPartitionLifecycleGuard
 		}
 	}
-	if len(barriers) != len(a.collectionMutationBarriers) {
-		return ErrVectorPartitionLifecycleConflict
-	}
 	for key, old := range a.collectionMutationBarriers {
 		incoming, ok := barriers[key]
 		if !ok || !vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, incoming) ||
@@ -552,7 +550,9 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 			return ErrVectorPartitionLifecycleGuard
 		}
 	}
-	return nil
+	// The catalog completion is itself a committed entry, separate from any
+	// collection mutation entries hidden by this snapshot.
+	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, appliedIndex, 1)
 }
 
 // Ordinary same-epoch catch-up can compact a candidate through cleanup. Keep
@@ -992,6 +992,80 @@ func vectorPartitionCollectionMutationBarrierSnapshotSuccessorV1(old, next vecto
 		}
 	}
 	return true
+}
+
+// When lifecycle and fence state is unchanged (or exactly rebound by a catalog
+// completion), the applied-index advance bounds hidden collection mutation
+// BEGIN and CONFIRM commands. Mixed lifecycle histories need more provenance
+// than the bounded completed-operation window retains.
+func (a *CatalogMetaAuthorityV1) validateCollectionMutationBarrierSnapshotProgressLockedV1(
+	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+	appliedIndex uint64,
+	reserved uint64,
+) error {
+	if appliedIndex <= a.applied {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	remaining := appliedIndex - a.applied
+	if reserved > remaining {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	remaining -= reserved
+	for collection, incoming := range barriers {
+		old, known := a.collectionMutationBarriers[collection]
+		if known && reflect.DeepEqual(old, incoming) {
+			continue
+		}
+		localEpoch := a.effectiveCollectionMutationEpochLockedV1(collection)
+		if !known && incoming.Epoch <= localEpoch {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		// Every newly retained confirmation implies its own BEGIN. The epoch
+		// distance also counts operations evicted from the 64-receipt window.
+		// A locally pending operation has already spent its BEGIN.
+		newBegins := uint64(0)
+		confirmations := uint64(0)
+		for _, receipt := range incoming.Completed {
+			if !known || receipt.Epoch > old.Epoch {
+				newBegins++
+				confirmations++
+			} else if old.Pending && receipt.Epoch == old.Epoch {
+				confirmations++
+			}
+		}
+		newPending := incoming.Pending && (!known || incoming.Epoch > old.Epoch)
+		if newPending {
+			newBegins++
+		}
+		begins := newBegins
+		if incoming.Epoch > localEpoch {
+			begins = max(begins, incoming.Epoch-localEpoch)
+		}
+		if (!known || incoming.Epoch > old.Epoch) && begins == 0 {
+			begins = 1
+		}
+		if begins > remaining {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		remaining -= begins
+		// A confirmed final operation consumes one CONFIRM per new BEGIN; a
+		// pending final operation consumes one fewer. A locally pending old
+		// operation also needs confirmation when the snapshot advances it,
+		// even if its receipt fell out of the bounded retained window.
+		requiredConfirmations := begins
+		if newPending {
+			requiredConfirmations--
+		}
+		if known && old.Pending && !(incoming.Pending && incoming.Epoch == old.Epoch) {
+			requiredConfirmations++
+		}
+		confirmations = max(confirmations, requiredConfirmations)
+		if confirmations > remaining {
+			return ErrVectorPartitionLifecycleConflict
+		}
+		remaining -= confirmations
+	}
+	return nil
 }
 
 // A compacted snapshot may include committed non-serving lifecycle commands

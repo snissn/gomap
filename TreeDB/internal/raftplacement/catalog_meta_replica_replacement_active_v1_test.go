@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -1586,6 +1587,31 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	if err := noBarrierFollower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
 		t.Fatalf("admitted BEGIN could not catch up with a newly confirmed barrier: %v", err)
 	}
+	var admittedSnapshot, shortCompletion CatalogMetaSnapshotV1
+	if err := json.Unmarshal(admitted, &admittedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(completed, &shortCompletion); err != nil {
+		t.Fatal(err)
+	}
+	shortCompletion.AppliedIndex = admittedSnapshot.AppliedIndex + 2 // BEGIN, CONFIRM, and completion need at least three.
+	shortRaw, err := json.Marshal(shortCompletion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(shortRaw); err != nil {
+		t.Fatalf("short completion snapshot is not internally canonical: %v", err)
+	}
+	shortFollower := NewCatalogMetaAuthorityV1()
+	if err := shortFollower.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+		t.Fatal(err)
+	}
+	if err := shortFollower.installCatalogMetaSnapshotBytesV1(shortRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("completion reused a mutation command index: %v", err)
+	}
+	if got, err := shortFollower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, admitted) {
+		t.Fatalf("short completion refusal mutated authority: %v", err)
+	}
 	if got, err := noBarrierFollower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(got, completed) {
 		t.Fatalf("new-barrier catch-up differs from committed authority: %v", err)
 	}
@@ -1718,6 +1744,126 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnwitnessedCollectionB
 	}
 	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
 		t.Fatalf("refused incoming-only barrier mutated authority: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotCountsRetainedCollectionBeginsV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(0); i < 3; i++ {
+		command := vectorPartitionCollectionMutationCommandV1{
+			Kind: vectorPartitionBeginCollectionMutationV1, Collection: active.Identity.Index.Collection,
+			CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+			ExpectedMutationEpoch: active.MutationEpoch + i, MutationEpoch: active.MutationEpoch + i + 1,
+			OperationDigest: strings.Repeat(string(rune('a'+i)), 64),
+		}
+		for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
+			vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,
+		} {
+			command.Kind = kind
+			if kind == vectorPartitionConfirmCollectionMutationV1 {
+				command.ExpectedMutationEpoch = command.MutationEpoch
+			}
+			raw, err := encodeVectorPartitionCollectionMutationCommandV1(command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+				t.Fatalf("mutation %d %s: %v", i, kind, err)
+			}
+		}
+	}
+	completed, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(completed); err != nil {
+		t.Fatalf("three committed mutations: %v", err)
+	}
+
+	// Three retained confirmations require three BEGINs as well.
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(completed, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var baseline CatalogMetaSnapshotV1
+	if err := json.Unmarshal(before, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	forged.AppliedIndex = baseline.AppliedIndex + 5 // Three BEGINs and three CONFIRMs need six.
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("forged snapshot is not internally canonical: %v", err)
+	}
+	refusing := NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("retained mutation BEGINs exceeded applied gap: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("refused short-gap snapshot mutated authority: %v", err)
+	}
+}
+
+func TestCatalogReplicaReplacementSnapshotPreservesMixedCompactedMutationHistoryV1(t *testing.T) {
+	leader, _, active := activeReplicaReplacementAuthorityV1(t, true)
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(0); i < maxVectorPartitionCollectionCompletedMutationsV1+1; i++ {
+		command := vectorPartitionCollectionMutationCommandV1{
+			Kind: vectorPartitionBeginCollectionMutationV1, Collection: active.Identity.Index.Collection,
+			CatalogEpoch: leader.record.Epoch, CatalogDigest: leader.record.Digest,
+			ExpectedMutationEpoch: active.MutationEpoch + i, MutationEpoch: active.MutationEpoch + i + 1,
+			OperationDigest: fmt.Sprintf("%064x", i+1),
+		}
+		for _, kind := range []vectorPartitionCollectionMutationCommandKindV1{
+			vectorPartitionBeginCollectionMutationV1, vectorPartitionConfirmCollectionMutationV1,
+		} {
+			command.Kind = kind
+			if kind == vectorPartitionConfirmCollectionMutationV1 {
+				command.ExpectedMutationEpoch = command.MutationEpoch
+			}
+			raw, err := encodeVectorPartitionCollectionMutationCommandV1(command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := leader.applyCommittedVectorPartitionCollectionMutationV1(raw, leader.applied+1); err != nil {
+				t.Fatalf("mutation %d %s: %v", i, kind, err)
+			}
+		}
+	}
+	applied := leader.applied
+	invalidated := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.Reason = "late invalidation"
+		command.InvalidationEpoch = active.MutationEpoch + maxVectorPartitionCollectionCompletedMutationsV1
+	}))
+	_ = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = invalidated.InvalidationEpoch
+	}))
+	final, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := NewCatalogMetaAuthorityV1()
+	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
+		t.Fatalf("late lifecycle watermark after compacted mutation history: %v", err)
 	}
 }
 
