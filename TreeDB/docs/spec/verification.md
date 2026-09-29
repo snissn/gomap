@@ -2783,11 +2783,19 @@ committed STAGED-to-PREPARED progress but reject a rewrite of locally known
 READY evidence. The genuine compacted PREPARED-to-cleanup control remains
 accepted with the inherited terminal-provenance limit described in the
 protocol spec.
-The collection-barrier snapshot tests accept an admitted replacement's newly
-confirmed barrier, reject unwitnessed epoch jumps and stale receipts without
-mutating authority, and cover empty authority maps and the bounded receipt
-window. BEGIN, CONFIRM, and replacement completion consume distinct applied
-entries.
+The collection-barrier snapshot tests accept valid post-completion mutations,
+reject unwitnessed epoch jumps and stale receipts without mutating authority,
+and cover empty authority maps and the bounded receipt window.
+`TestCatalogReplicaReplacementPendingRefusesNewCollectionMutationV1` refuses a
+new BEGIN before barrier debt while retaining exact BEGIN/CONFIRM retries.
+`TestCatalogReplicaReplacementSnapshotReservesEveryPhaseV1` accepts genuine
+known/unknown same-epoch phase catch-up and anchored completion, while refusing
+one missing applied entry across every mandatory phase and post-completion
+BEGIN/CONFIRM. These refusals preserve the local exported snapshot.
+`TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmationV1`
+constructs canonical old admitted state explicitly; it tests owned confirmation
+and bounded catch-up, not current admission, actual data outcome, or migration.
+The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 

@@ -380,11 +380,20 @@ Incoming-only terminal and fence history on that ordinary path has no durable
 provenance proof; closing that gap remains part of #4811.
 While a replica replacement is pending, new lifecycle transitions are refused
 so completion retains the ACTIVE evidence admitted at BEGIN; an exact retry of
-the last committed lifecycle command remains read-only.
-When lifecycle records and mutation fences are unchanged, newly observed
-collection barriers must fit the snapshot's applied-index advance, including
-BEGIN and CONFIRM entries and replacement completion. Mixed compacted lifecycle
-histories retain the provenance limits above.
+the last committed lifecycle command remains read-only. The shared collection
+mutation reducer also refuses new BEGIN commands before creating a barrier;
+otherwise later ACTIVE invalidation would be frozen and strand that barrier.
+Exact operation retries and owned CONFIRM remain available for previously
+committed barriers. This provides no automatic data-outcome proof or migration
+for old pending histories; unconfirmed debt still blocks completion.
+Snapshot catch-up reserves one entry for every mandatory replacement phase
+advance, and BEGIN for a newly observed operation. It checks this lower bound
+independently of lifecycle provenance. When lifecycle records and mutation
+fences are unchanged, newly observed collection barriers must fit the remaining
+applied-index advance: BEGIN, CONFIRM, and all replacement phases consume
+distinct entries, including phases hidden before catalog completion. Valid
+post-completion mutations remain accepted. Mixed compacted lifecycle histories
+retain the provenance limits above.
 
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated

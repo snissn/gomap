@@ -550,9 +550,15 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleSnapshotTran
 			return ErrVectorPartitionLifecycleGuard
 		}
 	}
-	// The catalog completion is itself a committed entry, separate from any
-	// collection mutation entries hidden by this snapshot.
-	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, appliedIndex, 1)
+	// Completion and every hidden preceding phase consume distinct entries.
+	if appliedIndex <= a.applied {
+		return ErrVectorPartitionLifecycleConflict
+	}
+	replacementEntries, err := replicaReplacementSnapshotEntryCostV1(a.replacements, replacements, appliedIndex-a.applied)
+	if err != nil {
+		return err
+	}
+	return a.validateCollectionMutationBarrierSnapshotProgressLockedV1(barriers, appliedIndex, replacementEntries)
 }
 
 // Ordinary same-epoch catch-up can compact a candidate through cleanup. Keep

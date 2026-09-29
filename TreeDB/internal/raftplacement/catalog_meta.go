@@ -713,13 +713,13 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 				return CatalogMetaStatusV1{}, err
 			}
 		}
-		// A changed replacement state requires at least one committed entry per
-		// operation before any newly observed collection mutation entries.
-		replacementEntries := uint64(0)
-		for group, incoming := range replacements {
-			if !bytes.Equal(incoming, a.replacements[group]) {
-				replacementEntries++
-			}
+		// Every mandatory phase consumes its own entry, including BEGIN for an
+		// operation unknown locally. Reserve these even for mixed histories.
+		replacementEntries, err := replicaReplacementSnapshotEntryCostV1(
+			a.replacements, replacements, snapshot.AppliedIndex-a.applied,
+		)
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
 		}
 		// With unchanged lifecycle and fences, every newly observed barrier
 		// epoch needs committed mutation entries. Mixed compacted histories

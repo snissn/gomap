@@ -1581,6 +1581,10 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
 		t.Fatalf("install admitted BEGIN and pending mutation: %v", err)
 	}
+	commitMutation() // Exact retry of the legacy owned BEGIN must not create new debt.
+	if retried, err := leader.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retried, pending) {
+		t.Fatalf("legacy exact BEGIN retry changed authority: %v", err)
+	}
 	mutation.Kind = vectorPartitionConfirmCollectionMutationV1
 	mutation.ExpectedMutationEpoch = mutation.MutationEpoch
 	commitMutation()
