@@ -1527,7 +1527,7 @@ func TestCatalogReplicaReplacementSnapshotRejectsNewActiveBeforeConfirmedFenceV1
 	}
 }
 
-func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMutationV1(t *testing.T) {
+func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmationV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
 	raw, err := EncodeReplicaReplacementBeginV1(begin)
 	if err != nil {
@@ -1557,7 +1557,22 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 			t.Fatalf("commit %s: %v", mutation.Kind, err)
 		}
 	}
-	commitMutation()
+	// Canonical state accepted by the old producer: BEGIN was committed after
+	// replacement admission. Current admission refuses this sequence; no data
+	// mutation or migration is asserted by this compatibility fixture. Retain
+	// its owned CONFIRM and bounded snapshot catch-up behavior.
+	leader.collectionMutationBarriers = map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1{
+		mutation.Collection: {Epoch: mutation.MutationEpoch, Pending: true, OperationDigest: mutation.OperationDigest},
+	}
+	leader.applied++
+	legacyRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader = NewCatalogMetaAuthorityV1()
+	if err := leader.installCatalogMetaSnapshotBytesV1(legacyRaw); err != nil {
+		t.Fatal(err)
+	}
 	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
@@ -1594,7 +1609,7 @@ func TestCatalogReplicaReplacementSnapshotAcceptsAdmittedBeginAfterCollectionMut
 	if err := json.Unmarshal(completed, &shortCompletion); err != nil {
 		t.Fatal(err)
 	}
-	shortCompletion.AppliedIndex = admittedSnapshot.AppliedIndex + 2 // BEGIN, CONFIRM, and completion need at least three.
+	shortCompletion.AppliedIndex = admittedSnapshot.AppliedIndex + 9 // Eight phases plus BEGIN and CONFIRM require ten entries.
 	shortRaw, err := json.Marshal(shortCompletion)
 	if err != nil {
 		t.Fatal(err)

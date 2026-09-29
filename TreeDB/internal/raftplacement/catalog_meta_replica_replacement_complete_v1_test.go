@@ -16,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
-func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
+func removedReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
 	t.Helper()
 	raw, _ := EncodeReplicaReplacementBeginV1(begin)
 	if _, err := a.applyCommittedCatalogMetaV1(raw, a.applied+1); err != nil {
@@ -68,7 +68,13 @@ func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err = EncodeReplicaReplacementCompleteV1(complete)
+	return complete
+}
+
+func completeReplicaReplacementForTestV1(t *testing.T, a *CatalogMetaAuthorityV1, begin ReplicaReplacementBeginV1) ReplicaReplacementCompleteV1 {
+	t.Helper()
+	complete := removedReplicaReplacementForTestV1(t, a, begin)
+	raw, err := EncodeReplicaReplacementCompleteV1(complete)
 	if err != nil {
 		t.Fatal(err)
 	}
