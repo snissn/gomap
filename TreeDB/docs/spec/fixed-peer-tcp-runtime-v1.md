@@ -48,9 +48,10 @@ groups plus an optional catalog group, and 32 voters per group. These are
 admission limits, not measured deployment capacities. A three-voter catalog
 does not grow when data nodes are added. Identity strings are bounded to 128
 bytes of valid UTF-8 without path separators, control characters, or surrounding whitespace.
-Configuration containers and a conservative 1 MiB escaped-JSON byte budget are
+Configuration containers have a conservative 32 MiB preclone inventory budget,
 checked before copying caller input or creating stores/listeners. The normalized
-shared encoding is checked again. Numeric advertised addresses are parsed without
+shared JSON encoding has a separate 8 MiB limit. These are admission bounds, not
+a whole-process memory limit. Numeric advertised addresses are parsed without
 DNS resolution. The catalog group and all its voters require
 `treedb.raftcluster.catalog_meta_authority` V1 alongside
 `treedb.raftcluster.single_group_provider` V1. Data groups may use the default
