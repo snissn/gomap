@@ -1148,8 +1148,14 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if catalog.Epoch != request.CatalogProof.Epoch || catalog.Digest != request.CatalogProof.Digest {
 		return ErrFixedPeerVectorProofStaleV1
 	}
-	if err := r.authority.ValidateCatalogMetaProof(ctx, request.CatalogProof.Epoch, request.CatalogProof.Digest); err != nil {
+	source, err := r.authority.Route(ctx, request.CatalogProof, raftplacement.RouteRequestV1{
+		Collection: vector.Collection, Shape: raftplacement.RouteShapeCollectionV1,
+	})
+	if err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
+	}
+	if source.GroupID() != request.OwnerGroup {
+		return ErrFixedPeerVectorUnavailableV1
 	}
 	record, exists := r.authority.VectorPartitionLifecycleRecordV1(request.Identity)
 	if !exists || record.ReadySetDigest != request.ReadySetDigest {
