@@ -1139,10 +1139,10 @@ func TestCatalogReplicaReplacementSnapshotRejectsSkippedCleanupRevisionsV1(t *te
 		record.InvalidationReason = "relevant mutation"
 		record.MutationConfirmed = true
 		record.CleanupComplete = true
-		record.RequiredGroups = nil
-		record.ReadyGroups = nil
+		record.RequiredGroups = []raftcluster.GroupID{}
+		record.ReadyGroups = []VectorPartitionLifecycleGroupReadyV1{}
 		record.ReadySetDigest = ""
-		record.CleanedGroups = nil
+		record.CleanedGroups = []raftcluster.GroupID{}
 		record.LastCommandDigest = strings.Repeat("e", 64)
 		lifecycle.MutationFences = append(lifecycle.MutationFences, vectorPartitionLifecycleMutationFenceV1{
 			Collection: record.Identity.Index.Collection, IndexName: record.Identity.Index.IndexName,
