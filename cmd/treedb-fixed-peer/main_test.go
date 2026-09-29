@@ -13,7 +13,8 @@ func TestReadFixedPeerConfig(t *testing.T) {
 		{"valid", `{"NodeID":"node-a"}`, true},
 		{"trailing", `{"NodeID":"node-a"} {}`, false},
 		{"unknown", `{"NotAConfigField":true}`, false},
-		{"oversized", `{"NodeID":"node-a"}` + strings.Repeat(" ", 1<<20) + `{}`, false},
+		{"over-1-MiB", `{"NodeID":"node-a"}` + strings.Repeat(" ", 1<<20), true},
+		{"over-8-MiB", `{"NodeID":"node-a"}` + strings.Repeat(" ", maxFixedPeerConfigBytes), false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			config, err := readConfig(strings.NewReader(tt.input))

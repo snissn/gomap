@@ -1,10 +1,12 @@
 import copy
 import datetime as dt
+import hashlib
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import treedb_peer_ec2 as deploy
 
@@ -76,6 +78,21 @@ class LiveInventoryAWS(FakeAWS):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_production_config_input_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = pathlib.Path(directory) / 'treedb-fixed-peer'
+            binary.write_bytes(b'fixed-peer binary fixture')
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            config = pathlib.Path(directory) / 'node.json'
+            for padding, reaches_inspector in ((1 << 20, True), (deploy.FIXED_PEER_CONFIG_LIMIT, False)):
+                config.write_text('{"NodeID":"node-a"}' + ' ' * padding)
+                inventory = dict(binary_sha256=digest, nodes=[dict(config_path=str(config))])
+                with self.subTest(bytes=config.stat().st_size), mock.patch.object(deploy.subprocess, 'run') as inspect:
+                    inspect.return_value = subprocess.CompletedProcess([], 1, '', 'fixture stop')
+                    with self.assertRaisesRegex(deploy.Refused, 'production config inspection failed' if reaches_inspector else 'input exceeds limit'):
+                        deploy.inspect_artifacts(inventory, str(binary))
+                    self.assertEqual(inspect.call_count, int(reaches_inspector))
+
     def test_inspected_listener_sources_follow_control_and_group_membership(self):
         node = spec()['nodes'][0]
         config = dict(ListenAddress='10.0.0.10:7100', Nodes=[dict(ID=x) for x in ('node-a','node-b','node-c')],

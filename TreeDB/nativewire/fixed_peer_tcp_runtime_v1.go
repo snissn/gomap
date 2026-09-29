@@ -44,8 +44,11 @@ const (
 	fixedPeerMaxDataGroupsV1       = raftplacement.MaxCatalogMetaGroupsV1
 	fixedPeerMaxHostedDataGroupsV1 = 32
 	fixedPeerMaxPeersV1            = 32
-	fixedPeerMaxConfigBytesV1      = 1 << 20
-	fixedPeerClientInflightV1      = 32
+	fixedPeerMaxConfigBytesV1      = 8 << 20
+	// The preclone walk charges conservative container and escaped-string
+	// overhead. Keep it bounded separately from the encoded shared config.
+	fixedPeerMaxConfigInventoryBytesV1 = 32 << 20
+	fixedPeerClientInflightV1          = 32
 )
 
 type FixedPeerTCPNodeV1 struct {

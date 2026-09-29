@@ -1205,7 +1205,7 @@ func TestFixedPeerVectorConfigCloneRetainsValidatedSnapshotV1(t *testing.T) {
 func TestFixedPeerVectorConfigPreflightBoundsInventoryAndAuthenticatedListenersV1(t *testing.T) {
 	config := fixedPeerTestConfigsV1(t)[0]
 	config.Vector = &FixedPeerTCPVectorConfigV1{
-		RequestBase: VectorPartitionCoordinatorRequestV1{Query: make([]float32, fixedPeerMaxConfigBytesV1)},
+		RequestBase: VectorPartitionCoordinatorRequestV1{Query: make([]float32, fixedPeerMaxConfigInventoryBytesV1/32+1)},
 	}
 	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "vector inventory exceeds byte budget") {
 		t.Fatalf("oversized vector preflight = %v", err)
@@ -1227,6 +1227,33 @@ func TestFixedPeerVectorConfigPreflightBoundsInventoryAndAuthenticatedListenersV
 	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "shard listener must be loopback") {
 		t.Fatalf("remote credentialed vector shard listener = %v", err)
 	}
+}
+
+func TestFixedPeerVectorConfigPreflightAdmitsBounded100KMembershipsV1(t *testing.T) {
+	config := fixedPeerTestConfigsV1(t)[0]
+	config.Vector = &FixedPeerTCPVectorConfigV1{
+		Manifest: collections.VectorPartitionManifestV1{
+			Memberships:        make([]collections.VectorPartitionMembershipV1, 100_000),
+			OverlapMemberships: make([]collections.VectorPartitionMembershipV1, 20_000),
+		},
+	}
+	for i := range config.Vector.Manifest.Memberships {
+		config.Vector.Manifest.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: uint32(i % 64)}
+	}
+	for i := range config.Vector.Manifest.OverlapMemberships {
+		config.Vector.Manifest.OverlapMemberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i * 5), PartitionID: uint32(i % 64)}
+	}
+	if err := preflightFixedPeerConfigV1(config); err != nil {
+		t.Fatalf("bounded 100K/20K inventory preflight = %v", err)
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) <= 1<<20 || len(raw) > fixedPeerMaxConfigBytesV1 {
+		t.Fatalf("representative encoded config bytes = %d, want (1 MiB, %d]", len(raw), fixedPeerMaxConfigBytesV1)
+	}
+	t.Logf("100K/20K membership config encodes to %d bytes", len(raw))
 }
 
 func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {

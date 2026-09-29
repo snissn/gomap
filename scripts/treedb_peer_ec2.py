@@ -22,6 +22,9 @@ class Refused(ValueError):
     pass
 
 
+FIXED_PEER_CONFIG_LIMIT = 8 << 20
+
+
 def require(ok, message):
     if not ok:
         raise Refused(message)
@@ -84,7 +87,7 @@ def inspect_artifacts(spec, binary):
     require(actual.hexdigest() == spec["binary_sha256"], "local executable digest mismatch")
     for node in spec["nodes"]:
         path = node.pop("config_path")
-        config = load(path, 1 << 20)
+        config = load(path, FIXED_PEER_CONFIG_LIMIT)
         result = subprocess.run([str(pathlib.Path(binary).resolve()), "-mode", "inspect", "-config", path,
                                  "-expected-binary-sha256", spec["binary_sha256"]], capture_output=True, text=True, timeout=30)
         require(result.returncode == 0 and len(result.stdout) <= 1 << 20, "production config inspection failed: " + result.stderr[:1024])
