@@ -613,6 +613,7 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 	expected, records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 	barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1,
+	allowUnknownTerminal bool,
 ) error {
 	for identity, old := range expected {
 		incoming, ok := records[identity]
@@ -645,8 +646,12 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 		case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1,
 			VectorPartitionLifecycleCleanableV1, VectorPartitionLifecycleAbsentV1:
 			// An incoming-only terminal record has erased the commands and READY
-			// evidence needed to prove its history to a stateful follower.
-			return ErrVectorPartitionLifecycleConflict
+			// evidence needed to prove its history to a stateful follower. Ordinary
+			// catch-up retains the prior acceptance of compacted terminal history;
+			// a replacement transition cannot rely on that missing proof.
+			if !allowUnknownTerminal {
+				return ErrVectorPartitionLifecycleConflict
+			}
 		}
 	}
 	for key, old := range a.mutationFences {
@@ -663,6 +668,27 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 		if ok && next.Revision > old.Revision && next.InvalidationEpoch == fence.Epoch &&
 			next.MutationConfirmed != fence.Pending {
 			witnesses[key] = true
+		}
+	}
+	if allowUnknownTerminal {
+		knownKeys := make(map[vectorPartitionLifecycleServingKeyV1]bool, len(a.lifecycle))
+		for identity := range a.lifecycle {
+			knownKeys[vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}] = true
+		}
+		for identity, incoming := range records {
+			if _, known := expected[identity]; known || incoming.State != VectorPartitionLifecycleAbsentV1 {
+				continue
+			}
+			key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+			if knownKeys[key] {
+				continue
+			}
+			fence, ok := fences[key]
+			if ok && incoming.InvalidationEpoch == fence.Epoch && incoming.MutationConfirmed != fence.Pending {
+				// Ordinary first-seen completed cleanup already accepted this
+				// self-consistent terminal witness before replacement validation.
+				witnesses[key] = true
+			}
 		}
 	}
 	for key, incoming := range fences {

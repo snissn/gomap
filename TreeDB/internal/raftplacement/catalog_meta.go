@@ -691,12 +691,26 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		}
 		if replacementSensitive {
 			if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
-				a.lifecycle, lifecycle, mutationFences, collectionMutationBarriers,
+				a.lifecycle, lifecycle, mutationFences, collectionMutationBarriers, false,
 			); err != nil {
 				return CatalogMetaStatusV1{}, err
 			}
-		} else if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle); err != nil {
-			return CatalogMetaStatusV1{}, err
+		} else {
+			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
+			knownServing := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(a.lifecycle))
+			for identity, record := range a.lifecycle {
+				if record.State != VectorPartitionLifecycleBuildingV1 && record.State != VectorPartitionLifecycleStagedV1 &&
+					record.State != VectorPartitionLifecyclePreparedV1 {
+					knownServing[identity] = record
+				}
+			}
+			if err := a.validateVectorPartitionLifecycleSnapshotEvidenceLockedV1(
+				knownServing, lifecycle, mutationFences, collectionMutationBarriers, true,
+			); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
 		}
 		a.replacements = replacements
 		a.replacementBytes = uint64(len(snapshot.ReplicaReplacements))
