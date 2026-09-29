@@ -1039,6 +1039,41 @@ func TestCatalogReplicaReplacementSnapshotAcceptsOrdinaryCompactedCutoverCleanup
 	if err := follower.installCatalogMetaSnapshotBytesV1(before); err != nil {
 		t.Fatal(err)
 	}
+	var forged CatalogMetaSnapshotV1
+	if err := json.Unmarshal(final, &forged); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle vectorPartitionLifecycleSnapshotV1
+	if err := json.Unmarshal(forged.VectorPartitionLifecycle, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i := range lifecycle.Records {
+		if lifecycle.Records[i].Identity == newIdentity {
+			lifecycle.Records[i].MutationEpoch--
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("cleaned candidate missing")
+	}
+	forged.VectorPartitionLifecycle, err = json.Marshal(lifecycle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRaw, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
+		t.Fatalf("changed-source fixture is not canonical: %v", err)
+	}
+	if err := follower.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("changed source epoch restored after PREPARED: %v", err)
+	}
+	if retained, err := follower.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("changed-source refusal mutated authority: %v", err)
+	}
 	if err := follower.installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("restore ordinary compacted cleanup: %v", err)
 	}

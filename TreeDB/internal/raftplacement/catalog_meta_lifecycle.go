@@ -681,7 +681,11 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 			}
 			key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
 			if knownKeys[key] {
-				continue
+				old, known := a.lifecycle[identity]
+				if !known || old.State != VectorPartitionLifecycleBuildingV1 && old.State != VectorPartitionLifecycleStagedV1 &&
+					old.State != VectorPartitionLifecyclePreparedV1 {
+					continue
+				}
 			}
 			fence, ok := fences[key]
 			if ok && incoming.InvalidationEpoch == fence.Epoch && incoming.MutationConfirmed != fence.Pending {
