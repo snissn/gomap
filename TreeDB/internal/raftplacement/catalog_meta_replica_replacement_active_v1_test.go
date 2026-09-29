@@ -929,10 +929,6 @@ func TestCatalogReplicaReplacementRefusesPendingMutationAndBuildingV1(t *testing
 
 func TestCatalogReplicaReplacementSnapshotRejectsUnactivatedSupersessionV1(t *testing.T) {
 	leader, begin, active := activeReplicaReplacementAuthorityV1(t, true)
-	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
-	if err != nil {
-		t.Fatal(err)
-	}
 	completeReplicaReplacementForTestV1(t, leader, begin)
 	candidateIdentity := catalogMetaLifecycleTestIdentityV1(leader.record, active.Identity.Generation+1, 12)
 	candidateIdentity.Immutable = active.Identity.Immutable
@@ -944,6 +940,10 @@ func TestCatalogReplicaReplacementSnapshotRejectsUnactivatedSupersessionV1(t *te
 	})
 	if candidate.State != VectorPartitionLifecycleBuildingV1 {
 		t.Fatalf("candidate state=%q", candidate.State)
+	}
+	before, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
 	}
 	forged, err := leader.ExportCatalogMetaSnapshotV1()
 	if err != nil {
@@ -965,6 +965,7 @@ func TestCatalogReplicaReplacementSnapshotRejectsUnactivatedSupersessionV1(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	forged.AppliedIndex++
 	forgedRaw, err := json.Marshal(forged)
 	if err != nil {
 		t.Fatal(err)
