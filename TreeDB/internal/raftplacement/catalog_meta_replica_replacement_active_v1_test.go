@@ -52,6 +52,77 @@ func activeReplicaReplacementBeginV1(catalog CatalogMetaRecordV1) ReplicaReplace
 	}
 }
 
+func TestCatalogReplicaReplacementPendingFreezesLifecycleV1(t *testing.T) {
+	a, begin, active := activeReplicaReplacementAuthorityV1(t, true)
+	beforeBegin, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBegin, err := EncodeReplicaReplacementBeginV1(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.applyCommittedCatalogMetaV1(rawBegin, a.applied+1); err != nil {
+		t.Fatalf("BEGIN: %v", err)
+	}
+	before, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildIdentity := catalogMetaLifecycleTestIdentityV1(a.record, active.Identity.Generation+1, 12)
+	buildIdentity.Immutable = active.Identity.Immutable
+	commands := []VectorPartitionLifecycleCommandV1{
+		{
+			Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+			Identity: buildIdentity, RequiredGroups: []raftcluster.GroupID{"group-b"},
+			PreviousActiveGeneration: active.Identity.Generation, MutationEpoch: active.MutationEpoch + 1,
+		},
+		catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+			command.Reason = "relevant mutation"
+			command.InvalidationEpoch = active.MutationEpoch + 1
+		}),
+	}
+	for _, command := range commands {
+		raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseline := NewCatalogMetaAuthorityV1()
+		if err := baseline.installCatalogMetaSnapshotBytesV1(beforeBegin); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := baseline.applyCommittedVectorPartitionLifecycleV1(raw, baseline.applied+1); err != nil {
+			t.Fatalf("%s baseline: %v", command.Kind, err)
+		}
+		if _, err := a.applyCommittedVectorPartitionLifecycleV1(raw, a.applied+1); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("pending replacement accepted %s: %v", command.Kind, err)
+		}
+		after, err := a.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("%s refusal changed authority: %v", command.Kind, err)
+		}
+	}
+	activate := VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleActivateV1, ExpectedRevision: active.Revision - 1,
+		ExpectedState: VectorPartitionLifecyclePreparedV1, Identity: active.Identity,
+		MutationEpoch: active.MutationEpoch, ReadySetDigest: active.ReadySetDigest,
+	}
+	rawActivate, err := EncodeVectorPartitionLifecycleCommandV1(activate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256HexVectorPartitionLifecycleV1(rawActivate) != active.LastCommandDigest {
+		t.Fatal("fixture ACTIVATE retry does not match committed digest")
+	}
+	if _, err := a.applyCommittedVectorPartitionLifecycleV1(rawActivate, a.applied+1); err != nil {
+		t.Fatalf("exact lifecycle retry during pending replacement: %v", err)
+	}
+	after, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("exact retry changed authority: %v", err)
+	}
+}
+
 func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T) {
 	a, begin, before := activeReplicaReplacementAuthorityV1(t, true)
 	if before.State != VectorPartitionLifecycleActiveV1 {
@@ -1851,6 +1922,7 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 		command.Reason = "relevant mutation"
 		command.InvalidationEpoch = math.MaxUint64
 	}))
+	invalidated := cloneVectorPartitionLifecycleRecordV1(terminal)
 	terminal = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(terminal, VectorPartitionLifecycleConfirmMutationV1, func(command *VectorPartitionLifecycleCommandV1) {
 		command.MutationEpoch = math.MaxUint64
 	}))
@@ -1883,6 +1955,20 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	}
 	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("fresh restore of genuine terminal witness: %v", err)
+	}
+	firstSeen, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	if !reflect.DeepEqual(catalog, leader.record) {
+		t.Fatal("first-seen fixture uses a different catalog")
+	}
+	firstSeenBefore, err := firstSeen.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstSeen.installCatalogMetaSnapshotBytesV1(final); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("stateful restore accepted first-seen compacted terminal history: %v", err)
+	}
+	if retained, err := firstSeen.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, firstSeenBefore) {
+		t.Fatalf("first-seen refusal changed local authority: %v", err)
 	}
 
 	var forged CatalogMetaSnapshotV1
@@ -1919,6 +2005,44 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	}
 	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
 		t.Fatalf("refusal changed local authority: %v", err)
+	}
+	var forgedPending CatalogMetaSnapshotV1
+	if err := json.Unmarshal(before, &forgedPending); err != nil {
+		t.Fatal(err)
+	}
+	records, _, _, fences, barriers, err = decodeVectorPartitionLifecycleSnapshotV1(forgedPending.VectorPartitionLifecycle, leader.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated.Identity.Index.IndexName = "unknown-invalidated"
+	invalidated.ReadySetDigest, err = VectorPartitionLifecycleReadySetDigestV1(invalidated.Identity, invalidated.RequiredGroups, invalidated.ReadyGroups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records[invalidated.Identity] = invalidated
+	fences[vectorPartitionLifecycleServingKeyV1{Collection: invalidated.Identity.Index.Collection, IndexName: invalidated.Identity.Index.IndexName}] =
+		vectorPartitionLifecycleMutationFenceStateV1{Epoch: math.MaxUint64, Pending: true}
+	forgedPending.VectorPartitionLifecycle, err = encodeVectorPartitionLifecycleSnapshotV1(records, fences, barriers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedPending.AppliedIndex++
+	forgedPendingRaw, err := json.Marshal(forgedPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedPendingRaw); err != nil {
+		t.Fatalf("unknown INVALIDATED fixture is not canonical: %v", err)
+	}
+	refusing = NewCatalogMetaAuthorityV1()
+	if err := refusing.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("unknown same-epoch INVALIDATED and pending fence restored: %v", err)
+	}
+	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("INVALIDATED refusal changed local authority: %v", err)
 	}
 }
 
@@ -2004,5 +2128,27 @@ func TestCatalogReplicaReplacementSameEpochSnapshotPreservesAbortedPreparationV1
 				t.Fatalf("refusal changed committed STAGED candidate: %v", err)
 			}
 		})
+	}
+	cleanable := catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(retired, VectorPartitionLifecycleMarkCleanableV1, nil))
+	cleanable = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(cleanable, VectorPartitionLifecycleRecordGroupCleanupV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.GroupID = "group-b"
+	}))
+	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(cleanable, VectorPartitionLifecycleCompleteCleanupV1, nil))
+	cleaned, err := leader.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(cleaned); err != nil {
+		t.Fatalf("fresh restore of cleaned candidate: %v", err)
+	}
+	lagging := NewCatalogMetaAuthorityV1()
+	if err := lagging.installCatalogMetaSnapshotBytesV1(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := lagging.installCatalogMetaSnapshotBytesV1(cleaned); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("compacted preparation cleanup lacks retained proof: %v", err)
+	}
+	if retained, err := lagging.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, before) {
+		t.Fatalf("compacted cleanup refusal changed local authority: %v", err)
 	}
 }
