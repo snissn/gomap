@@ -369,9 +369,17 @@ snapshot may add no lifecycle record or mutation fence. Compacted multi-epoch,
 unknown-BEGIN, and post-rebind lifecycle progress need further durable proof
 and fail closed on this path. At an unchanged catalog epoch, a snapshot must
 preserve locally committed BUILDING, STAGED, and PREPARED source and READY
-evidence while it remains in preparation or becomes ACTIVE. Existing compacted
-terminal cleanup behavior remains accepted; its erased READY provenance is an
-inherited limitation, not proof of a new replacement operation.
+evidence while it remains in preparation or becomes ACTIVE. A locally known
+candidate may advance to RETIRED only by an exact ABORT reducer replay. A
+stateful follower refuses previously unknown terminal records, or new mutation
+fences without a matching locally known invalidation successor. Compacted
+candidate cleanup can erase the evidence needed for this check and is refused;
+the stopped follower needs log replay or rebuild. Fresh installation of a
+trusted snapshot remains possible. Durable provenance for these compacted
+histories remains part of #4811.
+While a replica replacement is pending, new lifecycle transitions are refused
+so completion retains the ACTIVE evidence admitted at BEGIN; an exact retry of
+the last committed lifecycle command remains read-only.
 
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated

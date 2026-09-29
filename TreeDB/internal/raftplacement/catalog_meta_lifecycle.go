@@ -201,6 +201,12 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 	if current.LastCommandDigest == commandDigest {
 		return a.statusLocked(), nil
 	}
+	// Replacement completion requires the same immutable ACTIVE evidence that
+	// admitted BEGIN. Do not let a later lifecycle command strand that operation.
+	if a.hasPendingReplicaReplacementLockedV1() {
+		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard,
+			fmt.Errorf("lifecycle transition is blocked by pending replica replacement"))
+	}
 	if command.Kind == VectorPartitionLifecycleInvalidateV1 && command.InvalidationEpoch <= fence.Epoch {
 		return CatalogMetaStatusV1{}, errors.Join(ErrVectorPartitionLifecycleGuard,
 			fmt.Errorf("invalidation epoch %d does not advance durable fence %d", command.InvalidationEpoch, fence.Epoch))
@@ -560,12 +566,6 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 			return ErrVectorPartitionLifecycleConflict
 		}
 		if old.State == VectorPartitionLifecycleBuildingV1 || old.State == VectorPartitionLifecycleStagedV1 || old.State == VectorPartitionLifecyclePreparedV1 {
-			// Terminal cleanup erases READY evidence. Preserve the existing
-			// same-epoch compacted restore behavior for that inherited case;
-			// relative preparation proof applies while the evidence survives.
-			if incoming.State == VectorPartitionLifecycleRetiredV1 || incoming.State == VectorPartitionLifecycleCleanableV1 || incoming.State == VectorPartitionLifecycleAbsentV1 {
-				continue
-			}
 			if !a.replicaReplacementKnownPreparationSnapshotSuccessorV1(old, incoming, expected, records, fences, barriers) {
 				return ErrVectorPartitionLifecycleConflict
 			}
@@ -588,11 +588,34 @@ func (a *CatalogMetaAuthorityV1) validateVectorPartitionLifecycleSnapshotEvidenc
 			if !a.replicaReplacementNewLifecycleActiveSnapshotV1(incoming, expected, records, fences, barriers) {
 				return ErrVectorPartitionLifecycleConflict
 			}
+		case VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1,
+			VectorPartitionLifecycleCleanableV1, VectorPartitionLifecycleAbsentV1:
+			// An incoming-only terminal record has erased the commands and READY
+			// evidence needed to prove its history to a stateful follower.
+			return ErrVectorPartitionLifecycleConflict
 		}
 	}
 	for key, old := range a.mutationFences {
 		incoming, ok := fences[key]
 		if !ok || incoming.Epoch < old.Epoch || incoming.Epoch == old.Epoch && !old.Pending && incoming.Pending {
+			return ErrVectorPartitionLifecycleConflict
+		}
+	}
+	witnesses := make(map[vectorPartitionLifecycleServingKeyV1]bool)
+	for identity, old := range expected {
+		next := records[identity]
+		key := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
+		fence, ok := fences[key]
+		if ok && next.Revision > old.Revision && next.InvalidationEpoch == fence.Epoch &&
+			next.MutationConfirmed != fence.Pending {
+			witnesses[key] = true
+		}
+	}
+	for key, incoming := range fences {
+		if old, ok := a.mutationFences[key]; ok && old == incoming {
+			continue
+		}
+		if !witnesses[key] {
 			return ErrVectorPartitionLifecycleConflict
 		}
 	}
@@ -632,6 +655,15 @@ func (a *CatalogMetaAuthorityV1) replicaReplacementKnownPreparationSnapshotSucce
 	}
 	newReady := uint64(len(incoming.ReadyGroups) - len(old.ReadyGroups))
 	switch incoming.State {
+	case VectorPartitionLifecycleRetiredV1:
+		if incoming.Revision != old.Revision+1 {
+			return false
+		}
+		replayed, err := ApplyVectorPartitionLifecycleCommandV1(old, VectorPartitionLifecycleCommandV1{
+			Kind: VectorPartitionLifecycleAbortBuildV1, ExpectedRevision: old.Revision,
+			ExpectedState: old.State, Identity: old.Identity, Reason: incoming.RetirementReason,
+		})
+		return err == nil && equalVectorPartitionLifecycleRecordV1(replayed, incoming)
 	case VectorPartitionLifecycleStagedV1:
 		if old.State == VectorPartitionLifecyclePreparedV1 || newReady == 0 ||
 			incoming.Revision != old.Revision+newReady {
