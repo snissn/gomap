@@ -2,6 +2,7 @@ package raftplacement
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -83,6 +84,22 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if _, err := a.applyCommittedCatalogMetaV1(raw, a.applied+1); err != nil {
 		t.Fatalf("BEGIN while immutable generation is ACTIVE: %v", err)
 	}
+	validateServing := func(record VectorPartitionLifecycleRecordV1) {
+		t.Helper()
+		identity := record.Identity
+		snapshot, err := a.VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+			context.Background(), a.applied, identity.Index.Collection, identity.Index.IndexName,
+			identity.Generation, identity.Index.IndexDefinitionDigest, identity.Source.Generation,
+			identity.Source.Checksum, identity.Source.SchemaHash, identity.Source.RowCount,
+		)
+		if err != nil {
+			t.Fatalf("capture unchanged serving authority: %v", err)
+		}
+		if err := a.ValidateVectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(context.Background(), a.applied, snapshot); err != nil {
+			t.Fatalf("revalidate unchanged serving authority: %v", err)
+		}
+	}
+	validateServing(before)
 	pending, err := a.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +132,7 @@ func TestCatalogReplicaReplacementActiveImmutableRebindAndRestoreV1(t *testing.T
 	if err := catalogMetaLifecycleValidateSearchV1(a, rebound, after.ReadySetDigest); err != nil {
 		t.Fatalf("rebound ACTIVE authority: %v", err)
 	}
+	validateServing(after)
 	final, err := a.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
