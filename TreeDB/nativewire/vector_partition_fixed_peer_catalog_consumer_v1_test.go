@@ -142,7 +142,7 @@ func fixedPeerCatalogConsumerOwnerControlsV1(t *testing.T, ctx context.Context, 
 	assertRefused := func(label string) {
 		t.Helper()
 		frame, err := search()
-		if (err == nil && frame.Error == nil) || (frame.Response != nil && len(frame.Response.Neighbors) != 0) {
+		if (err == nil && frame.Error == nil) || fixedPeerCatalogConsumerShardHasHitsV1(frame.Response) {
 			t.Fatalf("%s returned consumer candidates: frame=%+v err=%v", label, frame, err)
 		}
 		if report, err := control.ReadinessV1(ctx, "owner-b"); err == nil || report.Ready {
@@ -158,7 +158,7 @@ func fixedPeerCatalogConsumerOwnerControlsV1(t *testing.T, ctx context.Context, 
 			t.Fatalf("%s public status advertised READY: %+v", label, status)
 		}
 	}
-	if frame, err := search(); err != nil || frame.Error != nil || frame.Response == nil || len(frame.Response.Neighbors) == 0 {
+	if frame, err := search(); err != nil || frame.Error != nil || !fixedPeerCatalogConsumerShardHasHitsV1(frame.Response) {
 		t.Fatalf("positive direct consumer shard: frame=%+v err=%v", frame, err)
 	}
 	// Remove two catalog voters, while both serving owner data groups remain
@@ -198,10 +198,21 @@ func fixedPeerCatalogConsumerOwnerControlsV1(t *testing.T, ctx context.Context, 
 	if response, err := restored.VectorSearchStrictV1(ctx, request); err != nil || len(response.Neighbors) == 0 {
 		t.Fatalf("restored consumer public search: response=%+v err=%v", response, err)
 	}
-	if frame, err := search(); err != nil || frame.Error != nil || frame.Response == nil || len(frame.Response.Neighbors) == 0 {
+	if frame, err := search(); err != nil || frame.Error != nil || !fixedPeerCatalogConsumerShardHasHitsV1(frame.Response) {
 		t.Fatalf("restored cached consumer shard: frame=%+v err=%v", frame, err)
 	}
 	fixedPeerAssertCatalogConsumerOwnerV1(t, ctx, control, owner)
+}
+
+func fixedPeerCatalogConsumerShardHasHitsV1(response *VectorPartitionShardSearchResponseV1) bool {
+	if response != nil {
+		for _, partial := range response.Partials {
+			if len(partial.Neighbors) != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func fixedPeerCatalogConsumerShardSearchV1(t testing.TB, ctx context.Context, configs []FixedPeerTCPConfigV1, request public.SearchRequestV1, readyDigest string) (vectorPartitionShardSearchTCPFrameV1, error) {
@@ -278,12 +289,12 @@ func fixedPeerCatalogConsumerCachedInvalidationV1(t *testing.T, ctx context.Cont
 	}
 	digest := reply.VectorCatalog.ReadySetDigest
 	frame, err := fixedPeerCatalogConsumerShardSearchV1(t, ctx, configs, request, digest)
-	if err != nil || frame.Error != nil || frame.Response == nil || len(frame.Response.Neighbors) == 0 {
+	if err != nil || frame.Error != nil || !fixedPeerCatalogConsumerShardHasHitsV1(frame.Response) {
 		t.Fatalf("initial cached consumer search: %+v %v", frame, err)
 	}
 	fixedPeerAssertInFlightActiveInvalidationV1(t, ctx, os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"), control, client, request)
 	frame, err = fixedPeerCatalogConsumerShardSearchV1(t, ctx, configs, request, digest)
-	if (err == nil && frame.Error == nil) || (frame.Response != nil && len(frame.Response.Neighbors) != 0) {
+	if (err == nil && frame.Error == nil) || fixedPeerCatalogConsumerShardHasHitsV1(frame.Response) {
 		t.Fatalf("invalidated cached consumer returned candidates: %+v %v", frame, err)
 	}
 	if report, err := control.ReadinessV1(ctx, "owner-b"); err == nil || report.Ready {
