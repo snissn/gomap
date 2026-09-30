@@ -270,8 +270,8 @@ func (r *FixedPeerTCPRuntimeV1) immutableActiveVectorRecordV1(ctx context.Contex
 	}
 	if r.meta == nil {
 		_, record, err := r.consumerImmutableVectorCatalogV1(ctx, fixedPeerVectorCatalogActiveV1)
-		if err == nil {
-			err = r.validateImmutableActiveVectorRecordV1(record, owners)
+		if err == nil && !slices.Equal(record.RequiredGroups, owners) {
+			err = ErrFixedPeerVectorProofStaleV1
 		}
 		return record, err
 	}
