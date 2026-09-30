@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"math"
@@ -33,6 +34,7 @@ type liveLifecycleRetainedInputV1 struct {
 	Descriptor, DescriptorSHA256                 string
 	Collection, Index                            string
 	Recipe                                       string // Empty preserves the selected 20% overlap fixture.
+	SnapshotFiles, SnapshotFilesSHA256           string // Explicit installation of a pristine, pinned staged copy.
 	Generation                                   uint64
 	Probes                                       int
 	Python, PythonSHA256, Adapter, AdapterSHA256 string
@@ -65,6 +67,16 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") == "" {
 		t.Fatal("retained real lifecycle requires a receipt directory")
+	}
+	if input.Recipe == "graph-disjoint-v1" || input.SnapshotFiles != "" || input.SnapshotFilesSHA256 != "" {
+		if expected := os.Getenv("GOMAP_SELECTED_LIVE_FIXTURE_SHA256"); len(expected) != 64 || fmt.Sprintf("%x", sha256.Sum256(raw)) != expected {
+			t.Fatal("root-selected retained input pin mismatch")
+		}
+		if input.SnapshotFiles == "" || input.SnapshotFilesSHA256 == "" {
+			t.Fatal("explicit retained snapshot file pin is required")
+		}
+		liveLifecycleReadPinnedV1(t, input.Queries, "8a27d38fb9d79e3607ee393af989644874e965813d7f26a55258dc60a0b1b70e")
+		liveLifecycleReadPinnedV1(t, input.Truth, "347a618317d2fde97802c2c84593980d36563c27dd2a859ab46320ca674f5fc8")
 	}
 	if input.Recipe == "graph-disjoint-v1" {
 		var descriptor struct {
@@ -118,6 +130,87 @@ func TestVectorPartitionLiveRetainedToolPinsV1(t *testing.T) {
 	}
 }
 
+// Installation is explicit and precedes ordinary recovery. The enclosing
+// root-owned driver pins the closed source and exact copy before this step;
+// only the deliberately named staged copy receives new physical identities.
+func liveLifecycleInstallRetainedCopyV1(ctx context.Context, in liveLifecycleRetainedInputV1) error {
+	if !filepath.IsAbs(in.DB) || filepath.Base(filepath.Clean(in.DB)) != "mutable-lifecycle-copy" || !filepath.IsAbs(in.SnapshotFiles) {
+		return errors.New("invalid retained snapshot installation paths")
+	}
+	info, err := os.Lstat(in.DB)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("retained snapshot must be a real staged directory: %v", err)
+	}
+	raw, err := os.ReadFile(in.SnapshotFiles)
+	if err != nil || len(in.SnapshotFilesSHA256) != 64 || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.SnapshotFilesSHA256 {
+		return fmt.Errorf("retained snapshot file-list pin mismatch: %v", err)
+	}
+	var expected map[string]string
+	if err := json.Unmarshal(raw, &expected); err != nil {
+		return err
+	}
+	if expected["index.db"] == "" {
+		return errors.New("retained snapshot lacks its pinned index")
+	}
+	for name, hash := range expected {
+		if !fs.ValidPath(name) || name == "." || filepath.ToSlash(filepath.Clean(name)) != name || len(hash) != 64 {
+			return errors.New("invalid retained snapshot file-list entry")
+		}
+	}
+	files := 0
+	if err := filepath.WalkDir(in.DB, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return errors.New("retained snapshot contains a nonregular entry")
+		}
+		rel, err := filepath.Rel(in.DB, path)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		_, readErr := io.Copy(hash, file)
+		if err := errors.Join(readErr, file.Close()); err != nil {
+			return err
+		}
+		if expected[filepath.ToSlash(rel)] != fmt.Sprintf("%x", hash.Sum(nil)) {
+			return fmt.Errorf("retained snapshot file mismatch: %s", rel)
+		}
+		files++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if files != len(expected) {
+		return errors.New("retained snapshot file pathset mismatch")
+	}
+	// Match snapshot restore: replacing a side index changes its identity, so
+	// capture those final identities only after both side stores are rebound.
+	sideRoot := ""
+	for _, name := range []string{"dictdb", "templatedb"} {
+		dir := filepath.Join(in.DB, name)
+		if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, dir, ""); err != nil {
+			return err
+		}
+		sideRoot = in.DB
+	}
+	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, in.DB, sideRoot)
+}
+
 func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
 	t.Helper()
 	in := liveLifecycleRetainedInputForV1(t)
@@ -127,6 +220,11 @@ func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPar
 	format, present, err := backenddb.LoadFormatConfig(in.DB)
 	if err != nil || !present || !format.RequiresCommandWALV2() {
 		t.Fatalf("copy lacks command-WAL eligibility: %v", err)
+	}
+	if in.SnapshotFiles != "" {
+		if err := liveLifecycleInstallRetainedCopyV1(t.Context(), in); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db, err := backenddb.Open(backenddb.Options{Dir: in.DB, DisableBackgroundPrune: true})
 	if err != nil {
