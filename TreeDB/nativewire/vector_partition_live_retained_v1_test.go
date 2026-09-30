@@ -31,6 +31,7 @@ type liveLifecycleRouteV1 struct{ domains, packs []uint32 }
 type liveLifecycleRetainedInputV1 struct {
 	DB, Queries, Truth, ManifestSHA256           string
 	Collection, Index                            string
+	Recipe                                       string // Empty preserves the selected 20% overlap fixture.
 	Generation                                   uint64
 	Probes                                       int
 	Python, PythonSHA256, Adapter, AdapterSHA256 string
@@ -58,7 +59,7 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	if err := json.Unmarshal(raw, &input); err != nil {
 		t.Fatal(err)
 	}
-	if !filepath.IsAbs(input.DB) || filepath.Base(filepath.Clean(input.DB)) != "mutable-lifecycle-copy" || input.Collection != "m3_partition_source" || input.Generation == 0 || input.Index == "" || input.Probes < 1 || input.Probes >= 16 {
+	if !filepath.IsAbs(input.DB) || filepath.Base(filepath.Clean(input.DB)) != "mutable-lifecycle-copy" || input.Collection != "m3_partition_source" || input.Generation == 0 || input.Index == "" || input.Probes < 1 || input.Probes >= 16 || (input.Recipe != "" && input.Recipe != "graph-disjoint-v1") {
 		t.Fatal("invalid retained mutable-copy specification")
 	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") == "" {
@@ -103,7 +104,7 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
 		t.Fatalf("manifest pin mismatch: %v", err)
 	}
-	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err != nil {
+	if err := validateLiveLifecycleRetainedGeometryV1(manifest, in.Recipe); err != nil {
 		t.Fatal(err)
 	}
 	fixture := vectorPartitionLiveProductionFixtureV1{dir: in.DB, database: db, collection: col, manifest: manifest}
@@ -114,6 +115,9 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	}
 	if fixture.definition.Dimensions != 768 || fixture.definition.Strategy != collections.VectorIndexStrategyColumnGraph {
 		t.Fatal("wrong retained definition")
+	}
+	if in.Recipe == "graph-disjoint-v1" && (fixture.definition.SchemaGeneration != 1 || fixture.definition.M != 16 || fixture.definition.EfConstruction != 128 || fixture.definition.EfSearch != 128 || collections.VectorIndexDefinitionDigestV1(fixture.definition) != manifest.IndexDefinitionDigest) {
+		t.Fatal("accepted disjoint fixture requires the fresh epoch-one source definition M16/eFC128/eFS128")
 	}
 	source, rows, err := col.ReadVectorPartitionRouterSourceRowsV1(in.Index)
 	if err != nil {
@@ -145,7 +149,7 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	return fixture, vectors, queries, in.Probes
 }
 
-func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1) error {
+func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1, recipe string) error {
 	if manifest.SourceRowCount != 100000 || manifest.DomainCount != 16 {
 		return fmt.Errorf("retained fixture must be real100K/D16")
 	}
@@ -158,8 +162,20 @@ func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitio
 	policy, valid := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
 	// PackDomainMembershipsV1 replaces the logical-domain capacity with the
 	// per-pack capacity before M3 persists the policy. Do not compare units.
-	if !valid || policy.Budget != 20000 || policy.Realized == 0 || policy.Capacity != uint64(plan.OverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
-		return fmt.Errorf("retained fixture must be the selected 20%% overlap multi-pack asset: policy=%+v packs=%d, want pack_capacity=%d packs=%d", policy, manifest.PartitionCount, plan.OverlapCapacity, plan.Partitions)
+	if !valid || policy.Capacity != uint64(plan.OverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
+		return fmt.Errorf("retained fixture physical geometry: policy=%+v packs=%d, want pack_capacity=%d packs=%d", policy, manifest.PartitionCount, plan.OverlapCapacity, plan.Partitions)
+	}
+	switch recipe {
+	case "":
+		if policy.Budget != 20000 || policy.Realized == 0 {
+			return errors.New("retained fixture must be the selected 20% overlap asset")
+		}
+	case "graph-disjoint-v1":
+		if policy.Budget != 0 || policy.Realized != 0 || policy.Unspent != 0 || len(manifest.OverlapMemberships) != 0 {
+			return errors.New("accepted disjoint fixture must have zero overlap budget and memberships")
+		}
+	default:
+		return fmt.Errorf("unknown retained fixture recipe %q", recipe)
 	}
 	return nil
 }
@@ -173,29 +189,42 @@ func TestVectorPartitionLiveRetainedGeometryV1(t *testing.T) {
 		realized  uint64
 		packs     uint32
 		wantError bool
+		recipe    string
+		overlap   bool
 	}{
-		{"physical-pack-capacity", 1875, 20000, 20000, 64, false},
-		{"logical-domain-capacity-is-not-pack-capacity", 7500, 20000, 20000, 64, true},
-		{"no-overlap", 1875, 20000, 0, 64, true},
-		{"disjoint-budget", 1875, 0, 0, 64, true},
-		{"wrong-pack-count", 1875, 20000, 20000, 16, true},
+		{"physical-pack-capacity", 1875, 20000, 20000, 64, false, "", false},
+		{"logical-domain-capacity-is-not-pack-capacity", 7500, 20000, 20000, 64, true, "", false},
+		{"no-overlap", 1875, 20000, 0, 64, true, "", false},
+		{"disjoint-budget", 1875, 0, 0, 64, true, "", false},
+		{"wrong-pack-count", 1875, 20000, 20000, 16, true, "", false},
+		{"accepted-disjoint", 1875, 0, 0, 64, false, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-overlap-policy", 1875, 20000, 20000, 64, true, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-overlap-membership", 1875, 0, 0, 64, true, "graph-disjoint-v1", true},
+		{"accepted-disjoint-rejects-domain-capacity", 7500, 0, 0, 64, true, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-pack-count", 1875, 0, 0, 16, true, "graph-disjoint-v1", false},
+		{"unknown-recipe", 1875, 0, 0, 64, true, "unknown", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := manifest
 			m.PartitionCount = tc.packs
+			if tc.overlap {
+				m.OverlapMemberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+			}
 			var err error
 			m.BalancePolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: tc.capacity, Budget: tc.budget, Realized: tc.realized, Unspent: tc.budget - tc.realized})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateLiveLifecycleRetainedGeometryV1(m); (err != nil) != tc.wantError {
+			if err := validateLiveLifecycleRetainedGeometryV1(m, tc.recipe); (err != nil) != tc.wantError {
 				t.Fatalf("geometry error=%v, wantError=%v", err, tc.wantError)
 			}
 		})
 	}
 	manifest.BalancePolicy = "malformed"
-	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err == nil {
-		t.Fatal("accepted malformed overlap policy")
+	for _, recipe := range []string{"", "graph-disjoint-v1"} {
+		if err := validateLiveLifecycleRetainedGeometryV1(manifest, recipe); err == nil {
+			t.Fatal("accepted malformed overlap policy")
+		}
 	}
 }
 

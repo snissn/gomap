@@ -844,12 +844,12 @@ func TestFixedPeerJSONOmitsUnusedVectorFieldsV1(t *testing.T) {
 }
 
 func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
-	raw := os.Getenv("GOMAP_FIXED_PEER_TEST_CONFIG")
-	if raw == "" {
+	path := os.Getenv("GOMAP_FIXED_PEER_TEST_CONFIG_FILE")
+	if path == "" {
 		return
 	}
-	var config FixedPeerTCPConfigV1
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+	config, err := fixedPeerReadTestConfigV1(path)
+	if err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := OpenFixedPeerTCPRuntimeV1(config)
@@ -860,6 +860,58 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func fixedPeerReadTestConfigV1(path string) (FixedPeerTCPConfigV1, error) {
+	var config FixedPeerTCPConfigV1
+	file, err := os.Open(path)
+	if err != nil {
+		return config, err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, fixedPeerMaxConfigBytesV1+1))
+	if err != nil {
+		return config, err
+	}
+	if len(raw) > fixedPeerMaxConfigBytesV1 {
+		return config, errors.New("child configuration exceeds byte budget")
+	}
+	err = json.Unmarshal(raw, &config)
+	return config, err
+}
+
+func TestFixedPeerTCPRuntimeConfigFileV1(t *testing.T) {
+	config := fixedPeerTestConfigsV1(t)[0]
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "node-config.json")
+	// A payload above Linux's per-string exec limit travels only through the
+	// private file; the child environment contains its short path.
+	large := append([]byte(strings.Repeat(" ", 128<<10)), raw...)
+	atLimit := append([]byte(strings.Repeat(" ", fixedPeerMaxConfigBytesV1-len(raw))), raw...)
+	for _, tc := range []struct {
+		name      string
+		raw       []byte
+		wantError bool
+	}{
+		{"above-inline-limit", large, false},
+		{"at-byte-budget", atLimit, false},
+		{"malformed", []byte("{"), true},
+		{"trailing-json", append(append([]byte(nil), raw...), raw...), true},
+		{"over-budget", []byte(strings.Repeat(" ", fixedPeerMaxConfigBytesV1+1)), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, tc.raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := fixedPeerReadTestConfigV1(path)
+			if (err != nil) != tc.wantError || (err == nil && !reflect.DeepEqual(got, config)) {
+				t.Fatalf("config file result=%+v err=%v wantError=%v", got, err, tc.wantError)
+			}
+		})
 	}
 }
 
@@ -876,12 +928,20 @@ func fixedPeerStartTestProcessV1(t testing.TB, config FixedPeerTCPConfigV1) *fix
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(raw) > fixedPeerMaxConfigBytesV1 {
+		t.Fatal("child configuration exceeds byte budget")
+	}
+	configPath := filepath.Join(t.TempDir(), "node-config.json")
+	if err := os.WriteFile(configPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("child config node=%s bytes=%d file=%s", config.NodeID, len(raw), configPath)
 	log, err := os.CreateTemp(t.TempDir(), "node-log-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestFixedPeerTCPRuntimeProcessV1$", "-test.v")
-	command.Env = append(os.Environ(), "GOMAP_FIXED_PEER_TEST_CONFIG="+string(raw))
+	command.Env = append(os.Environ(), "GOMAP_FIXED_PEER_TEST_CONFIG_FILE="+configPath)
 	command.Stdout, command.Stderr = log, log
 	input, err := command.StdinPipe()
 	if err != nil {
