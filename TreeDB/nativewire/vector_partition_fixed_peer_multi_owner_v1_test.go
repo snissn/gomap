@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		report.Process.TotalAllocBytes, report.Process.Mallocs, report.Process.Frees = memory.TotalAlloc, memory.Mallocs, memory.Frees
 		report.Process.NumGC, report.Process.PauseTotalNanos = uint64(memory.NumGC), memory.PauseTotalNs
 		report.Process.Goroutines, report.Process.LogicalCPUs, report.Process.GOMAXPROCS = uint64(runtime.NumGoroutine()), runtime.NumCPU(), runtime.GOMAXPROCS(0)
+		report.Process.GoMemoryLimitBytes = debug.SetMemoryLimit(-1)
 		if !before {
 			peerOSDiagnosticsV1(&report, nil)
 		}
