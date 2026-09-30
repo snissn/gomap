@@ -2982,3 +2982,38 @@ asset/READY/router identities are recorded separately. Historical epoch-zero
 bytes remain checksum-only. Adding this harness establishes no 100K pass,
 held-out recall or performance claim; expensive collection requires its own
 reviewed recipe, resource limits and allocation.
+
+### Retained-copy snapshot installation
+
+`TestVectorPartitionRetainedSnapshotInstallV1` creates two forced-pointer
+values, checkpoints and closes the source, proves that ordinary recovery
+rejects a plain copy, then exercises the retained caller's explicit staged-copy
+install and reads both values across reopen. It checks invalid pins, an original
+source path, changed pathsets, symlinks and unsafe file-list paths, and verifies
+that the original bytes remain unchanged. An actual hardlinked source tree is
+refused before mutation, preserving both original and staged bytes; regular
+file/hash equality alone is insufficient. Real dictionary/template side-store
+copies are refused before mutation, with every copied byte unchanged. The existing
+`db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
+retains the two-slot, interrupted-install, fallback and later-replacement proof.
+
+The accepted retained caller requires `SnapshotFiles` (the pristine copied
+file-path/SHA-256 JSON map), `SnapshotFilesSHA256`, and the root-selected input
+pin `GOMAP_SELECTED_LIVE_FIXTURE_SHA256`. Input, descriptor, tools, queries and
+truth are pinned before the shared opener verifies every copied file and
+explicitly rebinds the staged snapshot. Shared input admission and installation
+require every opened file to be regular with exactly one hardlink on the existing
+namespace-supported platforms; other platforms fail closed. This input is flat-only;
+`dictdb` and `templatedb` entries are refused before rebind or open. Public
+root/`maindb` side-store layouts use their existing layout-aware opener elsewhere.
+Ordinary Open remains strict; readers and replacement-build callers never
+install a snapshot. The legacy retained caller keeps its existing behavior
+unless installation is explicitly requested.
+
+The enclosing driver proves the closed original and copy are byte-identical
+before installation; rebind intentionally changes the staged index. Later
+checks bind collection/source/definition/manifest semantics and the fresh
+owner-separated generation, rather than demanding that the installed index
+remain identical to the original. A reused build retains its original builder
+head, executable, recipe and receipts, separately from the current caller
+head. No prior failed caller is reclassified as passing by this installation.

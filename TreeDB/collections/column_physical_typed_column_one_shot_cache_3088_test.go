@@ -519,6 +519,19 @@ func assertTypedColumnQ2OneShotColumnRankMapsNoGlobalCodes3158(tb testing.TB, pa
 	}
 }
 
+func TestTypedColumnOneShotCacheDiagnosticsStoreTimingOutsideBuildV1(t *testing.T) {
+	for _, storeNanos := range []int64{0, 576100} {
+		t.Run(strconv.FormatInt(storeNanos, 10), func(t *testing.T) {
+			diag := ColumnPhysicalQueryDiagnostics{
+				TypedColumnOneShotCacheMiss:       true,
+				TypedColumnOneShotCacheBuild:      true,
+				TypedColumnOneShotCacheStoreNanos: storeNanos,
+			}
+			assertTypedColumnOneShotCacheDiagnostics3158(t, "zero elapsed build", diag, false, true, true)
+		})
+	}
+}
+
 func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantHit, wantMiss, wantBuild bool) {
 	tb.Helper()
 	if diag.TypedColumnOneShotCacheHit != wantHit ||
@@ -555,7 +568,9 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 		diag.TypedColumnPrepareDensePredicateNanos +
 		diag.TypedColumnPrepareDensePreapplyNanos
 	if wantBuild {
-		if prepareNanos == 0 {
+		// Cache storage is timed after the build interval. It cannot prove that
+		// any phase inside a sub-resolution build recorded nonzero elapsed time.
+		if prepareNanos == diag.TypedColumnOneShotCacheStoreNanos {
 			return
 		}
 		if diag.TypedColumnOneShotBuildNanos <= 0 {
