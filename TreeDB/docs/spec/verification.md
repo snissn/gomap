@@ -2821,12 +2821,25 @@ non-catalog caller before BUILD; source-holder focused tests cover current FSM
 source binding, stale identity/catalog proof, cancellation, and bounded
 attestation size. `TestFixedPeerImmutableDefinitionAndMutationRefusalV1`
 checks the durable index epoch/incarnation admission and mutation refusal.
+
+`TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1` reuses the four-process,
+hosted-only public flow with a fresh deterministic 64-row, 768-dimension source,
+three packs, two domains and two owners. Before collection creation it declares
+index epoch 1 and the accepted source definition parameters: cosine, float32,
+column_graph, M16, EfConstruction128 and EfSearch128. It checks the persisted
+epoch and exact definition digest, the distinct historical epoch-zero digest,
+and the canonical connectivity-preserving Vamana R64/L256/alpha1.2 graph marker.
+Its query uses TopK4, Probes2 and EfSearch8. This is fresh-fixture public TCP
+parity coverage; it does not qualify the retained epoch-zero 100K/D16/P64
+fixture, historical P5/EfSearch96/TopK10 recall, a 95% quality threshold, or
+performance. Historical fixture builders and accepted bytes remain unchanged.
+
 Current-FSM-DB restore and stale shard-response tests cover bound-handle
 invalidation separately. Run the focused nativewire selectors on the exact
 candidate with:
 
 ```sh
-GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|MultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1|MultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(MultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1|MultiOwnerTCPAcceptedModelFreshIndexEpochV1|MultiOwnerTCPDomainSearchWithSeparateCatalogAndSourceLeadersV1|MultiOwnerTCPDomainSearchWithCatalogLeaderOnSourceFollowerV1|FixedPeerImmutableDefinitionAndMutationRefusalV1|FixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1|VectorPartitionShardSearchRejectsDBReplacementBeforeResponseV1)$'
 ```
 
 This bounded profile uses loopback vector listeners with peer credentials;
