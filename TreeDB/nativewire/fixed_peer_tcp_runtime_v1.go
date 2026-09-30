@@ -884,6 +884,7 @@ type fixedPeerReplyV1 struct {
 	VectorInsert         *public.InsertResponseV1                            `json:",omitempty"`
 	VectorSearch         *public.SearchResponseV1                            `json:",omitempty"`
 	VectorReady          *raftplacement.VectorPartitionLifecycleGroupReadyV1 `json:",omitempty"`
+	VectorCatalog        *raftplacement.VectorPartitionLifecycleRecordV1     `json:",omitempty"`
 	VectorSource         *fixedPeerVectorSourceAttestationV1                 `json:",omitempty"`
 }
 
@@ -947,7 +948,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward", "/v1/vector-forward", "/v1/vector-lifecycle":
 		requests = r.forwards
-	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -1004,6 +1005,16 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		proof, err = local.provider.ReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: r.config.NodeID, GroupID: group})
 		if err == nil {
 			reply.ReadProof = &proof
+		}
+	case "/v1/vector-catalog-read":
+		if body.VectorLifecycle == nil {
+			err = ErrFixedPeerVectorUnavailableV1
+			return
+		}
+		var record raftplacement.VectorPartitionLifecycleRecordV1
+		reply.Catalog, record, err = r.localImmutableVectorCatalogV1(ctx, body.VectorLifecycle.Action)
+		if err == nil {
+			reply.VectorCatalog = &record
 		}
 	case "/v1/catalog-read":
 		reply.Catalog, err = r.localCatalogFence(ctx)
@@ -1156,7 +1167,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

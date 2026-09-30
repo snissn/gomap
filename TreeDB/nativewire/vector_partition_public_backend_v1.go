@@ -408,17 +408,7 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 	}
 	id := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
 	topology := b.opts.Topology.Status()
-	if topology.Closed || !topology.Ready {
-		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
-	}
-	requiredGroups := slices.Clone(b.opts.RequiredGroups)
-	slices.Sort(requiredGroups)
-	ownerGroups := make([]raftcluster.GroupID, 0, len(topology.Endpoints))
-	for group := range topology.Endpoints {
-		ownerGroups = append(ownerGroups, group)
-	}
-	slices.Sort(ownerGroups)
-	if !slices.Equal(ownerGroups, requiredGroups) {
+	if !vectorPartitionTopologyHealthyV1(topology, b.opts.RequiredGroups) {
 		return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 	}
 	requiredAppliedIndex, err := b.opts.ReadFence.LinearizableCatalogMetaAppliedIndexV1(
@@ -453,6 +443,22 @@ func (b *VectorPartitionPublicBackendV1) OperationsHealthV1(ctx context.Context)
 		return public.OperationsHealthV1{Generation: id, State: status.State, Reason: "group_assets_unavailable"}, nil
 	}
 	return public.OperationsHealthV1{Ready: true, Generation: id, State: status.State, Reason: "ready"}, nil
+}
+
+// Keep endpoint coverage/readiness checks shared by the public backend and
+// immutable owners, which serve shards without a mutation coordinator.
+func vectorPartitionTopologyHealthyV1(topology VectorPartitionProductionTopologyStatusV1, required []raftcluster.GroupID) bool {
+	if topology.Closed || !topology.Ready {
+		return false
+	}
+	requiredGroups := slices.Clone(required)
+	slices.Sort(requiredGroups)
+	ownerGroups := make([]raftcluster.GroupID, 0, len(topology.Endpoints))
+	for group := range topology.Endpoints {
+		ownerGroups = append(ownerGroups, group)
+	}
+	slices.Sort(ownerGroups)
+	return slices.Equal(ownerGroups, requiredGroups)
 }
 
 func (b *VectorPartitionPublicBackendV1) checkID(id public.GenerationIDV1) error {
