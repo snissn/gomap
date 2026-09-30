@@ -43,6 +43,9 @@ func validateReplacementFinalMembershipV1(group FixedPeerTCPGroupV1, configurati
 // Prove the surviving target's durable prefix again immediately before removal.
 // Native configuration commitment remains the authority for quorum feasibility.
 func (r *FixedPeerTCPRuntimeV1) replacementRemovalProofV1(ctx context.Context, state raftplacement.ReplicaReplacementStateV1) (raftcluster.CommittedRaftConfigurationV1, error) {
+	if state.Begin.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.CommittedRaftConfigurationV1{}, raftcluster.ErrUnsupportedFeature
+	}
 	var empty raftcluster.CommittedRaftConfigurationV1
 	if state.Phase != raftplacement.ReplicaReplacementPromotedV1 && state.Phase != raftplacement.ReplicaReplacementRemoveIntentV1 {
 		return empty, raftcluster.ErrAdmissionUnavailable
@@ -73,6 +76,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementRemovalProofV1(ctx context.Context, s
 }
 
 func (r *FixedPeerTCPRuntimeV1) replacementRemovalIntentV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	if _, err := r.replacementReadV1(ctx, command); err != nil {
 		return err
 	}
@@ -124,6 +130,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementRemovalIntentV1(ctx context.Context, 
 }
 
 func (r *FixedPeerTCPRuntimeV1) removeReplacementV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	state, err := r.replacementStateAuthorityV1(ctx, command)
 	if err != nil {
 		return err
@@ -166,6 +175,9 @@ func (r *FixedPeerTCPRuntimeV1) removeReplacementV1(ctx context.Context, command
 }
 
 func (r *FixedPeerTCPRuntimeV1) completeReplacementV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	if _, err := r.replacementReadV1(ctx, command); err != nil {
 		return err
 	}
@@ -308,6 +320,9 @@ func (c *FixedPeerTCPClientV1) CompleteReplicaReplacementV1(ctx context.Context,
 // inspectable but cannot accept group traffic; readiness and route fences also
 // refuse them after an offline restart from pre-removal native state.
 func (r *FixedPeerTCPRuntimeV1) reconcileReplacementV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	state, err := r.replacementStateAuthorityV1(ctx, command)
 	if err != nil {
 		return err

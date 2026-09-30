@@ -193,6 +193,22 @@ func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithConte
 // The caller must independently fence and compare the committed immutable
 // manifest/placement pair before opening or serving this generation.
 func (c *Collection) PreparedVectorPartitionScopedManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, VectorPartitionLocalScopeV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, VectorPartitionLocalScopeV1{}, errors.New("collections: closed collection")
+	}
+	var manifest VectorPartitionManifestV1
+	var scope VectorPartitionLocalScopeV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var err error
+		manifest, scope, err = c.PreparedVectorPartitionScopedManifestUnderStorageBarrierWithContextV1(ctx, index, generation)
+		return err
+	})
+	return manifest, scope, err
+}
+
+// PreparedVectorPartitionScopedManifestUnderStorageBarrierWithContextV1 is the
+// current-FSM reader. The caller must already hold the root storage barrier.
+func (c *Collection) PreparedVectorPartitionScopedManifestUnderStorageBarrierWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, VectorPartitionLocalScopeV1, error) {
 	var zeroManifest VectorPartitionManifestV1
 	var zeroScope VectorPartitionLocalScopeV1
 	if c == nil || c.db == nil {
@@ -206,7 +222,7 @@ func (c *Collection) PreparedVectorPartitionScopedManifestWithContextV1(ctx cont
 	}
 	var manifest VectorPartitionManifestV1
 	var scope VectorPartitionLocalScopeV1
-	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err := func() error {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
@@ -234,7 +250,7 @@ func (c *Collection) PreparedVectorPartitionScopedManifestWithContextV1(ctx cont
 			return fmt.Errorf("%w: missing local asset manager", ErrVectorPartitionManifestInvalid)
 		}
 		return verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), c.meta.Options.ColumnStore.AssetManager.Namespace, assets)
-	})
+	}()
 	if err != nil {
 		return zeroManifest, zeroScope, err
 	}

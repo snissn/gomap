@@ -113,7 +113,7 @@ func (r *FixedPeerTCPRuntimeV1) verifyReplacementTargetTailV1(ctx context.Contex
 	if !replacementHasEnrollmentV1(state.Phase) || state.Seed == nil || !raftcluster.SameReplacementSnapshotSeedV1(*state.Seed, *candidate.Seed) {
 		return raftcluster.ErrAdmissionUnavailable
 	}
-	if err := r.replacementReceiverCutoffV1(ctx, command, reply); err != nil {
+	if err := r.replacementReceiverCutoffAtIndexV1(ctx, command, reply, candidate.Tail.Progress.EntryID.Index); err != nil {
 		return err
 	}
 	d := r.localDataV1(command.GroupID)
@@ -138,6 +138,9 @@ func (r *FixedPeerTCPRuntimeV1) verifyReplacementTargetTailV1(ctx context.Contex
 // The catalog coordinator derives the complete tail itself; generic advance
 // cannot turn a caller's self-consistent tail into promotion authority.
 func (r *FixedPeerTCPRuntimeV1) replacementPromotionIntentV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	if r.meta == nil {
 		return raftplacement.ErrCatalogMetaUnavailable
 	}
@@ -191,6 +194,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementPromotionIntentV1(ctx context.Context
 }
 
 func (r *FixedPeerTCPRuntimeV1) promoteReplacementV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	state, err := r.replacementStateAuthorityV1(ctx, command)
 	if err != nil {
 		return err
@@ -242,6 +248,9 @@ func (r *FixedPeerTCPRuntimeV1) promoteReplacementV1(ctx context.Context, comman
 }
 
 func (r *FixedPeerTCPRuntimeV1) completeReplacementPromotionV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	if command.OwnerPreparation != nil || r.config.Vector != nil {
+		return raftcluster.ErrUnsupportedFeature
+	}
 	if r.meta == nil {
 		return raftplacement.ErrCatalogMetaUnavailable
 	}

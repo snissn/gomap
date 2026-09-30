@@ -2768,7 +2768,41 @@ pending-mutation, BUILDING, and source-group guards. The existing
 `TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1` checks that
 ordinary feature activation over older completed replacement evidence refuses
 both as a command and a forward snapshot. These are authority-only checks;
-fixed-peer vector replacement BEGIN remains unavailable.
+ordinary fixed-peer vector replacement remains unavailable.
+
+`TestCatalogOwnerPreparationIdentityAndPhaseCapV1` covers unmarked owner,
+changed/incomplete identity, source-group refusal, allowed preparation phases,
+exact retry, accessor alias isolation, cold restore, both marker/ACTIVE evidence
+erasure refusal (empty snapshot without pending replacement stays valid), and direct/forward-import
+promotion/removal refusals with retained or erased markers.
+`TestCatalogCompletedReplacementHistoryAllowsLaterOwnerBindingSnapshotV1`
+completes an unrelated ordinary replacement with lifecycle support already
+enabled, then commits a new immutable ACTIVE index that uses that group and
+checks exact cold/known snapshot replay. Completed ordinary history grants no
+owner preparation authority; marked history retains its permanent phase cap.
+`TestCatalogPendingReplacementSnapshotRequiresCompleteBeginAdmissionV1` uses
+real pre-BEGIN lifecycle/mutation commands and verifies atomic cold/known refusal
+for a pending ordinary replacement combined with BUILDING or mutable ACTIVE
+state, a pending fence/barrier, or incompatible canonical/token placement.
+The genuine ordinary pending control remains admissible; completed histories
+remain covered separately.
+`TestImmutableOwnerReplacementPreparationCapabilityV1` is the baseline-compatible
+real-Raft capability producer: the baseline refuses at public replacement BEGIN
+before seed/install, whereas the candidate must install and enroll only a nonvoter.
+`TestImmutableOwnerReplacementInstalledAssetsTailAndRestartV1` checks actual current-DB
+hosted scope/assets, post-enrollment semantic tail, restart/exact BEGIN binding,
+unchanged static configuration, old voter retention, and no topology, public listener,
+READY, or public hits. `TestImmutableOwnerReplacementValidTailWithoutHostedAssetRefusesV1`
+retains native semantic tail progress while removing a declared hosted asset and
+requires cutoff/tail refusal; promotion remains closed independently. These
+preparation checks do not prove completed replacement or serving cutover. The
+installed-assets fixture logs BEGIN/native-install/nonvoter preparation time,
+native snapshot and hosted segment bytes, then three warmed semantic-tail calls.
+Its process-global allocation counters include the caller, all five in-process
+Raft servers, and background work; they provide no per-node allocation or RSS
+attribution. There is no working old owner baseline, and race instrumentation
+is diagnostic only. Healthy status/search implementation files are unchanged.
+No stable performance or scaling claim is made.
 `TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
 requires exact reducer revision distance across a compacted snapshot.
 `TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and
@@ -2793,9 +2827,12 @@ known/unknown same-epoch phase catch-up and anchored completion, while refusing
 one missing applied entry across every mandatory phase and post-completion
 BEGIN/CONFIRM. These refusals preserve the local exported snapshot.
 `TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmationV1`
-constructs canonical old admitted state explicitly; it tests owned confirmation
-and bounded catch-up, not current admission, actual data outcome, or migration.
-The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
+models already-owned old-producer barrier debt explicitly and retains exact
+BEGIN retries, owned CONFIRM, completed catch-up, and applied-entry budgets.
+Cold and known snapshots combining pending replacement and barrier debt refuse
+without authority mutation. The current reducer refuses the old
+BEGIN-after-replacement sequence; these controls establish neither migration
+nor an actual data outcome.
 Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
 history and reject its one/five-entry snapshots without authority mutation.
 Known records require the sum of their revision advances, including independent

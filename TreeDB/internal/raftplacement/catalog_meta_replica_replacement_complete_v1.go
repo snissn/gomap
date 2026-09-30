@@ -176,6 +176,9 @@ func (a *CatalogMetaAuthorityV1) ReplacementCompletionV1(group raftcluster.Group
 	if err != nil {
 		return ReplicaReplacementCompleteV1{}, err
 	}
+	if state.Begin.OwnerPreparation != nil {
+		return ReplicaReplacementCompleteV1{}, ErrVectorPartitionLifecycleGuard
+	}
 	if state.Phase != ReplicaReplacementRemovedV1 {
 		return ReplicaReplacementCompleteV1{}, ErrCatalogMetaConflict
 	}
@@ -227,6 +230,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementCompleteV1(raw 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	state := command.State
+	if err := validateReplicaReplacementOwnerPreparationPhaseV1(a.record, a.lifecycle, state); err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
 	old, err := decodeReplicaReplacementCurrentV1(a.replacements[state.Begin.GroupID])
 	if err != nil {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict

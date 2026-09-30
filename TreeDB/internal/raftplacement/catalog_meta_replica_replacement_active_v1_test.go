@@ -15,8 +15,36 @@ import (
 )
 
 func activeReplicaReplacementAuthorityV1(t *testing.T, activate bool) (*CatalogMetaAuthorityV1, ReplicaReplacementBeginV1, VectorPartitionLifecycleRecordV1) {
+	return activeReplicaReplacementAuthorityForOwnerModeV1(t, activate, false)
+}
+
+func activeReplicaReplacementAuthorityForOwnerModeV1(t *testing.T, activate, ownerOnly bool) (*CatalogMetaAuthorityV1, ReplicaReplacementBeginV1, VectorPartitionLifecycleRecordV1) {
 	t.Helper()
 	a, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	// group-b is the actual ANN owner; generic completion control replaces an
+	// unrelated group rather than relying on absent TokenPartitions metadata.
+	catalog.Catalog.Groups = append(catalog.Catalog.Groups, GroupV1{ID: "group-c", Members: []raftcluster.NodeID{"node-c"}})
+	if ownerOnly {
+		// Preparation is ANN-only: unrelated orders remain canonical on group-a.
+		for i := range catalog.Catalog.Placements {
+			if catalog.Catalog.Placements[i].GroupID == "group-b" {
+				catalog.Catalog.Placements[i].GroupID = "group-a"
+			}
+		}
+	}
+	var err error
+	catalog, err = NewCatalogMetaRecordV1(catalog.Epoch, catalog.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = NewCatalogMetaAuthorityV1()
+	raw, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{Record: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.applyCommittedCatalogMetaV1(raw, 1); err != nil {
+		t.Fatal(err)
+	}
 	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
 	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
 		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
@@ -48,8 +76,8 @@ func activeReplicaReplacementAuthorityV1(t *testing.T, activate bool) (*CatalogM
 func activeReplicaReplacementBeginV1(catalog CatalogMetaRecordV1) ReplicaReplacementBeginV1 {
 	return ReplicaReplacementBeginV1{
 		OperationID: "replace-active-ann-owner", ConfigDigest: strings.Repeat("d", 64),
-		ExpectedEpoch: catalog.Epoch, CatalogDigest: catalog.Digest, GroupID: "group-b",
-		OldNodeID: "node-b", NewPeer: raftcluster.Peer{ID: "standby", Address: "127.0.0.1:19001"},
+		ExpectedEpoch: catalog.Epoch, CatalogDigest: catalog.Digest, GroupID: "group-c",
+		OldNodeID: "node-c", NewPeer: raftcluster.Peer{ID: "standby", Address: "127.0.0.1:19001"},
 	}
 }
 
@@ -1557,30 +1585,43 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 			t.Fatalf("commit %s: %v", mutation.Kind, err)
 		}
 	}
-	// Canonical state accepted by the old producer: BEGIN was committed after
-	// replacement admission. Current admission refuses this sequence; no data
-	// mutation or migration is asserted by this compatibility fixture. Retain
-	// its owned CONFIRM and bounded snapshot catch-up behavior.
-	leader.collectionMutationBarriers = map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1{
-		mutation.Collection: {Epoch: mutation.MutationEpoch, Pending: true, OperationDigest: mutation.OperationDigest},
+	// The old producer could commit collection BEGIN after replacement admission.
+	// Explicitly model already-owned debt; current cold and known snapshot
+	// admission must refuse this combination. This is not a migration fixture.
+	ownedLegacy := func() *CatalogMetaAuthorityV1 {
+		t.Helper()
+		owned := NewCatalogMetaAuthorityV1()
+		if err := owned.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+			t.Fatal(err)
+		}
+		owned.collectionMutationBarriers = map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1{
+			mutation.Collection: {Epoch: active.MutationEpoch + 1, Pending: true, OperationDigest: strings.Repeat("e", 64)},
+		}
+		owned.applied++
+		return owned
 	}
-	leader.applied++
-	legacyRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	leader = NewCatalogMetaAuthorityV1()
-	if err := leader.installCatalogMetaSnapshotBytesV1(legacyRaw); err != nil {
-		t.Fatal(err)
-	}
+	leader = ownedLegacy()
 	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	follower := NewCatalogMetaAuthorityV1()
-	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatalf("install admitted BEGIN and pending mutation: %v", err)
+	known := NewCatalogMetaAuthorityV1()
+	if err := known.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+		t.Fatal(err)
 	}
+	for _, receiver := range []*CatalogMetaAuthorityV1{NewCatalogMetaAuthorityV1(), known} {
+		status, available := receiver.Status()
+		retained, exportErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+		if err := receiver.installCatalogMetaSnapshotBytesV1(pending); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("mixed pending snapshot admitted: %v", err)
+		}
+		got, gotAvailable := receiver.Status()
+		after, afterErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+		if !reflect.DeepEqual(status, got) || available != gotAvailable || !bytes.Equal(retained, after) || !errors.Is(afterErr, exportErr) {
+			t.Fatalf("mixed pending refusal mutated authority: before=%+v after=%+v export=%v/%v", status, got, exportErr, afterErr)
+		}
+	}
+	follower := ownedLegacy()
 	commitMutation() // Exact retry of the legacy owned BEGIN must not create new debt.
 	if retried, err := leader.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retried, pending) {
 		t.Fatalf("legacy exact BEGIN retry changed authority: %v", err)
@@ -1661,10 +1702,7 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
 		t.Fatalf("forged missing-confirmation snapshot is not self-consistent: %v", err)
 	}
-	refusing := NewCatalogMetaAuthorityV1()
-	if err := refusing.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatal(err)
-	}
+	refusing := ownedLegacy()
 	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("completion retained the same unconfirmed mutation: %v", err)
 	}
@@ -1683,10 +1721,7 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 	if err != nil {
 		t.Fatal(err)
 	}
-	catchup := NewCatalogMetaAuthorityV1()
-	if err := catchup.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatal(err)
-	}
+	catchup := ownedLegacy()
 	if err := catchup.installCatalogMetaSnapshotBytesV1(laterPending); err != nil {
 		t.Fatalf("later distinct pending mutation could not catch up: %v", err)
 	}
@@ -2257,7 +2292,15 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("fresh restore of genuine terminal witness: %v", err)
 	}
-	firstSeen, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	firstSeen := NewCatalogMetaAuthorityV1()
+	firstSeenCatalog, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{Record: leader.record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstSeen.applyCommittedCatalogMetaV1(firstSeenCatalog, 1); err != nil {
+		t.Fatal(err)
+	}
+	catalog := firstSeen.record
 	if !reflect.DeepEqual(catalog, leader.record) {
 		t.Fatal("first-seen fixture uses a different catalog")
 	}
@@ -2386,14 +2429,23 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedPendingRaw); err != nil {
+	withoutReplacement := forgedPending
+	withoutReplacement.ReplicaReplacements = nil
+	withoutReplacementRaw, err := json.Marshal(withoutReplacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(withoutReplacementRaw); err != nil {
 		t.Fatalf("unknown INVALIDATED fixture is not canonical: %v", err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("cold pending replacement accepted INVALIDATED lifecycle and pending fence: %v", err)
 	}
 	refusing = NewCatalogMetaAuthorityV1()
 	if err := refusing.installCatalogMetaSnapshotBytesV1(replacementBefore); err != nil {
 		t.Fatal(err)
 	}
-	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("unknown same-epoch INVALIDATED and pending fence restored: %v", err)
 	}
 	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, replacementBefore) {
