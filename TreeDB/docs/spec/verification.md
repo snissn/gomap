@@ -2775,6 +2775,11 @@ changed/incomplete identity, source-group refusal, allowed preparation phases,
 exact retry, accessor alias isolation, cold restore, both marker/ACTIVE evidence
 erasure refusal (empty snapshot without pending replacement stays valid), and direct/forward-import
 promotion/removal refusals with retained or erased markers.
+`TestCatalogCompletedReplacementHistoryAllowsLaterOwnerBindingSnapshotV1`
+completes an unrelated ordinary replacement with lifecycle support already
+enabled, then commits a new immutable ACTIVE index that uses that group and
+checks exact cold/known snapshot replay. Completed ordinary history grants no
+owner preparation authority; marked history retains its permanent phase cap.
 `TestImmutableOwnerReplacementPreparationCapabilityV1` is the baseline-compatible
 real-Raft capability producer: the baseline refuses at public replacement BEGIN
 before seed/install, whereas the candidate must install and enroll only a nonvoter.

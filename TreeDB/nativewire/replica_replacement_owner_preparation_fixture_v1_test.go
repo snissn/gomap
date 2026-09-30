@@ -192,6 +192,10 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 	// Trusted bootstrap has no semantic result receipt. Commit a real command
 	// before BUILD, using the generic native replacement fixture's producer.
 	owner := runtimes[1].localDataV1("group-b")
+	fixedPeerWaitV1(t, ctx, func() bool {
+		status, err := owner.provider.RuntimeStatusV1(ctx)
+		return err == nil && status.State == "Leader"
+	})
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
 		t.Fatal(err)

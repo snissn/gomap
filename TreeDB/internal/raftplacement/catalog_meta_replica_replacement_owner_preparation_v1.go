@@ -29,6 +29,11 @@ func validateReplicaReplacementOwnerPreparationPhaseV1(record CatalogMetaRecordV
 			}
 		}
 	}
+	// Ordinary completed history predates later owner bindings; it grants no
+	// authority to prepare that owner. Marked operations retain the cap above.
+	if identity == nil && state.Phase == ReplicaReplacementCompletedV1 {
+		return nil
+	}
 	// Existing owner operations without the explicit preparation cap remain closed.
 	for _, active := range lifecycle {
 		if slices.Contains(active.RequiredGroups, state.Begin.GroupID) && (identity == nil || *identity != active.Identity) {

@@ -3701,8 +3701,8 @@ These helpers and focused provider tests are a developmental checkpoint.
 The following runtime paths provide public seeded enrollment and guarded
 promotion and retirement for the supported profile. Lifecycle-bearing
 replacement and shard-sized recovery measurements remain required before a
-complete P5 claim. Lifecycle-bearing fixed-peer replacement continues to fail
-closed.
+complete P5 claim. Lifecycle-bearing fixed-peer replacement fails closed except
+the capped immutable ANN-only owner preparation described above.
 
 #### Replacement prejoin runtime checkpoint (developmental)
 
@@ -3713,9 +3713,10 @@ verified installation, and add intent. The target has no bootstrap path. Its
 native transport quarantines ordinary requests and the heartbeat fast path
 until installation has completed and add intent is durable. A permanent seed
 index floor rejects delayed seed snapshots after ordinary replication opens.
-Lifecycle-bearing fixed-peer replacement remains explicitly unsupported; this
-prejoin checkpoint alone does not qualify promotion, old-voter retirement, or
-that profile.
+Lifecycle-bearing fixed-peer replacement admits only the capped immutable
+ANN-only `owner_preparation` profile described above; other lifecycle-bearing
+profiles remain closed. Preparation does not qualify promotion, old-voter
+retirement, completion, or serving cutover.
 
 Short control requests poll one native phase worker per hosted group. A caller
 cancellation does not release a running native call or create a second retry

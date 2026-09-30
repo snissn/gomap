@@ -191,4 +191,55 @@ func TestCatalogOwnerPreparationIdentityAndPhaseCapV1(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("phase refusals changed authority: %v", err)
 	}
+	state.Phase = ReplicaReplacementCompletedV1
+	if err := validateReplicaReplacementOwnerPreparationPhaseV1(a.record, a.lifecycle, state); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("marked completed history bypassed permanent cap: %v", err)
+	}
+}
+
+func TestCatalogCompletedReplacementHistoryAllowsLaterOwnerBindingSnapshotV1(t *testing.T) {
+	// Lifecycle support is already enabled at BEGIN. Enabling it over older
+	// replacement evidence is independently forbidden and is not this flow.
+	a, begin, _ := activeReplicaReplacementAuthorityV1(t, true)
+	completeReplicaReplacementForTestV1(t, a, begin)
+	history, err := a.ReplicaReplacementStateV1(begin.GroupID)
+	if err != nil || history.Phase != ReplicaReplacementCompletedV1 || history.Begin.OwnerPreparation != nil {
+		t.Fatalf("ordinary completed history: %+v err=%v", history, err)
+	}
+	identity := catalogMetaLifecycleTestIdentityV1(a.record, 7, 11)
+	identity.Index.IndexName = "replacement-embedding"
+	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
+		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
+	}
+	applied := a.applied
+	building := catalogMetaLifecycleApplyV1(t, a, &applied, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: identity, RequiredGroups: []raftcluster.GroupID{begin.GroupID}, MutationEpoch: 9,
+	})
+	staged := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(building, VectorPartitionLifecycleRecordGroupReadyV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: begin.GroupID, AppliedIndex: applied, AssetSetDigest: strings.Repeat("c", 64)}
+	}))
+	digest, err := VectorPartitionLifecycleReadySetDigestV1(identity, staged.RequiredGroups, staged.ReadyGroups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(staged, VectorPartitionLifecyclePrepareV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.ReadySetDigest = digest
+	}))
+	catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(prepared, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) {
+		command.MutationEpoch = 9
+	}))
+	snapshot, err := a.ExportCatalogMetaSnapshotBytesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, receiver := range []*CatalogMetaAuthorityV1{NewCatalogMetaAuthorityV1(), a} {
+		if err := receiver.installCatalogMetaSnapshotBytesV1(snapshot); err != nil {
+			t.Fatalf("completed history with later ACTIVE owner binding: %v", err)
+		}
+		restored, err := receiver.ExportCatalogMetaSnapshotBytesV1()
+		if err != nil || !bytes.Equal(snapshot, restored) {
+			t.Fatalf("snapshot authority changed on restore: %v", err)
+		}
+	}
 }
