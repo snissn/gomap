@@ -791,11 +791,31 @@ PREPARE, and ACTIVE before the router and shard listeners warm. The ingress
 router and owners need only metadata and their explicitly hosted assets, not
 the full source collection or foreign-owner graph segments.
 
+A configured immutable ANN owner may host its data group while remaining
+outside `Catalog.Peers`. With peer authentication configured, stage, Warm,
+and serving validate fresh request-scoped catalog decisions from the actual
+catalog leader, backed by quorum and applied-state checks. Stage accepts only
+the configured generation's supported preparation states; Warm and serving
+require its exact ACTIVE identity and complete READY set. The owner creates
+no local catalog stores, vote, or authority; returned decisions are not cached
+leases or grants for later operations. Source capture and BUILD remain on the
+source holder and catalog leader; the source holder and router remain catalog
+voters.
+
+Owner generation status, operations health, and readiness observe existing
+scoped topology and assets without warming or binding a shard listener. A cold
+or restarted owner remains unready until explicit lifecycle Warm succeeds.
+Existing topology and cached generation handles still require fresh ACTIVE
+checks: missing catalog quorum, invalidation, wrong identity or READY evidence,
+and a changed current FSM DB refuse admission and cannot advertise READY.
+
 Only the configured router accepts public strict search. It checks fresh ACTIVE
-catalog/placement authority; each owner opens its scoped generation and verifies
-its current FSM DB and hosted bytes. Stale authority, a missing owner, a changed
-DB, or corrupt assets fail the entire request without a partial top-K. The
-immutable profile refuses public vector mutation and unsupported snapshot-style
+catalog/placement authority and repeats the ACTIVE/current-DB guard after remote
+results. Each private owner shard request validates fresh authority at admission,
+its current FSM DB and hosted bytes, and retains the current-DB return guard;
+it adds no post-search catalog barrier. Stale authority, a missing owner, a
+changed DB, or corrupt assets fail public strict search without a partial top-K.
+The immutable profile refuses public vector mutation and unsupported snapshot-style
 commands. This fixed-peer path has request-side catalog fences and is not the
 no-quorum snapshot-cache cost model described above for `OperationsV1.Search`.
 The separate catalog/data-leader topology, broader failure and recovery

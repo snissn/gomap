@@ -359,8 +359,16 @@ catalog state, lease, watch cursor, snapshot or apply capability. Failure to
 reach fresh authority refuses the operation; previously observed epoch/digest
 metadata cannot authorize a new write without a new fence.
 
+Configured immutable ANN owners can also consume fresh catalog lifecycle
+checks through this authenticated request-scoped path while remaining outside
+`Catalog.Peers`. They host their data group without local catalog stores,
+voting, or installed authority. The source holder and router remain catalog
+voters. See the [fixed-peer immutable owner contract](vector-partition-raft-v1.md#fixed-peer-immutable-multi-owner-serving-bounded-profile).
+
 Publication, epoch/digest validation and exact route comparison remain existing
 catalog-authority operations. Consumers cannot publish or serve authoritative
 catalog reads locally. Fixed membership validation and unsupported topology
-change refusals are unchanged. These RPCs assume the existing trusted private
-network; configuration digests are not cryptographic authentication.
+change refusals are unchanged. General route and metadata RPCs assume the
+existing trusted private network; configuration digests are not cryptographic
+authentication. Immutable owner lifecycle consumption requires configured peer
+authentication.
