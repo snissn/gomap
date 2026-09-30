@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +158,52 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	if len(queries) == 0 || probes < 1 || probes > int(seed.manifest.DomainCount) || warmQueries < 0 || warmQueries > 16 || (truth != nil && len(truth) != len(queries)) {
 		t.Fatal("public parity requires a declared query")
 	}
+	// The opt-in observes the existing correctness corpus once per arm. It is
+	// not testing.AllocsPerRun (which changes GOMAXPROCS and repeats queries).
+	costSetting := os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1")
+	comparativeCost := costSetting == "1"
+	if costSetting != "" && !comparativeCost {
+		t.Fatal("GOMAP_ACCEPTED_COMPARATIVE_COST_V1 must be empty or 1")
+	}
+	if comparativeCost && (len(queries) != 512 || truth == nil || warmQueries != 16 || probes != 5 || topK != 10 || efSearch != 96 || mergeEntries != 256 || separateLeaders || sourceFollower || missingOwnerAsset || consumerOwner || readCost) {
+		t.Fatal("comparative cost requires only the pinned accepted 512-query qualification")
+	}
+	type costWindow struct {
+		Before, After                 FixedPeerDiagnosticsV1
+		ElapsedNanos                  int64
+		BytesPerQuery, AllocsPerQuery float64
+	}
+	var localCost, tcpClientCost costWindow
+	// These two batch-boundary samples include all activity in this process.
+	// OS observations use the existing diagnostics reader; no query is sampled.
+	sampleParent := func(before bool) FixedPeerDiagnosticsV1 {
+		var report FixedPeerDiagnosticsV1
+		// Keep this parent's OS reader allocations outside both counter bounds.
+		if before {
+			peerOSDiagnosticsV1(&report, nil)
+		}
+		var memory runtime.MemStats
+		runtime.ReadMemStats(&memory)
+		report.Process.SampleUnixNano = uint64(time.Now().UnixNano())
+		report.Process.HeapAllocBytes, report.Process.HeapObjects = memory.HeapAlloc, memory.HeapObjects
+		report.Process.TotalAllocBytes, report.Process.Mallocs, report.Process.Frees = memory.TotalAlloc, memory.Mallocs, memory.Frees
+		report.Process.NumGC, report.Process.PauseTotalNanos = uint64(memory.NumGC), memory.PauseTotalNs
+		report.Process.Goroutines, report.Process.LogicalCPUs, report.Process.GOMAXPROCS = uint64(runtime.NumGoroutine()), runtime.NumCPU(), runtime.GOMAXPROCS(0)
+		report.Process.GoMemoryLimitBytes = debug.SetMemoryLimit(-1)
+		if !before {
+			peerOSDiagnosticsV1(&report, nil)
+		}
+		return report
+	}
+	finishCost := func(window *costWindow, started time.Time) {
+		window.ElapsedNanos = time.Since(started).Nanoseconds()
+		window.After = sampleParent(false)
+		if window.After.Process.TotalAllocBytes < window.Before.Process.TotalAllocBytes || window.After.Process.Mallocs < window.Before.Process.Mallocs {
+			t.Fatal("process allocation counters decreased")
+		}
+		window.BytesPerQuery = float64(window.After.Process.TotalAllocBytes-window.Before.Process.TotalAllocBytes) / float64(len(queries))
+		window.AllocsPerQuery = float64(window.After.Process.Mallocs-window.Before.Process.Mallocs) / float64(len(queries))
+	}
 	query := queries[0] // One representative query covers refusal/loss/reopen.
 	if err := seed.collection.EnsureVectorPartitionLiveBindingV1(ctx, seed.manifest); err != nil {
 		t.Fatal(err)
@@ -184,6 +232,9 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		configs[i].Vector.RequestBase.TopK = topK
 		configs[i].Vector.RequestBase.EfSearch = efSearch
 		configs[i].Vector.RequestBase.MergeEntriesLimit = mergeEntries
+	}
+	if comparativeCost && (configs[0].Vector.RequestBase.RouterMode != collections.VectorPartitionRouterModeExactV1 || configs[0].Vector.RequestBase.RouterScoreBudget != 256) {
+		t.Fatal("comparative cost requires exact accepted C256 routing")
 	}
 	if consumerOwner {
 		fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
@@ -243,15 +294,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		t.Fatal(err)
 	}
 	localResults := make([]VectorPartitionCoordinatorResponseV1, len(queries))
-	for i, query := range queries {
-		localRequest := configs[0].Vector.RequestBase
-		localRequest.RequestID, localRequest.CancellationID = fmt.Sprintf("local-parity-%d", i), fmt.Sprintf("local-parity-cancel-%d", i)
-		localRequest.Query = append([]float32(nil), query...)
-		localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
-		localResult, err := localCoordinator.Search(ctx, localRequest)
-		if err != nil {
-			t.Fatalf("same-generation local reference query %d: %v", i, err)
-		}
+	validateLocal := func(i int, localResult VectorPartitionCoordinatorResponseV1) {
 		if localResult.SourceGeneration != seed.manifest.SourceGeneration || localResult.SourceChecksum != seed.manifest.SourceChecksum ||
 			localResult.SourceSchemaHash != seed.manifest.SourceSchemaHash || localResult.SourceRowCount != seed.manifest.SourceRowCount ||
 			localResult.PartitionGeneration != seed.manifest.Generation || localResult.Counters.SelectedDomains != uint64(probes) ||
@@ -259,7 +302,51 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 			len(localResult.Neighbors) != min(topK, int(seed.manifest.SourceRowCount)) {
 			t.Fatalf("same-generation local reference query %d omitted a domain or result: %+v", i, localResult)
 		}
+	}
+	var localRequests []VectorPartitionCoordinatorRequestV1
+	var localStarted time.Time
+	if comparativeCost {
+		localRequests = make([]VectorPartitionCoordinatorRequestV1, len(queries))
+		for i, query := range queries {
+			localRequests[i] = configs[0].Vector.RequestBase
+			localRequests[i].RequestID, localRequests[i].CancellationID = fmt.Sprintf("local-parity-%d", i), fmt.Sprintf("local-parity-cancel-%d", i)
+			localRequests[i].Query = append([]float32(nil), query...)
+		}
+		for i := 0; i < warmQueries; i++ {
+			warm := localRequests[i]
+			warm.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
+			result, err := localCoordinator.Search(ctx, warm)
+			if err != nil {
+				t.Fatalf("bounded local warm query %d: %v", i, err)
+			}
+			validateLocal(i, result)
+		}
+		localCost.Before = sampleParent(true)
+		localStarted = time.Now()
+	}
+	for i, query := range queries {
+		localRequest := configs[0].Vector.RequestBase
+		if comparativeCost {
+			localRequest = localRequests[i]
+		} else {
+			localRequest.RequestID, localRequest.CancellationID = fmt.Sprintf("local-parity-%d", i), fmt.Sprintf("local-parity-cancel-%d", i)
+			localRequest.Query = append([]float32(nil), query...)
+		}
+		localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
+		localResult, err := localCoordinator.Search(ctx, localRequest)
+		if err != nil {
+			t.Fatalf("same-generation local reference query %d: %v", i, err)
+		}
+		if !comparativeCost {
+			validateLocal(i, localResult)
+		}
 		localResults[i] = localResult
+	}
+	if comparativeCost {
+		finishCost(&localCost, localStarted)
+		for i, result := range localResults {
+			validateLocal(i, result)
+		}
 	}
 	if truth != nil {
 		retainLiveLifecycleJSONV1(t, "accepted-native-reference", localResults)
@@ -484,14 +571,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	var response public.SearchResponseV1
 	publicResults := make([]public.SearchResponseV1, len(queries))
 	truthHits := 0
-	for queryIndex, query := range queries {
-		queryRequest := request
-		queryRequest.Query = append([]float32(nil), query...)
-		queryRequest.Deadline = time.Now().Add(30 * time.Second)
-		actual, err := publicClient.VectorSearchStrictV1(ctx, queryRequest)
-		if err != nil {
-			t.Fatalf("public query %d: %v", queryIndex, err)
-		}
+	validatePublic := func(queryIndex int, actual public.SearchResponseV1) {
 		if truth != nil {
 			retainLiveLifecycleJSONV1(t, fmt.Sprintf("accepted-query-%03d", queryIndex), struct {
 				Native VectorPartitionCoordinatorResponseV1
@@ -550,9 +630,91 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 				t.Fatalf("algorithm counter parity q=%d: public=%+v native=%+v", queryIndex, a, b)
 			}
 		}
+	}
+	type daemonCost struct {
+		NodeID                        raftcluster.NodeID
+		PID                           int
+		Before, After                 FixedPeerDiagnosticsV1
+		BytesPerQuery, AllocsPerQuery float64
+		PeerStreamWrittenBytes        *uint64
+	}
+	var daemonCosts []daemonCost
+	var publicRequests []public.SearchRequestV1
+	var tcpStarted time.Time
+	if comparativeCost {
+		publicRequests = make([]public.SearchRequestV1, len(queries))
+		for i, query := range queries {
+			publicRequests[i] = request
+			publicRequests[i].Query = append([]float32(nil), query...)
+		}
+		daemonCosts = make([]daemonCost, len(configs))
+		for i, config := range configs {
+			before, err := client.DiagnosticsV1(ctx, config.NodeID)
+			if err != nil {
+				t.Fatalf("before cost diagnostics %s: %v", config.NodeID, err)
+			}
+			daemonCosts[i] = daemonCost{NodeID: config.NodeID, PID: processes[i].command.Process.Pid, Before: before}
+		}
+		tcpClientCost.Before = sampleParent(true)
+		tcpStarted = time.Now()
+	}
+	for queryIndex, query := range queries {
+		queryRequest := request
+		if comparativeCost {
+			queryRequest = publicRequests[queryIndex]
+		} else {
+			queryRequest.Query = append([]float32(nil), query...)
+		}
+		queryRequest.Deadline = time.Now().Add(30 * time.Second)
+		actual, err := publicClient.VectorSearchStrictV1(ctx, queryRequest)
+		if err != nil {
+			t.Fatalf("public query %d: %v", queryIndex, err)
+		}
+		if !comparativeCost {
+			validatePublic(queryIndex, actual)
+		}
 		publicResults[queryIndex] = actual
 		if queryIndex == 0 {
 			response = actual
+		}
+	}
+	if comparativeCost {
+		finishCost(&tcpClientCost, tcpStarted)
+		for i := range daemonCosts {
+			d := &daemonCosts[i]
+			after, err := client.DiagnosticsV1(ctx, d.NodeID)
+			if err != nil {
+				t.Fatalf("after cost diagnostics %s: %v", d.NodeID, err)
+			}
+			d.After = after
+			if after.Process.TotalAllocBytes < d.Before.Process.TotalAllocBytes || after.Process.Mallocs < d.Before.Process.Mallocs {
+				t.Fatalf("daemon allocation counters decreased: %s", d.NodeID)
+			}
+			d.BytesPerQuery = float64(after.Process.TotalAllocBytes-d.Before.Process.TotalAllocBytes) / float64(len(queries))
+			d.AllocsPerQuery = float64(after.Process.Mallocs-d.Before.Process.Mallocs) / float64(len(queries))
+			beforeWritten := make(map[string]uint64, len(d.Before.Network))
+			for _, n := range d.Before.Network {
+				beforeWritten[n.RemoteIP] = n.WrittenBytes
+			}
+			// Absence of an enabled peer transport is unavailable, not zero.
+			if len(d.Before.Network) > 0 && len(after.Network) > 0 {
+				var written uint64
+				for _, n := range after.Network {
+					previous, exists := beforeWritten[n.RemoteIP]
+					if !exists || n.WrittenBytes < previous {
+						t.Fatalf("peer stream inventory/counter drift: %s/%s", d.NodeID, n.RemoteIP)
+					}
+					written += n.WrittenBytes - previous
+					delete(beforeWritten, n.RemoteIP)
+				}
+				if len(beforeWritten) != 0 {
+					t.Fatalf("peer stream inventory shrank: %s", d.NodeID)
+				}
+				d.PeerStreamWrittenBytes = &written
+			}
+		}
+		for i, result := range publicResults {
+			validatePublic(i, result)
 		}
 	}
 	t.Logf("public/native parity: queries=%d neighbors_per_query=%d probes=%d exact_scan_partitions=0", len(queries), len(response.Neighbors), probes)
@@ -568,6 +730,57 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		if recall < .95 {
 			t.Fatalf("pinned512-query recall %.9f below .95; no retuning", recall)
 		}
+	}
+	if comparativeCost {
+		var daemonBytesPerQuery, daemonAllocsPerQuery float64
+		var daemonRSSBefore, daemonRSSAfter, peerStreamWrittenBytes uint64
+		allRSSAvailable, allStreamsAvailable := true, true
+		unavailable := []string{"exact navigation allocations", "exact merge allocations", "unique RPC bytes", "simultaneous all-daemon peak RSS", "query-attributed process allocations", "repeated-run latency statistics"}
+		for _, d := range daemonCosts {
+			daemonBytesPerQuery += d.BytesPerQuery
+			daemonAllocsPerQuery += d.AllocsPerQuery
+			daemonRSSBefore += d.Before.Process.RSSBytes
+			daemonRSSAfter += d.After.Process.RSSBytes
+			if d.Before.Process.RSSBytes == 0 || d.After.Process.RSSBytes == 0 {
+				allRSSAvailable = false
+			}
+			if d.PeerStreamWrittenBytes == nil {
+				allStreamsAvailable = false
+			} else {
+				peerStreamWrittenBytes += *d.PeerStreamWrittenBytes
+			}
+		}
+		var rssBefore, rssAfter, streamWritten *uint64
+		if allRSSAvailable {
+			rssBefore, rssAfter = &daemonRSSBefore, &daemonRSSAfter
+		} else {
+			unavailable = append(unavailable, "all-daemon RSS snapshots: inspect each diagnostic Unavailable")
+		}
+		if allStreamsAvailable {
+			streamWritten = &peerStreamWrittenBytes
+		} else {
+			unavailable = append(unavailable, "all-daemon peer transport stream writes: no enabled inventory on one or more nodes")
+		}
+		var localCandidateBytes, publicCandidateBytes uint64
+		for i := range queries {
+			localCandidateBytes += localResults[i].Counters.CandidateBytes
+			publicCandidateBytes += publicResults[i].Counters.CandidateBytes
+		}
+		retainLiveLifecycleJSONV1(t, "accepted-comparative-cost", struct {
+			Queries, WarmQueries, Probes, EfSearch, TopK, RouterScoreBudget, MergeEntries int
+			Local, TCPClient                                                              costWindow
+			Daemons                                                                       []daemonCost
+			TCPAllProcessBytesPerQuery, TCPAllProcessAllocsPerQuery                       float64
+			DaemonRSSBeforeBytes, DaemonRSSAfterBytes, PeerStreamWrittenBytes             *uint64
+			LocalCandidateBytes, PublicCandidateBytes                                     uint64
+			CounterReceipt, Scope                                                         string
+			Unavailable                                                                   []string
+		}{len(queries), warmQueries, probes, efSearch, topK, 256, mergeEntries,
+			localCost, tcpClientCost, daemonCosts,
+			tcpClientCost.BytesPerQuery + daemonBytesPerQuery, tcpClientCost.AllocsPerQuery + daemonAllocsPerQuery,
+			rssBefore, rssAfter, streamWritten, localCandidateBytes, publicCandidateBytes,
+			"accepted-public-parity", "one ordered pass per arm; process-global allocations; daemon intervals are staggered and include diagnostics/background; RSS snapshots and process-lifetime peak RSS; peer transport stream writes include control/raft/diagnostics and exclude public nativewire sockets; candidate bytes and algorithm counters are semantic counters, not allocation or unique wire bytes",
+			unavailable})
 	}
 	if readCost {
 		fixedPeerImmutableOwnerReadCostV1(t, ctx, configs, publicClient, request, consumerOwner)
