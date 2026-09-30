@@ -71,9 +71,12 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	return input
 }
 
-func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
+func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
 	t.Helper()
 	in := liveLifecycleRetainedInputForV1(t)
+	if in.Recipe != expectedRecipe {
+		t.Fatalf("retained fixture recipe %q does not match caller recipe %q", in.Recipe, expectedRecipe)
+	}
 	format, present, err := backenddb.LoadFormatConfig(in.DB)
 	if err != nil || !present || !format.RequiresCommandWALV2() {
 		t.Fatalf("copy lacks command-WAL eligibility: %v", err)
