@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,7 +322,11 @@ func TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1(t *testi
 	t.Run("owner_config_boundaries", func(t *testing.T) {
 		fixedPeerCatalogConsumerConfigBoundariesV1(t, configs)
 	})
-	r := &FixedPeerTCPRuntimeV1{config: configs[1]}
+	owned, _, err := validateFixedPeerConfigV1(configs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &FixedPeerTCPRuntimeV1{config: owned, immutableVectorAssetDigests: fixedPeerImmutableVectorAssetDigestsV1(owned.Vector)}
 	i := r.config.Vector.Identity
 	status := raftplacement.CatalogMetaStatusV1{Epoch: i.Index.CatalogEpoch, Digest: i.Index.CatalogDigest, AppliedIndex: 9}
 	owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
@@ -329,7 +334,6 @@ func TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1(t *testi
 	for _, owner := range owners {
 		record.ReadyGroups = append(record.ReadyGroups, raftplacement.VectorPartitionLifecycleGroupReadyV1{GroupID: owner, AppliedIndex: 7, AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(owner), seed.manifest)})
 	}
-	var err error
 	record.ReadySetDigest, err = raftplacement.VectorPartitionLifecycleReadySetDigestV1(i, owners, record.ReadyGroups)
 	if err != nil {
 		t.Fatal(err)
@@ -337,6 +341,60 @@ func TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1(t *testi
 	if err := r.validateImmutableVectorCatalogDecisionV1(status, record, fixedPeerVectorCatalogActiveV1); err != nil {
 		t.Fatalf("valid ACTIVE decision: %v", err)
 	}
+	t.Run("caller_config_mutation_isolated", func(t *testing.T) {
+		caller := configs[1].Vector
+		caller.Manifest.Assets[0].Bytes++
+		caller.Manifest.RouterAsset.Checksum = "caller-mutated"
+		caller.Manifest.Placements[0].GroupID = "caller-mutated"
+		caller.Placement.Partitions[0].GroupID = "caller-mutated"
+		caller.Identity.Immutable.ManifestDigest = "caller-mutated"
+		if r.config.Vector.Identity != i || r.config.Vector.Manifest.Assets[0].Bytes == caller.Manifest.Assets[0].Bytes ||
+			r.config.Vector.Manifest.RouterAsset.Checksum == caller.Manifest.RouterAsset.Checksum ||
+			r.config.Vector.Manifest.Placements[0].GroupID == caller.Manifest.Placements[0].GroupID ||
+			r.config.Vector.Placement.Partitions[0].GroupID == caller.Placement.Partitions[0].GroupID {
+			t.Fatal("runtime configuration aliases caller-owned immutable bindings")
+		}
+		if err := r.validateImmutableVectorCatalogDecisionV1(status, record, fixedPeerVectorCatalogActiveV1); err != nil {
+			t.Fatalf("caller mutation changed valid ACTIVE decision: %v", err)
+		}
+	})
+	t.Run("changed_assets_with_fresh_ready_digest_refused", func(t *testing.T) {
+		changed := record
+		changed.ReadyGroups = slices.Clone(record.ReadyGroups)
+		changed.ReadyGroups[0].AssetSetDigest = strings.Repeat("f", 64)
+		if changed.ReadyGroups[0].AssetSetDigest == record.ReadyGroups[0].AssetSetDigest {
+			changed.ReadyGroups[0].AssetSetDigest = strings.Repeat("a", 64)
+		}
+		changed.ReadySetDigest, err = raftplacement.VectorPartitionLifecycleReadySetDigestV1(i, owners, changed.ReadyGroups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.validateImmutableActiveVectorRecordV1(changed, owners); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+			t.Fatalf("changed assets admitted with a self-consistent READY digest: %v", err)
+		}
+	})
+	t.Run("missing_precomputed_binding_fails_closed", func(t *testing.T) {
+		uninitialized := &FixedPeerTCPRuntimeV1{config: owned}
+		if err := uninitialized.validateImmutableActiveVectorRecordV1(record, owners); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+			t.Fatalf("uninitialized runtime admitted ACTIVE: %v", err)
+		}
+	})
+	t.Run("fresh_ready_apply_is_not_cached", func(t *testing.T) {
+		changed := record
+		changed.ReadyGroups = slices.Clone(record.ReadyGroups)
+		changed.ReadyGroups[0].AppliedIndex++
+		// The old digest must fail even though the fixed asset expectations match.
+		if err := r.validateImmutableActiveVectorRecordV1(changed, owners); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+			t.Fatalf("changed READY apply admitted with old digest: %v", err)
+		}
+		changed.ReadySetDigest, err = raftplacement.VectorPartitionLifecycleReadySetDigestV1(i, owners, changed.ReadyGroups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.validateImmutableActiveVectorRecordV1(changed, owners); err != nil {
+			t.Fatalf("fresh READY apply with its own digest refused: %v", err)
+		}
+	})
 	building := record
 	building.State = raftplacement.VectorPartitionLifecycleBuildingV1
 	building.ReadyGroups, building.ReadySetDigest = nil, ""

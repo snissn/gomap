@@ -150,6 +150,9 @@ type FixedPeerTCPRuntimeV1 struct {
 	requests  chan struct{}
 	forwards  chan struct{}
 	reads     chan struct{}
+
+	// Fixed asset bindings from the runtime-owned cloned config, never a serving grant.
+	immutableVectorAssetDigests map[raftcluster.GroupID]string
 }
 
 type FixedPeerTCPClientV1 struct {
@@ -425,6 +428,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		return nil, err
 	}
 	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4)}
+	r.immutableVectorAssetDigests = fixedPeerImmutableVectorAssetDigestsV1(r.config.Vector)
 	if _, hosted := r.config.RaftListen[r.config.Catalog.ID]; hosted {
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
 	}
