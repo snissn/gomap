@@ -66,3 +66,44 @@ func (f *FSM) PreparedVectorPartitionManifestFromCurrentDBV1(ctx context.Context
 	}
 	return progress, manifest, nil
 }
+
+// PreparedVectorPartitionScopedManifestFromCurrentDBV1 inspects installed hosted
+// bytes on the current FSM DB without constructing or warming a serving runtime.
+// Root barrier precedes f.mu, matching native snapshot replacement.
+func (f *FSM) PreparedVectorPartitionScopedManifestFromCurrentDBV1(ctx context.Context, barrier raftcluster.AppliedIndexReadBarrier, collection, index string, generation uint64) (collections.CollectionMeta, collections.VectorPartitionManifestV1, collections.VectorPartitionLocalScopeV1, error) {
+	var meta collections.CollectionMeta
+	var manifest collections.VectorPartitionManifestV1
+	var scope collections.VectorPartitionLocalScopeV1
+	if f == nil {
+		return meta, manifest, scope, raftcluster.ErrReadBarrierNotSatisfied
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root := raftcluster.MainDBDir(f.cluster.Dir)
+	if root == "" {
+		return meta, manifest, scope, raftcluster.ErrReadBarrierNotSatisfied
+	}
+	err := collections.WithVectorPartitionStorageBarrierWithContextV1(ctx, root, func() error {
+		f.mu.RLock()
+		defer f.mu.RUnlock()
+		if f.closed || f.db == nil || filepath.Clean(f.db.Dir()) != filepath.Clean(root) {
+			return raftcluster.ErrReadBarrierNotSatisfied
+		}
+		progress, err := f.appliedProgressLocked()
+		if err != nil {
+			return err
+		}
+		if err := barrier.Check(progress); err != nil {
+			return err
+		}
+		local, err := collections.OpenCollectionForRaftSourceV1(f.db, collection)
+		if err != nil {
+			return err
+		}
+		meta = local.MetaView()
+		manifest, scope, err = local.PreparedVectorPartitionScopedManifestUnderStorageBarrierWithContextV1(ctx, index, generation)
+		return err
+	})
+	return meta, manifest, scope, err
+}

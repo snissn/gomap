@@ -2768,7 +2768,26 @@ pending-mutation, BUILDING, and source-group guards. The existing
 `TestCatalogReplicaReplacementSerialCompletionSnapshotAndNextV1` checks that
 ordinary feature activation over older completed replacement evidence refuses
 both as a command and a forward snapshot. These are authority-only checks;
-fixed-peer vector replacement BEGIN remains unavailable.
+ordinary fixed-peer vector replacement remains unavailable.
+
+`TestCatalogOwnerPreparationIdentityAndPhaseCapV1` covers unmarked owner,
+changed/incomplete identity, source-group refusal, allowed preparation phases,
+exact retry, accessor alias isolation, cold restore, and direct/forward-import
+promotion/removal refusals with retained or erased markers.
+`TestImmutableOwnerReplacementPreparationCapabilityV1` is the baseline-compatible
+real-Raft capability producer: the baseline refuses at public replacement BEGIN
+before seed/install, whereas the candidate must install and enroll only a nonvoter.
+`TestImmutableOwnerReplacementInstalledAssetsTailAndRestartV1` checks actual current-DB
+hosted scope/assets, post-enrollment semantic tail, restart/exact BEGIN binding,
+unchanged static configuration, old voter retention, and no topology, public listener,
+READY, or public hits. `TestImmutableOwnerReplacementValidTailWithoutHostedAssetRefusesV1`
+retains native semantic tail progress while removing a declared hosted asset and
+requires cutoff/tail refusal; promotion remains closed independently. These are
+proposed focused checks until exact-head execution receipts are accepted; they
+do not prove completed replacement or serving cutover. The existing bounded
+voter/consumer read-cost sampler supplies a proportional before/after guardrail;
+caller allocation measurements exclude server allocations and whole-case child
+resources include setup/recovery. No quantitative performance claim is made.
 `TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
 requires exact reducer revision distance across a compacted snapshot.
 `TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and

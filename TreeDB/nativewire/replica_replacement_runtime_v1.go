@@ -86,10 +86,11 @@ func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, transpor
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateReplacementBeginV1(command raftplacement.ReplicaReplacementBeginV1) (FixedPeerTCPGroupV1, error) {
-	// The catalog authority refuses BEGIN while the vector lifecycle feature is
-	// enabled. Keep the same boundary at every replacement RPC before a local
-	// group or transport can be published.
 	if r.config.Vector != nil {
+		if err := r.validateImmutableOwnerPreparationV1(command); err != nil {
+			return FixedPeerTCPGroupV1{}, err
+		}
+	} else if command.OwnerPreparation != nil {
 		return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
 	}
 	if command.ConfigDigest != r.client.digest {
@@ -147,6 +148,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementStateAuthorityV1(ctx context.Context,
 	}
 	if string(actual) != string(raw) {
 		return raftplacement.ReplicaReplacementStateV1{}, raftplacement.ErrCatalogMetaConflict
+	}
+	if command.OwnerPreparation != nil && reply.ReplacementState.Phase != raftplacement.ReplicaReplacementBegunV1 && reply.ReplacementState.Phase != raftplacement.ReplicaReplacementSeededV1 && reply.ReplacementState.Phase != raftplacement.ReplicaReplacementInstalledV1 && reply.ReplacementState.Phase != raftplacement.ReplicaReplacementAddIntentV1 {
+		return raftplacement.ReplicaReplacementStateV1{}, raftcluster.ErrUnsupportedFeature
 	}
 	return *reply.ReplacementState, nil
 }
@@ -503,6 +507,15 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 // actual native snapshot installation and nonvoter enrollment. Promotion and
 // durable tail readiness remain separate; success never creates a new voter.
 func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, catalogLeader raftcluster.NodeID, command raftplacement.ReplicaReplacementBeginV1) (raftcluster.CommittedRaftConfigurationV1, error) {
+	if c.config.Vector != nil && command.OwnerPreparation == nil {
+		identity := c.config.Vector.Identity
+		command.OwnerPreparation = &identity
+	}
+	if command.OwnerPreparation != nil {
+		// Freeze caller-owned identity before carrying canonical BEGIN across phases.
+		identity := *command.OwnerPreparation
+		command.OwnerPreparation = &identity
+	}
 	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
 	if err != nil {
 		return raftcluster.CommittedRaftConfigurationV1{}, err

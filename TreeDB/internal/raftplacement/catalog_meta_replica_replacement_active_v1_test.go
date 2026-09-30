@@ -15,8 +15,36 @@ import (
 )
 
 func activeReplicaReplacementAuthorityV1(t *testing.T, activate bool) (*CatalogMetaAuthorityV1, ReplicaReplacementBeginV1, VectorPartitionLifecycleRecordV1) {
+	return activeReplicaReplacementAuthorityForOwnerModeV1(t, activate, false)
+}
+
+func activeReplicaReplacementAuthorityForOwnerModeV1(t *testing.T, activate, ownerOnly bool) (*CatalogMetaAuthorityV1, ReplicaReplacementBeginV1, VectorPartitionLifecycleRecordV1) {
 	t.Helper()
 	a, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	// group-b is the actual ANN owner; generic completion control replaces an
+	// unrelated group rather than relying on absent TokenPartitions metadata.
+	catalog.Catalog.Groups = append(catalog.Catalog.Groups, GroupV1{ID: "group-c", Members: []raftcluster.NodeID{"node-c"}})
+	if ownerOnly {
+		// Preparation is ANN-only: unrelated orders remain canonical on group-a.
+		for i := range catalog.Catalog.Placements {
+			if catalog.Catalog.Placements[i].GroupID == "group-b" {
+				catalog.Catalog.Placements[i].GroupID = "group-a"
+			}
+		}
+	}
+	var err error
+	catalog, err = NewCatalogMetaRecordV1(catalog.Epoch, catalog.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = NewCatalogMetaAuthorityV1()
+	raw, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{Record: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.applyCommittedCatalogMetaV1(raw, 1); err != nil {
+		t.Fatal(err)
+	}
 	identity := catalogMetaLifecycleTestIdentityV1(catalog, 7, 11)
 	identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{
 		ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64),
@@ -48,8 +76,8 @@ func activeReplicaReplacementAuthorityV1(t *testing.T, activate bool) (*CatalogM
 func activeReplicaReplacementBeginV1(catalog CatalogMetaRecordV1) ReplicaReplacementBeginV1 {
 	return ReplicaReplacementBeginV1{
 		OperationID: "replace-active-ann-owner", ConfigDigest: strings.Repeat("d", 64),
-		ExpectedEpoch: catalog.Epoch, CatalogDigest: catalog.Digest, GroupID: "group-b",
-		OldNodeID: "node-b", NewPeer: raftcluster.Peer{ID: "standby", Address: "127.0.0.1:19001"},
+		ExpectedEpoch: catalog.Epoch, CatalogDigest: catalog.Digest, GroupID: "group-c",
+		OldNodeID: "node-c", NewPeer: raftcluster.Peer{ID: "standby", Address: "127.0.0.1:19001"},
 	}
 }
 

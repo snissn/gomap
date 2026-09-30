@@ -430,6 +430,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// #4324's nativewire integration fixtures use the exported compatibility
 	// schema names to configure typed-column vector and sorted-scalar sources.
 	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 9},
+	// Owner replacement preparation uses the retained metadata configuration.
+	{path: "TreeDB/nativewire/replica_replacement_owner_preparation_fixture_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// The real-process hosted-assets fixture copies the compatibility-retained
 	// schema definition while excluding the builder's source documents.
 	{path: "TreeDB/nativewire/vector_partition_fixed_peer_multi_owner_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},

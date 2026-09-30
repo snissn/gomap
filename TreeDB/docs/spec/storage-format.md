@@ -395,7 +395,8 @@ applied authority; altered, duplicated, omitted or foreign commands refuse.
 This developmental profile retains one pending command per group and refuses
 catalog mutation while it is pending. BEGIN changes no catalog membership or
 placement and is not snapshot-installation, tail-readiness or promotion proof.
-Lifecycle-bearing fixed-peer replacement remains explicitly unsupported.
+Lifecycle-bearing fixed-peer replacement stays closed except the explicitly
+capped immutable ANN-only owner preparation described below.
 
 An inline-source lifecycle identity may additionally carry an `immutable`
 object with lowercase SHA-256 `manifest_digest` and `placement_digest` fields.
@@ -3631,7 +3632,13 @@ local preparation alone does not authorize serving.
 
 P5's bounded replacement substrate retains one current operation per catalog
 Raft group. The existing catalog snapshot carries either its canonical BEGIN
-or its canonical `replica-replacement-advance-v1` JSON value. Advance phases are
+or its canonical `replica-replacement-advance-v1` JSON value.
+BEGIN may carry optional `owner_preparation`, the complete immutable lifecycle
+identity bound to its exact catalog epoch/digest. Ordinary BEGIN omits the field
+and retains its bytes. The marker persists through receiver and catalog records
+and independently caps authority at `add-intent`; decoding canonical JSON does
+not itself grant promotion or serving authority. Cold/forward snapshot import
+requires the exact ACTIVE ANN-only owner and rejects erased or changed caps. Advance phases are
 `seeded`, `installed`, and `add-intent`; adjacent advances and exact retries are
 accepted, while changing the BEGIN or selected seed is refused. A replacement
 command is capped at 24 KiB and the existing total catalog snapshot limit still

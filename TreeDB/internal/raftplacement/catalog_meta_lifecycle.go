@@ -354,7 +354,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleLockedV1(gro
 			return ErrVectorPartitionLifecycleGuard
 		}
 		for _, partition := range placement.TokenPartitions {
-			if partition.GroupID == group {
+			if partition.GroupID == group && !slices.Contains(record.RequiredGroups, group) {
 				return ErrVectorPartitionLifecycleGuard
 			}
 		}
