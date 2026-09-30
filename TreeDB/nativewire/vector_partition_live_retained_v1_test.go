@@ -65,6 +65,9 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	if !filepath.IsAbs(input.DB) || filepath.Base(filepath.Clean(input.DB)) != "mutable-lifecycle-copy" || input.Collection != "m3_partition_source" || input.Generation == 0 || input.Index == "" || input.Probes < 1 || input.Probes >= 16 || (input.Recipe != "" && input.Recipe != "graph-disjoint-v1") {
 		t.Fatal("invalid retained mutable-copy specification")
 	}
+	if err := validateLiveLifecycleRetainedFlatLayoutV1(input.DB); err != nil {
+		t.Fatal(err)
+	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") == "" {
 		t.Fatal("retained real lifecycle requires a receipt directory")
 	}
@@ -130,6 +133,19 @@ func TestVectorPartitionLiveRetainedToolPinsV1(t *testing.T) {
 	}
 }
 
+// Retained callers admit only the flat M3 layout. The public root/maindb
+// opener supports sibling side stores, but flat backend recovery does not.
+func validateLiveLifecycleRetainedFlatLayoutV1(dir string) error {
+	for _, name := range []string{"dictdb", "templatedb"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return fmt.Errorf("flat retained copy does not support %s", name)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // Installation is explicit and precedes ordinary recovery. The enclosing
 // root-owned driver pins the closed source and exact copy before this step;
 // only the deliberately named staged copy receives new physical identities.
@@ -140,6 +156,9 @@ func liveLifecycleInstallRetainedCopyV1(ctx context.Context, in liveLifecycleRet
 	info, err := os.Lstat(in.DB)
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("retained snapshot must be a real staged directory: %v", err)
+	}
+	if err := validateLiveLifecycleRetainedFlatLayoutV1(in.DB); err != nil {
+		return err
 	}
 	raw, err := os.ReadFile(in.SnapshotFiles)
 	if err != nil || len(in.SnapshotFilesSHA256) != 64 || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.SnapshotFilesSHA256 {
@@ -192,23 +211,7 @@ func liveLifecycleInstallRetainedCopyV1(ctx context.Context, in liveLifecycleRet
 	if files != len(expected) {
 		return errors.New("retained snapshot file pathset mismatch")
 	}
-	// Match snapshot restore: replacing a side index changes its identity, so
-	// capture those final identities only after both side stores are rebound.
-	sideRoot := ""
-	for _, name := range []string{"dictdb", "templatedb"} {
-		dir := filepath.Join(in.DB, name)
-		if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, dir, ""); err != nil {
-			return err
-		}
-		sideRoot = in.DB
-	}
-	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, in.DB, sideRoot)
+	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, in.DB, "")
 }
 
 func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {

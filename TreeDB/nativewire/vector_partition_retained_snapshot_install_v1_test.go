@@ -148,6 +148,39 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	for _, side := range []string{"dictdb", "templatedb"} {
+		t.Run("unsupported-"+side, func(t *testing.T) {
+			sideDir := filepath.Join(copyDir, side)
+			sideDB, err := backenddb.Open(backenddb.Options{Dir: sideDir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sideDB.SetSync([]byte("side-store"), []byte(side)); err != nil {
+				_ = sideDB.Close()
+				t.Fatal(err)
+			}
+			if err := sideDB.Close(); err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(sideDir)
+			before := ownerRelocationDiagnosticTreeSealV1(t, copyDir)
+			pinned, err := json.Marshal(before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pinPath := filepath.Join(t.TempDir(), "snapshot-files.json")
+			if err := os.WriteFile(pinPath, pinned, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			unsupported := liveLifecycleRetainedInputV1{DB: copyDir, SnapshotFiles: pinPath, SnapshotFilesSHA256: fmt.Sprintf("%x", sha256.Sum256(pinned))}
+			if err := liveLifecycleInstallRetainedCopyV1(t.Context(), unsupported); err == nil || !strings.Contains(err.Error(), "does not support "+side) {
+				t.Fatalf("side-store install error=%v, want flat-layout refusal", err)
+			}
+			if got := ownerRelocationDiagnosticTreeSealV1(t, copyDir); !maps.Equal(got, before) {
+				t.Fatal("refused side-store install changed the staged copy")
+			}
+		})
+	}
 	if err := liveLifecycleInstallRetainedCopyV1(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
