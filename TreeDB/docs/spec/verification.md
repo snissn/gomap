@@ -2834,6 +2834,28 @@ parity coverage; it does not qualify the retained epoch-zero 100K/D16/P64
 fixture, historical P5/EfSearch96/TopK10 recall, a 95% quality threshold, or
 performance. Historical fixture builders and accepted bytes remain unchanged.
 
+`TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1` retains that explicit
+index-epoch-1 source definition and canonical model, with a fresh deterministic
+1,024-row, 768-dimension source, three packs, two domains and two owners in four
+real processes. The two domain populations are 683 and 341, both above L256.
+Its 32 declared source-document queries use ordinals `(37 + 29*q) % 1024` for
+`q=0..31`, TopK10, Probes2, EfSearch96 and MergeEntries32. Every query checks
+public IDs/scores against the same-generation native reference and exact
+selected-domain/group/RPC counters with no exact scan. One representative query
+covers nonrouter refusal, owner loss without partial results, and owner reopen
+parity. Hosted-only inventory and zero serving-source rows remain required.
+This is public correctness parity, not held-out recall, retained 100K/D16/P64 or
+historical P5 qualification, a 95% quality threshold, or performance/latency
+qualification. Historical source builders and accepted assets remain unchanged.
+
+Run the 4-row baseline, 64-row fixture and scaled fixture together in normal and
+race modes on the reviewed candidate:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run '^TestMultiOwnerTCP(DomainSearchUsesOnlyHostedAssetsV1|AcceptedModelFreshIndexEpochV1|AcceptedModelScaledCorrectnessV1)$'
+GOWORK=off go test -race -count=1 ./TreeDB/nativewire -run '^TestMultiOwnerTCP(DomainSearchUsesOnlyHostedAssetsV1|AcceptedModelFreshIndexEpochV1|AcceptedModelScaledCorrectnessV1)$'
+```
+
 Current-FSM-DB restore and stale shard-response tests cover bound-handle
 invalidation separately. Run the focused nativewire selectors on the exact
 candidate with:
