@@ -2422,14 +2422,23 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedPendingRaw); err != nil {
+	withoutReplacement := forgedPending
+	withoutReplacement.ReplicaReplacements = nil
+	withoutReplacementRaw, err := json.Marshal(withoutReplacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(withoutReplacementRaw); err != nil {
 		t.Fatalf("unknown INVALIDATED fixture is not canonical: %v", err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+		t.Fatalf("cold pending replacement accepted INVALIDATED lifecycle and pending fence: %v", err)
 	}
 	refusing = NewCatalogMetaAuthorityV1()
 	if err := refusing.installCatalogMetaSnapshotBytesV1(replacementBefore); err != nil {
 		t.Fatal(err)
 	}
-	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedPendingRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("unknown same-epoch INVALIDATED and pending fence restored: %v", err)
 	}
 	if retained, err := refusing.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retained, replacementBefore) {
