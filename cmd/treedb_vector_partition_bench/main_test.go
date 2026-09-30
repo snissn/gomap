@@ -1118,6 +1118,26 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks(t *testing.T) {
 				len(report.Rows) != 1 || report.Rows[0].IndexEpoch != epoch || report.Rows[0].IndexDefinitionDigest != digest {
 				t.Fatalf("epoch/digest binding: descriptor=%s manifest=%s report=%+v want %d/%s", descriptor.IndexDefinitionDigest, manifest.IndexDefinitionDigest, report.Rows, epoch, digest)
 			}
+			candidate := report
+			candidate.Rows = []m3PartitionIndexRow{report.Rows[0], report.Rows[0]}
+			if err := validateM3PartitionIndexReport(candidate); err != nil {
+				t.Fatalf("consistent multirow index binding rejected: %v", err)
+			}
+			otherDigest := fmt.Sprintf("%x", sha256.Sum256([]byte("another index definition")))
+			for name, mutate := range map[string]func(*m3PartitionIndexRow){
+				"empty digest":     func(row *m3PartitionIndexRow) { row.IndexDefinitionDigest = "" },
+				"short digest":     func(row *m3PartitionIndexRow) { row.IndexDefinitionDigest = "abcd" },
+				"nonhex digest":    func(row *m3PartitionIndexRow) { row.IndexDefinitionDigest = strings.Repeat("z", 64) },
+				"different digest": func(row *m3PartitionIndexRow) { row.IndexDefinitionDigest = otherDigest },
+				"different epoch":  func(row *m3PartitionIndexRow) { row.IndexEpoch++ },
+			} {
+				candidate := report
+				candidate.Rows = []m3PartitionIndexRow{report.Rows[0], report.Rows[0]}
+				mutate(&candidate.Rows[1])
+				if err := validateM3PartitionIndexReport(candidate); err == nil {
+					t.Fatalf("accepted %s in epoch/digest report binding", name)
+				}
+			}
 			for _, asset := range manifest.Assets {
 				if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
 					t.Fatalf("partition %d graph variant=%q", asset.PartitionID, asset.GraphVariant)

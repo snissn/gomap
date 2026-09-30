@@ -1273,6 +1273,10 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
+		if !m8SHA256V1(row.IndexDefinitionDigest) || row.IndexEpoch != report.Rows[0].IndexEpoch ||
+			row.IndexDefinitionDigest != report.Rows[0].IndexDefinitionDigest {
+			return errors.New("invalid M3 index epoch/definition binding")
+		}
 		if len(row.PartitionLoads) != report.Partitions {
 			return fmt.Errorf("invalid M3 physical pack loads: %+v", row.PartitionLoads)
 		}
