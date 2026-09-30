@@ -2803,6 +2803,25 @@ Raft servers, and background work; they provide no per-node allocation or RSS
 attribution. There is no working old owner baseline, and race instrumentation
 is diagnostic only. Healthy status/search implementation files are unchanged.
 No stable performance or scaling claim is made.
+
+
+`TestImmutableOwnerReplacementPrivateSourceWarmV1` checks explicit private
+initialization after the genuine installed-seed DB swap, generation/searcher
+cache reuse, fresh semantic-tail admission, nonvoter/old-voter membership,
+typed public/phase/identity/authentication refusals, exact authenticated target
+tail-read success with wrong-node/unmarked refusal, cold restart, and retirement
+after a hosted file disappears between actual worker completion and polling,
+or after an actual native snapshot DB replacement. The existing source authority
+test seam blocks an actual cached worker; runtime Close cancels it, waits for its
+return, and closes the private cache.
+Status/readiness and public listeners remain cold. The pending operation's
+existing lifecycle freeze prevents a legal ACTIVE replacement; this test does
+not fabricate one. Cold/cache timing and process-global allocations are bounded
+diagnostics including the caller, five Raft runtimes, background work and control
+polls. Source Stats show exactly one cold partition miss per hosted placement
+and reuse of every hosted pack. Verified declared hosted artifact bytes deduplicate
+identical namespace/file/offset/length references; they are not retained memory.
+These diagnostics are neither per-node overhead nor a throughput/comparative claim.
 `TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
 requires exact reducer revision distance across a compacted snapshot.
 `TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and

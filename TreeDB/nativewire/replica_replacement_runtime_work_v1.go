@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	hraft "github.com/hashicorp/raft"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
@@ -29,10 +30,12 @@ type replacementNativeWorkV1 struct {
 }
 
 type replacementNativeSlotV1 struct {
-	mu     sync.Mutex
-	closed bool
-	work   *replacementNativeWorkV1
-	begin  raftplacement.ReplicaReplacementBeginV1
+	mu          sync.Mutex
+	closed      bool
+	work        *replacementNativeWorkV1
+	begin       raftplacement.ReplicaReplacementBeginV1
+	ownerSource *CollectionVectorPartitionGenerationSourceV1
+	ownerDB     *backenddb.DB
 }
 
 // Only a freshly fenced committed BEGIN may supersede the process-local slot.

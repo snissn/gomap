@@ -356,7 +356,25 @@ after enrollment while the target remains a nonvoter; it does not establish
 current leader-tail readiness before enrollment. Missing assets or unavailable
 fresh authority refuse preparation. The old replica remains a voter. No serving
 topology is attached or warmed, no public listener is advertised, and promotion,
-removal, and completion remain independently unavailable. This pending operation
+removal, and completion remain independently unavailable. A separate authenticated
+catalog-member `replacement-owner-warm` control can retain private owner-local
+generation/searcher packs on this already prepared nonvoter. Its authenticated
+exact target may inspect the existing leader-tail read only for the currently
+authorized immutable marked BEGIN at add-intent; ordinary/unmarked and other-node
+tail callers remain catalog-member-only. Each explicit warm
+requires the exact BEGIN/seed at add-intent, old-voter retention and target
+nonvoter membership, the current semantic leader tail, fresh immutable ACTIVE
+authority, and the exact current FSM database. Cold initialization captures the
+current collection/DB under the storage barrier; it cannot use the startup DB
+that native installation replaced. Cache reuse rechecks operation/ACTIVE/DB
+authority and opens no topology or endpoint. Consuming completed warm work
+rechecks current semantic tail/hosted assets; a prior successful worker is not a
+grant for a later poll. Runtime shutdown cancels and waits for the actual worker
+before closing its retained source. A failed asset or DB check retires
+the source after its worker returns; restart remains cold. Ordinary observations
+do not warm it. The source may reuse/create the schema source manager, but no
+ANN serving runtime, READY receipt, or promotion authority is created.
+This pending operation
 retains the existing lifecycle/mutation freeze; completion and owner cutover are
 still later work. Static fixed-peer configuration is unchanged.
 
