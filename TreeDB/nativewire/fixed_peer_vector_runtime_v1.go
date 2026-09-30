@@ -184,7 +184,27 @@ func (b *fixedPeerVectorBackendV1) RegisterVectorPartitionV1(ctx context.Context
 	return backend.RegisterVectorPartitionV1(ctx, request)
 }
 
+func (b *fixedPeerVectorBackendV1) immutableOwnerV1() bool {
+	return b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.config.Vector != nil &&
+		b.runtime.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) &&
+		b.runtime.parent.config.NodeID != b.runtime.parent.config.Vector.RouterNodeID
+}
+
 func (b *fixedPeerVectorBackendV1) GenerationStatusV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
+	if b.immutableOwnerV1() {
+		vector := b.runtime.parent.config.Vector
+		if id.Index != vector.Identity.Index.IndexName || id.Generation != vector.Identity.Generation {
+			return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: ErrFixedPeerVectorProofStaleV1}
+		}
+		_, record, err := b.runtime.observeImmutableTopologyV1(ctx)
+		if err != nil {
+			return public.GenerationStatusV1{}, publicBackendErrorV1(err)
+		}
+		if err := b.runtime.requireCurrentImmutableDBV1(); err != nil {
+			return public.GenerationStatusV1{}, publicBackendErrorV1(err)
+		}
+		return publicStatusV1(record), nil
+	}
 	backend, err := b.backend(ctx)
 	if err != nil {
 		return public.GenerationStatusV1{}, publicBackendErrorV1(err)
@@ -248,6 +268,13 @@ func (b *fixedPeerVectorBackendV1) RequestVectorPartitionRebuildV1(ctx context.C
 }
 
 func (b *fixedPeerVectorBackendV1) VectorPartitionCleanupEligibilityV1(ctx context.Context, id public.GenerationIDV1) (public.CleanupEligibilityV1, error) {
+	if b.immutableOwnerV1() {
+		status, err := b.GenerationStatusV1(ctx, id)
+		if err != nil {
+			return public.CleanupEligibilityV1{}, err
+		}
+		return public.CleanupEligibilityV1{Eligible: status.State == public.GenerationCleanableV1, Status: status}, nil
+	}
 	backend, err := b.backend(ctx)
 	if err != nil {
 		return public.CleanupEligibilityV1{}, publicBackendErrorV1(err)
@@ -256,6 +283,30 @@ func (b *fixedPeerVectorBackendV1) VectorPartitionCleanupEligibilityV1(ctx conte
 }
 
 func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
+	if b.immutableOwnerV1() {
+		vector := b.runtime.parent.config.Vector
+		id := public.GenerationIDV1{Index: vector.Identity.Index.IndexName, Generation: vector.Identity.Generation}
+		topology, _, err := b.runtime.observeImmutableTopologyV1(raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1))
+		if err != nil {
+			if dbErr := b.runtime.requireCurrentImmutableDBV1(); dbErr != nil {
+				return public.OperationsHealthV1{Generation: id, Reason: "authority_unavailable"}, dbErr
+			}
+			b.runtime.initMu.Lock()
+			cold := b.runtime.topology == nil || b.runtime.source == nil
+			b.runtime.initMu.Unlock()
+			if cold {
+				return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+			}
+			return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
+		}
+		if !vectorPartitionTopologyHealthyV1(topology.Status(), fixedPeerVectorOwnerGroupsV1(vector.Placement)) {
+			return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+		}
+		if err := b.runtime.requireCurrentImmutableDBV1(); err != nil {
+			return public.OperationsHealthV1{Generation: id, Reason: "authority_unavailable"}, err
+		}
+		return public.OperationsHealthV1{Ready: true, Generation: id, State: public.GenerationActiveV1, Reason: "ready"}, nil
+	}
 	backend, err := b.backend(ctx)
 	if err != nil {
 		return public.OperationsHealthV1{Generation: public.GenerationIDV1{Index: b.runtime.parent.config.Vector.Manifest.IndexName, Generation: b.runtime.parent.config.Vector.Manifest.Generation}, Reason: "authority_unavailable"}, err
@@ -708,15 +759,20 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		return errors.New("fixed-peer vector runtime requires exactly one owner group")
 	}
 	localDataGroups := 0
+	localOwner := false
 	for _, group := range config.Groups {
 		if localGroups[group.ID] {
 			localDataGroups++
+			localOwner = localOwner || owners[group.ID]
 		}
 	}
 	if !standby && localDataGroups != 1 {
 		return errors.New("fixed-peer vector runtime requires exactly one local data group")
 	}
-	if !standby && !localGroups[config.Catalog.ID] {
+	// Only a credentialed immutable ANN owner may consume catalog decisions.
+	// Source holders, routers and mutable runtimes retain local voting authority.
+	consumerOwner := immutable && config.Credentials != nil && localOwner && config.NodeID != vector.RouterNodeID
+	if !standby && !localGroups[config.Catalog.ID] && !consumerOwner {
 		return errors.New("fixed-peer vector runtime requires local catalog authority")
 	}
 	for group := range owners {

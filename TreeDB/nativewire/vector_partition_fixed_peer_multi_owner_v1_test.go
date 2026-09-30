@@ -136,7 +136,17 @@ func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, 
 	testMultiOwnerTCPDomainSearchWithQueriesV1(t, ctx, seed, [][]float32{query}, 4, 8, 16, separateLeaders, sourceFollower, missingOwnerAsset)
 }
 
+func testMultiOwnerTCPDomainSearchWithSeedModeV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, query []float32, separateLeaders, sourceFollower, missingOwnerAsset, consumerOwner, readCost bool) {
+	t.Helper()
+	testMultiOwnerTCPDomainSearchWithQueriesModeV1(t, ctx, seed, [][]float32{query}, 4, 8, 16, separateLeaders, sourceFollower, missingOwnerAsset, consumerOwner, readCost)
+}
+
 func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, queries [][]float32, topK, efSearch, mergeEntries int, separateLeaders, sourceFollower, missingOwnerAsset bool) {
+	t.Helper()
+	testMultiOwnerTCPDomainSearchWithQueriesModeV1(t, ctx, seed, queries, topK, efSearch, mergeEntries, separateLeaders, sourceFollower, missingOwnerAsset, false, false)
+}
+
+func testMultiOwnerTCPDomainSearchWithQueriesModeV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, queries [][]float32, topK, efSearch, mergeEntries int, separateLeaders, sourceFollower, missingOwnerAsset, consumerOwner, readCost bool) {
 	t.Helper()
 	if len(queries) == 0 {
 		t.Fatal("public parity requires a declared query")
@@ -166,6 +176,9 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 		configs[i].Vector.RequestBase.EfSearch = efSearch
 		configs[i].Vector.RequestBase.MergeEntriesLimit = mergeEntries
 	}
+	if consumerOwner {
+		fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
+	}
 	metaLeader := raftcluster.NodeID("source-holder")
 	if separateLeaders {
 		metaLeader = "ingress"
@@ -173,13 +186,21 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 			configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
 			metaLeader = "source-follower"
 		}
+	}
+	if separateLeaders || consumerOwner || readCost {
 		ca := newPeerCAFixtureV1(t)
 		for i := range configs {
 			configs[i].Catalog.BootstrapNode = metaLeader
 			configs[i].ClusterID = "multi-owner-separate-leaders"
 			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			if consumerOwner && configs[i].NodeID == "owner-b" {
+				t.Log("catalog-consumer owner config preflight: node=owner-b catalog_voter=false immutable=true credentialed=true local_data_group=group-b")
+			}
 			validated, _, err := validateFixedPeerConfigV1(configs[i])
 			if err != nil {
+				if consumerOwner && configs[i].NodeID == "owner-b" {
+					t.Fatalf("catalog-consumer owner config preflight rejected: %v", err)
+				}
 				t.Fatal(err)
 			}
 			raw, err := json.Marshal(validated)
@@ -330,8 +351,14 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 		for _, config := range configs {
 			id := config.NodeID
 			status, err := client.Status(ctx, id)
+			if consumerOwner && id == "owner-b" {
+				if err != nil || status.CatalogRole != "consumer" || status.Catalog.AppliedIndex != 0 || status.CatalogRaft.GroupID != "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" {
+					return false
+				}
+				continue
+			}
 			if err != nil || status.CatalogRaft.LeaderID == "" || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" ||
-				(separateLeaders && (status.CatalogRaft.LeaderID != metaLeader ||
+				((separateLeaders || consumerOwner) && (status.CatalogRaft.LeaderID != metaLeader ||
 					((id == "source-holder" || id == "source-follower") && status.Groups[0].LeaderID != "source-holder"))) {
 				return false
 			}
@@ -353,6 +380,12 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 		for _, config := range configs {
 			id := config.NodeID
 			status, err := client.Status(ctx, id)
+			if consumerOwner && id == "owner-b" {
+				if err != nil || status.CatalogRole != "consumer" || status.Catalog.AppliedIndex != 0 {
+					return false
+				}
+				continue
+			}
 			if err != nil || status.Catalog.AppliedIndex == 0 || status.Catalog.Digest != record.Digest {
 				return false
 			}
@@ -364,7 +397,7 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
 		}
 	}
-	if separateLeaders {
+	if separateLeaders || consumerOwner {
 		// owner-b has a valid cluster certificate but is not the catalog
 		// leader. It may not request a source capture or publish BUILD.
 		wrongCaller, err := NewFixedPeerTCPClientV1(configs[1])
@@ -456,11 +489,14 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 		}
 	}
 	t.Logf("public/native parity: queries=%d neighbors_per_query=%d selected_domains=2 selected_groups=2 rpcs=2 exact_scan_partitions=0", len(queries), len(response.Neighbors))
-	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); faultDir != "" {
+	if readCost {
+		fixedPeerImmutableOwnerReadCostV1(t, ctx, configs, publicClient, request, consumerOwner)
+	}
+	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); !consumerOwner && faultDir != "" {
 		fixedPeerAssertInFlightActiveInvalidationV1(t, ctx, faultDir, client, publicClient, request)
 		return
 	}
-	if separateLeaders && !sourceFollower {
+	if (separateLeaders || consumerOwner) && !sourceFollower {
 		// The valid public request above used both owner shards. A node with a
 		// valid cluster certificate must still be unable to send group-c work
 		// directly to owner-b's authenticated shard endpoint.
@@ -514,6 +550,10 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 			}
 		}
 	}
+	if consumerOwner && os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL") != "" {
+		fixedPeerCatalogConsumerCachedInvalidationV1(t, ctx, configs, client, publicClient, request)
+		return
+	}
 	// Losing one selected owner must fail the whole public request; no partial
 	// hits from the surviving owner may escape. Reopen that owner on its original
 	// hosted-only assets and require the same generation/result again.
@@ -549,8 +589,14 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 	processes[1] = fixedPeerStartTestProcessV1(t, configs[1])
 	fixedPeerWaitV1(t, ctx, func() bool {
 		status, err := client.Status(ctx, "owner-b")
+		if consumerOwner {
+			return err == nil && status.CatalogRole == "consumer" && status.Catalog.AppliedIndex == 0 && len(status.Groups) == 1 && status.Groups[0].LeaderID != ""
+		}
 		return err == nil && status.CatalogRaft.LeaderID != "" && len(status.Groups) == 1 && status.Groups[0].LeaderID != "" && status.Catalog.AppliedIndex != 0
 	})
+	if consumerOwner {
+		fixedPeerAssertColdCatalogConsumerOwnerV1(t, ctx, configs, client)
+	}
 	if missingOwnerAsset {
 		_, recoveryErr := client.EnsureImmutableVectorLifecycleV1(ctx)
 		var remoteErr *fixedPeerRemoteErrorV1
@@ -626,7 +672,10 @@ func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Contex
 			}
 		}
 	}
-	if err := publicClient.Close(); err != nil {
+	if consumerOwner {
+		fixedPeerCatalogConsumerOwnerControlsV1(t, ctx, configs, processes, client, publicClient, request)
+	}
+	if err := publicClient.Close(); err != nil && !consumerOwner {
 		t.Fatal(err)
 	}
 	client.Close()

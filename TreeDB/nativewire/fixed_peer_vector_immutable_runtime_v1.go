@@ -27,7 +27,29 @@ func (r *fixedPeerVectorRuntimeV1) requireCurrentImmutableDBV1() error {
 	return nil
 }
 
-func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
+// Observation must never warm durable assets or bind a shard listener.
+func (r *fixedPeerVectorRuntimeV1) observeImmutableTopologyV1(ctx context.Context) (*VectorPartitionProductionTopologyV1, raftplacement.VectorPartitionLifecycleRecordV1, error) {
+	var zero raftplacement.VectorPartitionLifecycleRecordV1
+	if err := r.requireCurrentImmutableDBV1(); err != nil {
+		return nil, zero, err
+	}
+	r.initMu.Lock()
+	topology, source := r.topology, r.source
+	r.initMu.Unlock()
+	if topology == nil || source == nil {
+		return nil, zero, ErrFixedPeerVectorUnavailableV1
+	}
+	record, err := r.parent.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.parent.config.Vector.Placement))
+	if err != nil {
+		return nil, zero, err
+	}
+	if err := r.requireCurrentImmutableDBV1(); err != nil {
+		return nil, zero, err
+	}
+	return topology, record, nil
+}
+
+func (r *fixedPeerVectorRuntimeV1) ensureImmutableTopologyV1(ctx context.Context) (*VectorPartitionProductionTopologyV1, error) {
 	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
@@ -44,17 +66,17 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
 	// A cached topology is not a cached serving grant. Every public entry must
 	// still observe the current ACTIVE record and complete ready set.
-	record, err := r.parent.immutableActiveVectorRecordV1(ctx, owners)
+	_, err := r.parent.immutableActiveVectorRecordV1(ctx, owners)
 	if err != nil {
 		return nil, err
 	}
 	r.initMu.Lock()
 	defer r.initMu.Unlock()
-	if r.backend != nil {
+	if r.topology != nil {
 		if err := r.requireCurrentImmutableDBV1(); err != nil {
 			return nil, err
 		}
-		return r.backend, nil
+		return r.topology, nil
 	}
 	resolved, err := raftplacement.Validate(vector.Catalog)
 	if err != nil {
@@ -89,9 +111,13 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		}
 	}
 
-	lifecycle, err := NewLinearizableCatalogVectorPartitionLifecycleAuthorityV1(r.parent.authority, r.parent)
-	if err != nil {
-		return nil, err
+	var lifecycle VectorPartitionReplicatedLifecycleAuthorityV1 = r.parent
+	if r.parent.meta != nil {
+		// Keep voter search validation and its hot-path cost unchanged.
+		lifecycle, err = NewLinearizableCatalogVectorPartitionLifecycleAuthorityV1(r.parent.authority, r.parent)
+		if err != nil {
+			return nil, err
+		}
 	}
 	endpoints := make(map[raftcluster.GroupID]string, len(owners))
 	nodeEndpoints := make(map[raftcluster.GroupID]map[raftcluster.NodeID]string, len(owners))
@@ -185,19 +211,6 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		}
 		return nil, err
 	}
-	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
-		Topology: topology, RequestBase: vector.RequestBase,
-		Lifecycle: raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.parent.authority, Committer: r.parent.meta},
-		ReadFence: r.parent, Identity: vector.Identity, RequiredGroups: owners,
-		Builder: fixedPeerVectorImmutableNoBuildV1{}, MutationEpoch: record.MutationEpoch,
-	})
-	if err != nil {
-		_ = topology.Close()
-		if source != nil {
-			_ = source.Close()
-		}
-		return nil, err
-	}
 	if err := r.requireCurrentImmutableDBV1(); err != nil {
 		_ = topology.Close()
 		if source != nil {
@@ -205,7 +218,48 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		}
 		return nil, err
 	}
-	r.collection, r.source, r.topology, r.backend = collection, source, topology, backend
+	r.collection, r.source, r.topology = collection, source, topology
+	return topology, nil
+}
+
+// Only the catalog-voter router needs a public search backend/mutation
+// coordinator. Owners serve directly through the existing topology and source.
+func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
+	if r == nil || r.parent == nil || r.parent.config.Vector == nil ||
+		r.parent.config.NodeID != r.parent.config.Vector.RouterNodeID || r.parent.meta == nil || r.parent.authority == nil {
+		return nil, ErrFixedPeerVectorUnavailableV1
+	}
+	topology, err := r.ensureImmutableTopologyV1(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r.initMu.Lock()
+	defer r.initMu.Unlock()
+	if r.backend != nil {
+		if err := r.requireCurrentImmutableDBV1(); err != nil {
+			return nil, err
+		}
+		return r.backend, nil
+	}
+	vector := r.parent.config.Vector
+	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
+	record, err := r.parent.immutableActiveVectorRecordV1(ctx, owners)
+	if err != nil {
+		return nil, err
+	}
+	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
+		Topology: topology, RequestBase: vector.RequestBase,
+		Lifecycle: raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.parent.authority, Committer: r.parent.meta},
+		ReadFence: r.parent, Identity: vector.Identity, RequiredGroups: owners,
+		Builder: fixedPeerVectorImmutableNoBuildV1{}, MutationEpoch: record.MutationEpoch,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := r.requireCurrentImmutableDBV1(); err != nil {
+		return nil, err
+	}
+	r.backend = backend
 	return backend, nil
 }
 
@@ -213,6 +267,13 @@ func (r *FixedPeerTCPRuntimeV1) immutableActiveVectorRecordV1(ctx context.Contex
 	var zero raftplacement.VectorPartitionLifecycleRecordV1
 	if r == nil || r.config.Vector == nil || len(owners) == 0 {
 		return zero, ErrFixedPeerVectorUnavailableV1
+	}
+	if r.meta == nil {
+		_, record, err := r.consumerImmutableVectorCatalogV1(ctx, fixedPeerVectorCatalogActiveV1)
+		if err == nil && !slices.Equal(record.RequiredGroups, owners) {
+			err = ErrFixedPeerVectorProofStaleV1
+		}
+		return record, err
 	}
 	fence, err := r.catalogFence(ctx)
 	if err != nil {

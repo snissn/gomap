@@ -14,37 +14,44 @@ import (
 )
 
 // fixedPeerVectorScopedStageAuthorityV1 belongs to one bounded owner-local
-// Stage call. The authenticated leader read is followed by a local applied
-// catch-up; no leader-only proof is copied to an arbitrary owner follower.
+// Stage call. Voters fence local applied authority; consumer owners use a
+// fresh authenticated decision without installing catalog state locally.
 type fixedPeerVectorScopedStageAuthorityV1 struct {
-	mu         sync.Mutex
-	authority  *raftplacement.CatalogMetaAuthorityV1
-	fence      func(context.Context) (raftplacement.CatalogMetaStatusV1, error)
-	identity   raftplacement.VectorPartitionLifecycleIdentityV1
-	hosted     raftcluster.GroupID
-	routerOnly bool
-	routerHost bool
-	timeout    time.Duration
-	expected   *raftplacement.CatalogMetaStatusV1
+	mu          sync.Mutex
+	readCatalog func(context.Context) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error)
+	authority   *raftplacement.CatalogMetaAuthorityV1
+	fence       func(context.Context) (raftplacement.CatalogMetaStatusV1, error)
+	identity    raftplacement.VectorPartitionLifecycleIdentityV1
+	hosted      raftcluster.GroupID
+	routerOnly  bool
+	routerHost  bool
+	timeout     time.Duration
+	expected    *raftplacement.CatalogMetaStatusV1
 }
 
 func newFixedPeerVectorScopedStageAuthorityV1(r *FixedPeerTCPRuntimeV1, hosted raftcluster.GroupID) (*fixedPeerVectorScopedStageAuthorityV1, error) {
-	if r == nil || r.authority == nil || r.meta == nil || r.config.Vector == nil ||
+	if r == nil || r.config.Vector == nil || ((r.authority == nil || r.meta == nil) && !r.immutableVectorCatalogConsumerV1()) ||
 		r.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) ||
 		hosted == "" || (r.data[hosted] == nil && (hosted != r.config.Catalog.ID || r.meta == nil)) {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
-	return &fixedPeerVectorScopedStageAuthorityV1{
+	a := &fixedPeerVectorScopedStageAuthorityV1{
 		authority: r.authority, fence: r.catalogFence, identity: r.config.Vector.Identity, hosted: hosted,
 		routerOnly: r.data[hosted] == nil, routerHost: r.config.NodeID == r.config.Vector.RouterNodeID,
 		timeout: r.config.RequestTimeout,
-	}, nil
+	}
+	if r.meta == nil {
+		a.readCatalog = func(ctx context.Context) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error) {
+			return r.consumerImmutableVectorCatalogV1(ctx, fixedPeerVectorCatalogStageV1)
+		}
+	}
+	return a, nil
 }
 
 func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedStageV1(
 	ctx context.Context, manifest collections.VectorPartitionManifestV1, scope collections.VectorPartitionLocalScopeV1,
 ) error {
-	if a == nil || a.authority == nil || a.fence == nil || ctx == nil {
+	if a == nil || (a.readCatalog == nil && (a.authority == nil || a.fence == nil)) || ctx == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
 	a.mu.Lock()
@@ -57,17 +64,25 @@ func (a *fixedPeerVectorScopedStageAuthorityV1) ValidateVectorPartitionScopedSta
 		ctx, cancel = context.WithTimeout(ctx, a.timeout)
 		defer cancel()
 	}
-	before, err := a.fence(ctx)
+	var before, after raftplacement.CatalogMetaStatusV1
+	var record raftplacement.VectorPartitionLifecycleRecordV1
+	var err error
+	ok := true
+	if a.readCatalog != nil {
+		before, record, err = a.readCatalog(ctx)
+		after = before
+	} else {
+		before, err = a.fence(ctx)
+		if err == nil {
+			record, ok = a.authority.VectorPartitionLifecycleRecordV1(a.identity)
+			after, err = a.fence(ctx)
+		}
+	}
 	if err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	if before.AppliedIndex == 0 || before.Epoch != a.identity.Index.CatalogEpoch || before.Digest != a.identity.Index.CatalogDigest {
 		return ErrFixedPeerVectorProofStaleV1
-	}
-	record, ok := a.authority.VectorPartitionLifecycleRecordV1(a.identity)
-	after, err := a.fence(ctx)
-	if err != nil {
-		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	if !sameScopedStageCatalogStatusV1(before, after) ||
 		(a.expected != nil && (before.Epoch != a.expected.Epoch || before.Digest != a.expected.Digest)) {
