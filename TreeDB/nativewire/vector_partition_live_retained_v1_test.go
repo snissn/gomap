@@ -104,21 +104,20 @@ func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPar
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(manifest)
-	if in.Recipe == "graph-disjoint-v1" && in.ManifestSHA256 == "" {
+	descriptorIntegrity := ""
+	if in.Recipe == "graph-disjoint-v1" {
 		// The pinned M3 descriptor binds the actual persisted manifest without a
-		// separate metadata-dump program. The old caller retains its JSON SHA pin.
+		// separate metadata-dump program, even when an additional JSON pin exists.
 		var descriptor struct {
 			Integrity string `json:"manifest_integrity_digest"`
 		}
 		if err := json.Unmarshal(liveLifecycleReadPinnedV1(t, in.Descriptor, in.DescriptorSHA256), &descriptor); err != nil {
 			t.Fatal(err)
 		}
-		if len(descriptor.Integrity) != 64 || descriptor.Integrity != manifest.IntegrityDigest {
-			t.Fatal("fresh descriptor manifest integrity mismatch")
-		}
-	} else if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
-		t.Fatalf("manifest pin mismatch: %v", err)
+		descriptorIntegrity = descriptor.Integrity
+	}
+	if err := validateLiveLifecycleRetainedManifestPinV1(manifest, in.Recipe, in.ManifestSHA256, descriptorIntegrity); err != nil {
+		t.Fatal(err)
 	}
 	if err := validateLiveLifecycleRetainedGeometryV1(manifest, in.Recipe); err != nil {
 		t.Fatal(err)
@@ -149,7 +148,7 @@ func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPar
 		}
 		vectors[string(row.DocumentID)] = row.Values
 	}
-	raw = liveLifecycleReadPinnedV1(t, in.Queries, "8a27d38fb9d79e3607ee393af989644874e965813d7f26a55258dc60a0b1b70e")
+	raw := liveLifecycleReadPinnedV1(t, in.Queries, "8a27d38fb9d79e3607ee393af989644874e965813d7f26a55258dc60a0b1b70e")
 	if len(raw) != 512*768*4 {
 		t.Fatal("wrong real query shape")
 	}
@@ -163,6 +162,49 @@ func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPar
 	liveLifecyclePlacementV1(t, &fixture)
 	ok = true
 	return fixture, vectors, queries, in.Probes
+}
+
+func validateLiveLifecycleRetainedManifestPinV1(manifest collections.VectorPartitionManifestV1, recipe, manifestSHA256, descriptorIntegrity string) error {
+	if recipe == "graph-disjoint-v1" && (len(descriptorIntegrity) != 64 || descriptorIntegrity != manifest.IntegrityDigest) {
+		return errors.New("fresh descriptor manifest integrity mismatch")
+	}
+	// Legacy callers require their JSON pin; disjoint callers may add one.
+	if recipe != "graph-disjoint-v1" || manifestSHA256 != "" {
+		raw, err := json.Marshal(manifest)
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != manifestSHA256 {
+			return fmt.Errorf("manifest pin mismatch: %v", err)
+		}
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedManifestPinV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{IntegrityDigest: fmt.Sprintf("%064x", 1)}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := fmt.Sprintf("%x", sha256.Sum256(raw))
+	for _, tc := range []struct {
+		name, recipe, manifestSHA256, descriptorIntegrity string
+		wantError                                         bool
+	}{
+		{"disjoint-descriptor-only", "graph-disjoint-v1", "", manifest.IntegrityDigest, false},
+		{"disjoint-additional-json-pin", "graph-disjoint-v1", pin, manifest.IntegrityDigest, false},
+		{"disjoint-correct-json-wrong-descriptor", "graph-disjoint-v1", pin, fmt.Sprintf("%064x", 2), true},
+		{"disjoint-correct-json-missing-descriptor", "graph-disjoint-v1", pin, "", true},
+		{"disjoint-correct-json-short-descriptor", "graph-disjoint-v1", pin, "1", true},
+		{"disjoint-wrong-additional-json-pin", "graph-disjoint-v1", fmt.Sprintf("%064x", 2), manifest.IntegrityDigest, true},
+		{"legacy-json-pin", "", pin, "", false},
+		{"legacy-wrong-json-pin", "", fmt.Sprintf("%064x", 2), "", true},
+		{"legacy-missing-json-pin", "", "", manifest.IntegrityDigest, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateLiveLifecycleRetainedManifestPinV1(manifest, tc.recipe, tc.manifestSHA256, tc.descriptorIntegrity); (err != nil) != tc.wantError {
+				t.Fatalf("manifest pin error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
 }
 
 func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1, recipe string) error {
