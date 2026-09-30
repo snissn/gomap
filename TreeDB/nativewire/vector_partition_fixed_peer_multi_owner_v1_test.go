@@ -45,6 +45,17 @@ func TestMultiOwnerTCPDomainSearchRejectsMissingHostedOwnerAssetV1(t *testing.T)
 // public lifecycle and TCP path. It does not qualify the retained epoch-zero
 // 100K fixture, its D16/P64 geometry, recall, or performance.
 func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16)
+}
+
+// These declared deterministic queries check public/native parity, not held-out
+// recall or performance. Both fresh domain graphs have more than L256 rows.
+func TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1(t *testing.T) {
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 1024, 32, 10, 96, 32)
+}
+
+func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, queryCount, topK, efSearch, mergeEntries int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	definition := collections.VectorIndexDefinition{
@@ -60,13 +71,13 @@ func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
 	if digest := collections.VectorIndexDefinitionDigestV1(historical); digest != "acb460d2a9c2fe4932668e7d01cce03ac791579dd750180b78c814c86c64b87e" {
 		t.Fatalf("accepted source definition parameters changed: %s", digest)
 	}
-	documents := make([]vectorPartitionLiveDocumentV1, 64)
+	documents := make([]vectorPartitionLiveDocumentV1, rowCount)
 	for i := range documents {
 		vector := make([]float32, definition.Dimensions)
 		for dimension := range vector {
 			vector[dimension] = float32(((i+1)*(dimension+3)+i*i)%31-15) / 16
 		}
-		vector[0] += float32(i) / 64
+		vector[0] += float32(i) / float32(rowCount)
 		documents[i] = vectorPartitionLiveDocumentV1{id: fmt.Sprintf("fresh-%02d", i), vector: vector, home: uint32(i % 3)}
 	}
 	seed := newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, nil, [2]string{"group-b", "group-c"}, true, true, definition)
@@ -78,7 +89,7 @@ func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
 		seed.manifest.IndexDefinitionDigest != expectedDigest || expectedDigest == collections.VectorIndexDefinitionDigestV1(historical) {
 		t.Fatalf("fresh trusted genesis did not preserve its distinct epoch/definition binding: meta=%+v manifest=%+v", persisted, seed.manifest)
 	}
-	if seed.manifest.SourceRowCount != 64 || seed.manifest.PartitionCount != 3 || seed.manifest.DomainCount != 2 {
+	if seed.manifest.SourceRowCount != uint64(rowCount) || seed.manifest.PartitionCount != 3 || seed.manifest.DomainCount != 2 {
 		t.Fatalf("fresh fixture geometry changed: %+v", seed.manifest)
 	}
 	graphs := 0
@@ -94,9 +105,18 @@ func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
 	if graphs != 2 {
 		t.Fatalf("fresh fixture has %d canonical domain graph descriptors, want 2", graphs)
 	}
-	query := append([]float32(nil), documents[37].vector...)
-	t.Logf("fresh public fixture: rows=64 dimensions=768 packs=3 domains=2 owners=2 epoch=1 definition=%s canonical_graphs=%d", expectedDigest, graphs)
-	testMultiOwnerTCPDomainSearchWithSeedV1(t, ctx, seed, query, false, false, false)
+	domainRows, err := collections.VectorPartitionDomainGraphRowCountsV1(ctx, seed.manifest)
+	if err != nil || len(domainRows) != 3 || domainRows[0] != uint64(rowCount-rowCount/3) || domainRows[1] != 0 || domainRows[2] != uint64(rowCount/3) {
+		t.Fatalf("fresh domain row counts: rows=%v err=%v", domainRows, err)
+	}
+	queries := make([][]float32, queryCount)
+	for i := range queries {
+		// The 64-row wrapper retains its original query at document 37.
+		queries[i] = append([]float32(nil), documents[(37+29*i)%rowCount].vector...)
+	}
+	t.Logf("fresh public fixture: rows=%d dimensions=768 packs=3 domains=2 owners=2 epoch=1 definition=%s canonical_graphs=%d", rowCount, expectedDigest, graphs)
+	t.Logf("declared public queries: count=%d domain_rows=%d/%d top_k=%d probes=2 ef_search=%d merge_entries=%d", queryCount, domainRows[0], domainRows[2], topK, efSearch, mergeEntries)
+	testMultiOwnerTCPDomainSearchWithQueriesV1(t, ctx, seed, queries, topK, efSearch, mergeEntries, false, false, false)
 }
 
 func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower, missingOwnerAsset bool) {
@@ -113,6 +133,15 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 
 func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, query []float32, separateLeaders, sourceFollower, missingOwnerAsset bool) {
 	t.Helper()
+	testMultiOwnerTCPDomainSearchWithQueriesV1(t, ctx, seed, [][]float32{query}, 4, 8, 16, separateLeaders, sourceFollower, missingOwnerAsset)
+}
+
+func testMultiOwnerTCPDomainSearchWithQueriesV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, queries [][]float32, topK, efSearch, mergeEntries int, separateLeaders, sourceFollower, missingOwnerAsset bool) {
+	t.Helper()
+	if len(queries) == 0 {
+		t.Fatal("public parity requires a declared query")
+	}
+	query := queries[0] // One representative query covers refusal/loss/reopen.
 	if err := seed.collection.EnsureVectorPartitionLiveBindingV1(ctx, seed.manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +161,11 @@ func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, 
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
+	for i := range configs {
+		configs[i].Vector.RequestBase.TopK = topK
+		configs[i].Vector.RequestBase.EfSearch = efSearch
+		configs[i].Vector.RequestBase.MergeEntriesLimit = mergeEntries
+	}
 	metaLeader := raftcluster.NodeID("source-holder")
 	if separateLeaders {
 		metaLeader = "ingress"
@@ -178,17 +212,24 @@ func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	localRequest := configs[0].Vector.RequestBase
-	localRequest.RequestID, localRequest.CancellationID = "local-parity", "local-parity-cancel"
-	localRequest.Query = append([]float32(nil), query...)
-	localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
-	localResult, err := localCoordinator.Search(ctx, localRequest)
-	if err != nil {
-		t.Fatalf("same-generation local reference: %v", err)
-	}
-	if localResult.PartitionGeneration != seed.manifest.Generation || localResult.Counters.SelectedDomains != 2 ||
-		localResult.Counters.SelectedPartitions != 2 || localResult.Counters.HNSWServedPartitions != 2 || len(localResult.Neighbors) == 0 {
-		t.Fatalf("same-generation local reference omitted a domain: %+v", localResult)
+	localResults := make([]VectorPartitionCoordinatorResponseV1, len(queries))
+	for i, query := range queries {
+		localRequest := configs[0].Vector.RequestBase
+		localRequest.RequestID, localRequest.CancellationID = fmt.Sprintf("local-parity-%d", i), fmt.Sprintf("local-parity-cancel-%d", i)
+		localRequest.Query = append([]float32(nil), query...)
+		localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
+		localResult, err := localCoordinator.Search(ctx, localRequest)
+		if err != nil {
+			t.Fatalf("same-generation local reference query %d: %v", i, err)
+		}
+		if localResult.SourceGeneration != seed.manifest.SourceGeneration || localResult.SourceChecksum != seed.manifest.SourceChecksum ||
+			localResult.SourceSchemaHash != seed.manifest.SourceSchemaHash || localResult.SourceRowCount != seed.manifest.SourceRowCount ||
+			localResult.PartitionGeneration != seed.manifest.Generation || localResult.Counters.SelectedDomains != 2 ||
+			localResult.Counters.SelectedPartitions != 2 || localResult.Counters.HNSWServedPartitions != 2 || localResult.Counters.ExactScanPartitions != 0 ||
+			len(localResult.Neighbors) != min(topK, int(seed.manifest.SourceRowCount)) {
+			t.Fatalf("same-generation local reference query %d omitted a domain or result: %+v", i, localResult)
+		}
+		localResults[i] = localResult
 	}
 	if err := localCoordinator.Close(); err != nil {
 		t.Fatal(err)
@@ -368,9 +409,9 @@ func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, 
 	defer publicClient.Close()
 	request := public.SearchRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: seed.manifest.IndexName, Generation: seed.manifest.Generation},
-		Query: append([]float32(nil), query...), Metric: public.MetricCosineV1, TopK: 4, Probes: 2, EfSearch: 8,
+		Query: append([]float32(nil), query...), Metric: public.MetricCosineV1, TopK: topK, Probes: 2, EfSearch: efSearch,
 		Consistency: public.ConsistencyGenerationSnapshotV1,
-		Limits:      public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 16},
+		Limits:      public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: mergeEntries},
 		Deadline:    time.Now().Add(30 * time.Second),
 	}
 	for _, node := range []raftcluster.NodeID{"owner-b", "owner-c", "source-holder"} {
@@ -387,23 +428,34 @@ func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, 
 			t.Fatalf("nonrouter %s accepted public strict search: %v", node, searchErr)
 		}
 	}
-	response, err := publicClient.VectorSearchStrictV1(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Counters.SelectedDomains != 2 || response.Counters.SelectedGroups != 2 || response.Counters.RPCs != 2 ||
-		response.Counters.SelectedPartitions != 2 || response.Counters.HNSWServedPartitions != 2 || response.Counters.ExactScanPartitions != 0 {
-		t.Fatalf("multi-owner search did not traverse each selected domain exactly once: %+v", response.Counters)
-	}
-	if len(response.Neighbors) == 0 || len(response.Neighbors) != len(localResult.Neighbors) {
-		t.Fatalf("multi-owner result cardinality differs from same-generation local search: remote=%+v local=%+v", response.Neighbors, localResult.Neighbors)
-	}
-	for i, remote := range response.Neighbors {
-		local := localResult.Neighbors[i]
-		if remote.ID != local.ID || math.Abs(float64(remote.Score-local.Score)) > 1e-5 {
-			t.Fatalf("same-generation local parity at rank %d: remote=%+v local=%+v", i, remote, local)
+	var response public.SearchResponseV1
+	for queryIndex, query := range queries {
+		queryRequest := request
+		queryRequest.Query = append([]float32(nil), query...)
+		queryRequest.Deadline = time.Now().Add(30 * time.Second)
+		actual, err := publicClient.VectorSearchStrictV1(ctx, queryRequest)
+		if err != nil {
+			t.Fatalf("public query %d: %v", queryIndex, err)
+		}
+		if actual.Generation != request.Generation || actual.Counters.SelectedDomains != 2 || actual.Counters.SelectedGroups != 2 || actual.Counters.RPCs != 2 ||
+			actual.Counters.SelectedPartitions != 2 || actual.Counters.HNSWServedPartitions != 2 || actual.Counters.ExactScanPartitions != 0 {
+			t.Fatalf("public query %d did not traverse each selected domain exactly once: %+v", queryIndex, actual)
+		}
+		localResult := localResults[queryIndex]
+		if len(actual.Neighbors) == 0 || len(actual.Neighbors) != len(localResult.Neighbors) {
+			t.Fatalf("public query %d cardinality differs from same-generation local search: remote=%+v local=%+v", queryIndex, actual.Neighbors, localResult.Neighbors)
+		}
+		for rank, remote := range actual.Neighbors {
+			local := localResult.Neighbors[rank]
+			if remote.ID != local.ID || math.Abs(float64(remote.Score-local.Score)) > 1e-5 {
+				t.Fatalf("same-generation local parity query %d rank %d: remote=%+v local=%+v", queryIndex, rank, remote, local)
+			}
+		}
+		if queryIndex == 0 {
+			response = actual
 		}
 	}
+	t.Logf("public/native parity: queries=%d neighbors_per_query=%d selected_domains=2 selected_groups=2 rpcs=2 exact_scan_partitions=0", len(queries), len(response.Neighbors))
 	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); faultDir != "" {
 		fixedPeerAssertInFlightActiveInvalidationV1(t, ctx, faultDir, client, publicClient, request)
 		return
