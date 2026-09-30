@@ -650,6 +650,9 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		for _, done := range workDone {
 			<-done
 		}
+		for _, d := range data {
+			errs = append(errs, d.retireReplacementOwnerSourceV1())
+		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
 		}
@@ -905,6 +908,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		_ = json.NewEncoder(w).Encode(reply)
 	}()
 	var caller raftcluster.NodeID
+	var ownerTailCaller bool
 	if r.client.security != nil {
 		if request.TLS == nil || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.PeerCertificates) == 0 {
 			err = errPeerAuthenticationV1
@@ -920,8 +924,12 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 				allowed = allowed || member.ID == caller
 			}
 			if !allowed {
-				err = errPeerAuthenticationV1
-				return
+				if request.URL.Path != "/v1/replacement-tail" {
+					err = errPeerAuthenticationV1
+					return
+				}
+				// Defer only this pure read until its marked BEGIN can bind caller.
+				ownerTailCaller = true
 			}
 		}
 	}
@@ -981,8 +989,27 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		err = fmt.Errorf("invalid trailing RPC payload")
 		return
 	}
+	if ownerTailCaller {
+		command, decodeErr := raftplacement.DecodeReplicaReplacementBeginV1(body.Entry)
+		if decodeErr != nil || command.OwnerPreparation == nil || command.NewPeer.ID != caller {
+			err = errPeerAuthenticationV1
+			return
+		}
+		if err = r.validateImmutableOwnerPreparationV1(command); err != nil {
+			return
+		}
+		state, authorityErr := r.replacementStateAuthorityV1(ctx, command)
+		if authorityErr != nil {
+			err = authorityErr
+			return
+		}
+		if state.Phase != raftplacement.ReplicaReplacementAddIntentV1 || state.Seed == nil {
+			err = raftcluster.ErrAdmissionUnavailable
+			return
+		}
+	}
 	switch request.URL.Path {
-	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion", "/v1/replacement-removal-proof", "/v1/replacement-removal-intent", "/v1/replacement-remove", "/v1/replacement-complete", "/v1/replacement-reconcile":
+	case "/v1/replacement-owner-warm", "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion", "/v1/replacement-removal-proof", "/v1/replacement-removal-intent", "/v1/replacement-remove", "/v1/replacement-complete", "/v1/replacement-reconcile":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)

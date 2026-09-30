@@ -107,3 +107,46 @@ func (f *FSM) PreparedVectorPartitionScopedManifestFromCurrentDBV1(ctx context.C
 	})
 	return meta, manifest, scope, err
 }
+
+// OpenCollectionForRaftSourceFromCurrentDBV1 captures a cold source handle and
+// its exact DB identity at an applied boundary. The returned handle does not
+// retain the FSM DB across restore; callers must recheck HasCurrentDBV1 around
+// source reads and retire stale handles outside the storage/FSM locks.
+func (f *FSM) OpenCollectionForRaftSourceFromCurrentDBV1(ctx context.Context, barrier raftcluster.AppliedIndexReadBarrier, name string) (*collections.Collection, *backenddb.DB, error) {
+	if f == nil {
+		return nil, nil, raftcluster.ErrReadBarrierNotSatisfied
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root := raftcluster.MainDBDir(f.cluster.Dir)
+	if root == "" {
+		return nil, nil, raftcluster.ErrReadBarrierNotSatisfied
+	}
+	var local *collections.Collection
+	var database *backenddb.DB
+	err := collections.WithVectorPartitionStorageBarrierWithContextV1(ctx, root, func() error {
+		f.mu.RLock()
+		defer f.mu.RUnlock()
+		if f.closed || f.db == nil || filepath.Clean(f.db.Dir()) != filepath.Clean(root) {
+			return raftcluster.ErrReadBarrierNotSatisfied
+		}
+		progress, err := f.appliedProgressLocked()
+		if err != nil {
+			return err
+		}
+		if err := barrier.Check(progress); err != nil {
+			return err
+		}
+		local, err = collections.OpenCollectionForRaftSourceV1(f.db, name)
+		if err != nil {
+			return err
+		}
+		database = f.db
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return local, database, nil
+}
