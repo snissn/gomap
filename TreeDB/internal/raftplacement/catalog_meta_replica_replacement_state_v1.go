@@ -241,6 +241,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementAdvanceV1(raw [
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := validateReplicaReplacementOwnerPreparationPhaseV1(a.record, a.lifecycle, next); err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
 	if err := validateReplicaReplacementCatalogV1(next.Begin, a.record); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
@@ -266,6 +269,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementAdvanceV1(raw [
 }
 
 func (a *CatalogMetaAuthorityV1) installReplicaReplacementCandidateLockedV1(candidate map[raftcluster.GroupID][]byte, index uint64) (CatalogMetaStatusV1, error) {
+	if err := validateReplicaReplacementOwnerPreparationPhasesV1(a.record, a.resolved, a.lifecycle, candidate, a.mutationFences, a.collectionMutationBarriers); err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
 	encoded, err := encodeReplicaReplacementSnapshotV1(candidate)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err

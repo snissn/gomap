@@ -319,7 +319,8 @@ state machine.
 
 ### Immutable ACTIVE lifecycle continuity during replica replacement (#4811)
 
-The catalog authority permits a replacement BEGIN for a non-source group while
+The catalog authority permits an ordinary replacement BEGIN for a non-source,
+non-owner group while
 an immutable generation is ACTIVE only when no collection or index mutation is
 pending and every live lifecycle record is immutable ACTIVE. BUILDING and other
 live states refuse. Completion changes the catalog epoch and digest, rebinds
@@ -329,8 +330,35 @@ Snapshot restore accepts that epoch transition only with the exact completed
 replacement roster and deterministic lifecycle rebind; ordinary catalog
 publication remains blocked by live lifecycle state. Activating the lifecycle
 feature over older completed replacement evidence is also refused. The fixed-peer
-runtime still refuses vector replacement BEGIN, so this authority continuity
-does not enable usable replica replacement or owner cutover.
+runtime keeps source, router, mutable, and catalog-voter replacement closed.
+
+An authenticated configured immutable ANN owner outside the catalog voting set
+may prepare a Nodes-only target with an optional canonical BEGIN
+`owner_preparation` identity. It binds the complete configured lifecycle identity,
+immutable manifest/placement digests, and current catalog epoch/digest.
+Authoritative `RequiredGroups` establishes owner membership even without token
+partition metadata. Unmarked owner BEGIN refuses.
+A lifecycle-feature-enabled incoming snapshot with pending replacements requires
+the complete BEGIN invariant: every live lifecycle record is immutable ACTIVE,
+no mutation fence or collection barrier is pending, and canonical source/token
+ownership remains compatible with the replaced group. Missing evidence refuses
+even if both marker and lifecycle records were erased; no pending replacement
+leaves ordinary empty cold imports unchanged. The marker independently caps
+committed phases at `add-intent`, including exact retries, cold snapshot import,
+forward restore, and direct phase requests; it grants no READY or serving authority.
+
+Before nonvoter enrollment, the receiver verifies the installed native snapshot
+and durable command boundary, then checks the actual current FSM database for
+the exact definition, source, generation, scoped owner identity, and hosted asset
+bytes under the storage barrier. Each preparation inspection requires fresh
+authenticated catalog ACTIVE authority. Current semantic leader-tail proof occurs
+after enrollment while the target remains a nonvoter; it does not establish
+current leader-tail readiness before enrollment. Missing assets or unavailable
+fresh authority refuse preparation. The old replica remains a voter. No serving
+topology is attached or warmed, no public listener is advertised, and promotion,
+removal, and completion remain independently unavailable. This pending operation
+retains the existing lifecycle/mutation freeze; completion and owner cutover are
+still later work. Static fixed-peer configuration is unchanged.
 
 ## Vector partition placement (M1)
 

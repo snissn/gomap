@@ -52,6 +52,10 @@ func (r *FixedPeerTCPRuntimeV1) openAuthorizedReplacementReceiverV1(cfg raftclus
 // install, or advance a phase, so enrollment can independently check the
 // durable cutoff without granting mutation authority to a data-only node.
 func (r *FixedPeerTCPRuntimeV1) replacementReceiverCutoffV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1) error {
+	return r.replacementReceiverCutoffAtIndexV1(ctx, command, reply, 0)
+}
+
+func (r *FixedPeerTCPRuntimeV1) replacementReceiverCutoffAtIndexV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, reply *fixedPeerReplyV1, minimumIndex uint64) error {
 	state, err := r.replacementStateAuthorityV1(ctx, command)
 	if err != nil {
 		return err
@@ -59,6 +63,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementReceiverCutoffV1(ctx context.Context,
 	d := r.localDataV1(command.GroupID)
 	if !replacementHasEnrollmentV1(state.Phase) || state.Seed == nil || command.NewPeer.ID != r.config.NodeID || d == nil || d.replacementID != command.OperationID || d.prejoin == nil || d.replacementReceiver == nil {
 		return raftcluster.ErrAdmissionUnavailable
+	}
+	if err := r.verifyReplacementHostedOwnerV1(ctx, state, max(minimumIndex, state.Seed.Manifest.LastIncludedIndex)); err != nil {
+		return err
 	}
 	owner := d.replacementReceiver
 	owner.mu.Lock()

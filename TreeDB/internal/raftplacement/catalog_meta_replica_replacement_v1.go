@@ -28,15 +28,16 @@ const (
 // the immutable node/security configuration before submitting this command.
 // Membership and readiness remain separate, subsequently verified operations.
 type ReplicaReplacementBeginV1 struct {
-	Format        uint16              `json:"format"`
-	Kind          string              `json:"kind"`
-	OperationID   string              `json:"operation_id"`
-	ConfigDigest  string              `json:"config_digest"`
-	ExpectedEpoch uint64              `json:"expected_epoch"`
-	CatalogDigest string              `json:"catalog_digest"`
-	GroupID       raftcluster.GroupID `json:"group_id"`
-	OldNodeID     raftcluster.NodeID  `json:"old_node_id"`
-	NewPeer       raftcluster.Peer    `json:"new_peer"`
+	Format           uint16                              `json:"format"`
+	Kind             string                              `json:"kind"`
+	OperationID      string                              `json:"operation_id"`
+	ConfigDigest     string                              `json:"config_digest"`
+	ExpectedEpoch    uint64                              `json:"expected_epoch"`
+	CatalogDigest    string                              `json:"catalog_digest"`
+	GroupID          raftcluster.GroupID                 `json:"group_id"`
+	OldNodeID        raftcluster.NodeID                  `json:"old_node_id"`
+	NewPeer          raftcluster.Peer                    `json:"new_peer"`
+	OwnerPreparation *VectorPartitionLifecycleIdentityV1 `json:"owner_preparation,omitempty"`
 }
 
 func replicaReplacementCommandBytesV1(raw []byte) bool {
@@ -70,6 +71,15 @@ func validateReplicaReplacementBeginV1(command ReplicaReplacementBeginV1) error 
 		!validReplicaReplacementStringV1(string(command.OldNodeID)) || !validReplicaReplacementStringV1(string(command.NewPeer.ID)) ||
 		command.OldNodeID == command.NewPeer.ID || !validReplicaReplacementDigestV1(command.ConfigDigest) || !validReplicaReplacementDigestV1(command.CatalogDigest) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("invalid replica replacement identity"))
+	}
+	if command.OwnerPreparation != nil {
+		identity := *command.OwnerPreparation
+		if err := validateVectorPartitionLifecycleIdentityV1(identity); err != nil {
+			return err
+		}
+		if identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{}) || identity.Index.CatalogEpoch != command.ExpectedEpoch || identity.Index.CatalogDigest != command.CatalogDigest {
+			return ErrVectorPartitionLifecycleIdentity
+		}
 	}
 	if !validReplicaReplacementAddressV1(command.NewPeer.Address) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("invalid replica replacement address"))
@@ -178,6 +188,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 			return CatalogMetaStatusV1{}, err
 		}
 		if sameReplicaReplacementBeginV1(previous.Begin, command) {
+			if err := validateReplicaReplacementOwnerPreparationPhaseV1(a.record, a.lifecycle, previous); err != nil {
+				return CatalogMetaStatusV1{}, err
+			}
 			return a.statusLocked(), nil
 		}
 		if previous.Phase != ReplicaReplacementCompletedV1 {

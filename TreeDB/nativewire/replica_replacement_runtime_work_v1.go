@@ -362,6 +362,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementReceiverStatusV1(ctx context.Context,
 			return nil
 		}
 	}
+	if err := r.verifyReplacementHostedOwnerV1(ctx, state, state.Seed.Manifest.LastIncludedIndex); err != nil {
+		return err
+	}
 	reply.ReplacementInstalled = true
 	reply.ReplacementSeed = state.Seed
 	return nil
