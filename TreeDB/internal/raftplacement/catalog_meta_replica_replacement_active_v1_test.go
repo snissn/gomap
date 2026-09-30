@@ -1585,30 +1585,43 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 			t.Fatalf("commit %s: %v", mutation.Kind, err)
 		}
 	}
-	// Canonical state accepted by the old producer: BEGIN was committed after
-	// replacement admission. Current admission refuses this sequence; no data
-	// mutation or migration is asserted by this compatibility fixture. Retain
-	// its owned CONFIRM and bounded snapshot catch-up behavior.
-	leader.collectionMutationBarriers = map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1{
-		mutation.Collection: {Epoch: mutation.MutationEpoch, Pending: true, OperationDigest: mutation.OperationDigest},
+	// The old producer could commit collection BEGIN after replacement admission.
+	// Explicitly model already-owned debt; current cold and known snapshot
+	// admission must refuse this combination. This is not a migration fixture.
+	ownedLegacy := func() *CatalogMetaAuthorityV1 {
+		t.Helper()
+		owned := NewCatalogMetaAuthorityV1()
+		if err := owned.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+			t.Fatal(err)
+		}
+		owned.collectionMutationBarriers = map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1{
+			mutation.Collection: {Epoch: active.MutationEpoch + 1, Pending: true, OperationDigest: strings.Repeat("e", 64)},
+		}
+		owned.applied++
+		return owned
 	}
-	leader.applied++
-	legacyRaw, err := leader.ExportCatalogMetaSnapshotBytesV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	leader = NewCatalogMetaAuthorityV1()
-	if err := leader.installCatalogMetaSnapshotBytesV1(legacyRaw); err != nil {
-		t.Fatal(err)
-	}
+	leader = ownedLegacy()
 	pending, err := leader.ExportCatalogMetaSnapshotBytesV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	follower := NewCatalogMetaAuthorityV1()
-	if err := follower.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatalf("install admitted BEGIN and pending mutation: %v", err)
+	known := NewCatalogMetaAuthorityV1()
+	if err := known.installCatalogMetaSnapshotBytesV1(admitted); err != nil {
+		t.Fatal(err)
 	}
+	for _, receiver := range []*CatalogMetaAuthorityV1{NewCatalogMetaAuthorityV1(), known} {
+		status, available := receiver.Status()
+		retained, exportErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+		if err := receiver.installCatalogMetaSnapshotBytesV1(pending); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("mixed pending snapshot admitted: %v", err)
+		}
+		got, gotAvailable := receiver.Status()
+		after, afterErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+		if !reflect.DeepEqual(status, got) || available != gotAvailable || !bytes.Equal(retained, after) || !errors.Is(afterErr, exportErr) {
+			t.Fatalf("mixed pending refusal mutated authority: before=%+v after=%+v export=%v/%v", status, got, exportErr, afterErr)
+		}
+	}
+	follower := ownedLegacy()
 	commitMutation() // Exact retry of the legacy owned BEGIN must not create new debt.
 	if retried, err := leader.ExportCatalogMetaSnapshotBytesV1(); err != nil || !bytes.Equal(retried, pending) {
 		t.Fatalf("legacy exact BEGIN retry changed authority: %v", err)
@@ -1689,10 +1702,7 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(forgedRaw); err != nil {
 		t.Fatalf("forged missing-confirmation snapshot is not self-consistent: %v", err)
 	}
-	refusing := NewCatalogMetaAuthorityV1()
-	if err := refusing.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatal(err)
-	}
+	refusing := ownedLegacy()
 	if err := refusing.installCatalogMetaSnapshotBytesV1(forgedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("completion retained the same unconfirmed mutation: %v", err)
 	}
@@ -1711,10 +1721,7 @@ func TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmati
 	if err != nil {
 		t.Fatal(err)
 	}
-	catchup := NewCatalogMetaAuthorityV1()
-	if err := catchup.installCatalogMetaSnapshotBytesV1(pending); err != nil {
-		t.Fatal(err)
-	}
+	catchup := ownedLegacy()
 	if err := catchup.installCatalogMetaSnapshotBytesV1(laterPending); err != nil {
 		t.Fatalf("later distinct pending mutation could not catch up: %v", err)
 	}

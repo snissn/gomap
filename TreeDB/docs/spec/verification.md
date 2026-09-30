@@ -2827,9 +2827,12 @@ known/unknown same-epoch phase catch-up and anchored completion, while refusing
 one missing applied entry across every mandatory phase and post-completion
 BEGIN/CONFIRM. These refusals preserve the local exported snapshot.
 `TestCatalogReplicaReplacementSnapshotAcceptsLegacyAdmittedBarrierConfirmationV1`
-constructs canonical old admitted state explicitly; it tests owned confirmation
-and bounded catch-up, not current admission, actual data outcome, or migration.
-The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
+models already-owned old-producer barrier debt explicitly and retains exact
+BEGIN retries, owned CONFIRM, completed catch-up, and applied-entry budgets.
+Cold and known snapshots combining pending replacement and barrier debt refuse
+without authority mutation. The current reducer refuses the old
+BEGIN-after-replacement sequence; these controls establish neither migration
+nor an actual data outcome.
 Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
 history and reject its one/five-entry snapshots without authority mutation.
 Known records require the sum of their revision advances, including independent
