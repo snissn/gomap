@@ -47,7 +47,11 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 	if err := os.CopyFS(unbound, os.DirFS(source)); err != nil {
 		t.Fatal(err)
 	}
-	if copied, err := backenddb.Open(backenddb.Options{Dir: unbound, ReadOnly: true, DisableSideStores: true}); err == nil {
+	// Keep the constructor's canonical durability contract at the backend boundary.
+	reopenOpts := opts
+	reopenOpts.Dir = unbound
+	reopenOpts.ReadOnly = true
+	if copied, err := backenddb.Open(reopenOpts); err == nil {
 		_ = copied.Close()
 		t.Fatal("ordinary recovery accepted copied forced-pointer dependencies")
 	} else if !errors.Is(err, backenddb.ErrNoRecoverableMeta) {
@@ -147,8 +151,9 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 	if err := liveLifecycleInstallRetainedCopyV1(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
+	reopenOpts.Dir = copyDir
 	for phase := 0; phase < 2; phase++ {
-		installed, err := backenddb.Open(backenddb.Options{Dir: copyDir, ReadOnly: true, DisableSideStores: true})
+		installed, err := backenddb.Open(reopenOpts)
 		if err != nil {
 			t.Fatal(err)
 		}
