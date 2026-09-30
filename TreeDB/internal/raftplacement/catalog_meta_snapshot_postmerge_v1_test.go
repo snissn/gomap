@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -306,7 +307,7 @@ func TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1(t *testing.T) {
 	if cost, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(before, before, leader.mutationFences, 0); err != nil || cost != 0 {
 		t.Fatalf("unchanged legacy history: cost=%d err=%v", cost, err)
 	}
-	catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
+	candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, VectorPartitionLifecycleActivateV1, func(c *VectorPartitionLifecycleCommandV1) {
 		c.PreviousActiveGeneration, c.PreviousActiveRevision = active.Identity.Generation, active.Revision
 		c.MutationEpoch = candidate.MutationEpoch
 	}))
@@ -321,6 +322,121 @@ func TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1(t *testing.T) {
 			t.Fatalf("ambiguous pair discounted: %v", err)
 		}
 	}
+
+	// A genuine incoming-only BEGIN provides one spare applied entry. Candidate
+	// aliases still cannot earn the atomic discount, even with an exact proof.
+	spareIdentity := catalogMetaLifecycleTestIdentityV1(catalog, 9, 15)
+	catalogMetaLifecycleApplyV1(t, leader, &applied, VectorPartitionLifecycleCommandV1{
+		Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1,
+		Identity: spareIdentity, RequiredGroups: candidate.RequiredGroups, MutationEpoch: candidate.MutationEpoch,
+	})
+	install := func(t *testing.T) {
+		t.Helper()
+		current := postmergeSnapshotBytesV1(t, leader)
+		if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(current); err != nil {
+			t.Fatalf("genuine aliased producer is not canonical: %v", err)
+		}
+		for i := 0; i < 16; i++ {
+			follower := NewCatalogMetaAuthorityV1()
+			if err := follower.installCatalogMetaSnapshotBytesV1(beforeBytes); err != nil {
+				t.Fatal(err)
+			}
+			if err := follower.installCatalogMetaSnapshotBytesV1(current); err != nil {
+				t.Fatalf("exact candidate catch-up refused on install %d: %v", i, err)
+			}
+		}
+	}
+	t.Run("ACTIVE-install", install)
+	for _, kind := range []VectorPartitionLifecycleCommandKindV1{VectorPartitionLifecycleInvalidateV1, VectorPartitionLifecycleConfirmMutationV1,
+		VectorPartitionLifecycleRetireV1, VectorPartitionLifecycleMarkCleanableV1, VectorPartitionLifecycleRecordGroupCleanupV1,
+		VectorPartitionLifecycleCompleteCleanupV1} {
+		if kind == VectorPartitionLifecycleRecordGroupCleanupV1 {
+			for _, group := range candidate.RequiredGroups {
+				candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, kind, func(c *VectorPartitionLifecycleCommandV1) { c.GroupID = group }))
+			}
+		} else {
+			candidate = catalogMetaLifecycleApplyV1(t, leader, &applied, catalogMetaLifecycleTestCommandV1(candidate, kind, func(c *VectorPartitionLifecycleCommandV1) {
+				if kind == VectorPartitionLifecycleInvalidateV1 {
+					c.Reason, c.InvalidationEpoch = "exact aliased candidate", candidate.MutationEpoch+1
+				}
+				if kind == VectorPartitionLifecycleConfirmMutationV1 {
+					c.MutationEpoch = candidate.InvalidationEpoch
+				}
+			}))
+		}
+		t.Run(string(kind)+"-install", install)
+	}
+	current := postmergeSnapshotBytesV1(t, leader)
+	for _, field := range []string{"source-epoch", "final-digest", "competing-terminal-alias"} {
+		t.Run(field, func(t *testing.T) {
+			forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+				for i := range lifecycle.Records {
+					if lifecycle.Records[i].Identity == candidate.Identity {
+						if field == "source-epoch" {
+							lifecycle.Records[i].MutationEpoch--
+						}
+						if field == "final-digest" {
+							lifecycle.Records[i].LastCommandDigest = strings.Repeat("e", 64)
+						}
+					}
+					if field == "competing-terminal-alias" && lifecycle.Records[i].Identity == aliasIdentity {
+						alias := candidate
+						alias.Identity = aliasIdentity
+						raw, err := EncodeVectorPartitionLifecycleCommandV1(VectorPartitionLifecycleCommandV1{
+							Kind: VectorPartitionLifecycleCompleteCleanupV1, ExpectedState: VectorPartitionLifecycleCleanableV1,
+							ExpectedRevision: alias.Revision - 1, Identity: alias.Identity,
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						alias.LastCommandDigest = sha256HexVectorPartitionLifecycleV1(raw)
+						lifecycle.Records[i] = alias
+					}
+				}
+				snapshot.AppliedIndex += 10 // Refusal must depend on proof, not a tight budget.
+			})
+			postmergeSnapshotRefusesV1(t, beforeBytes, forged)
+		})
+	}
+	// Produce a canonical predecessor source alias without relying on ACTIVATE's
+	// generation lookup to pick the locally ACTIVE source identity by map order.
+	independent := NewCatalogMetaAuthorityV1()
+	if err := independent.installCatalogMetaSnapshotBytesV1(beforeBytes); err != nil {
+		t.Fatal(err)
+	}
+	independentApplied := independent.applied
+	previousAliasIdentity := catalogMetaLifecycleTestIdentityV1(catalog, active.Identity.Generation, 16)
+	previousAlias := catalogMetaLifecycleBuildPreparedV1(t, independent, &independentApplied, previousAliasIdentity, 0, active.MutationEpoch)
+	withPreviousAlias := func(raw []byte) []byte {
+		return postmergeRewriteSnapshotV1(t, raw, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+			lifecycle.Records = append(lifecycle.Records, previousAlias)
+			slices.SortFunc(lifecycle.Records, func(a, b VectorPartitionLifecycleRecordV1) int {
+				if vectorPartitionLifecycleIdentityLessV1(a.Identity, b.Identity) {
+					return -1
+				}
+				return 1
+			})
+			snapshot.AppliedIndex += 10
+		})
+	}
+	t.Run("ambiguous-predecessor", func(t *testing.T) {
+		postmergeSnapshotRefusesV1(t, withPreviousAlias(beforeBytes), withPreviousAlias(current))
+	})
+	invalidated := catalogMetaLifecycleApplyV1(t, independent, &independentApplied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(c *VectorPartitionLifecycleCommandV1) {
+		c.Reason, c.InvalidationEpoch = "independent predecessor", active.MutationEpoch+1
+	}))
+	invalidated = catalogMetaLifecycleApplyV1(t, independent, &independentApplied, catalogMetaLifecycleTestCommandV1(invalidated, VectorPartitionLifecycleConfirmMutationV1, func(c *VectorPartitionLifecycleCommandV1) { c.MutationEpoch = invalidated.InvalidationEpoch }))
+	t.Run("missing-atomic-retirement", func(t *testing.T) {
+		forged := postmergeRewriteSnapshotV1(t, current, func(snapshot *CatalogMetaSnapshotV1, lifecycle *vectorPartitionLifecycleSnapshotV1) {
+			for i := range lifecycle.Records {
+				if lifecycle.Records[i].Identity == active.Identity {
+					lifecycle.Records[i] = invalidated
+				}
+			}
+			snapshot.AppliedIndex += 10
+		})
+		postmergeSnapshotRefusesV1(t, beforeBytes, forged)
+	})
 }
 
 func TestCatalogSnapshotInitialActivationServingNameGuardV1(t *testing.T) {
