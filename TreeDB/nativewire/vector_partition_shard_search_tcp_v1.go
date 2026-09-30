@@ -540,9 +540,9 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	if s.PeerTransport != nil {
 		var err error
 		if s.preparedOwnerAdmission != nil {
-			err = s.preparedOwnerAdmission(ctx)
+			conn, err = s.PeerTransport.acceptAuthenticatedV1(ctx, conn)
 			if err == nil {
-				conn, err = s.PeerTransport.acceptAuthenticatedV1(ctx, conn)
+				err = s.preparedOwnerAdmission(ctx)
 			}
 		} else {
 			conn, err = s.PeerTransport.accept(ctx, conn, s.PeerGroupID)

@@ -2,13 +2,54 @@ package nativewire
 
 import (
 	"context"
+	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 func TestImmutableOwnerReplacementPrivateEndpointV1(t *testing.T) {
 	testImmutableOwnerReplacementPrivateSourceWarmV1(t, true)
+}
+
+func TestReplacementOwnerEndpointFailedAuthSkipsAuthorityV1(t *testing.T) {
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := client.SetDeadline(deadline); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(VectorPartitionShardSearchTCPServerV1{
+			PeerTransport: transport, PeerGroupID: config.Groups[0].ID,
+			preparedOwnerAdmission: func(context.Context) error {
+				calls.Add(1)
+				return nil
+			},
+		}).ServeConn(ctx, server)
+	}()
+	// A non-TLS record must fail before catalog/ACTIVE/tail admission work.
+	_, _ = client.Write([]byte("plain"))
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("failed authentication invoked owner authority %d times", calls.Load())
+	}
 }
 
 func assertReplacementOwnerEndpointSearchV1(t *testing.T, ctx context.Context, client *FixedPeerTCPClientV1, target, oldOwner *FixedPeerTCPRuntimeV1, command raftplacement.ReplicaReplacementBeginV1) {

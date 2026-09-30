@@ -153,7 +153,8 @@ func (p *PeerTransportV1) accept(ctx context.Context, raw net.Conn, group raftcl
 	return p.acceptAuthenticatedV1(ctx, raw)
 }
 
-// Callers must establish local endpoint authority before using this handshake.
+// Authenticate the peer before callers perform operation-specific remote
+// authority checks. This handshake does not grant local endpoint authority.
 func (p *PeerTransportV1) acceptAuthenticatedV1(ctx context.Context, raw net.Conn) (net.Conn, error) {
 	if p == nil || p.security == nil {
 		return nil, errPeerAuthenticationV1
