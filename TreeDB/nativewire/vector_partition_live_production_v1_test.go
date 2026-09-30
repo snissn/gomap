@@ -697,6 +697,11 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 // Existing fixture wrappers retain their original definition and epoch defaults.
 func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool, definition collections.VectorIndexDefinition) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
+	return newVectorPartitionLiveNativewireDocumentsWithGeometryV1(t, documents, columns, owners, commandWAL, ownerSeparated, definition, 3, 2)
+}
+
+func newVectorPartitionLiveNativewireDocumentsWithGeometryV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool, definition collections.VectorIndexDefinition, partitionCount, domainCount uint32) vectorPartitionLiveProductionFixtureV1 {
+	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
@@ -752,12 +757,27 @@ func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, doc
 		State: "building", Collection: "docs", IndexName: definition.Name,
 		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(definition),
 		SourceGeneration:      source.Generation, SourceChecksum: source.Checksum, SourceSchemaHash: source.SchemaHash, SourceRowCount: source.RowCount,
-		Generation: source.Generation + 100, PartitionCount: 3, DomainCount: 2,
-		DomainPacks:   []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
+		Generation: source.Generation + 100, PartitionCount: partitionCount, DomainCount: domainCount,
 		BalancePolicy: "disjoint_v1",
-		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: owners[0]}, {PartitionID: 1, GroupID: owners[0]}, {PartitionID: 2, GroupID: owners[1]}},
 	}
-	parts := []internalrouter.RouterPartitionV1{{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}}
+	if partitionCount != 3 && (domainCount == 0 || partitionCount%domainCount != 0) {
+		t.Fatal("invalid fixture geometry")
+	}
+	for pack := uint32(0); pack < partitionCount; pack++ {
+		domain := pack / (partitionCount / domainCount)
+		if partitionCount == 3 {
+			domain = 0
+			if pack == 2 {
+				domain = 1
+			}
+		}
+		manifest.DomainPacks = append(manifest.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: domain, PackID: pack})
+		manifest.Placements = append(manifest.Placements, collections.VectorPartitionPlacementV1{PartitionID: pack, GroupID: owners[domain%2]})
+	}
+	parts := make([]internalrouter.RouterPartitionV1, partitionCount)
+	for p := range parts {
+		parts[p].PartitionID = uint32(p)
+	}
 	for _, row := range rows {
 		document := byID[string(row.DocumentID)]
 		home := document.home
@@ -769,7 +789,7 @@ func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, doc
 		}
 	}
 	manifest.Canonicalize()
-	inputs := make([]collections.VectorPartitionSearchAssetV1, 3)
+	inputs := make([]collections.VectorPartitionSearchAssetV1, partitionCount)
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: manifest.Generation, PartitionID: uint32(partition), Dimensions: definition.Dimensions}
 	}
@@ -794,7 +814,7 @@ func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, doc
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget = 2, 1, len(parts)
 	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, max(8, len(documents)*2)
-	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = max(8, dimensions), 32, 100_000_000
+	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = max(8, dimensions), max(32, len(parts)), 100_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, parts, collections.VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 9102, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
 		database.Close()
 		t.Fatal(err)

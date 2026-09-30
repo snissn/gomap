@@ -30,6 +30,7 @@ type liveLifecycleRouteV1 struct{ domains, packs []uint32 }
 // The enclosing admission script retains the source/copy hashes and resources.
 type liveLifecycleRetainedInputV1 struct {
 	DB, Queries, Truth, ManifestSHA256           string
+	Descriptor, DescriptorSHA256                 string
 	Collection, Index                            string
 	Recipe                                       string // Empty preserves the selected 20% overlap fixture.
 	Generation                                   uint64
@@ -104,7 +105,19 @@ func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPar
 		t.Fatal(err)
 	}
 	raw, err := json.Marshal(manifest)
-	if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
+	if in.Recipe == "graph-disjoint-v1" && in.ManifestSHA256 == "" {
+		// The pinned M3 descriptor binds the actual persisted manifest without a
+		// separate metadata-dump program. The old caller retains its JSON SHA pin.
+		var descriptor struct {
+			Integrity string `json:"manifest_integrity_digest"`
+		}
+		if err := json.Unmarshal(liveLifecycleReadPinnedV1(t, in.Descriptor, in.DescriptorSHA256), &descriptor); err != nil {
+			t.Fatal(err)
+		}
+		if len(descriptor.Integrity) != 64 || descriptor.Integrity != manifest.IntegrityDigest {
+			t.Fatal("fresh descriptor manifest integrity mismatch")
+		}
+	} else if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
 		t.Fatalf("manifest pin mismatch: %v", err)
 	}
 	if err := validateLiveLifecycleRetainedGeometryV1(manifest, in.Recipe); err != nil {
