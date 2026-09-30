@@ -147,8 +147,9 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	t.Setenv("TMPDIR", state)
 	endpoints := make(map[string]string, len(groups))
 	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
-	for _, group := range groups {
-		address := reserveVectorPartitionSystemTCPAddressTestV1(t)
+	addresses := reserveVectorPartitionSystemTCPAddressesTestV1(t, len(groups))
+	for index, group := range groups {
+		address := addresses[index]
 		endpoints[group] = address
 		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: address})
 	}
@@ -717,10 +718,11 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	root := t.TempDir()
 	capabilityKey := writeVectorPartitionSystemCapabilityKeyTestV1(t, root)
 	endpoints := make(map[string]string, len(groups))
-	for _, group := range groups {
-		endpoints[group] = reserveVectorPartitionSystemTCPAddressTestV1(t)
+	addresses := reserveVectorPartitionSystemTCPAddressesTestV1(t, len(groups)+1)
+	for index, group := range groups {
+		endpoints[group] = addresses[index]
 	}
-	publicAddress := reserveVectorPartitionSystemTCPAddressTestV1(t)
+	publicAddress := addresses[len(groups)]
 	applied := map[string]uint64{"group-a": 1, "group-b": 1, "group-c": 1, "group-d": 1}
 	configs := make([]string, len(groups))
 	ready := make([]string, len(groups))
@@ -903,17 +905,26 @@ func waitVectorPartitionSystemReadyTestV1(t *testing.T, path string, process *ve
 	t.Fatalf("system node did not become ready at %s", path)
 }
 
-func reserveVectorPartitionSystemTCPAddressTestV1(t *testing.T) string {
+func reserveVectorPartitionSystemTCPAddressesTestV1(t *testing.T, count int) []string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	listeners := make([]net.Listener, 0, count)
+	defer func() {
+		for _, listener := range listeners {
+			if err := listener.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	addresses := make([]string, 0, count)
+	for range count {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners = append(listeners, listener)
+		addresses = append(addresses, listener.Addr().String())
 	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
+	return addresses
 }
 
 func writeVectorPartitionSystemJSONTestV1(t *testing.T, path string, value any) {
