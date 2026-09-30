@@ -388,19 +388,52 @@ committed barriers. This provides no automatic data-outcome proof or migration
 for old pending histories; unconfirmed debt still blocks completion.
 Snapshot catch-up reserves one entry for every mandatory replacement phase
 advance, and BEGIN for a newly observed operation. It checks this lower bound
-independently of lifecycle provenance. It then reserves a conservative known
-lifecycle lower bound: the largest revision advance among locally known records
-of each full Index identity, summed across independent indexes. An atomic
-cutover advances two records within one Index in one entry; mutation fence
-changes are side effects of those same commands and add no separate cost.
-This bound applies even to mixed histories. It does not recover exact command
-union counts for erased same-index intermediate generations or authenticate
-incoming-only lifecycle history. When lifecycle records and mutation fences
-are unchanged, newly observed collection barriers must fit the remaining
-applied-index advance: BEGIN, CONFIRM, and all replacement phases consume
-distinct entries, including phases hidden before catalog completion. Valid
-post-completion mutations remain accepted. Mixed compacted lifecycle histories
-retain the provenance limits above.
+independently of lifecycle provenance. It then sums the revision advances of
+locally known lifecycle records. Two records share one entry only when the
+pure reducer reconstructs their atomic cutover and both resulting records
+have valid snapshot suffixes; independent commands within one Index do not
+share a cost. Pair identities must be unique at their full Index+generation;
+ambiguous legacy source aliases cannot select an accounting discount. Terminal
+admission can prove an exact ACTIVATE candidate despite unchanged preparation
+aliases, since the command names its full identity. The generation-selected
+predecessor must remain unambiguous; serving suffix chains require a unique
+eligible ACTIVE or terminal successor and refuse competing serving aliases.
+Mutation fence
+changes are side effects and add no separate
+entry. This accounting is conditioned on retained overlap proofs, not an
+unconditional mathematical lower bound or an exact erased command union.
+Discounts start from locally ACTIVE predecessors; a tight budget can refuse
+compacted multiple cutovers through candidates already locally PREPARED when
+their additional overlaps cannot be proved. Incoming-only history supplies no
+additional overlap proof.
+Known preparation records retain their source/identity facts through terminal
+catch-up. Admission bounds their READY/PREPARE, abort or activation, and cleanup
+steps and checks the retained terminal command digest. ABSENT erases READY
+receipts: this proves bounded reducer reachability and retained source facts,
+not authentication of erased asset receipts. Named predecessor retirement must
+also be proved by the atomic reducer pair and its suffixes. An initial activation
+without a named predecessor must first vacate a locally known ACTIVE serving
+name, with any earlier invalidation confirmed and compatible with its captured
+source epoch. A newer confirmed fence does not discharge that retained debt.
+Supersession chains that vacate a known predecessor retain the existing bounded
+provenance limits; admission does not authenticate all erased activation order.
+A BUILDING/STAGED
+candidate whose newly acquired READY receipts were erased by ABSENT cannot
+supply that cutover proof; locally PREPARED cutover/cleanup retains the proof.
+New collection barriers must fit the remaining applied-index advance even
+when lifecycle records change: BEGIN, CONFIRM, and replacement phases consume
+distinct entries. A validated invalidation advance of a locally known record
+can explain a possible mutation-epoch jump only when it is strictly below the
+earliest newly retained BEGIN (including a new pending BEGIN). Admission takes
+the maximum qualifying invalidation, preserving an earlier compatible jump
+when a later invalidation is ineligible. A confirmation of a locally pending
+operation is not a new BEGIN. Epoch distance still charges evicted commands
+after the compatible floor. This is retained-epoch compatibility with a
+reducer-reachable minimum history, not proof of actual erased ordering or
+command counts; incoming-only lifecycle records or fences cannot supply that
+evidence. Existing local effective epochs still reject
+stale retained receipts. Valid post-completion mutations and ordinary compacted
+cleanup remain accepted, subject to these retained-history limits.
 
 Replicated activation also does not mutate or consult the standalone M1 active
 pointer. M6 opens the exact prepared router generation named by replicated

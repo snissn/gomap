@@ -2798,11 +2798,62 @@ and bounded catch-up, not current admission, actual data outcome, or migration.
 The current reducer refuses that fixture's old BEGIN-after-replacement sequence.
 Known-lifecycle budget tests accept the genuine six-entry ACTIVE-to-ABSENT
 history and reject its one/five-entry snapshots without authority mutation.
-Two independent known indexes require the sum of their revision lower bounds;
-a two-record atomic cutover remains accepted with one entry. The bound uses
-per-full-Index maxima and leaves the stated erased/unknown/mixed-barrier
-provenance limits intact. Existing ordinary cleanup, A-to-B-to-C cutover, and
-mixed 65-barrier catch-up remain positive controls.
+Known records require the sum of their revision advances, including independent
+commands within the same Index. A pure-reducer-proved two-record atomic cutover
+shares one entry; both compacted suffixes must validate even when ACTIVATE's
+digest has been overwritten. Accounting is conditioned on retained overlap
+proofs, not an unconditional mathematical lower bound. Discounts start from
+locally ACTIVE predecessors; tight budgets can refuse multiple compacted
+cutovers through already locally PREPARED candidates whose further overlaps
+cannot be proved. Incoming-only and erased history retain provenance limits.
+Existing ordinary cleanup, incoming-only A-to-B-to-C cutover, and mixed
+65-barrier catch-up remain positive controls.
+`TestCatalogSnapshotKnownPreparationCleanupReachabilityV1` uses real BUILDING,
+STAGED, and PREPARED abort/cleanup producers and refuses skipped terminal
+revisions or forged final command digests without authority mutation.
+`TestCatalogSnapshotKnownPreparationServingCatchupV1` retains genuine preparation
+through activation, invalidation, confirmation, retirement, and completed cleanup.
+`TestCatalogSnapshotIndependentSameIndexLifecycleBudgetV1` refuses two independent
+same-index commands in one applied entry.
+`TestCatalogSnapshotCompactedCutoverIndependentSuffixBudgetV1` preserves atomic
+cutover sharing while charging independent commands on both resulting records.
+`TestCatalogSnapshotMixedLifecycleBarrierProgressV1` accepts genuine mutation and
+direct-invalidation epoch-jump producers, and refuses short mixed budgets and
+forged confirmed maximum-epoch barriers. ABSENT's erased READY receipts are not
+authenticated by these checks. These are snapshot-admission correctness tests;
+they make no runtime replacement or quantitative performance claim.
+The compacted-cutover test also refuses activation without predecessor
+retirement even when the forged snapshot offers spare applied entries; its
+predecessor is independently invalidated and confirmed, so canonical decoding
+alone does not refuse the forgery.
+`TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1` uses an admitted legacy
+source-alias producer: unchanged history remains valid, but ambiguous
+Index+generation pairs deterministically receive no atomic-entry discount.
+Repeated genuine terminal INSTALL controls retain an unchanged PREPARED source
+alias and a genuine incoming-only BEGIN that supplies the spare applied entry.
+Exact candidate identity permits catch-up; eligible serving suffix selection
+ignores preparation aliases and refuses competing terminal aliases. Canonical
+source-epoch, final-digest, missing atomic retirement and ambiguous predecessor
+negatives preserve the admission trust checks.
+`TestCatalogSnapshotInitialActivationServingNameGuardV1` refuses a canonical
+confirmed terminal candidate below an unchanged ACTIVE source watermark, while
+accepting genuine invalidation/confirmation/retirement followed by initial
+activation and a later confirmed mutation. It also refuses a genuinely produced
+older unconfirmed predecessor substituted into that final confirmed snapshot,
+with spare applied entries and a fresh canonical-decoding precondition.
+Known-predecessor supersession chains retain bounded provenance limits; these
+checks do not authenticate all erased activation ordering.
+`TestCatalogSnapshotMixedBarrierInvalidationOrderingV1` uses real producers
+before each canonical short-budget refusal. It covers late invalidations above
+the final barrier or between its first retained BEGIN and final epoch, a jump
+below the retained window that still leaves an evicted entry to charge,
+multiple earlier/later known invalidations, new pending BEGINs, and locally
+pending confirmation displaced by later receipts. Genuine invalidation before
+many barriers and a pending-only barrier retain positive controls. Only
+invalidation epochs strictly below the earliest new retained BEGIN are
+compatible jump floors; the maximum qualifying candidate is used rather than
+the final maximum. This bounds a possible reducer history and does not
+authenticate actual erased ordering or command counts.
 
 ## Fixed-peer immutable multi-owner serving, bounded profile (#4809)
 
