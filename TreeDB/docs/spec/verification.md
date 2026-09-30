@@ -2783,12 +2783,15 @@ hosted scope/assets, post-enrollment semantic tail, restart/exact BEGIN binding,
 unchanged static configuration, old voter retention, and no topology, public listener,
 READY, or public hits. `TestImmutableOwnerReplacementValidTailWithoutHostedAssetRefusesV1`
 retains native semantic tail progress while removing a declared hosted asset and
-requires cutoff/tail refusal; promotion remains closed independently. These are
-proposed focused checks until exact-head execution receipts are accepted; they
-do not prove completed replacement or serving cutover. The existing bounded
-voter/consumer read-cost sampler supplies a proportional before/after guardrail;
-caller allocation measurements exclude server allocations and whole-case child
-resources include setup/recovery. No quantitative performance claim is made.
+requires cutoff/tail refusal; promotion remains closed independently. These
+preparation checks do not prove completed replacement or serving cutover. The
+installed-assets fixture logs BEGIN/native-install/nonvoter preparation time,
+native snapshot and hosted segment bytes, then three warmed semantic-tail calls.
+Its process-global allocation counters include the caller, all five in-process
+Raft servers, and background work; they provide no per-node allocation or RSS
+attribution. There is no working old owner baseline, and race instrumentation
+is diagnostic only. Healthy status/search implementation files are unchanged.
+No stable performance or scaling claim is made.
 `TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`
 requires exact reducer revision distance across a compacted snapshot.
 `TestCatalogReplicaReplacementSnapshotRejectsForgedNewActiveReadyV1` and
