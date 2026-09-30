@@ -120,13 +120,13 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		t.Fatalf("target unmarked tail read=%v", err)
 	}
 	targetClient.Close()
-	var hostedPlacements, hostedArtifactBytes uint64
+	var hostedPacks, hostedDomains, hostedArtifactBytes uint64
 	hostedRefs := make(map[string]bool)
 	for _, placement := range configs[0].Vector.Manifest.Placements {
 		if placement.GroupID != string(command.GroupID) {
 			continue
 		}
-		hostedPlacements++
+		hostedPacks++
 		for _, asset := range configs[0].Vector.Manifest.Assets {
 			if asset.PartitionID != placement.PartitionID {
 				continue
@@ -139,8 +139,19 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 			}
 		}
 	}
-	if hostedPlacements == 0 || hostedArtifactBytes == 0 {
-		t.Fatal("fixture has no declared hosted packs/assets")
+	manifest := configs[0].Vector.Manifest
+	offsets, err := vectorPartitionCoordinatorDomainPackOffsetsV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for domain := 0; domain+1 < len(offsets); domain++ {
+		anchor := manifest.DomainPacks[offsets[domain]].PackID
+		if manifest.Placements[anchor].GroupID == string(command.GroupID) {
+			hostedDomains++
+		}
+	}
+	if !vectorPartitionCoordinatorUsesDomainGraphsV1(manifest) || hostedDomains != 1 || hostedPacks != 2 || hostedArtifactBytes == 0 {
+		t.Fatalf("fixture must host one two-pack domain: domains=%d packs=%d bytes=%d", hostedDomains, hostedPacks, hostedArtifactBytes)
 	}
 	startWarm := func() *replacementNativeWorkV1 {
 		t.Helper()
@@ -166,7 +177,7 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		}
 		elapsed := time.Since(start)
 		runtime.ReadMemStats(&after)
-		t.Logf("private_owner_warm label=%s elapsed_ns=%d global_bytes=%d global_allocs=%d scope=caller_five_raft_nodes_background_and_control_polling cache=%+v hosted_placements=%d verified_declared_hosted_artifact_bytes=%d unique_hosted_refs=%d", label, elapsed.Nanoseconds(), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, source().Stats(), hostedPlacements, hostedArtifactBytes, len(hostedRefs))
+		t.Logf("private_owner_warm label=%s elapsed_ns=%d global_bytes=%d global_allocs=%d scope=caller_five_raft_nodes_background_and_control_polling cache=%+v hosted_search_domains=%d hosted_physical_packs=%d verified_declared_hosted_artifact_bytes=%d unique_hosted_refs=%d", label, elapsed.Nanoseconds(), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, source().Stats(), hostedDomains, hostedPacks, hostedArtifactBytes, len(hostedRefs))
 	}
 	warm("cold")
 	retained := source()
@@ -174,8 +185,8 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		t.Fatal("warm did not retain source")
 	}
 	cold := retained.Stats()
-	if cold.GenerationMisses != 1 || cold.PartitionMisses != hostedPlacements {
-		t.Fatalf("packs not opened: %+v", cold)
+	if cold.GenerationMisses != 1 || cold.PartitionMisses != hostedDomains {
+		t.Fatalf("hosted domain searchers not opened: %+v", cold)
 	}
 	local.replacementWork.mu.Lock()
 	installedDB := local.replacementWork.ownerDB
@@ -186,8 +197,8 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 	warm("cached")
 	cached := retained.Stats()
 	if source() != retained || cached.GenerationMisses != cold.GenerationMisses || cached.PartitionMisses != cold.PartitionMisses ||
-		cached.GenerationHits <= cold.GenerationHits || cached.PartitionHits-cold.PartitionHits < hostedPlacements {
-		t.Fatalf("warm did not reuse actual packs: cold=%+v cached=%+v", cold, cached)
+		cached.GenerationHits <= cold.GenerationHits || cached.PartitionHits-cold.PartitionHits != hostedDomains {
+		t.Fatalf("warm did not reuse every hosted domain searcher: cold=%+v cached=%+v", cold, cached)
 	}
 	assertPrivate()
 	if _, err := os.Stat(filepath.Join(configs[targetIndex].RaftRoot, "nodes", string(command.NewPeer.ID), "groups", string(configs[targetIndex].Catalog.ID))); !os.IsNotExist(err) {

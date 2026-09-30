@@ -358,7 +358,10 @@ fresh authority refuse preparation. The old replica remains a voter. No serving
 topology is attached or warmed, no public listener is advertised, and promotion,
 removal, and completion remain independently unavailable. A separate authenticated
 catalog-member `replacement-owner-warm` control can retain private owner-local
-generation/searcher packs on this already prepared nonvoter. Its authenticated
+generation/domain searchers on this already prepared nonvoter. A domain searcher
+opens through its first physical pack ID and retains all colocated sections;
+physical pack count does not equal searcher cache cardinality. Legacy per-pack
+graphs retain their existing per-pack opens. Its authenticated
 exact target may inspect the existing leader-tail read only for the currently
 authorized immutable marked BEGIN at add-intent; ordinary/unmarked and other-node
 tail callers remain catalog-member-only. Each explicit warm

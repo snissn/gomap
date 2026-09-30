@@ -2818,8 +2818,11 @@ Status/readiness and public listeners remain cold. The pending operation's
 existing lifecycle freeze prevents a legal ACTIVE replacement; this test does
 not fabricate one. Cold/cache timing and process-global allocations are bounded
 diagnostics including the caller, five Raft runtimes, background work and control
-polls. Source Stats show exactly one cold partition miss per hosted placement
-and reuse of every hosted pack. Verified declared hosted artifact bytes deduplicate
+polls. Source Stats count cached searchers: exactly one cold partition miss
+per hosted domain and one cached hit per domain, with generation/partition misses
+unchanged on reuse. This fixture's one hosted domain covers two physical packs;
+its first pack ID opens the domain root and all physical sections. Hosted physical
+pack count is reported separately. Verified declared hosted artifact bytes deduplicate
 identical namespace/file/offset/length references; they are not retained memory.
 These diagnostics are neither per-node overhead nor a throughput/comparative claim.
 `TestCatalogReplicaReplacementSnapshotRejectsExcessInvalidationRevisionsV1`

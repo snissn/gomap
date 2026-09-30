@@ -244,23 +244,48 @@ func (r *FixedPeerTCPRuntimeV1) warmReplacementOwnerSourceV1(ctx context.Context
 		return err
 	}
 	defer func() { err = errors.Join(err, pin.Close()) }()
-	for _, placement := range pin.Manifest().Placements {
-		if placement.GroupID != string(command.GroupID) {
+	manifest := r.config.Vector.Manifest
+	offsets, layoutErr := vectorPartitionCoordinatorDomainPackOffsetsV1(manifest)
+	if layoutErr != nil {
+		return layoutErr
+	}
+	placements := pin.Manifest().Placements
+	if len(placements) != int(manifest.PartitionCount) {
+		return ErrFixedPeerVectorProofStaleV1
+	}
+	domainGraphs := vectorPartitionCoordinatorUsesDomainGraphsV1(manifest)
+	for domain := 0; domain+1 < len(offsets); domain++ {
+		packs := manifest.DomainPacks[offsets[domain]:offsets[domain+1]]
+		anchor := packs[0].PackID
+		owner := placements[anchor].GroupID
+		for _, mapping := range packs {
+			if placements[mapping.PackID].PartitionID != mapping.PackID || placements[mapping.PackID].GroupID != owner {
+				return ErrFixedPeerVectorWrongOwnerV1
+			}
+		}
+		if owner != string(command.GroupID) {
 			continue
 		}
-		lease, openErr := pin.OpenPartition(ctx, placement.PartitionID)
-		if openErr != nil {
-			return openErr
+		// A domain searcher retains all colocated physical sections through its
+		// first pack ID. Legacy per-pack graphs still open each physical pack.
+		if domainGraphs {
+			packs = packs[:1]
 		}
-		if closeErr := lease.Close(); closeErr != nil {
-			return closeErr
+		for _, mapping := range packs {
+			lease, openErr := pin.OpenPartition(ctx, mapping.PackID)
+			if openErr != nil {
+				return openErr
+			}
+			if closeErr := lease.Close(); closeErr != nil {
+				return closeErr
+			}
 		}
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	// Completion polls obtain the final tail/asset fence; this worker checks
-	// ACTIVE/currentDB after pack open without retaining the request's lifetime.
+	// ACTIVE/currentDB after searcher open without retaining the request's lifetime.
 	_, _, err = r.replacementOwnerCatalogV1(ctx, command, d)
 	return err
 }
