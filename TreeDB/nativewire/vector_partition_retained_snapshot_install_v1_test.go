@@ -159,6 +159,30 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 				t.Skipf("hard links unsupported: %v", err)
 			}
 		}
+		// A private index does not make the still-linked mutable dependencies safe.
+		indexBytes, err := os.ReadFile(filepath.Join(source, "index.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateIndex := filepath.Join(linked, ".private-index")
+		if err := os.WriteFile(privateIndex, indexBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(privateIndex, filepath.Join(linked, "index.db")); err != nil {
+			t.Fatal(err)
+		}
+		fromIndex, err := os.Stat(filepath.Join(source, "index.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		toIndex, err := os.Stat(filepath.Join(linked, "index.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexLinks, err := liveLifecycleRetainedFileLinkCountV1(toIndex)
+		if err != nil || indexLinks != 1 || os.SameFile(fromIndex, toIndex) {
+			t.Fatalf("copied index is not private: links=%d err=%v", indexLinks, err)
+		}
 		valueLinks := 0
 		for name := range original {
 			if strings.HasPrefix(name, "value_vlog/") {
