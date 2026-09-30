@@ -148,6 +148,51 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("hardlinked-copy", func(t *testing.T) {
+		linked := filepath.Join(t.TempDir(), "mutable-lifecycle-copy")
+		for name := range original {
+			path := filepath.Join(linked, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(filepath.Join(source, name), path); err != nil {
+				t.Skipf("hard links unsupported: %v", err)
+			}
+		}
+		valueLinks := 0
+		for name := range original {
+			if strings.HasPrefix(name, "value_vlog/") {
+				from, err := os.Stat(filepath.Join(source, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				to, err := os.Stat(filepath.Join(linked, name))
+				if err != nil || !os.SameFile(from, to) {
+					t.Fatalf("value-log hardlink witness %s: %v", name, err)
+				}
+				valueLinks++
+			}
+		}
+		if valueLinks == 0 {
+			t.Fatal("hardlinked copy has no value-log witness")
+		}
+		if got := ownerRelocationDiagnosticTreeSealV1(t, linked); !maps.Equal(got, original) {
+			t.Fatal("hardlinked copy does not match pinned bytes")
+		}
+		if err := validateLiveLifecycleRetainedFlatLayoutV1(linked); err == nil || !strings.Contains(err.Error(), "not private") {
+			t.Fatalf("hardlinked admission error=%v, want private-copy refusal", err)
+		}
+		linkedInput := in
+		linkedInput.DB = linked
+		if err := liveLifecycleInstallRetainedCopyV1(t.Context(), linkedInput); err == nil || !strings.Contains(err.Error(), "not private") {
+			t.Fatalf("hardlinked install error=%v, want private-copy refusal", err)
+		}
+		for _, dir := range []string{source, linked} {
+			if got := ownerRelocationDiagnosticTreeSealV1(t, dir); !maps.Equal(got, original) {
+				t.Fatalf("refused hardlinked install changed %s", dir)
+			}
+		}
+	})
 	for _, side := range []string{"dictdb", "templatedb"} {
 		t.Run("unsupported-"+side, func(t *testing.T) {
 			sideDir := filepath.Join(copyDir, side)

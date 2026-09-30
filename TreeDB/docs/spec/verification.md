@@ -2990,7 +2990,9 @@ values, checkpoints and closes the source, proves that ordinary recovery
 rejects a plain copy, then exercises the retained caller's explicit staged-copy
 install and reads both values across reopen. It checks invalid pins, an original
 source path, changed pathsets, symlinks and unsafe file-list paths, and verifies
-that the original bytes remain unchanged. Real dictionary/template side-store
+that the original bytes remain unchanged. An actual hardlinked source tree is
+refused before mutation, preserving both original and staged bytes; regular
+file/hash equality alone is insufficient. Real dictionary/template side-store
 copies are refused before mutation, with every copied byte unchanged. The existing
 `db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
 retains the two-slot, interrupted-install, fallback and later-replacement proof.
@@ -2999,7 +3001,9 @@ The accepted retained caller requires `SnapshotFiles` (the pristine copied
 file-path/SHA-256 JSON map), `SnapshotFilesSHA256`, and the root-selected input
 pin `GOMAP_SELECTED_LIVE_FIXTURE_SHA256`. Input, descriptor, tools, queries and
 truth are pinned before the shared opener verifies every copied file and
-explicitly rebinds the staged snapshot. This retained input is flat-only;
+explicitly rebinds the staged snapshot. Shared input admission and installation
+require every opened file to be regular with exactly one hardlink on the existing
+namespace-supported platforms; other platforms fail closed. This input is flat-only;
 `dictdb` and `templatedb` entries are refused before rebind or open. Public
 root/`maindb` side-store layouts use their existing layout-aware opener elsewhere.
 Ordinary Open remains strict; readers and replacement-build callers never

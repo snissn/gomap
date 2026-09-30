@@ -143,7 +143,32 @@ func validateLiveLifecycleRetainedFlatLayoutV1(dir string) error {
 			return err
 		}
 	}
-	return nil
+	// Regular files and matching hashes alone do not prove a private copy:
+	// index rebind replaces only the index, while WAL/value files stay mutable.
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return errors.New("retained snapshot contains a nonregular entry")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		info, checkErr := file.Stat()
+		if checkErr == nil && !info.Mode().IsRegular() {
+			checkErr = errors.New("opened retained snapshot file is not regular")
+		}
+		if checkErr == nil {
+			links, err := liveLifecycleRetainedFileLinkCountV1(info)
+			checkErr = err
+			if checkErr == nil && links != 1 {
+				checkErr = fmt.Errorf("retained snapshot file is not private: %s has %d links", path, links)
+			}
+		}
+		return errors.Join(checkErr, file.Close())
+	})
 }
 
 // Installation is explicit and precedes ordinary recovery. The enclosing
