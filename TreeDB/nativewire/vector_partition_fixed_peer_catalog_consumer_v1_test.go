@@ -425,7 +425,7 @@ func fixedPeerCatalogConsumerConfigBoundariesV1(t *testing.T, configs []FixedPee
 	if err != nil {
 		t.Fatalf("authenticated consumer client constructor: %v", err)
 	}
-	_ = client.Close()
+	client.Close()
 	transport, err := NewPeerTransportV1(owner)
 	if err != nil {
 		t.Fatalf("authenticated consumer transport constructor: %v", err)
