@@ -811,6 +811,18 @@ the close command or by connection teardown. Strict, fast, and pinned searches
 retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
 
+The current pre-alpha `vector_search_response` counter block contains 22
+uvarints in this order: selected domains, selected packs, selected groups,
+requests, RPCs, retries, redirects, local candidates, local edges, snapshot pins,
+read proofs, generation pins, partition opens, query bytes, request bytes,
+candidate bytes, response bytes, HNSW-served partitions, exact-scan partitions,
+router score calls, router candidates, and router edges. The selected-partitions
+API alias is reconstructed from selected packs. The existing 20 stage timings
+follow this complete counter block. All strict, fast, and pinned responses use
+this encoding; router work is preserved separately from local shard work.
+Clients and servers must use this current layout; the earlier incomplete
+19-counter pre-alpha layout is unsupported.
+
 `vector_insert` is the narrow LocalOnly public mutation route. It requires the
 generic `deadline` section and `vector_insert_request` (144). The request binds
 one mutation-attempt idempotency key, exact document ID, generation, FP32

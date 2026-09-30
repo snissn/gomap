@@ -817,11 +817,12 @@ func decodeVectorPartitionSearchResponseV1(src []byte, maxNeighbors int, limits 
 			response.Neighbors[i] = public.NeighborV1{ID: r.string(), Score: r.float32()}
 		}
 	}
-	var counters [19]uint64
+	var counters [22]uint64
 	for i := range counters {
 		counters[i] = r.u64()
 	}
 	response.Counters = public.SearchCountersV1{
+		RouterScoreCalls: counters[19], RouterCandidates: counters[20], RouterEdges: counters[21],
 		SelectedDomains: counters[0], SelectedPacks: counters[1], SelectedPartitions: counters[1], SelectedGroups: counters[2], Requests: counters[3], RPCs: counters[4], Retries: counters[5], Redirects: counters[6], Candidates: counters[7], Edges: counters[8],
 		SnapshotPins: counters[9], ReadProofs: counters[10], GenerationPins: counters[11], PartitionOpens: counters[12], QueryBytes: counters[13], RequestBytes: counters[14], CandidateBytes: counters[15], ResponseBytes: counters[16], HNSWServedPartitions: counters[17], ExactScanPartitions: counters[18],
 	}
@@ -900,7 +901,7 @@ func decodeVectorPartitionStatusV1(src []byte) (VectorPartitionStatusV1, error) 
 	return status, r.done()
 }
 
-func vectorPartitionCountersV1(c public.SearchCountersV1) [19]uint64 {
+func vectorPartitionCountersV1(c public.SearchCountersV1) [22]uint64 {
 	packs := c.SelectedPacks
 	if packs == 0 {
 		packs = c.SelectedPartitions
@@ -909,7 +910,7 @@ func vectorPartitionCountersV1(c public.SearchCountersV1) [19]uint64 {
 	if domains == 0 {
 		domains = packs
 	}
-	return [19]uint64{domains, packs, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes, c.HNSWServedPartitions, c.ExactScanPartitions}
+	return [22]uint64{domains, packs, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes, c.HNSWServedPartitions, c.ExactScanPartitions, c.RouterScoreCalls, c.RouterCandidates, c.RouterEdges}
 }
 
 func vectorPartitionTimingsV1(t public.SearchTimingV1) ([20]uint64, error) {
