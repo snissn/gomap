@@ -520,6 +520,11 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 				t.Fatalf("same-generation local parity query %d rank %d: remote=%+v local=%+v", queryIndex, rank, remote, local)
 			}
 		}
+		a, b := actual.Counters, localResult.Counters
+		if b.RouterScoreCalls == 0 || b.RouterCandidates == 0 ||
+			a.RouterScoreCalls != b.RouterScoreCalls || a.RouterCandidates != b.RouterCandidates || a.RouterEdges != b.RouterEdges {
+			t.Fatalf("router counter parity q=%d: public=%+v native=%+v", queryIndex, a, b)
+		}
 		if truth != nil {
 			if len(truth[queryIndex]) != topK {
 				t.Fatal("retained truth cardinality drift")
@@ -541,8 +546,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 					truthHits++
 				}
 			}
-			a, b := actual.Counters, localResult.Counters
-			if a.RouterScoreCalls != b.RouterScoreCalls || a.RouterCandidates != b.RouterCandidates || a.RouterEdges != b.RouterEdges || a.SelectedPacks != b.SelectedPacks || a.Candidates != b.Candidates || a.Edges != b.Edges || a.Retries != b.Retries || a.Redirects != b.Redirects {
+			if a.SelectedPacks != b.SelectedPacks || a.Candidates != b.Candidates || a.Edges != b.Edges || a.Retries != b.Retries || a.Redirects != b.Redirects {
 				t.Fatalf("algorithm counter parity q=%d: public=%+v native=%+v", queryIndex, a, b)
 			}
 		}

@@ -2962,6 +2962,12 @@ This is public correctness parity, not held-out recall, retained 100K/D16/P64 or
 historical P5 qualification, a 95% quality threshold, or performance/latency
 qualification. Historical source builders and accepted assets remain unchanged.
 
+These real TCP fixtures also require nonzero native router scoring and exact
+public/native router score-call, candidate and edge counter parity on every
+query. `TestVectorPartitionWireV1RoundTrip` checks distinct multibyte router
+counters, all existing stage timings, and refusal of every truncated response
+prefix through the shared strict/fast/pinned response codec.
+
 Run the 4-row baseline, 64-row fixture and scaled fixture together in normal and
 race modes on the reviewed candidate:
 

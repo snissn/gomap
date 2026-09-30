@@ -111,6 +111,7 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 			SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, SelectedGroups: 2, Requests: 3, RPCs: 4, Retries: 5, Redirects: 6, Candidates: 7, Edges: 8,
 			SnapshotPins: 9, ReadProofs: 10, GenerationPins: 11, PartitionOpens: 12, QueryBytes: 13, RequestBytes: 14, CandidateBytes: 15, ResponseBytes: 16,
 			HNSWServedPartitions: 17, ExactScanPartitions: 18,
+			RouterScoreCalls: 257, RouterCandidates: 258, RouterEdges: 259,
 		},
 		Timing: public.SearchTimingV1{
 			Admission: 1, OperationsHealth: 2, ServiceAdapter: 3, PublicAdapter: 4, RouterOpen: 5, RouterSearch: 6, Placement: 7,
@@ -126,6 +127,11 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 	gotResponse, err := decodeVectorPartitionSearchResponseV1(raw, request.TopK, limits)
 	if err != nil || !reflect.DeepEqual(gotResponse, response) {
 		t.Fatalf("response round trip = %+v, err=%v", gotResponse, err)
+	}
+	for cut := 0; cut < len(raw); cut++ {
+		if _, err := decodeVectorPartitionSearchResponseV1(raw[:cut], request.TopK, limits); err == nil {
+			t.Fatalf("truncated response accepted at byte %d", cut)
+		}
 	}
 	if _, err := decodeVectorPartitionSearchResponseV1(raw, 1, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
 		t.Fatalf("response exceeded requested top-k: %v", err)
