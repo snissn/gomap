@@ -750,15 +750,20 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		return errors.New("fixed-peer vector runtime requires exactly one owner group")
 	}
 	localDataGroups := 0
+	localOwner := false
 	for _, group := range config.Groups {
 		if localGroups[group.ID] {
 			localDataGroups++
+			localOwner = localOwner || owners[group.ID]
 		}
 	}
 	if !standby && localDataGroups != 1 {
 		return errors.New("fixed-peer vector runtime requires exactly one local data group")
 	}
-	if !standby && !localGroups[config.Catalog.ID] {
+	// Only a credentialed immutable ANN owner may consume catalog decisions.
+	// Source holders, routers and mutable runtimes retain local voting authority.
+	consumerOwner := immutable && config.Credentials != nil && localOwner && config.NodeID != vector.RouterNodeID
+	if !standby && !localGroups[config.Catalog.ID] && !consumerOwner {
 		return errors.New("fixed-peer vector runtime requires local catalog authority")
 	}
 	for group := range owners {

@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -306,6 +307,9 @@ func TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1(t *testi
 	}, nil, [2]string{"group-b", "group-c"}, true, true)
 	defer seed.database.Close()
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, seed.collection.MetaView())
+	t.Run("owner_config_boundaries", func(t *testing.T) {
+		fixedPeerCatalogConsumerConfigBoundariesV1(t, configs)
+	})
 	r := &FixedPeerTCPRuntimeV1{config: configs[1]}
 	i := r.config.Vector.Identity
 	status := raftplacement.CatalogMetaStatusV1{Epoch: i.Index.CatalogEpoch, Digest: i.Index.CatalogDigest, AppliedIndex: 9}
@@ -400,5 +404,93 @@ func TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1(t *testi
 	}
 	if peerControlScopeV1("vector-catalog-read") != "control-read" || peerControlRequestModeV1("vector-catalog-read", peerRequestIngressV1) != peerRequestInternalV1 {
 		t.Fatal("consumer decision is not a bounded drain dependency read")
+	}
+}
+
+func fixedPeerCatalogConsumerConfigBoundariesV1(t *testing.T, configs []FixedPeerTCPConfigV1) {
+	t.Helper()
+	ca := newPeerCAFixtureV1(t)
+	configs = slices.Clone(configs)
+	for i := range configs {
+		configs[i].RaftListen = maps.Clone(configs[i].RaftListen)
+		configs[i].ClusterID = "consumer-config-boundaries"
+		configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	}
+	fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
+	owner, _, err := validateFixedPeerConfigV1(configs[1])
+	if err != nil {
+		t.Fatalf("credentialed immutable owner preflight: %v", err)
+	}
+	client, err := NewFixedPeerTCPClientV1(owner)
+	if err != nil {
+		t.Fatalf("authenticated consumer client constructor: %v", err)
+	}
+	_ = client.Close()
+	transport, err := NewPeerTransportV1(owner)
+	if err != nil {
+		t.Fatalf("authenticated consumer transport constructor: %v", err)
+	}
+	_ = transport.Close()
+	assertNoStorage := func(t *testing.T) {
+		t.Helper()
+		for _, root := range []string{owner.DataRoot, owner.RaftRoot} {
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("config/client/authentication preflight created storage %s: %v", root, err)
+			}
+		}
+	}
+	assertNoStorage(t)
+	for _, index := range []int{0, 1, 3} {
+		name := string(configs[index].NodeID)
+		t.Run(name+"_requires_catalog_vote", func(t *testing.T) {
+			config := configs[index]
+			if index == 1 {
+				config.Credentials = nil
+			} else {
+				config.Catalog.Peers = slices.DeleteFunc(slices.Clone(config.Catalog.Peers), func(peer raftcluster.Peer) bool { return peer.ID == config.NodeID })
+				config.Catalog.BootstrapNode = "owner-c"
+				config.RaftListen = maps.Clone(config.RaftListen)
+				delete(config.RaftListen, config.Catalog.ID)
+			}
+			if _, _, err := validateFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || err.Error() != "raftcluster: invalid config: fixed-peer vector runtime requires local catalog authority" {
+				t.Fatalf("nonowner or uncredentialed consumer admitted: %v", err)
+			}
+		})
+	}
+	t.Run("multiple_local_groups", func(t *testing.T) {
+		if err := validateFixedPeerVectorConfigV1(owner, map[raftcluster.GroupID]bool{"group-b": true, "group-c": true}); err == nil || err.Error() != "fixed-peer vector runtime requires exactly one local data group" {
+			t.Fatalf("consumer with multiple local groups admitted: %v", err)
+		}
+	})
+	t.Run("mutable_requires_catalog_vote", TestFixedPeerVectorConfigRequiresLocalCatalogAuthorityV1)
+	t.Run("immutable_manifest_binding", func(t *testing.T) {
+		config := owner
+		config.Vector = cloneFixedPeerVectorConfigV1(owner.Vector)
+		config.Vector.Identity.Immutable.ManifestDigest = "wrong"
+		if _, _, err := validateFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) {
+			t.Fatalf("consumer with a mismatched immutable manifest admitted: %v", err)
+		}
+	})
+	for _, invalid := range []string{"wrong_node", "expired"} {
+		t.Run(invalid, func(t *testing.T) {
+			config := owner
+			node, notAfter := string(owner.NodeID), time.Now().Add(time.Hour)
+			if invalid == "wrong_node" {
+				node = "ingress"
+			} else {
+				notAfter = time.Now().Add(-time.Minute)
+			}
+			config.Credentials = ca.issue(t, owner.ClusterID, node, time.Now().Add(-time.Hour), notAfter)
+			if _, err := NewFixedPeerTCPClientV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+				t.Fatalf("invalid consumer client credentials admitted: %v", err)
+			}
+			if _, err := NewPeerTransportV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+				t.Fatalf("invalid consumer transport credentials admitted: %v", err)
+			}
+			if _, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+				t.Fatalf("invalid consumer runtime credentials admitted: %v", err)
+			}
+			assertNoStorage(t)
+		})
 	}
 }

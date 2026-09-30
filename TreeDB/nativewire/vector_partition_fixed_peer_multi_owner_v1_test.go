@@ -193,8 +193,14 @@ func testMultiOwnerTCPDomainSearchWithQueriesModeV1(t *testing.T, ctx context.Co
 			configs[i].Catalog.BootstrapNode = metaLeader
 			configs[i].ClusterID = "multi-owner-separate-leaders"
 			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			if consumerOwner && configs[i].NodeID == "owner-b" {
+				t.Log("catalog-consumer owner config preflight: node=owner-b catalog_voter=false immutable=true credentialed=true local_data_group=group-b")
+			}
 			validated, _, err := validateFixedPeerConfigV1(configs[i])
 			if err != nil {
+				if consumerOwner && configs[i].NodeID == "owner-b" {
+					t.Fatalf("catalog-consumer owner config preflight rejected: %v", err)
+				}
 				t.Fatal(err)
 			}
 			raw, err := json.Marshal(validated)
