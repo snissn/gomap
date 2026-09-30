@@ -63,6 +63,10 @@ func TestCatalogOwnerPreparationIdentityAndPhaseCapV1(t *testing.T) {
 	if _, err = a.applyCommittedCatalogMetaV1(raw, a.applied+1); err != nil {
 		t.Fatal(err)
 	}
+	begin, err = DecodeReplicaReplacementBeginV1(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	seed := raftcluster.ReplacementSnapshotSeedV1{SourceNodeID: begin.OldNodeID, SnapshotID: "native-owner-seed", Version: hraft.SnapshotVersionMax, Term: 4, Index: 9, ConfigurationIndex: 1, ConfigurationSHA256: strings.Repeat("c", 64), ArchiveSHA256: strings.Repeat("d", 64), SizeBytes: 1024, Manifest: raftcluster.SnapshotManifestV1{Format: raftcluster.SnapshotManifestFormatV1, Version: 1, NodeID: begin.OldNodeID, GroupID: begin.GroupID, LastIncludedTerm: 4, LastIncludedIndex: 9, AppliedCommandLSN: 3, LogicalDigestV1: strings.Repeat("e", 64), Scope: raftcluster.SnapshotScopeIdentityV1{ScopeRule: "single-group-v1", DatabaseScope: "database/default", CatalogScope: "catalog/default"}, CreatedAt: time.Unix(1700000000, 0).UTC()}}
 	state := ReplicaReplacementStateV1{Begin: begin, Seed: &seed}
 	for _, phase := range []ReplicaReplacementPhaseV1{ReplicaReplacementSeededV1, ReplicaReplacementInstalledV1, ReplicaReplacementAddIntentV1} {

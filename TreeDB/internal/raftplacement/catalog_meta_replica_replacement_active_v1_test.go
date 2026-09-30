@@ -2285,7 +2285,15 @@ func TestCatalogReplicaReplacementSameEpochSnapshotRejectsUnknownTerminalFenceV1
 	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(final); err != nil {
 		t.Fatalf("fresh restore of genuine terminal witness: %v", err)
 	}
-	firstSeen, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
+	firstSeen := NewCatalogMetaAuthorityV1()
+	firstSeenCatalog, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{Record: leader.record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstSeen.applyCommittedCatalogMetaV1(firstSeenCatalog, 1); err != nil {
+		t.Fatal(err)
+	}
+	catalog := firstSeen.record
 	if !reflect.DeepEqual(catalog, leader.record) {
 		t.Fatal("first-seen fixture uses a different catalog")
 	}
