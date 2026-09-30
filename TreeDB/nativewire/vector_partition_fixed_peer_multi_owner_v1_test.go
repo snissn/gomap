@@ -41,6 +41,64 @@ func TestMultiOwnerTCPDomainSearchRejectsMissingHostedOwnerAssetV1(t *testing.T)
 	testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t, false, false, true)
 }
 
+// This fresh fixture qualifies the accepted canonical graph model through the
+// public lifecycle and TCP path. It does not qualify the retained epoch-zero
+// 100K fixture, its D16/P64 geometry, recall, or performance.
+func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	definition := collections.VectorIndexDefinition{
+		Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine,
+		Dimensions: 768, M: 16, EfConstruction: 128, EfSearch: 128,
+		Encoding: collections.VectorIndexEncodingFloat32, Strategy: collections.VectorIndexStrategyColumnGraph,
+		SchemaGeneration: 1,
+	}
+	// This value copy checks the historical definition binding; it never edits
+	// the retained fixture or changes its accepted epoch-zero digest.
+	historical := definition
+	historical.SchemaGeneration = 0
+	if digest := collections.VectorIndexDefinitionDigestV1(historical); digest != "acb460d2a9c2fe4932668e7d01cce03ac791579dd750180b78c814c86c64b87e" {
+		t.Fatalf("accepted source definition parameters changed: %s", digest)
+	}
+	documents := make([]vectorPartitionLiveDocumentV1, 64)
+	for i := range documents {
+		vector := make([]float32, definition.Dimensions)
+		for dimension := range vector {
+			vector[dimension] = float32(((i+1)*(dimension+3)+i*i)%31-15) / 16
+		}
+		vector[0] += float32(i) / 64
+		documents[i] = vectorPartitionLiveDocumentV1{id: fmt.Sprintf("fresh-%02d", i), vector: vector, home: uint32(i % 3)}
+	}
+	seed := newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, nil, [2]string{"group-b", "group-c"}, true, true, definition)
+	t.Cleanup(func() { _ = seed.database.Close() })
+	persisted := seed.collection.MetaView()
+	expectedDigest := collections.VectorIndexDefinitionDigestV1(definition)
+	if len(persisted.VectorIndexes) != 1 || persisted.VectorIndexes[0].SchemaGeneration != 1 ||
+		collections.VectorIndexDefinitionDigestV1(persisted.VectorIndexes[0]) != expectedDigest ||
+		seed.manifest.IndexDefinitionDigest != expectedDigest || expectedDigest == collections.VectorIndexDefinitionDigestV1(historical) {
+		t.Fatalf("fresh trusted genesis did not preserve its distinct epoch/definition binding: meta=%+v manifest=%+v", persisted, seed.manifest)
+	}
+	if seed.manifest.SourceRowCount != 64 || seed.manifest.PartitionCount != 3 || seed.manifest.DomainCount != 2 {
+		t.Fatalf("fresh fixture geometry changed: %+v", seed.manifest)
+	}
+	graphs := 0
+	for _, asset := range seed.manifest.Assets {
+		if asset.GraphVariant == "" {
+			continue // Physical chunks inherit their descriptor's graph identity.
+		}
+		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
+			t.Fatalf("fresh asset %s uses another graph model: %s", asset.ID, asset.GraphVariant)
+		}
+		graphs++
+	}
+	if graphs != 2 {
+		t.Fatalf("fresh fixture has %d canonical domain graph descriptors, want 2", graphs)
+	}
+	query := append([]float32(nil), documents[37].vector...)
+	t.Logf("fresh public fixture: rows=64 dimensions=768 packs=3 domains=2 owners=2 epoch=1 definition=%s canonical_graphs=%d", expectedDigest, graphs)
+	testMultiOwnerTCPDomainSearchWithSeedV1(t, ctx, seed, query, false, false, false)
+}
+
 func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateLeaders, sourceFollower, missingOwnerAsset bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
@@ -50,6 +108,11 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 		{id: "c", vector: []float32{0, 1}, home: 2},
 		{id: "d", vector: []float32{.2, .8}, home: 2},
 	}, nil, [2]string{"group-b", "group-c"}, true, true)
+	testMultiOwnerTCPDomainSearchWithSeedV1(t, ctx, seed, []float32{.7, .7}, separateLeaders, sourceFollower, missingOwnerAsset)
+}
+
+func testMultiOwnerTCPDomainSearchWithSeedV1(t *testing.T, ctx context.Context, seed vectorPartitionLiveProductionFixtureV1, query []float32, separateLeaders, sourceFollower, missingOwnerAsset bool) {
+	t.Helper()
 	if err := seed.collection.EnsureVectorPartitionLiveBindingV1(ctx, seed.manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +180,7 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	}
 	localRequest := configs[0].Vector.RequestBase
 	localRequest.RequestID, localRequest.CancellationID = "local-parity", "local-parity-cancel"
-	localRequest.Query = []float32{.7, .7}
+	localRequest.Query = append([]float32(nil), query...)
 	localRequest.DeadlineUnixNano = time.Now().Add(30 * time.Second).UnixNano()
 	localResult, err := localCoordinator.Search(ctx, localRequest)
 	if err != nil {
@@ -305,7 +368,7 @@ func testMultiOwnerTCPDomainSearchUsesOnlyHostedAssetsV1(t *testing.T, separateL
 	defer publicClient.Close()
 	request := public.SearchRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: seed.manifest.IndexName, Generation: seed.manifest.Generation},
-		Query: []float32{.7, .7}, Metric: public.MetricCosineV1, TopK: 4, Probes: 2, EfSearch: 8,
+		Query: append([]float32(nil), query...), Metric: public.MetricCosineV1, TopK: 4, Probes: 2, EfSearch: 8,
 		Consistency: public.ConsistencyGenerationSnapshotV1,
 		Limits:      public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 16},
 		Deadline:    time.Now().Add(30 * time.Second),
