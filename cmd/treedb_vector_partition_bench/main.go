@@ -121,6 +121,7 @@ type config struct {
 	memory                    benchmarkMemoryPlan
 	stage                     string
 	m3PersistDir              string
+	m3IndexEpoch              uint64
 	m3FinalOfflineGraph       bool
 	m8ExistingDB              string
 	m8VariantDBs              []string
@@ -1039,6 +1040,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
 	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
+	fs.Uint64Var(&cfg.m3IndexEpoch, "m3-index-epoch", 0, "schema generation for the fresh M3 source index; zero preserves historical definitions, one supports public lifecycle fixtures")
 	fs.BoolVar(&cfg.m3FinalOfflineGraph, "m3-final-offline-graph", false, "materialize the final qualifier's retained M16/eFC128 offline graph control")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
@@ -1231,6 +1233,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if cfg.m3IndexEpoch != 0 && cfg.stage != "overlap,partition_index" {
+		return config{}, errors.New("-m3-index-epoch requires stage overlap,partition_index")
 	}
 	if cfg.m3FinalOfflineGraph && (cfg.stage != "overlap,partition_index" || cfg.m3PersistDir == "" || cfg.partitionAssignment != partitionAssignmentGraphV1 || cfg.partitionHNSWM != 16 || cfg.partitionHNSWEfC != 128) {
 		return config{}, errors.New("-m3-final-offline-graph requires retained graph-assignment M3 with explicit M16/efConstruction128")

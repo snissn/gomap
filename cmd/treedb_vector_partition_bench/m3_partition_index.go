@@ -110,6 +110,8 @@ type m3PartitionIndexRow struct {
 	EdgesPerOp                   float64            `json:"edges_per_op"`
 	ExactLocalRecallAtK          float64            `json:"exact_local_recall_at_k"`
 	ManifestDigest               string             `json:"manifest_digest"`
+	IndexEpoch                   uint64             `json:"index_epoch"`
+	IndexDefinitionDigest        string             `json:"index_definition_digest"`
 	SourceGeneration             uint64             `json:"source_generation"`
 	SourceChecksum               uint64             `json:"source_checksum"`
 	SourceSchemaHash             uint64             `json:"source_schema_hash"`
@@ -447,6 +449,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
+	meta.VectorIndexes[0].SchemaGeneration = cfg.m3IndexEpoch
 	partitionHNSWM, partitionHNSWEfConstruction, err := m3PartitionLocalHNSWConfigV1(cfg)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -705,6 +708,12 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened M3 router lifecycle=%+v", lifecycle)
 	}
 	manifest = lifecycle.Manifest
+	reopenedIndexes := col.MetaView().VectorIndexes
+	if len(reopenedIndexes) != 1 || reopenedIndexes[0].SchemaGeneration != cfg.m3IndexEpoch ||
+		collections.VectorIndexDefinitionDigestV1(reopenedIndexes[0]) != identityDescriptor.IndexDefinitionDigest ||
+		manifest.IndexDefinitionDigest != identityDescriptor.IndexDefinitionDigest {
+		return m3PartitionIndexRow{}, errors.New("reopened M3 index epoch/definition does not match source and manifest")
+	}
 	if lifecycle.Capacity != uint64(overlap.Capacity) || lifecycle.OverlapBudget != uint64(overlap.Budget) || lifecycle.UnspentOverlapBudget != uint64(overlap.Unspent) {
 		return m3PartitionIndexRow{}, fmt.Errorf("reopened lifecycle accounting=%+v", lifecycle)
 	}
@@ -877,6 +886,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		EdgesPerOp:                   float64(edges) / float64(timedOps),
 		ExactLocalRecallAtK:          recallTotal / float64(correctnessSearches),
 		ManifestDigest:               manifest.IntegrityDigest,
+		IndexEpoch:                   reopenedIndexes[0].SchemaGeneration,
+		IndexDefinitionDigest:        manifest.IndexDefinitionDigest,
 		SourceGeneration:             source.Generation,
 		SourceChecksum:               source.Checksum,
 		SourceSchemaHash:             source.SchemaHash,

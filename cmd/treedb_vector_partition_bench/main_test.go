@@ -1049,61 +1049,109 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
 	}
-	dataset := writeFixtureForTest(t, 64, 8, 8)
-	persist := filepath.Join(t.TempDir(), "canonical")
-	args := []string{
-		"-dataset", dataset,
-		"-out", t.TempDir(),
-		"-m3-persist-db", persist,
-		"-partitions", "16",
-		"-probes", "1",
-		"-overlap", "0",
-		"-top-k", "4",
-		"-stage", "overlap,partition_index",
-		"-partition-repetitions", "1",
-		"-partition-pivots", "2",
-		"-partition-max-leaf-bucket", "8",
-		"-partition-degree", "4",
-		"-router-max-scalar-work", "50000000000",
+	var defaultDigest string
+	for _, epoch := range []uint64{0, 1} {
+		t.Run(fmt.Sprintf("epoch-%d", epoch), func(t *testing.T) {
+			dataset := writeFixtureForTest(t, 64, 8, 8)
+			persist := filepath.Join(t.TempDir(), "canonical")
+			args := []string{
+				"-dataset", dataset,
+				"-out", t.TempDir(),
+				"-m3-persist-db", persist,
+				"-partitions", "16",
+				"-probes", "1",
+				"-overlap", "0",
+				"-top-k", "4",
+				"-stage", "overlap,partition_index",
+				"-partition-repetitions", "1",
+				"-partition-pivots", "2",
+				"-partition-max-leaf-bucket", "8",
+				"-partition-degree", "4",
+				"-router-max-scalar-work", "50000000000",
+			}
+			if epoch != 0 {
+				args = append(args, "-m3-index-epoch", strconv.FormatUint(epoch, 10))
+			}
+			var output bytes.Buffer
+			if err := runWithHermeticProvenance(t, args, &output); err != nil {
+				t.Fatal(err)
+			}
+			db, err := backenddb.Open(backenddb.Options{Dir: persist, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			col, err := collections.NewCollectionManager(db).OpenCollection(m3BenchmarkCollection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := col.Meta()
+			if len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].M != partitionHNSWDegree || meta.VectorIndexes[0].EfConstruction != partitionHNSWDefaultEfC {
+				t.Fatalf("source index definition=%+v", meta.VectorIndexes)
+			}
+			if meta.VectorIndexes[0].SchemaGeneration != epoch {
+				t.Fatalf("source index epoch=%d want %d", meta.VectorIndexes[0].SchemaGeneration, epoch)
+			}
+			digest := collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0])
+			if epoch == 0 {
+				defaultDigest = digest
+			} else if digest == defaultDigest {
+				t.Fatal("epoch one retained the historical definition digest")
+			}
+			descriptor, err := m3ReadVariantDescriptorV1(persist)
+			if err != nil || descriptor.PartitionHNSWM != 32 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 256 {
+				t.Fatalf("canonical descriptor=%+v err=%v", descriptor, err)
+			}
+			router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := router.Status().Manifest
+			if err := router.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var report m3PartitionIndexReport
+			if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+				t.Fatal(err)
+			}
+			if descriptor.IndexDefinitionDigest != digest || manifest.IndexDefinitionDigest != digest ||
+				len(report.Rows) != 1 || report.Rows[0].IndexEpoch != epoch || report.Rows[0].IndexDefinitionDigest != digest {
+				t.Fatalf("epoch/digest binding: descriptor=%s manifest=%s report=%+v want %d/%s", descriptor.IndexDefinitionDigest, manifest.IndexDefinitionDigest, report.Rows, epoch, digest)
+			}
+			for _, asset := range manifest.Assets {
+				if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
+					t.Fatalf("partition %d graph variant=%q", asset.PartitionID, asset.GraphVariant)
+				}
+				searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, manifest.Generation, asset.PartitionID)
+				if err != nil {
+					t.Fatalf("production-open canonical pack partition %d: %v", asset.PartitionID, err)
+				}
+				if err := searcher.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
-	if err := runWithHermeticProvenance(t, args, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	db, err := backenddb.Open(backenddb.Options{Dir: persist, DisableBackgroundPrune: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	col, err := collections.NewCollectionManager(db).OpenCollection(m3BenchmarkCollection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta := col.Meta()
-	if len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].M != partitionHNSWDegree || meta.VectorIndexes[0].EfConstruction != partitionHNSWDefaultEfC {
-		t.Fatalf("source index definition=%+v", meta.VectorIndexes)
-	}
-	descriptor, err := m3ReadVariantDescriptorV1(persist)
-	if err != nil || descriptor.PartitionHNSWM != 32 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 256 {
-		t.Fatalf("canonical descriptor=%+v err=%v", descriptor, err)
-	}
-	router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest := router.Status().Manifest
-	if err := router.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for _, asset := range manifest.Assets {
-		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
-			t.Fatalf("partition %d graph variant=%q", asset.PartitionID, asset.GraphVariant)
+}
+
+func TestM3IndexEpochConfigV1(t *testing.T) {
+	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "overlap,partition_index"}
+	for _, epoch := range []uint64{0, 1, math.MaxUint64} {
+		cfg, err := parseConfig(append(slices.Clone(args), "-m3-index-epoch", strconv.FormatUint(epoch, 10)))
+		if err != nil || cfg.m3IndexEpoch != epoch {
+			t.Fatalf("epoch %d config=%+v err=%v", epoch, cfg, err)
 		}
-		searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, manifest.Generation, asset.PartitionID)
-		if err != nil {
-			t.Fatalf("production-open canonical pack partition %d: %v", asset.PartitionID, err)
-		}
-		if err := searcher.Close(); err != nil {
-			t.Fatal(err)
+	}
+	if cfg, err := parseConfig(args); err != nil || cfg.m3IndexEpoch != 0 {
+		t.Fatalf("historical default epoch=%d err=%v", cfg.m3IndexEpoch, err)
+	}
+	for _, invalid := range [][]string{
+		{"-m3-index-epoch", "-1"},
+		{"-m3-index-epoch", "18446744073709551616"},
+		{"-m3-index-epoch", "1", "-stage", "simulation"},
+	} {
+		if _, err := parseConfig(append(slices.Clone(args), invalid...)); err == nil {
+			t.Fatalf("invalid M3 epoch arguments accepted: %v", invalid)
 		}
 	}
 }
