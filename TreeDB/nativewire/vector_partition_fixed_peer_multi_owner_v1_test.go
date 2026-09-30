@@ -722,12 +722,16 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	if err != nil {
 		t.Fatalf("reopened owner search: %v", err)
 	}
-	if len(reopened.Neighbors) != len(response.Neighbors) || reopened.Counters.SelectedDomains != uint64(probes) || reopened.Counters.RPCs != response.Counters.RPCs ||
+	if reopened.Generation != request.Generation || len(reopened.Neighbors) != len(response.Neighbors) || reopened.Counters.SelectedDomains != uint64(probes) || reopened.Counters.RPCs != response.Counters.RPCs ||
 		reopened.Counters.SelectedPartitions != uint64(probes) || reopened.Counters.HNSWServedPartitions != uint64(probes) || reopened.Counters.ExactScanPartitions != 0 {
 		t.Fatalf("reopened owner lost a domain or result: before=%+v after=%+v", response, reopened)
 	}
 	for i, neighbor := range reopened.Neighbors {
-		if neighbor.ID != response.Neighbors[i].ID || math.Abs(float64(neighbor.Score-response.Neighbors[i].Score)) > 1e-5 {
+		scoreMismatch := math.Abs(float64(neighbor.Score-response.Neighbors[i].Score)) > 1e-5
+		if truth != nil {
+			scoreMismatch = math.Float32bits(neighbor.Score) != math.Float32bits(response.Neighbors[i].Score)
+		}
+		if neighbor.ID != response.Neighbors[i].ID || scoreMismatch {
 			t.Fatalf("reopened owner result at rank %d: before=%+v after=%+v", i, response.Neighbors[i], neighbor)
 		}
 	}
