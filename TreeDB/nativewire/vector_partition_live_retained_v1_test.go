@@ -30,7 +30,9 @@ type liveLifecycleRouteV1 struct{ domains, packs []uint32 }
 // The enclosing admission script retains the source/copy hashes and resources.
 type liveLifecycleRetainedInputV1 struct {
 	DB, Queries, Truth, ManifestSHA256           string
+	Descriptor, DescriptorSHA256                 string
 	Collection, Index                            string
+	Recipe                                       string // Empty preserves the selected 20% overlap fixture.
 	Generation                                   uint64
 	Probes                                       int
 	Python, PythonSHA256, Adapter, AdapterSHA256 string
@@ -58,11 +60,23 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	if err := json.Unmarshal(raw, &input); err != nil {
 		t.Fatal(err)
 	}
-	if !filepath.IsAbs(input.DB) || filepath.Base(filepath.Clean(input.DB)) != "mutable-lifecycle-copy" || input.Collection != "m3_partition_source" || input.Generation == 0 || input.Index == "" || input.Probes < 1 || input.Probes >= 16 {
+	if !filepath.IsAbs(input.DB) || filepath.Base(filepath.Clean(input.DB)) != "mutable-lifecycle-copy" || input.Collection != "m3_partition_source" || input.Generation == 0 || input.Index == "" || input.Probes < 1 || input.Probes >= 16 || (input.Recipe != "" && input.Recipe != "graph-disjoint-v1") {
 		t.Fatal("invalid retained mutable-copy specification")
 	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") == "" {
 		t.Fatal("retained real lifecycle requires a receipt directory")
+	}
+	if input.Recipe == "graph-disjoint-v1" {
+		var descriptor struct {
+			PythonSHA256  string `json:"kahip_python_sha256"`
+			AdapterSHA256 string `json:"kahip_adapter_sha256"`
+		}
+		if err := json.Unmarshal(liveLifecycleReadPinnedV1(t, input.Descriptor, input.DescriptorSHA256), &descriptor); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateLiveLifecycleRetainedToolPinsV1(input, descriptor.PythonSHA256, descriptor.AdapterSHA256); err != nil {
+			t.Fatal(err)
+		}
 	}
 	liveLifecycleReadPinnedV1(t, input.Python, input.PythonSHA256)
 	liveLifecycleReadPinnedV1(t, input.Adapter, input.AdapterSHA256)
@@ -70,9 +84,46 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	return input
 }
 
-func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
+func validateLiveLifecycleRetainedToolPinsV1(input liveLifecycleRetainedInputV1, descriptorPython, descriptorAdapter string) error {
+	if descriptorPython != "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae" || descriptorAdapter != "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e" || input.PythonSHA256 != descriptorPython || input.AdapterSHA256 != descriptorAdapter {
+		return errors.New("accepted descriptor/input tool provenance mismatch")
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedToolPinsV1(t *testing.T) {
+	python := "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae"
+	adapter := "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e"
+	wrong := fmt.Sprintf("%064x", 1)
+	for _, tc := range []struct {
+		name, inputPython, inputAdapter, descriptorPython, descriptorAdapter string
+		wantError                                                            bool
+	}{
+		{"accepted-tools", python, adapter, python, adapter, false},
+		{"wrong-input-python", wrong, adapter, python, adapter, true},
+		{"missing-input-python", "", adapter, python, adapter, true},
+		{"wrong-input-adapter", python, wrong, python, adapter, true},
+		{"missing-input-adapter", python, "", python, adapter, true},
+		{"wrong-descriptor-python", wrong, adapter, wrong, adapter, true},
+		{"missing-descriptor-python", "", adapter, "", adapter, true},
+		{"wrong-descriptor-adapter", python, wrong, python, wrong, true},
+		{"missing-descriptor-adapter", python, "", python, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := liveLifecycleRetainedInputV1{PythonSHA256: tc.inputPython, AdapterSHA256: tc.inputAdapter}
+			if err := validateLiveLifecycleRetainedToolPinsV1(input, tc.descriptorPython, tc.descriptorAdapter); (err != nil) != tc.wantError {
+				t.Fatalf("tool pin error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
 	t.Helper()
 	in := liveLifecycleRetainedInputForV1(t)
+	if in.Recipe != expectedRecipe {
+		t.Fatalf("retained fixture recipe %q does not match caller recipe %q", in.Recipe, expectedRecipe)
+	}
 	format, present, err := backenddb.LoadFormatConfig(in.DB)
 	if err != nil || !present || !format.RequiresCommandWALV2() {
 		t.Fatalf("copy lacks command-WAL eligibility: %v", err)
@@ -99,11 +150,22 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(manifest)
-	if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
-		t.Fatalf("manifest pin mismatch: %v", err)
+	descriptorIntegrity := ""
+	if in.Recipe == "graph-disjoint-v1" {
+		// The pinned M3 descriptor binds the actual persisted manifest without a
+		// separate metadata-dump program, even when an additional JSON pin exists.
+		var descriptor struct {
+			Integrity string `json:"manifest_integrity_digest"`
+		}
+		if err := json.Unmarshal(liveLifecycleReadPinnedV1(t, in.Descriptor, in.DescriptorSHA256), &descriptor); err != nil {
+			t.Fatal(err)
+		}
+		descriptorIntegrity = descriptor.Integrity
 	}
-	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err != nil {
+	if err := validateLiveLifecycleRetainedManifestPinV1(manifest, in.Recipe, in.ManifestSHA256, descriptorIntegrity); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLiveLifecycleRetainedGeometryV1(manifest, in.Recipe); err != nil {
 		t.Fatal(err)
 	}
 	fixture := vectorPartitionLiveProductionFixtureV1{dir: in.DB, database: db, collection: col, manifest: manifest}
@@ -114,6 +176,9 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	}
 	if fixture.definition.Dimensions != 768 || fixture.definition.Strategy != collections.VectorIndexStrategyColumnGraph {
 		t.Fatal("wrong retained definition")
+	}
+	if in.Recipe == "graph-disjoint-v1" && (fixture.definition.SchemaGeneration != 1 || fixture.definition.M != 16 || fixture.definition.EfConstruction != 128 || fixture.definition.EfSearch != 128 || collections.VectorIndexDefinitionDigestV1(fixture.definition) != manifest.IndexDefinitionDigest) {
+		t.Fatal("accepted disjoint fixture requires the fresh epoch-one source definition M16/eFC128/eFS128")
 	}
 	source, rows, err := col.ReadVectorPartitionRouterSourceRowsV1(in.Index)
 	if err != nil {
@@ -129,7 +194,7 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 		}
 		vectors[string(row.DocumentID)] = row.Values
 	}
-	raw = liveLifecycleReadPinnedV1(t, in.Queries, "8a27d38fb9d79e3607ee393af989644874e965813d7f26a55258dc60a0b1b70e")
+	raw := liveLifecycleReadPinnedV1(t, in.Queries, "8a27d38fb9d79e3607ee393af989644874e965813d7f26a55258dc60a0b1b70e")
 	if len(raw) != 512*768*4 {
 		t.Fatal("wrong real query shape")
 	}
@@ -145,7 +210,50 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	return fixture, vectors, queries, in.Probes
 }
 
-func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1) error {
+func validateLiveLifecycleRetainedManifestPinV1(manifest collections.VectorPartitionManifestV1, recipe, manifestSHA256, descriptorIntegrity string) error {
+	if recipe == "graph-disjoint-v1" && (len(descriptorIntegrity) != 64 || descriptorIntegrity != manifest.IntegrityDigest) {
+		return errors.New("fresh descriptor manifest integrity mismatch")
+	}
+	// Legacy callers require their JSON pin; disjoint callers may add one.
+	if recipe != "graph-disjoint-v1" || manifestSHA256 != "" {
+		raw, err := json.Marshal(manifest)
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != manifestSHA256 {
+			return fmt.Errorf("manifest pin mismatch: %v", err)
+		}
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedManifestPinV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{IntegrityDigest: fmt.Sprintf("%064x", 1)}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := fmt.Sprintf("%x", sha256.Sum256(raw))
+	for _, tc := range []struct {
+		name, recipe, manifestSHA256, descriptorIntegrity string
+		wantError                                         bool
+	}{
+		{"disjoint-descriptor-only", "graph-disjoint-v1", "", manifest.IntegrityDigest, false},
+		{"disjoint-additional-json-pin", "graph-disjoint-v1", pin, manifest.IntegrityDigest, false},
+		{"disjoint-correct-json-wrong-descriptor", "graph-disjoint-v1", pin, fmt.Sprintf("%064x", 2), true},
+		{"disjoint-correct-json-missing-descriptor", "graph-disjoint-v1", pin, "", true},
+		{"disjoint-correct-json-short-descriptor", "graph-disjoint-v1", pin, "1", true},
+		{"disjoint-wrong-additional-json-pin", "graph-disjoint-v1", fmt.Sprintf("%064x", 2), manifest.IntegrityDigest, true},
+		{"legacy-json-pin", "", pin, "", false},
+		{"legacy-wrong-json-pin", "", fmt.Sprintf("%064x", 2), "", true},
+		{"legacy-missing-json-pin", "", "", manifest.IntegrityDigest, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateLiveLifecycleRetainedManifestPinV1(manifest, tc.recipe, tc.manifestSHA256, tc.descriptorIntegrity); (err != nil) != tc.wantError {
+				t.Fatalf("manifest pin error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1, recipe string) error {
 	if manifest.SourceRowCount != 100000 || manifest.DomainCount != 16 {
 		return fmt.Errorf("retained fixture must be real100K/D16")
 	}
@@ -158,8 +266,20 @@ func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitio
 	policy, valid := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
 	// PackDomainMembershipsV1 replaces the logical-domain capacity with the
 	// per-pack capacity before M3 persists the policy. Do not compare units.
-	if !valid || policy.Budget != 20000 || policy.Realized == 0 || policy.Capacity != uint64(plan.OverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
-		return fmt.Errorf("retained fixture must be the selected 20%% overlap multi-pack asset: policy=%+v packs=%d, want pack_capacity=%d packs=%d", policy, manifest.PartitionCount, plan.OverlapCapacity, plan.Partitions)
+	if !valid || policy.Capacity != uint64(plan.OverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
+		return fmt.Errorf("retained fixture physical geometry: policy=%+v packs=%d, want pack_capacity=%d packs=%d", policy, manifest.PartitionCount, plan.OverlapCapacity, plan.Partitions)
+	}
+	switch recipe {
+	case "":
+		if policy.Budget != 20000 || policy.Realized == 0 {
+			return errors.New("retained fixture must be the selected 20% overlap asset")
+		}
+	case "graph-disjoint-v1":
+		if policy.Budget != 0 || policy.Realized != 0 || policy.Unspent != 0 || len(manifest.OverlapMemberships) != 0 {
+			return errors.New("accepted disjoint fixture must have zero overlap budget and memberships")
+		}
+	default:
+		return fmt.Errorf("unknown retained fixture recipe %q", recipe)
 	}
 	return nil
 }
@@ -173,29 +293,42 @@ func TestVectorPartitionLiveRetainedGeometryV1(t *testing.T) {
 		realized  uint64
 		packs     uint32
 		wantError bool
+		recipe    string
+		overlap   bool
 	}{
-		{"physical-pack-capacity", 1875, 20000, 20000, 64, false},
-		{"logical-domain-capacity-is-not-pack-capacity", 7500, 20000, 20000, 64, true},
-		{"no-overlap", 1875, 20000, 0, 64, true},
-		{"disjoint-budget", 1875, 0, 0, 64, true},
-		{"wrong-pack-count", 1875, 20000, 20000, 16, true},
+		{"physical-pack-capacity", 1875, 20000, 20000, 64, false, "", false},
+		{"logical-domain-capacity-is-not-pack-capacity", 7500, 20000, 20000, 64, true, "", false},
+		{"no-overlap", 1875, 20000, 0, 64, true, "", false},
+		{"disjoint-budget", 1875, 0, 0, 64, true, "", false},
+		{"wrong-pack-count", 1875, 20000, 20000, 16, true, "", false},
+		{"accepted-disjoint", 1875, 0, 0, 64, false, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-overlap-policy", 1875, 20000, 20000, 64, true, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-overlap-membership", 1875, 0, 0, 64, true, "graph-disjoint-v1", true},
+		{"accepted-disjoint-rejects-domain-capacity", 7500, 0, 0, 64, true, "graph-disjoint-v1", false},
+		{"accepted-disjoint-rejects-pack-count", 1875, 0, 0, 16, true, "graph-disjoint-v1", false},
+		{"unknown-recipe", 1875, 0, 0, 64, true, "unknown", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := manifest
 			m.PartitionCount = tc.packs
+			if tc.overlap {
+				m.OverlapMemberships = []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+			}
 			var err error
 			m.BalancePolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: tc.capacity, Budget: tc.budget, Realized: tc.realized, Unspent: tc.budget - tc.realized})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateLiveLifecycleRetainedGeometryV1(m); (err != nil) != tc.wantError {
+			if err := validateLiveLifecycleRetainedGeometryV1(m, tc.recipe); (err != nil) != tc.wantError {
 				t.Fatalf("geometry error=%v, wantError=%v", err, tc.wantError)
 			}
 		})
 	}
 	manifest.BalancePolicy = "malformed"
-	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err == nil {
-		t.Fatal("accepted malformed overlap policy")
+	for _, recipe := range []string{"", "graph-disjoint-v1"} {
+		if err := validateLiveLifecycleRetainedGeometryV1(manifest, recipe); err == nil {
+			t.Fatal("accepted malformed overlap policy")
+		}
 	}
 }
 

@@ -2947,3 +2947,38 @@ corrupt-owner fault matrix, scoped
 reclaim/reopen breadth, and matched enabled-path latency/CPU/alloc/RSS and
 catalog-RPC measurements remain #4809 acceptance work. Local-vs-TCP ID/score
 parity is not a holdout-recall or throughput result.
+
+## Accepted-disjoint public qualification harness (#4809)
+
+`TestMultiOwnerTCPAcceptedDisjointGeometryV1` reuses the existing fixture and
+four-process public helpers with 64 rows, 768 dimensions, 64 placements and
+16 whole domains across two owners. Two queries use P5, EfSearch96, TopK10,
+MergeEntries256 and exact centroid routing with ScoreBudget256, while exact
+vector-row scans remain forbidden. Native/public parity, selected counters,
+hosted-only assets, nonrouter refusal, selected-owner loss without partial
+results and same-generation owner reopen exercise the larger geometry. The
+existing three-pack/two-domain wrappers retain P2, two groups/two RPCs and their
+1e-5 score tolerance.
+
+`TestVectorPartitionLiveRetainedGeometryV1` preserves the strict selected
+20-percent-overlap default and its negatives, and separately checks explicit
+`graph-disjoint-v1` admission at 100K/D16/P64 with zero overlap. The mutable
+lifecycle caller binds the default recipe before opening a DB; fixture JSON
+cannot widen it. `TestFixedPeerTCPRuntimeConfigFileV1` checks private 0600 child
+configuration transport above the inline environment limit, at the existing
+8 MiB cap, and refusal of malformed, trailing or oversized JSON.
+
+`TestMultiOwnerTCPAcceptedDisjointRetained100KV1` is an opt-in harness requiring
+a root-approved fresh epoch-one M3 copy and pinned descriptor, queries and
+truth through `GOMAP_SELECTED_LIVE_FIXTURE`. It binds the actual definition and
+manifest integrity to the accepted source/assignment/graph recipe, then uses
+the existing owner-separated materializer once to produce a new global
+generation and router. Source M16/128/128 is distinct from local compatibility
+32/256 and canonical Vamana R64/L256/alpha1.2. Its 512 previously examined
+queries use the parameters above, with at most 16 public warm queries, exact
+ID/order/float32-score and algorithm-counter parity, unique IDs and pinned
+recall >=0.95. Original source/assignment identities and fresh owner-separated
+asset/READY/router identities are recorded separately. Historical epoch-zero
+bytes remain checksum-only. Adding this harness establishes no 100K pass,
+held-out recall or performance claim; expensive collection requires its own
+reviewed recipe, resource limits and allocation.

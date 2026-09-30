@@ -473,7 +473,7 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		os.Exit(23)
 	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_FIXTURE") != "" {
-		fixture, vectors, queries, probes := liveLifecycleOpenRetainedV1(t)
+		fixture, vectors, queries, probes := liveLifecycleOpenRetainedV1(t, "")
 		runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, probes, "doc-000000", 8)
 		return
 	}
