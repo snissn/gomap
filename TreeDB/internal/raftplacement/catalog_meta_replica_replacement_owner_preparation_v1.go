@@ -1,6 +1,7 @@
 package raftplacement
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -43,22 +44,15 @@ func validateReplicaReplacementOwnerPreparationPhaseV1(record CatalogMetaRecordV
 	return nil
 }
 
-func validateReplicaReplacementOwnerPreparationPhasesV1(record CatalogMetaRecordV1, lifecycle map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, replacements map[raftcluster.GroupID][]byte, fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1) error {
+func validateReplicaReplacementOwnerPreparationPhasesV1(record CatalogMetaRecordV1, resolved ResolvedCatalogV1, lifecycle map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, replacements map[raftcluster.GroupID][]byte, fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1) error {
 	for _, raw := range replacements {
 		state, err := decodeReplicaReplacementCurrentV1(raw)
 		if err != nil {
 			return err
 		}
 		if state.Phase != ReplicaReplacementCompletedV1 && catalogMetaFeatureEnabledV1(record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
-			active := false
-			for _, existing := range lifecycle {
-				if existing.State == VectorPartitionLifecycleActiveV1 && existing.Identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) {
-					active = true
-					break
-				}
-			}
-			if !active {
-				return ErrVectorPartitionLifecycleGuard
+			if err := validateImmutableReplicaReplacementLifecycleV1(resolved, lifecycle, fences, barriers, state.Begin.GroupID); err != nil {
+				return errors.Join(ErrVectorPartitionLifecycleGuard, err)
 			}
 		}
 		if state.Begin.OwnerPreparation != nil {

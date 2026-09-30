@@ -7,6 +7,7 @@ import (
 	hraft "github.com/hashicorp/raft"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -241,5 +242,145 @@ func TestCatalogCompletedReplacementHistoryAllowsLaterOwnerBindingSnapshotV1(t *
 		if err != nil || !bytes.Equal(snapshot, restored) {
 			t.Fatalf("snapshot authority changed on restore: %v", err)
 		}
+	}
+}
+
+func TestCatalogPendingReplacementSnapshotRequiresCompleteBeginAdmissionV1(t *testing.T) {
+	for _, name := range []string{"ordinary", "building", "mutable-active", "pending-fence", "pending-barrier", "canonical-source", "unbound-token-owner"} {
+		t.Run(name, func(t *testing.T) {
+			catalog := catalogMetaLifecycleCatalogV1(true)
+			catalog.Groups = append(catalog.Groups, GroupV1{ID: "group-c", Members: []raftcluster.NodeID{"node-c"}})
+			if name == "canonical-source" {
+				catalog.Placements[0].GroupID = "group-c"
+			}
+			if name == "unbound-token-owner" {
+				catalog.Placements[0] = tokenPlacement(catalog.Placements[0].Collection, PlacementModeTokenV1)
+				catalog.Placements[0].TokenPartitions[0].GroupID = "group-c"
+			}
+			record, err := NewCatalogMetaRecordV1(1, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := NewCatalogMetaAuthorityV1()
+			genesis, err := EncodeCatalogMetaCommandV1(CatalogMetaCommandV1{Record: record})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.applyCommittedCatalogMetaV1(genesis, 1); err != nil {
+				t.Fatal(err)
+			}
+			applied := a.applied
+			addGeneration := func(index string, immutable, activate bool) VectorPartitionLifecycleRecordV1 {
+				t.Helper()
+				identity := catalogMetaLifecycleTestIdentityV1(record, 7, 11)
+				identity.Index.IndexName = index
+				if immutable {
+					identity.Immutable = VectorPartitionLifecycleImmutableAuthorityV1{ManifestDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64)}
+				}
+				building := catalogMetaLifecycleApplyV1(t, a, &applied, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-b"}, MutationEpoch: 9})
+				if !activate {
+					return building
+				}
+				staged := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(building, VectorPartitionLifecycleRecordGroupReadyV1, func(command *VectorPartitionLifecycleCommandV1) {
+					command.GroupReady = VectorPartitionLifecycleGroupReadyV1{GroupID: "group-b", AppliedIndex: applied, AssetSetDigest: strings.Repeat("c", 64)}
+				}))
+				digest, err := VectorPartitionLifecycleReadySetDigestV1(identity, staged.RequiredGroups, staged.ReadyGroups)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared := catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(staged, VectorPartitionLifecyclePrepareV1, func(command *VectorPartitionLifecycleCommandV1) { command.ReadySetDigest = digest }))
+				return catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(prepared, VectorPartitionLifecycleActivateV1, func(command *VectorPartitionLifecycleCommandV1) { command.MutationEpoch = 9 }))
+			}
+			addGeneration("embedding", true, true)
+			begin := activeReplicaReplacementBeginV1(record)
+			raw, err := EncodeReplicaReplacementBeginV1(begin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A known receiver has genuinely committed this exact BEGIN. Source
+			// placement negatives are not admitted and use a catalog-only receiver.
+			known := NewCatalogMetaAuthorityV1()
+			clean, err := a.ExportCatalogMetaSnapshotBytesV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := known.installCatalogMetaSnapshotBytesV1(clean); err != nil {
+				t.Fatal(err)
+			}
+			if name != "canonical-source" && name != "unbound-token-owner" {
+				if _, err := known.applyCommittedCatalogMetaV1(raw, known.applied+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch name {
+			case "building":
+				addGeneration("unrelated", true, false)
+			case "mutable-active":
+				addGeneration("unrelated", false, true)
+			case "pending-fence":
+				active := addGeneration("unrelated", true, true)
+				catalogMetaLifecycleApplyV1(t, a, &applied, catalogMetaLifecycleTestCommandV1(active, VectorPartitionLifecycleInvalidateV1, func(command *VectorPartitionLifecycleCommandV1) {
+					command.Reason = "unrelated mutation"
+					command.InvalidationEpoch = active.MutationEpoch + 1
+				}))
+			case "pending-barrier":
+				command, err := encodeVectorPartitionCollectionMutationCommandV1(vectorPartitionCollectionMutationCommandV1{Kind: vectorPartitionBeginCollectionMutationV1, Collection: catalog.Placements[1].Collection, CatalogEpoch: record.Epoch, CatalogDigest: record.Digest, ExpectedMutationEpoch: 1, MutationEpoch: 2, OperationDigest: strings.Repeat("e", 64)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := a.applyCommittedVectorPartitionCollectionMutationV1(command, a.applied+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := a.ExportCatalogMetaSnapshotBytesV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Every mixed lifecycle/mutation state is itself a real admitted
+			// pre-BEGIN authority and valid cold snapshot. Combining it with a
+			// pending operation must not bypass normal BEGIN refusal.
+			if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(before); err != nil {
+				t.Fatalf("pre-BEGIN control: %v", err)
+			}
+			if _, err := a.applyCommittedCatalogMetaV1(raw, a.applied+1); name == "ordinary" {
+				if err != nil {
+					t.Fatalf("ordinary BEGIN: %v", err)
+				}
+			} else if !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+				t.Fatalf("mixed BEGIN admitted: %v", err)
+			}
+			var snapshot CatalogMetaSnapshotV1
+			if err := json.Unmarshal(before, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			snapshot.AppliedIndex = a.applied + 1
+			snapshot.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(map[raftcluster.GroupID][]byte{begin.GroupID: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			forged, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, receiver := range []*CatalogMetaAuthorityV1{NewCatalogMetaAuthorityV1(), known} {
+				status, available := receiver.Status()
+				retained, exportErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+				err := receiver.installCatalogMetaSnapshotBytesV1(forged)
+				if name == "ordinary" {
+					if err != nil {
+						t.Fatalf("ordinary pending restore: %v", err)
+					}
+					continue
+				}
+				if !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+					t.Fatalf("mixed pending restore: %v", err)
+				}
+				got, gotAvailable := receiver.Status()
+				after, afterErr := receiver.ExportCatalogMetaSnapshotBytesV1()
+				if !reflect.DeepEqual(status, got) || available != gotAvailable || !bytes.Equal(retained, after) || !errors.Is(afterErr, exportErr) {
+					t.Fatalf("refusal mutated authority: before=%+v after=%+v export=%v/%v", status, got, exportErr, afterErr)
+				}
+			}
+		})
 	}
 }

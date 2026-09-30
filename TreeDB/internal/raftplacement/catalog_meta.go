@@ -644,13 +644,13 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
-	if err := validateReplicaReplacementOwnerPreparationPhasesV1(record, lifecycle, replacements, mutationFences, collectionMutationBarriers); err != nil {
+	if err := validateReplicaReplacementOwnerPreparationPhasesV1(record, resolved, lifecycle, replacements, mutationFences, collectionMutationBarriers); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.record.Epoch != 0 {
-		if err := validateReplicaReplacementOwnerPreparationPhasesV1(a.record, a.lifecycle, replacements, a.mutationFences, a.collectionMutationBarriers); err != nil {
+		if err := validateReplicaReplacementOwnerPreparationPhasesV1(a.record, a.resolved, a.lifecycle, replacements, a.mutationFences, a.collectionMutationBarriers); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 	}

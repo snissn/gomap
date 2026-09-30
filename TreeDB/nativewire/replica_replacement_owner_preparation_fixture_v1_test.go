@@ -73,15 +73,47 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 	meta.Options.ColumnStore = &column
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
 	fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
+	excluded := map[string]bool{}
+	for _, config := range configs {
+		excluded[config.ListenAddress] = true
+		for _, value := range config.RaftListen {
+			excluded[value] = true
+		}
+		for _, node := range config.Nodes {
+			excluded[node.Address] = true
+		}
+		for _, peer := range config.Catalog.Peers {
+			excluded[peer.Address] = true
+		}
+		for _, group := range config.Groups {
+			for _, peer := range group.Peers {
+				excluded[peer.Address] = true
+			}
+		}
+		for _, value := range config.Vector.PublicAddresses {
+			excluded[value] = true
+		}
+		for _, addresses := range config.Vector.ShardAddresses {
+			for _, value := range addresses {
+				excluded[value] = true
+			}
+		}
+	}
 	reserved := []net.Listener{}
 	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		for {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := listener.Addr().String()
+			// Hold colliding sockets too, so allocation must move past them.
+			reserved = append(reserved, listener)
+			if !excluded[value] {
+				excluded[value] = true
+				return value
+			}
 		}
-		value := listener.Addr().String()
-		reserved = append(reserved, listener)
-		return value
 	}
 	const target raftcluster.NodeID = "replacement"
 	targetAddress, targetRaft := address(), address()

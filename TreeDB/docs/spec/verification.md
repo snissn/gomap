@@ -2780,6 +2780,12 @@ completes an unrelated ordinary replacement with lifecycle support already
 enabled, then commits a new immutable ACTIVE index that uses that group and
 checks exact cold/known snapshot replay. Completed ordinary history grants no
 owner preparation authority; marked history retains its permanent phase cap.
+`TestCatalogPendingReplacementSnapshotRequiresCompleteBeginAdmissionV1` uses
+real pre-BEGIN lifecycle/mutation commands and verifies atomic cold/known refusal
+for a pending ordinary replacement combined with BUILDING or mutable ACTIVE
+state, a pending fence/barrier, or incompatible canonical/token placement.
+The genuine ordinary pending control remains admissible; completed histories
+remain covered separately.
 `TestImmutableOwnerReplacementPreparationCapabilityV1` is the baseline-compatible
 real-Raft capability producer: the baseline refuses at public replacement BEGIN
 before seed/install, whereas the candidate must install and enroll only a nonvoter.

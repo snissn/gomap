@@ -328,18 +328,24 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleLockedV1(gro
 	if !catalogMetaFeatureEnabledV1(a.record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
 		return a.validateVectorPartitionLifecycleCatalogTransitionLockedV1()
 	}
-	for _, barrier := range a.collectionMutationBarriers {
+	return validateImmutableReplicaReplacementLifecycleV1(a.resolved, a.lifecycle, a.mutationFences, a.collectionMutationBarriers, group)
+}
+
+// Pending lifecycle-enabled replacements retain the complete BEGIN admission
+// invariant during command application and cold or known snapshot import.
+func validateImmutableReplicaReplacementLifecycleV1(resolved ResolvedCatalogV1, lifecycle map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1, barriers map[CollectionRefV1]vectorPartitionCollectionMutationBarrierStateV1, group raftcluster.GroupID) error {
+	for _, barrier := range barriers {
 		if barrier.Pending {
 			return ErrVectorPartitionLifecycleGuard
 		}
 	}
-	for _, fence := range a.mutationFences {
+	for _, fence := range fences {
 		if fence.Pending {
 			return ErrVectorPartitionLifecycleGuard
 		}
 	}
 	active := false
-	for identity, record := range a.lifecycle {
+	for identity, record := range lifecycle {
 		if record.Identity != identity {
 			return ErrVectorPartitionLifecycleIdentity
 		}
@@ -349,7 +355,7 @@ func (a *CatalogMetaAuthorityV1) validateReplicaReplacementLifecycleLockedV1(gro
 		if record.State != VectorPartitionLifecycleActiveV1 || identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{}) {
 			return ErrVectorPartitionLifecycleGuard
 		}
-		placement, ok := a.resolved.Placement(identity.Index.Collection)
+		placement, ok := resolved.Placement(identity.Index.Collection)
 		if !ok || placement.GroupID == group {
 			return ErrVectorPartitionLifecycleGuard
 		}
