@@ -11,8 +11,8 @@ strict TCP API, in the same order, on the same retained generation. The fixed
 settings remain exact routing C256, P5, EF96, TopK10 and Merge256. The opt-in
 adds **16 local warm calls** before the existing local reference pass; the TCP
 arm keeps its existing **16 warm calls**. Thus each arm has 528 calls, including
-512 observed calls. Existing refusal, loss and reopen controls run separately
-after the observed passes. No repeated correctness corpus, ranker change,
+512 observed calls. Existing refusal, loss and reopen controls remain outside
+the observed passes. No repeated correctness corpus, ranker change,
 retuning, M3 rebuild, TLS/startup change or `readCost` mode is introduced.
 
 Requests and result slices are allocated before the observed windows. Each
