@@ -278,6 +278,18 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 	if err := bound.requireCurrentImmutableDBV1(); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("immutable serving accepted a snapshot-replaced DB: %v", err)
 	}
+	// Exercise the immutable owner health adapter against the same actual
+	// snapshot-replaced FSM DB without changing this fixture's runtime config.
+	healthParent := &FixedPeerTCPRuntimeV1{config: r.config, data: r.data}
+	healthParent.config.Vector = &FixedPeerTCPVectorConfigV1{
+		Identity: raftplacement.VectorPartitionLifecycleIdentityV1{
+			Immutable: raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{ManifestDigest: "health-control"},
+		},
+	}
+	healthBackend := &fixedPeerVectorBackendV1{runtime: &fixedPeerVectorRuntimeV1{parent: healthParent, dataGroup: "group-a"}}
+	if health, err := healthBackend.OperationsHealthV1(ctx); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || health.Ready || health.Reason != "authority_unavailable" {
+		t.Fatalf("snapshot-replaced owner health: %+v %v", health, err)
+	}
 	before, err = r.Status(ctx)
 	if err != nil {
 		t.Fatal(err)

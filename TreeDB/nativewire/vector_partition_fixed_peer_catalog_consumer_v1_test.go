@@ -271,8 +271,8 @@ func fixedPeerAssertColdCatalogConsumerOwnerV1(t testing.TB, ctx context.Context
 		t.Fatal(err)
 	}
 	defer peer.Close()
-	if status, err := peer.VectorStatusV1(ctx); err == nil && status.Health.Ready {
-		t.Fatalf("cold consumer status advertised READY: %+v", status)
+	if status, err := peer.VectorStatusV1(ctx); err != nil || status.Health.Ready || status.Health.Reason != "topology_unavailable" {
+		t.Fatalf("cold consumer status must report unwarmed topology: %+v %v", status, err)
 	}
 	if report, err := control.ReadinessV1(ctx, "owner-b"); err == nil || report.Ready {
 		t.Fatalf("cold consumer readiness advertised READY: %+v %v", report, err)
