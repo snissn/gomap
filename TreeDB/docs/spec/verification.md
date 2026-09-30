@@ -2772,7 +2772,8 @@ ordinary fixed-peer vector replacement remains unavailable.
 
 `TestCatalogOwnerPreparationIdentityAndPhaseCapV1` covers unmarked owner,
 changed/incomplete identity, source-group refusal, allowed preparation phases,
-exact retry, accessor alias isolation, cold restore, and direct/forward-import
+exact retry, accessor alias isolation, cold restore, both marker/ACTIVE evidence
+erasure refusal (empty snapshot without pending replacement stays valid), and direct/forward-import
 promotion/removal refusals with retained or erased markers.
 `TestImmutableOwnerReplacementPreparationCapabilityV1` is the baseline-compatible
 real-Raft capability producer: the baseline refuses at public replacement BEGIN

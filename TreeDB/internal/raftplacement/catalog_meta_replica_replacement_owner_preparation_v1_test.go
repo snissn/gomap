@@ -103,6 +103,40 @@ func TestCatalogOwnerPreparationIdentityAndPhaseCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var stripped CatalogMetaSnapshotV1
+	if err := json.Unmarshal(before, &stripped); err != nil {
+		t.Fatal(err)
+	}
+	stripped.VectorPartitionLifecycle = nil
+	stripped.AppliedIndex++
+	unmarked := state
+	unmarked.Begin.OwnerPreparation = nil
+	unmarkedRaw, err := EncodeReplicaReplacementStateV1(unmarked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped.ReplicaReplacements, err = encodeReplicaReplacementSnapshotV1(map[raftcluster.GroupID][]byte{begin.GroupID: unmarkedRaw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	strippedRaw, err := json.Marshal(stripped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, receiver := range []*CatalogMetaAuthorityV1{NewCatalogMetaAuthorityV1(), a} {
+		if err := receiver.installCatalogMetaSnapshotBytesV1(strippedRaw); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("both marker and ACTIVE evidence erased: %v", err)
+		}
+	}
+	// No pending replacement grants no capability; ordinary empty cold state stays valid.
+	stripped.ReplicaReplacements = nil
+	emptyRaw, err := json.Marshal(stripped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalogMetaAuthorityV1().installCatalogMetaSnapshotBytesV1(emptyRaw); err != nil {
+		t.Fatalf("empty snapshot without pending replacement: %v", err)
+	}
 	digest := raftentry.CommandDigestV1{1}
 	state.Tail = &raftcluster.ReplacementTailV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID, LeaderTerm: 4, CommitIndex: 12, ConfigurationIndex: 10, Progress: raftcluster.ReplacementTailProgressV1{EntryID: raftentry.ApplyEntryID{Term: 4, Index: 11}, CommandDigest: digest, ProgressDigest: raftentry.CommandDigestV1{2}, Result: raftentry.ApplyResultV1{CommandDigest: digest, ResultDigest: raftentry.CommandDigestV1{3}}}}
 	for _, phase := range []ReplicaReplacementPhaseV1{ReplicaReplacementPromoteIntentV1, ReplicaReplacementPromotedV1, ReplicaReplacementRemoveIntentV1, ReplicaReplacementRemovedV1} {

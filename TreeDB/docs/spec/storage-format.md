@@ -3638,7 +3638,10 @@ identity bound to its exact catalog epoch/digest. Ordinary BEGIN omits the field
 and retains its bytes. The marker persists through receiver and catalog records
 and independently caps authority at `add-intent`; decoding canonical JSON does
 not itself grant promotion or serving authority. Cold/forward snapshot import
-requires the exact ACTIVE ANN-only owner and rejects erased or changed caps. Advance phases are
+requires the exact ACTIVE ANN-only owner and rejects erased or changed caps.
+A lifecycle-feature-enabled incoming snapshot with pending replacements requires
+immutable ACTIVE evidence even if both marker and lifecycle records were erased;
+no pending replacement leaves ordinary empty cold imports unchanged. Advance phases are
 `seeded`, `installed`, and `add-intent`; adjacent advances and exact retries are
 accepted, while changing the BEGIN or selected seed is refused. A replacement
 command is capped at 24 KiB and the existing total catalog snapshot limit still

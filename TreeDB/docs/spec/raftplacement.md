@@ -337,7 +337,10 @@ may prepare a Nodes-only target with an optional canonical BEGIN
 `owner_preparation` identity. It binds the complete configured lifecycle identity,
 immutable manifest/placement digests, and current catalog epoch/digest.
 Authoritative `RequiredGroups` establishes owner membership even without token
-partition metadata. Unmarked owner BEGIN refuses. The marker independently caps
+partition metadata. Unmarked owner BEGIN refuses.
+A lifecycle-feature-enabled incoming snapshot with pending replacements requires
+immutable ACTIVE evidence even if both marker and lifecycle records were erased;
+no pending replacement leaves ordinary empty cold imports unchanged. The marker independently caps
 committed phases at `add-intent`, including exact retries, cold snapshot import,
 forward restore, and direct phase requests; it grants no READY or serving authority.
 

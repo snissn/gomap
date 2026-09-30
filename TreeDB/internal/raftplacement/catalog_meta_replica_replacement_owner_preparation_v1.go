@@ -44,6 +44,18 @@ func validateReplicaReplacementOwnerPreparationPhasesV1(record CatalogMetaRecord
 		if err != nil {
 			return err
 		}
+		if state.Phase != ReplicaReplacementCompletedV1 && catalogMetaFeatureEnabledV1(record.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+			active := false
+			for _, existing := range lifecycle {
+				if existing.State == VectorPartitionLifecycleActiveV1 && existing.Identity.Immutable != (VectorPartitionLifecycleImmutableAuthorityV1{}) {
+					active = true
+					break
+				}
+			}
+			if !active {
+				return ErrVectorPartitionLifecycleGuard
+			}
+		}
 		if state.Begin.OwnerPreparation != nil {
 			for _, fence := range fences {
 				if fence.Pending {

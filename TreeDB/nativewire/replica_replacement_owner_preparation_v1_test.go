@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -51,7 +52,7 @@ func TestImmutableOwnerReplacementInstalledAssetsTailAndRestartV1(t *testing.T) 
 		}
 		fixedPeerWaitV1(t, ctx, func() bool {
 			reply, err := client.call(ctx, "owner-b", "replacement-tail", fixedPeerRequestV1{Entry: raw}, false)
-			return err == nil && reply.ReplacementTail != nil
+			return err == nil && reply.ReplacementTail != nil && reply.ReplacementTail.Progress.Validate() == nil && reply.ReplacementTail.Progress.CommandDigest != (raftentry.CommandDigestV1{}) && reply.ReplacementTail.Progress.Result.CommandDigest == reply.ReplacementTail.Progress.CommandDigest && reply.ReplacementTail.Progress.Result.ResultDigest != (raftentry.CommandDigestV1{})
 		})
 		if _, err := os.Stat(filepath.Join(configs[target].RaftRoot, "nodes", string(command.NewPeer.ID), "groups", string(configs[target].Catalog.ID))); !os.IsNotExist(err) {
 			t.Fatalf("prepared owner acquired local catalog files: %v", err)
@@ -162,7 +163,7 @@ func TestImmutableOwnerReplacementValidTailWithoutHostedAssetRefusesV1(t *testin
 	fixedPeerWaitV1(t, ctx, func() bool {
 		var err error
 		observed, err = client.call(ctx, "owner-b", "replacement-tail", fixedPeerRequestV1{Entry: raw}, false)
-		return err == nil && observed.ReplacementTail != nil
+		return err == nil && observed.ReplacementTail != nil && observed.ReplacementTail.Progress.Validate() == nil && observed.ReplacementTail.Progress.CommandDigest != (raftentry.CommandDigestV1{}) && observed.ReplacementTail.Progress.Result.ResultDigest != (raftentry.CommandDigestV1{})
 	})
 	target := runtimes[len(runtimes)-1]
 	local := target.localDataV1(command.GroupID)
