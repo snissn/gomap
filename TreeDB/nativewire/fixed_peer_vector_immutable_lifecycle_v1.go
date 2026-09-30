@@ -301,7 +301,11 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorLocalV1(ctx context.Context) 
 	if err := r.waitForImmutableCatalogStatusV1(ctx); err != nil {
 		return err
 	}
-	_, err := r.vector.ensureImmutableBackendV1(ctx)
+	if r.config.NodeID == r.config.Vector.RouterNodeID {
+		_, err := r.vector.ensureImmutableBackendV1(ctx)
+		return err
+	}
+	_, err := r.vector.ensureImmutableTopologyV1(ctx)
 	return err
 }
 
@@ -396,6 +400,10 @@ func (r *FixedPeerTCPRuntimeV1) stageImmutableVectorLocalV1(ctx context.Context)
 }
 
 func (r *FixedPeerTCPRuntimeV1) waitForImmutableCatalogStatusV1(ctx context.Context) error {
+	if r.immutableVectorCatalogConsumerV1() {
+		_, _, err := r.consumerImmutableVectorCatalogV1(ctx, fixedPeerVectorCatalogStageV1)
+		return err
+	}
 	reply, err := r.catalogConsumerCall(ctx, "catalog-read", fixedPeerRequestV1{})
 	if err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)

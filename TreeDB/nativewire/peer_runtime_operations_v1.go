@@ -250,9 +250,9 @@ func (r *FixedPeerTCPRuntimeV1) immutableVectorWarmReadinessV1(ctx context.Conte
 	}
 	if listener {
 		r.vector.initMu.Lock()
-		backend, topology := r.vector.backend, r.vector.topology
+		backend, topology, source := r.vector.backend, r.vector.topology, r.vector.source
 		r.vector.initMu.Unlock()
-		if backend == nil || topology == nil {
+		if topology == nil || (r.config.NodeID == r.config.Vector.RouterNodeID && backend == nil) || (ownerLeader && source == nil) {
 			return ErrFixedPeerVectorUnavailableV1
 		}
 		status := topology.Status()

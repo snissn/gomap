@@ -44,7 +44,7 @@ func (w *peerWorkLeaseV1) release() {
 
 func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
-	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
+	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
 		return "control-read"
 	case "readiness", "diagnostics":
 		return "control-diagnostics"
@@ -94,6 +94,9 @@ func preflightPeerRequestBytesV1(body fixedPeerRequestV1) (int64, error) {
 		if !charge(len(value)+1, 6) {
 			return 0, raftcluster.ErrRouteTargetUnsupported
 		}
+	}
+	if body.VectorLifecycle != nil && !charge(len(body.VectorLifecycle.Action), 6) {
+		return 0, raftcluster.ErrRouteTargetUnsupported
 	}
 	return int64(fixedPeerMaxRPCBytesV1) - remaining, nil
 }

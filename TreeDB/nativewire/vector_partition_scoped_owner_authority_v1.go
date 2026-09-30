@@ -14,14 +14,15 @@ import (
 )
 
 // fixedPeerVectorScopedOwnerAuthorityV1 binds local immutable pack admission
-// to an ACTIVE replicated lifecycle record. The two fences bracket the cloned
-// record without carrying a leader-only read proof to this owner follower.
+// to an ACTIVE replicated lifecycle record. Voters bracket their local record;
+// consumers receive a fresh authenticated decision for their configured scope.
 type fixedPeerVectorScopedOwnerAuthorityV1 struct {
-	authority *raftplacement.CatalogMetaAuthorityV1
-	fence     func(context.Context) (raftplacement.CatalogMetaStatusV1, error)
-	identity  raftplacement.VectorPartitionLifecycleIdentityV1
-	hosted    raftcluster.GroupID
-	currentDB func() error
+	readCatalog func(context.Context) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error)
+	authority   *raftplacement.CatalogMetaAuthorityV1
+	fence       func(context.Context) (raftplacement.CatalogMetaStatusV1, error)
+	identity    raftplacement.VectorPartitionLifecycleIdentityV1
+	hosted      raftcluster.GroupID
+	currentDB   func() error
 
 	mu          sync.RWMutex
 	owners      []raftcluster.GroupID
@@ -29,20 +30,26 @@ type fixedPeerVectorScopedOwnerAuthorityV1 struct {
 }
 
 func newFixedPeerVectorScopedOwnerAuthorityV1(r *FixedPeerTCPRuntimeV1, hosted raftcluster.GroupID) (*fixedPeerVectorScopedOwnerAuthorityV1, error) {
-	if r == nil || r.authority == nil || r.meta == nil || r.config.Vector == nil || r.data[hosted] == nil ||
+	if r == nil || r.config.Vector == nil || ((r.authority == nil || r.meta == nil) && !r.immutableVectorCatalogConsumerV1()) || r.data[hosted] == nil ||
 		r.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || hosted == "" {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
-	return &fixedPeerVectorScopedOwnerAuthorityV1{
+	a := &fixedPeerVectorScopedOwnerAuthorityV1{
 		authority: r.authority, fence: r.catalogFence, identity: r.config.Vector.Identity, hosted: hosted,
 		currentDB: r.vector.requireCurrentImmutableDBV1,
-	}, nil
+	}
+	if r.meta == nil {
+		a.readCatalog = func(ctx context.Context) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error) {
+			return r.consumerImmutableVectorCatalogV1(ctx, fixedPeerVectorCatalogActiveV1)
+		}
+	}
+	return a, nil
 }
 
 func (a *fixedPeerVectorScopedOwnerAuthorityV1) ValidateVectorPartitionScopedOwnerV1(
 	ctx context.Context, manifest collections.VectorPartitionManifestV1, scope collections.VectorPartitionLocalScopeV1,
 ) error {
-	if a == nil || a.authority == nil || a.fence == nil || ctx == nil {
+	if a == nil || (a.readCatalog == nil && (a.authority == nil || a.fence == nil)) || ctx == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
 	if err := ctx.Err(); err != nil {
@@ -113,7 +120,7 @@ func (a *fixedPeerVectorScopedOwnerAuthorityV1) validatePair(
 	ctx context.Context, scope collections.VectorPartitionLocalScopeV1,
 	owners []raftcluster.GroupID, readyDigest string,
 ) error {
-	if a == nil || a.authority == nil || a.fence == nil || ctx == nil {
+	if a == nil || (a.readCatalog == nil && (a.authority == nil || a.fence == nil)) || ctx == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
 	if err := ctx.Err(); err != nil {
@@ -129,17 +136,25 @@ func (a *fixedPeerVectorScopedOwnerAuthorityV1) validatePair(
 		scope.PlacementDigest != a.identity.Immutable.PlacementDigest {
 		return ErrFixedPeerVectorProofStaleV1
 	}
-	before, err := a.fence(ctx)
+	var before, after raftplacement.CatalogMetaStatusV1
+	var record raftplacement.VectorPartitionLifecycleRecordV1
+	var err error
+	ok := true
+	if a.readCatalog != nil {
+		before, record, err = a.readCatalog(ctx)
+		after = before
+	} else {
+		before, err = a.fence(ctx)
+		if err == nil {
+			record, ok = a.authority.VectorPartitionLifecycleRecordV1(a.identity)
+			after, err = a.fence(ctx)
+		}
+	}
 	if err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	if before.AppliedIndex == 0 || before.Epoch != a.identity.Index.CatalogEpoch || before.Digest != a.identity.Index.CatalogDigest {
 		return ErrFixedPeerVectorProofStaleV1
-	}
-	record, ok := a.authority.VectorPartitionLifecycleRecordV1(a.identity)
-	after, err := a.fence(ctx)
-	if err != nil {
-		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
 	if !sameScopedStageCatalogStatusV1(before, after) || !ok || record.Aborted || record.Identity != a.identity ||
 		record.State != raftplacement.VectorPartitionLifecycleActiveV1 || record.ReadySetDigest == "" ||
