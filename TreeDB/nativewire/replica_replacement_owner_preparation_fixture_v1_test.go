@@ -239,8 +239,13 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	// before BUILD, using the generic native replacement fixture's producer.
 	owner := runtimes[1].localDataV1("group-b")
 	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := owner.provider.RuntimeStatusV1(ctx)
-		return err == nil && status.State == "Leader"
+		for _, config := range configs[:len(configs)-1] {
+			status, err := client.Status(ctx, config.NodeID)
+			if err != nil || len(status.Groups) != 1 || status.Groups[0].LeaderID != config.NodeID {
+				return false
+			}
+		}
+		return true
 	})
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
