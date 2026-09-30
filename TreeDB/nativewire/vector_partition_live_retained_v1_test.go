@@ -66,10 +66,56 @@ func liveLifecycleRetainedInputForV1(t *testing.T) liveLifecycleRetainedInputV1 
 	if os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") == "" {
 		t.Fatal("retained real lifecycle requires a receipt directory")
 	}
+	if input.Recipe == "graph-disjoint-v1" {
+		var descriptor struct {
+			PythonSHA256  string `json:"kahip_python_sha256"`
+			AdapterSHA256 string `json:"kahip_adapter_sha256"`
+		}
+		if err := json.Unmarshal(liveLifecycleReadPinnedV1(t, input.Descriptor, input.DescriptorSHA256), &descriptor); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateLiveLifecycleRetainedToolPinsV1(input, descriptor.PythonSHA256, descriptor.AdapterSHA256); err != nil {
+			t.Fatal(err)
+		}
+	}
 	liveLifecycleReadPinnedV1(t, input.Python, input.PythonSHA256)
 	liveLifecycleReadPinnedV1(t, input.Adapter, input.AdapterSHA256)
 	t.Logf("retained_input_sha256=%x", sha256.Sum256(raw))
 	return input
+}
+
+func validateLiveLifecycleRetainedToolPinsV1(input liveLifecycleRetainedInputV1, descriptorPython, descriptorAdapter string) error {
+	if descriptorPython != "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae" || descriptorAdapter != "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e" || input.PythonSHA256 != descriptorPython || input.AdapterSHA256 != descriptorAdapter {
+		return errors.New("accepted descriptor/input tool provenance mismatch")
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedToolPinsV1(t *testing.T) {
+	python := "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae"
+	adapter := "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e"
+	wrong := fmt.Sprintf("%064x", 1)
+	for _, tc := range []struct {
+		name, inputPython, inputAdapter, descriptorPython, descriptorAdapter string
+		wantError                                                            bool
+	}{
+		{"accepted-tools", python, adapter, python, adapter, false},
+		{"wrong-input-python", wrong, adapter, python, adapter, true},
+		{"missing-input-python", "", adapter, python, adapter, true},
+		{"wrong-input-adapter", python, wrong, python, adapter, true},
+		{"missing-input-adapter", python, "", python, adapter, true},
+		{"wrong-descriptor-python", wrong, adapter, wrong, adapter, true},
+		{"missing-descriptor-python", "", adapter, "", adapter, true},
+		{"wrong-descriptor-adapter", python, wrong, python, wrong, true},
+		{"missing-descriptor-adapter", python, "", python, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := liveLifecycleRetainedInputV1{PythonSHA256: tc.inputPython, AdapterSHA256: tc.inputAdapter}
+			if err := validateLiveLifecycleRetainedToolPinsV1(input, tc.descriptorPython, tc.descriptorAdapter); (err != nil) != tc.wantError {
+				t.Fatalf("tool pin error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
 }
 
 func liveLifecycleOpenRetainedV1(t *testing.T, expectedRecipe string) (vectorPartitionLiveProductionFixtureV1, map[string][]float32, [][]float32, int) {
