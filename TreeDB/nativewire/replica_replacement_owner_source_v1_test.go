@@ -21,7 +21,12 @@ import (
 )
 
 func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
-	ctx, client, runtimes, configs, command := immutableOwnerReplacementFixtureV1(t)
+	testImmutableOwnerReplacementPrivateSourceWarmV1(t, false)
+}
+
+func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint bool) {
+	t.Helper()
+	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
 	identity := configs[0].Vector.Identity
 	command.OwnerPreparation = &identity
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, raftplacement.ErrCatalogMetaUnavailable) {
@@ -85,6 +90,15 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		}
 		if err := listener.Close(); err != nil {
 			t.Fatal(err)
+		}
+		if endpoint {
+			local.replacementWork.mu.Lock()
+			preparedEndpoint := local.replacementWork.ownerEndpoint
+			local.replacementWork.mu.Unlock()
+			if preparedEndpoint == nil {
+				t.Fatal("explicit preparation did not retain endpoint")
+			}
+			assertReplacementOwnerEndpointSearchV1(t, ctx, client, target, runtimes[1], command)
 		}
 		for _, operation := range []string{"replacement-promotion-intent", "replacement-promote", "replacement-complete-promotion", "replacement-removal-intent", "replacement-remove", "replacement-complete"} {
 			if _, err := client.call(ctx, "source-holder", operation, fixedPeerRequestV1{Entry: raw}, false); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
@@ -172,7 +186,13 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		start := time.Now()
-		if err := client.WarmReplicaReplacementOwnerV1(ctx, command); err != nil {
+		var err error
+		if endpoint {
+			err = client.PrepareReplicaReplacementOwnerEndpointV1(ctx, command)
+		} else {
+			err = client.WarmReplicaReplacementOwnerV1(ctx, command)
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		elapsed := time.Since(start)
@@ -183,6 +203,15 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 	retained := source()
 	if retained == nil {
 		t.Fatal("warm did not retain source")
+	}
+	var coldEndpoint *replacementOwnerEndpointV1
+	if endpoint {
+		local.replacementWork.mu.Lock()
+		coldEndpoint = local.replacementWork.ownerEndpoint
+		local.replacementWork.mu.Unlock()
+		if coldEndpoint == nil {
+			t.Fatal("cold preparation did not retain endpoint")
+		}
 	}
 	cold := retained.Stats()
 	if cold.GenerationMisses != 1 || cold.PartitionMisses != hostedDomains {
@@ -195,6 +224,14 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 		t.Fatal("private source bound stale startup DB")
 	}
 	warm("cached")
+	if endpoint {
+		local.replacementWork.mu.Lock()
+		cachedEndpoint := local.replacementWork.ownerEndpoint
+		local.replacementWork.mu.Unlock()
+		if cachedEndpoint != coldEndpoint {
+			t.Fatal("cached preparation replaced endpoint")
+		}
+	}
 	cached := retained.Stats()
 	if source() != retained || cached.GenerationMisses != cold.GenerationMisses || cached.PartitionMisses != cold.PartitionMisses ||
 		cached.GenerationHits <= cold.GenerationHits || cached.PartitionHits-cold.PartitionHits != hostedDomains {
@@ -226,6 +263,24 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 	}
 	if err := ownerClient.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, errPeerAuthenticationV1) {
 		t.Fatalf("noncatalog caller warm=%v", err)
+	}
+	if endpoint {
+		if _, err := ownerClient.call(ctx, command.NewPeer.ID, "replacement-owner-endpoint", fixedPeerRequestV1{Entry: raw}, false); !errors.Is(err, errPeerAuthenticationV1) {
+			t.Fatalf("noncatalog caller endpoint=%v", err)
+		}
+		unmarkedRaw, err := raftplacement.EncodeReplicaReplacementBeginV1(unmarked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.call(ctx, command.NewPeer.ID, "replacement-owner-endpoint", fixedPeerRequestV1{Entry: unmarkedRaw}, false); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
+			t.Fatalf("unmarked endpoint=%v", err)
+		}
+		if _, err := client.call(ctx, command.OldNodeID, "replacement-owner-endpoint", fixedPeerRequestV1{Entry: raw}, false); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+			t.Fatalf("wrong target endpoint=%v", err)
+		}
+		if _, err := client.peerTransport.ProbeShardEndpointV1(ctx, configs[targetIndex].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID], command.NewPeer.ID, command.GroupID); !errors.Is(err, errPeerAuthenticationV1) {
+			t.Fatalf("ordinary probe widened membership=%v", err)
+		}
 	}
 	ownerClient.Close()
 	canceled, cancel := context.WithCancel(ctx)
@@ -280,7 +335,23 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 	}
 	local = target.localDataV1(command.GroupID)
 	waitTail()
-	assertPrivate()
+	if endpoint {
+		local.replacementWork.mu.Lock()
+		restartedEndpoint := local.replacementWork.ownerEndpoint
+		local.replacementWork.mu.Unlock()
+		if restartedEndpoint != nil {
+			t.Fatal("restart created endpoint by observation")
+		}
+		listener, err := net.Listen("tcp", configs[targetIndex].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		assertPrivate()
+	}
 	if source() != nil {
 		t.Fatal("restart/observation warmed source")
 	}
@@ -326,8 +397,26 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 			_ = os.Rename(hidden, assetPath)
 		}
 	})
+	if endpoint {
+		conn, err := client.peerTransport.dialScope(ctx, configs[targetIndex].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID], command.NewPeer.ID, "shard:"+string(command.GroupID))
+		if err == nil {
+			_, err = probeVectorPartitionShardConnV1(ctx, conn)
+			_ = conn.Close()
+		}
+		if err == nil {
+			t.Fatal("endpoint probe accepted missing hosted asset")
+		}
+	}
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); err == nil {
 		t.Fatal("completed warm accepted subsequently missing asset")
+	}
+	if endpoint {
+		local.replacementWork.mu.Lock()
+		staleEndpoint := local.replacementWork.ownerEndpoint
+		local.replacementWork.mu.Unlock()
+		if staleEndpoint != nil {
+			t.Fatal("missing asset retained endpoint")
+		}
 	}
 	if source() != nil {
 		t.Fatal("missing asset retained cache")
@@ -362,8 +451,26 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 	if err := local.fsm.InstallRaftSnapshotV1(bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
+	if endpoint {
+		conn, err := client.peerTransport.dialScope(ctx, configs[targetIndex].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID], command.NewPeer.ID, "shard:"+string(command.GroupID))
+		if err == nil {
+			_, err = probeVectorPartitionShardConnV1(ctx, conn)
+			_ = conn.Close()
+		}
+		if err == nil {
+			t.Fatal("endpoint probe accepted snapshot-replaced DB")
+		}
+	}
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("snapshot-replaced cached DB=%v", err)
+	}
+	if endpoint {
+		local.replacementWork.mu.Lock()
+		staleEndpoint := local.replacementWork.ownerEndpoint
+		local.replacementWork.mu.Unlock()
+		if staleEndpoint != nil {
+			t.Fatal("DB swap retained endpoint")
+		}
 	}
 	if source() != nil {
 		t.Fatal("snapshot replacement retained cache")
