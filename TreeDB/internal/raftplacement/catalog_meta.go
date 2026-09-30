@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 	"sync"
 
@@ -697,7 +696,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 				return CatalogMetaStatusV1{}, err
 			}
 		} else {
-			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle); err != nil {
+			if err := validateKnownVectorPartitionPreparationSnapshotV1(a.lifecycle, lifecycle, mutationFences, a.activeNames); err != nil {
 				return CatalogMetaStatusV1{}, err
 			}
 			knownServing := make(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1, len(a.lifecycle))
@@ -721,26 +720,22 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		// Known revisions retain a conservative lifecycle-entry lower bound
-		// even when mixed histories cannot authenticate every barrier command.
+		// Reserve proof-conditioned known lifecycle costs; unavailable overlap
+		// proofs can refuse a tight budget for compacted cutover histories.
 		lifecycleEntries, err := knownVectorPartitionLifecycleSnapshotEntryCostV1(
-			a.lifecycle, lifecycle, snapshot.AppliedIndex-a.applied-replacementEntries,
+			a.lifecycle, lifecycle, mutationFences, snapshot.AppliedIndex-a.applied-replacementEntries,
 		)
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 		reservedEntries := replacementEntries + lifecycleEntries
-		// With unchanged lifecycle and fences, every newly observed barrier
-		// epoch needs committed mutation entries. Mixed compacted histories
-		// cannot be costed from the retained barrier window alone.
-		sameLifecycle := reflect.DeepEqual(a.lifecycle, lifecycle) || len(a.lifecycle) == 0 && len(lifecycle) == 0
-		sameFences := reflect.DeepEqual(a.mutationFences, mutationFences) || len(a.mutationFences) == 0 && len(mutationFences) == 0
-		if sameLifecycle && sameFences {
-			if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
-				collectionMutationBarriers, snapshot.AppliedIndex, reservedEntries,
-			); err != nil {
-				return CatalogMetaStatusV1{}, err
-			}
+		// Lifecycle and barrier reducers consume separate entries, including
+		// mixed catch-up. Known invalidation jumps can explain skipped epochs,
+		// but never eliminate retained BEGIN/CONFIRM costs.
+		if err := a.validateCollectionMutationBarrierSnapshotProgressLockedV1(
+			collectionMutationBarriers, lifecycle, snapshot.AppliedIndex, reservedEntries,
+		); err != nil {
+			return CatalogMetaStatusV1{}, err
 		}
 		a.replacements = replacements
 		a.replacementBytes = uint64(len(snapshot.ReplicaReplacements))
