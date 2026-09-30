@@ -2829,6 +2829,12 @@ alone does not refuse the forgery.
 `TestCatalogSnapshotLegacyAmbiguousCutoverBudgetV1` uses an admitted legacy
 source-alias producer: unchanged history remains valid, but ambiguous
 Index+generation pairs deterministically receive no atomic-entry discount.
+Repeated genuine terminal INSTALL controls retain an unchanged PREPARED source
+alias and a genuine incoming-only BEGIN that supplies the spare applied entry.
+Exact candidate identity permits catch-up; eligible serving suffix selection
+ignores preparation aliases and refuses competing terminal aliases. Canonical
+source-epoch, final-digest, missing atomic retirement and ambiguous predecessor
+negatives preserve the admission trust checks.
 `TestCatalogSnapshotInitialActivationServingNameGuardV1` refuses a canonical
 confirmed terminal candidate below an unchanged ACTIVE source watermark, while
 accepting genuine invalidation/confirmation/retirement followed by initial

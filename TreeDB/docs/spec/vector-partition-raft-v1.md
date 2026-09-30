@@ -393,7 +393,12 @@ locally known lifecycle records. Two records share one entry only when the
 pure reducer reconstructs their atomic cutover and both resulting records
 have valid snapshot suffixes; independent commands within one Index do not
 share a cost. Pair identities must be unique at their full Index+generation;
-ambiguous legacy source aliases cannot select a cutover proof. Mutation fence
+ambiguous legacy source aliases cannot select an accounting discount. Terminal
+admission can prove an exact ACTIVATE candidate despite unchanged preparation
+aliases, since the command names its full identity. The generation-selected
+predecessor must remain unambiguous; serving suffix chains require a unique
+eligible ACTIVE or terminal successor and refuse competing serving aliases.
+Mutation fence
 changes are side effects and add no separate
 entry. This accounting is conditioned on retained overlap proofs, not an
 unconditional mathematical lower bound or an exact erased command union.

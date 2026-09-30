@@ -603,9 +603,12 @@ func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 				generations = lifecycleSnapshotGenerationIndexV1(old)
 				incomingGenerations = lifecycleSnapshotGenerationIndexV1(next)
 			}
-			candidateIdentity := generations[lifecycleSnapshotGenerationKeyV1{identity.Index, incoming.SupersededByGeneration}]
+			candidateKey := lifecycleSnapshotGenerationKeyV1{identity.Index, incoming.SupersededByGeneration}
+			candidateIdentity := generations[candidateKey]
 			candidate, known := old[candidateIdentity]
-			if known && knownLifecycleSnapshotCutoverV1(prior, candidate, next, fences, generations, incomingGenerations) {
+			// Accounting cannot select a candidate alias for shared entry credit.
+			if known && incomingGenerations[candidateKey] == candidateIdentity &&
+				knownLifecycleSnapshotCutoverV1(prior, candidate, next, fences, generations, incomingGenerations) {
 				distance--
 			}
 		}
@@ -617,19 +620,19 @@ func knownVectorPartitionLifecycleSnapshotEntryCostV1(
 	return budget - remaining, nil
 }
 
-// Only an actual reducer cutover and two validated suffixes permit sharing an
-// entry. The final ACTIVATE digest may have been overwritten by later cleanup.
+// Prove the exact candidate's reducer cutover and both suffixes. ACTIVATE names
+// its full identity; only the predecessor is selected by generation. Accounting
+// separately requires candidate uniqueness before sharing an entry. The final
+// ACTIVATE digest may have been overwritten by later cleanup.
 func knownLifecycleSnapshotCutoverV1(
 	previous, candidate VectorPartitionLifecycleRecordV1,
 	records map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1,
 	fences map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1,
 	oldGenerations, nextGenerations map[lifecycleSnapshotGenerationKeyV1]VectorPartitionLifecycleIdentityV1,
 ) bool {
-	for _, identity := range []VectorPartitionLifecycleIdentityV1{previous.Identity, candidate.Identity} {
-		key := lifecycleSnapshotGenerationKeyV1{identity.Index, identity.Generation}
-		if oldGenerations[key] != identity || nextGenerations[key] != identity {
-			return false
-		}
+	key := lifecycleSnapshotGenerationKeyV1{previous.Identity.Index, previous.Identity.Generation}
+	if oldGenerations[key] != previous.Identity || nextGenerations[key] != previous.Identity {
+		return false
 	}
 	incoming, ok := records[candidate.Identity]
 	if !ok {
@@ -1539,7 +1542,27 @@ func replicaReplacementLifecycleRecordSnapshotSuccessorV1(
 		generation := next.SupersededByGeneration
 		proved := false
 		for steps := 0; steps < len(records); steps++ {
-			_, successor, found := findVectorPartitionLifecycleGenerationLockedV1(records, next.Identity.Index, generation)
+			// Preparation aliases never became serving successors. Select only a
+			// unique eligible suffix; competing terminal aliases cannot be chosen
+			// by map order or earn authority from their state alone.
+			var successor VectorPartitionLifecycleRecordV1
+			found := false
+			for identity, record := range records {
+				if identity.Index != next.Identity.Index || identity.Generation != generation ||
+					record.PreviousActiveGeneration != previous.Identity.Generation || record.Aborted || identity.SourceFormat == 2 {
+					continue
+				}
+				switch record.State {
+				case VectorPartitionLifecycleActiveV1, VectorPartitionLifecycleInvalidatedV1, VectorPartitionLifecycleRetiredV1,
+					VectorPartitionLifecycleCleanableV1, VectorPartitionLifecycleAbsentV1:
+				default:
+					continue
+				}
+				if found {
+					return false
+				}
+				successor, found = record, true
+			}
 			if !found || generation <= previous.Identity.Generation ||
 				successor.PreviousActiveGeneration != previous.Identity.Generation ||
 				successor.Aborted || successor.Identity.SourceFormat == 2 {
