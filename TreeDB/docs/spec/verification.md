@@ -2873,6 +2873,32 @@ source binding, stale identity/catalog proof, cancellation, and bounded
 attestation size. `TestFixedPeerImmutableDefinitionAndMutationRefusalV1`
 checks the durable index epoch/incarnation admission and mutation refusal.
 
+The owner-only catalog-consumer prerequisite for #4811 has the following
+additional verification mapping. Source-holder BUILD and the public ingress
+router remain catalog voters; only the configured immutable owner `owner-b`
+is excluded from `Catalog.Peers` before genesis.
+
+| Test | Covered boundary |
+| --- | --- |
+| `TestMultiOwnerTCPDomainSearchWithCatalogConsumerOwnerV1` | Four real processes complete BUILD/Stage/READY/PREPARE/ACTIVE and public strict-search parity with hosted-only owner assets, zero serving-source rows, no owner-local catalog files, and no local catalog applied index or raft group. After a positive direct-owner request, cached and cold quorum loss refuse candidates and READY; cold status/readiness observation does not bind the shard listener. Explicit lifecycle recovery restores serving after restart. |
+| `TestMultiOwnerTCPDomainSearchWithCatalogConsumerInvalidationV1` | The same initial positive consumer setup uses the existing in-flight invalidation control: public strict search refuses invalidated results, and the already-warm consumer refuses candidates and READY under the previous ready digest. |
+| `TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1` | Fresh decisions bind configured catalog/index/source/manifest/placement/owner identity and complete READY evidence. Negative controls retain strict voter requirements for mutable, router and non-owner configurations, and reject absent or mismatched credentials before local stores are opened. |
+| `TestFixedPeerImmutableOwnerReadCostV1/voter` and `/consumer` | The same bounded sampler observes owner status and public two-owner search: ten measured operations per loop, parent allocations/bytes/wall time, and existing child process resource logs. Consumer capability has no working old baseline. Parent allocations do not measure child/server allocations; child CPU/RSS cover the whole correctness/recovery case, not isolated steady reads. These samples do not establish a stable latency, throughput, or recall qualification. |
+
+`TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1` also checks
+`authority_unavailable` when snapshot restore replaces the owner-bound FSM DB;
+the cold consumer status control requires `topology_unavailable` before Warm.
+
+The retained tests-only baseline consumer control fails at the runtime
+constructor with `fixed-peer vector runtime requires local catalog authority`,
+before genesis or Ensure/Stage; this is capability refusal, not a lifecycle
+Stage failure. Its unchanged voter control passes. Consumer admission uses a
+fresh authenticated quorum-backed catalog read without a local vote or cached
+authority grant. Public strict search retains its final ACTIVE/current-DB
+check after remote results; private owner requests use fresh admission and the
+current-DB boundary without an additional post-search catalog barrier. This
+prerequisite does not complete #4811 snapshot, replacement, or transfer gates.
+
 `TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1` reuses the four-process,
 hosted-only public flow with a fresh deterministic 64-row, 768-dimension source,
 three packs, two domains and two owners. Before collection creation it declares

@@ -288,6 +288,15 @@ func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (publ
 		id := public.GenerationIDV1{Index: vector.Identity.Index.IndexName, Generation: vector.Identity.Generation}
 		topology, _, err := b.runtime.observeImmutableTopologyV1(raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1))
 		if err != nil {
+			if dbErr := b.runtime.requireCurrentImmutableDBV1(); dbErr != nil {
+				return public.OperationsHealthV1{Generation: id, Reason: "authority_unavailable"}, dbErr
+			}
+			b.runtime.initMu.Lock()
+			cold := b.runtime.topology == nil || b.runtime.source == nil
+			b.runtime.initMu.Unlock()
+			if cold {
+				return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
+			}
 			return public.OperationsHealthV1{Generation: id, Reason: "catalog_unavailable"}, err
 		}
 		if !vectorPartitionTopologyHealthyV1(topology.Status(), fixedPeerVectorOwnerGroupsV1(vector.Placement)) {
