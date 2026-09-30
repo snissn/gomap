@@ -100,6 +100,11 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 		}
 	}
 	reserved := []net.Listener{}
+	t.Cleanup(func() {
+		for _, listener := range reserved {
+			_ = listener.Close()
+		}
+	})
 	address := func() string {
 		for {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -125,6 +130,7 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 			t.Fatal(err)
 		}
 	}
+	reserved = nil
 	for i := range configs {
 		configs[i].Nodes, configs[i].Vector = nodes, vector
 	}
@@ -185,13 +191,6 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 		}
 	}
 	runtimes := make([]*FixedPeerTCPRuntimeV1, len(configs))
-	for i, config := range configs {
-		opened, err := OpenFixedPeerTCPRuntimeV1(config)
-		if err != nil {
-			t.Fatal(err)
-		}
-		runtimes[i] = opened
-	}
 	t.Cleanup(func() {
 		for _, runtime := range runtimes {
 			if runtime != nil {
@@ -201,6 +200,13 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 			}
 		}
 	})
+	for i, config := range configs {
+		opened, err := OpenFixedPeerTCPRuntimeV1(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtimes[i] = opened
+	}
 	client, err := NewFixedPeerTCPClientV1(configs[0])
 	if err != nil {
 		t.Fatal(err)
