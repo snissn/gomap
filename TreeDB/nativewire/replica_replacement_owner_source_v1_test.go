@@ -25,8 +25,13 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 }
 
 func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint bool) {
+	testImmutableOwnerReplacementPrivateQualificationV1(t, endpoint, false)
+}
+
+func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint, qualification bool) {
 	t.Helper()
 	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
+	var ordinaryOracle VectorPartitionShardSearchResponseV1
 	identity := configs[0].Vector.Identity
 	command.OwnerPreparation = &identity
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, raftplacement.ErrCatalogMetaUnavailable) {
@@ -99,6 +104,9 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 				t.Fatal("explicit preparation did not retain endpoint")
 			}
 			assertReplacementOwnerEndpointSearchV1(t, ctx, client, target, runtimes[1], command)
+			if qualification {
+				ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
+			}
 		}
 		for _, operation := range []string{"replacement-promotion-intent", "replacement-promote", "replacement-complete-promotion", "replacement-removal-intent", "replacement-remove", "replacement-complete"} {
 			if _, err := client.call(ctx, "source-holder", operation, fixedPeerRequestV1{Entry: raw}, false); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
@@ -238,6 +246,59 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 		t.Fatalf("warm did not reuse every hosted domain searcher: cold=%+v cached=%+v", cold, cached)
 	}
 	assertPrivate()
+	if qualification {
+		request := replacementOwnerQualificationRequestV1(t, ctx, target, command)
+		wrong := command
+		wrong.OperationID += "-other"
+		if result, err := client.QualifyReplicaReplacementOwnerV1(ctx, wrong, request); err == nil || len(result.Search.Partials) != 0 {
+			t.Fatalf("different BEGIN acquired private endpoint: %+v %v", result, err)
+		}
+		unmarked := command
+		unmarked.OwnerPreparation = nil
+		if result, err := client.QualifyReplicaReplacementOwnerV1(ctx, unmarked, request); !errors.Is(err, raftcluster.ErrUnsupportedFeature) || len(result.Search.Partials) != 0 {
+			t.Fatalf("unmarked BEGIN acquired qualification: %+v %v", result, err)
+		}
+		wrongNode := request
+		wrongNode.TargetNodeID = command.OldNodeID
+		if result, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, wrongNode); !errors.Is(err, raftcluster.ErrUnsupportedFeature) || len(result.Search.Partials) != 0 {
+			t.Fatalf("wrong target acquired qualification: %+v %v", result, err)
+		}
+		lifecycle := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: runtimes[3].authority, Committer: runtimes[3].meta}
+		if _, err := lifecycle.InvalidateGenerationBeforeRelevantMutationV1(ctx, *command.OwnerPreparation, "private qualification pending replacement"); !errors.Is(err, raftplacement.ErrVectorPartitionLifecycleGuard) {
+			t.Fatalf("pending preparation admitted ACTIVE invalidation producer: %v", err)
+		}
+		// The original single-voter leader is the actual quorum. Cached ANN state
+		// cannot supply its proof after that process closes.
+		if err := runtimes[1].Close(); err != nil {
+			t.Fatal(err)
+		}
+		runtimes[1] = nil
+		short, cancel := context.WithTimeout(ctx, time.Second)
+		result, err := client.QualifyReplicaReplacementOwnerV1(short, command, request)
+		cancel()
+		if err == nil || len(result.Search.Partials) != 0 {
+			t.Fatalf("lost leader quorum returned private hits: %+v %v", result, err)
+		}
+		runtimes[1], err = OpenFixedPeerTCPRuntimeV1(configs[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			status, err := client.Status(ctx, command.OldNodeID)
+			return err == nil && len(status.Groups) == 1 && status.Groups[0].LeaderID == command.OldNodeID
+		})
+		waitTail()
+		// Native provider recovery replaces the startup DB. It restores quorum
+		// proof issuance, but does not rebind the ordinary ANN serving runtime.
+		oldData := runtimes[1].localDataV1(command.GroupID)
+		if oldData.fsm.HasCurrentDBV1(oldData.db) {
+			t.Fatal("original owner snapshot recovery retained startup DB")
+		}
+		if _, err := runtimes[1].vector.ensureImmutableTopologyV1(ctx); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+			t.Fatalf("restored ordinary topology accepted stale startup DB: %v", err)
+		}
+		ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
+	}
 	if _, err := os.Stat(filepath.Join(configs[targetIndex].RaftRoot, "nodes", string(command.NewPeer.ID), "groups", string(configs[targetIndex].Catalog.ID))); !os.IsNotExist(err) {
 		t.Fatalf("warm created catalog storage: %v", err)
 	}
@@ -357,6 +418,9 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 	}
 	warm("restart-cold")
 	retained = source()
+	if qualification {
+		ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
+	}
 	// Finish actual cached work without consuming its result. Mutation after
 	// worker completion must still be refused by the later completion poll.
 	completed := startWarm()
@@ -388,6 +452,10 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 	if assetPath == "" {
 		t.Fatal("no hosted segment")
 	}
+	var qualificationRequest VectorPartitionShardSearchRequestV1
+	if qualification {
+		qualificationRequest = replacementOwnerQualificationRequestV1(t, ctx, target, command)
+	}
 	hidden := assetPath + ".private-warm-test"
 	if err := os.Rename(assetPath, hidden); err != nil {
 		t.Fatal(err)
@@ -405,6 +473,12 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 		}
 		if err == nil {
 			t.Fatal("endpoint probe accepted missing hosted asset")
+		}
+	}
+	if qualification {
+		result, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, qualificationRequest)
+		if err == nil || len(result.Search.Partials) != 0 {
+			t.Fatalf("missing assets returned private hits: %+v %v", result, err)
 		}
 	}
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); err == nil {
@@ -430,6 +504,9 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 	warm("asset-restored-cold")
 	retained = source()
 
+	if qualification {
+		qualificationRequest = replacementOwnerQualificationRequestV1(t, ctx, target, command)
+	}
 	// A real native snapshot swap invalidates the exact retained DB identity.
 	snapshot, err := local.fsm.ExportRaftSnapshotV1()
 	if err != nil {
@@ -459,6 +536,12 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 		}
 		if err == nil {
 			t.Fatal("endpoint probe accepted snapshot-replaced DB")
+		}
+	}
+	if qualification {
+		result, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, qualificationRequest)
+		if err == nil || len(result.Search.Partials) != 0 {
+			t.Fatalf("DB swap returned private hits: %+v %v", result, err)
 		}
 	}
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {

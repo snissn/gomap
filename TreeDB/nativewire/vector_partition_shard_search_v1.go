@@ -34,6 +34,7 @@ const (
 
 const (
 	vectorPartitionShardSearchProofReadIndexV1      = "read_index"
+	vectorPartitionShardSearchProofPrivateOwnerV1   = "replacement_private_read_index"
 	vectorPartitionShardSearchProofStrictSnapshotV1 = "immutable_snapshot_capability"
 )
 
@@ -340,17 +341,18 @@ type vectorPartitionShardSearchRouteV1 struct {
 }
 
 type VectorPartitionShardSearchServiceV1 struct {
-	localNodeID            raftcluster.NodeID
-	localGroup             raftcluster.GroupID
-	readCoordinator        raftcluster.RoutedReadIndexCoordinator
-	generationSource       VectorPartitionGenerationSourceV1
-	limits                 VectorPartitionShardSearchLimitsV1
-	route                  vectorPartitionShardSearchRouteV1
-	stats                  vectorPartitionShardSearchStatsAccumulatorV1
-	servingSnapshot        *VectorPartitionServingSnapshotPublisherV1
-	strictKey              []byte
-	preparedOwnerAdmission func(context.Context) error
-	postSearchGuard        func() error // immutable fixed-peer DB witness after searching cached assets
+	localNodeID             raftcluster.NodeID
+	localGroup              raftcluster.GroupID
+	readCoordinator         raftcluster.RoutedReadIndexCoordinator
+	generationSource        VectorPartitionGenerationSourceV1
+	limits                  VectorPartitionShardSearchLimitsV1
+	route                   vectorPartitionShardSearchRouteV1
+	stats                   vectorPartitionShardSearchStatsAccumulatorV1
+	servingSnapshot         *VectorPartitionServingSnapshotPublisherV1
+	strictKey               []byte
+	preparedOwnerAdmission  func(context.Context) error
+	privateOwnerReadBarrier func(context.Context) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, error)
+	postSearchGuard         func() error // immutable fixed-peer DB witness after searching cached assets
 
 	// Narrow package-test seams for cancellation and timing at the response boundary.
 	testBeforePartialMaterialization func()
@@ -438,7 +440,20 @@ func validateVectorPartitionShardSearchLimitsV1(l VectorPartitionShardSearchLimi
 	return nil
 }
 
-func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, request VectorPartitionShardSearchRequestV1) (response VectorPartitionShardSearchResponseV1, resultErr error) {
+func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+	return s.searchV1(ctx, request, false)
+}
+
+// Private qualification shares bounded ANN execution, but never the local-leader
+// proof or ordinary response authority. Only the operation-owned endpoint binds it.
+func (s *VectorPartitionShardSearchServiceV1) searchPrivateOwnerV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+	if s == nil || s.preparedOwnerAdmission == nil || s.privateOwnerReadBarrier == nil || s.servingSnapshot != nil || !replacementOwnerQualificationRequestSupportedV1(request) {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Err: ErrVectorPartitionShardSearchInvalidRequest}
+	}
+	return s.searchV1(ctx, request, true)
+}
+
+func (s *VectorPartitionShardSearchServiceV1) searchV1(ctx context.Context, request VectorPartitionShardSearchRequestV1, privateOwner bool) (response VectorPartitionShardSearchResponseV1, resultErr error) {
 	started := time.Now()
 	if s == nil {
 		return response, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Err: ErrVectorPartitionShardSearchAssetsUnavailable}
@@ -476,6 +491,15 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		return response, s.wrapError(err, "")
 	}
 	defer cancel()
+	if privateOwner {
+		// Revalidate operation, ACTIVE, hosted assets/tail and current DB after ANN.
+		// The outer deferred error path clears all partials on any late refusal.
+		defer func() {
+			if resultErr == nil {
+				resultErr = s.preparedOwnerAdmission(ctx)
+			}
+		}()
+	}
 	if err := s.validateRequest(request); err != nil {
 		return response, s.wrapError(err, "")
 	}
@@ -533,20 +557,42 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(ErrVectorPartitionShardSearchGenerationMismatch, groupID)
 		}
 		readStarted := time.Now()
-		proof, progress, err = s.readCoordinator.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID})
-		response.Timing.ReadIndexApplyNanos = elapsedNanosV1(readStarted)
-		if err != nil {
-			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+		if privateOwner {
+			if request.TargetNodeID != s.localNodeID {
+				return response, s.wrapError(ErrVectorPartitionShardSearchRouteMismatch, groupID)
+			}
+			proof, progress, err = s.privateOwnerReadBarrier(ctx)
+			if err == nil {
+				err = (raftcluster.ReadIndexBarrier{NodeID: proof.NodeID, GroupID: groupID}).Check(proof)
+			}
+			if err == nil {
+				err = (raftcluster.AppliedIndexReadBarrier{NodeID: s.localNodeID, GroupID: groupID, MinAppliedIndex: proof.Index}).Check(progress)
+			}
+			if err == nil && proof.NodeID == s.localNodeID {
+				err = raftcluster.ErrReadBarrierTargetMismatch
+			}
+		} else {
+			proof, progress, err = s.readCoordinator.CoordinateRoutedReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID})
+			response.Timing.ReadIndexApplyNanos = elapsedNanosV1(readStarted)
+			if err != nil {
+				return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+			}
+			target := raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID}
+			if err := target.Check(proof); err != nil {
+				return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+			}
+			if err := proof.AppliedIndexBarrier().Check(progress); err != nil {
+				return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+			}
+			if proof.NodeID != s.localNodeID || proof.GroupID != s.localGroup || progress.NodeID != s.localNodeID || progress.GroupID != s.localGroup {
+				return response, s.wrapErrorWithHint(fmt.Errorf("%w: proof served by node=%q group=%q applied_node=%q applied_group=%q", ErrVectorPartitionShardSearchRouteMismatch, proof.NodeID, proof.GroupID, progress.NodeID, progress.GroupID), groupID, leaderHint)
+			}
 		}
-		target := raftcluster.ReadIndexBarrier{NodeID: request.TargetNodeID, GroupID: groupID}
-		if err := target.Check(proof); err != nil {
-			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
-		}
-		if err := proof.AppliedIndexBarrier().Check(progress); err != nil {
-			return response, s.wrapErrorWithHint(err, groupID, leaderHint)
-		}
-		if proof.NodeID != s.localNodeID || proof.GroupID != s.localGroup || progress.NodeID != s.localNodeID || progress.GroupID != s.localGroup {
-			return response, s.wrapErrorWithHint(fmt.Errorf("%w: proof served by node=%q group=%q applied_node=%q applied_group=%q", ErrVectorPartitionShardSearchRouteMismatch, proof.NodeID, proof.GroupID, progress.NodeID, progress.GroupID), groupID, leaderHint)
+		if privateOwner {
+			response.Timing.ReadIndexApplyNanos = elapsedNanosV1(readStarted)
+			if err != nil {
+				return response, s.wrapErrorWithHint(err, groupID, leaderHint)
+			}
 		}
 		s.stats.readProof()
 		response.ReadProofs = 1
@@ -902,6 +948,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 		PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
 		LiveRevision: request.LiveRevision, LiveCoverage: request.LiveCoverage,
+	}
+	if privateOwner {
+		responseProof.Kind = vectorPartitionShardSearchProofPrivateOwnerV1
+		responseProof.ServingNode = s.localNodeID
 	}
 	if strictSnapshot != nil {
 		capability := request.StrictCapability
