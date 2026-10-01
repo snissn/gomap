@@ -873,7 +873,7 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixedPeerActiveInvalidationChildV1(runtime)
-	if os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" {
+	if os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" || os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1") == "1" {
 		fixedPeerCostChildV1(t, runtime)
 	} else {
 		_, _ = io.Copy(io.Discard, os.Stdin)

@@ -120,8 +120,10 @@ Do not invent exact attribution from these fields. Keep the existing semantic
 parity, recall, five-native-call, owner-loss and reopen assertions unchanged.
 
 Before that allocation, the focused source guardrails are
-`TestFixedPeerCostObservationBoundariesV1` and
-`TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1` with the cost flag unset.
+`TestFixedPeerCostObservationBoundariesV1`,
+`TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1`, and
+`TestMultiOwnerTCPCostSetupAfterActiveFreshIndexEpochV1` with the comparative
+cost flag unset.
 The observation top enables the flag only within scoped child subcases. A real
 non-ingress runtime checks setup/before/after acknowledgements, sampling rates,
 timestamp order, nonempty profile files and clean EOF shutdown; an out-of-order
@@ -129,7 +131,15 @@ command must fail without creating its profile or acknowledgement. A minimal
 ingress topology tests installation before connection pools, occupied-pool
 refusal and actual shard framing through the installed dial wrapper. The RSS
 subcase checks sampled-sum arithmetic and canceled observer drain. The existing
-64-row fixture exercises ordinary serving with the option unset. These bounded
+64-row fixture exercises ordinary serving with the option unset. The added
+fresh64 top scopes `GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1=1` to enable only
+the existing child setup pipe: setup follows successful ACTIVE lifecycle warm,
+while the real ingress dispatcher still has no shard connections, and precedes
+readiness/status checks and all public searches. Setup acknowledges zero frame
+bytes and an enabled sample rate; EOF retains the existing clean child drain.
+It creates no allocation profiles or comparative receipts, and refuses retained
+input/receipt paths, comparative mode, and changed query settings. Leave this separate
+preflight flag unset in ordinary tests and retained collection. These bounded
 checks qualify the observation mechanisms, not 100K ANN profile attribution or
 the retained fixture's performance. The pinned 512-query qualification guard
 remains unchanged.

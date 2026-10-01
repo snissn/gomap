@@ -50,6 +50,15 @@ func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
 	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16)
 }
 
+// Exercise the real ACTIVE-to-observer setup ordering on the existing fresh64
+// deployment, without enabling retained comparative collection or profiling.
+func TestMultiOwnerTCPCostSetupAfterActiveFreshIndexEpochV1(t *testing.T) {
+	t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "")
+	t.Setenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1", "1")
+	t.Log("cost observation setup mode: fresh64 ACTIVE-before-first-search; comparative collection disabled")
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16)
+}
+
 // These declared deterministic queries check public/native parity, not held-out
 // recall or performance. Both fresh domain graphs have more than L256 rows.
 func TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1(t *testing.T) {
@@ -167,6 +176,14 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	}
 	if comparativeCost && (len(queries) != 512 || truth == nil || warmQueries != 16 || probes != 5 || topK != 10 || efSearch != 96 || mergeEntries != 256 || separateLeaders || sourceFollower || missingOwnerAsset || consumerOwner || readCost) {
 		t.Fatal("comparative cost requires only the pinned accepted 512-query qualification")
+	}
+	setupSetting := os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1")
+	costSetupPreflight := setupSetting == "1"
+	if setupSetting != "" && !costSetupPreflight {
+		t.Fatal("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1 must be empty or 1")
+	}
+	if costSetupPreflight && (comparativeCost || os.Getenv("GOMAP_SELECTED_LIVE_FIXTURE") != "" || os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS") != "" || seed.manifest.SourceRowCount != 64 || len(queries) != 1 || truth != nil || warmQueries != 0 || probes != 2 || topK != 4 || efSearch != 8 || mergeEntries != 16 || separateLeaders || sourceFollower || missingOwnerAsset || consumerOwner || readCost) {
+		t.Fatal("cost setup preflight requires only the existing fresh64 qualification")
 	}
 	type costWindow struct {
 		Before, After                 FixedPeerDiagnosticsV1
@@ -511,11 +528,6 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		}
 		return true
 	})
-	if comparativeCost {
-		for _, process := range processes {
-			fixedPeerCostObserveV1(t, ctx, process, "setup", "")
-		}
-	}
 	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
 		if report, err := client.ReadinessV1(ctx, node); err == nil || report.Ready {
 			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
@@ -538,6 +550,16 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	}
 	if _, err := client.EnsureImmutableVectorLifecycleV1(ctx); err != nil {
 		t.Fatalf("source-verified BUILD, hosted Stage, and ACTIVE: %v", err)
+	}
+	// ACTIVE creation warms the lazily constructed ingress topology without
+	// opening shard connection pools. Install the observer before any search.
+	if comparativeCost || costSetupPreflight {
+		for _, process := range processes {
+			setup := fixedPeerCostObserveV1(t, ctx, process, "setup", "")
+			if setup.SampleUnixNano <= 0 || setup.MemoryProfileRate <= 0 || setup.RequestFrameBytes != 0 || setup.ResponseFrameBytes != 0 {
+				t.Fatalf("child setup before first shard connection: %+v", setup)
+			}
+		}
 	}
 	if faultDir := os.Getenv("GOMAP_FIXED_PEER_ACTIVE_INVALIDATION_CONTROL"); faultDir != "" {
 		fixedPeerWaitActiveInvalidationFileV1(t, ctx, faultDir, "hook-ready")
