@@ -160,6 +160,24 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
 		}
+		metadataContext := snapshotContext
+		if metadataContext == nil {
+			metadataContext = context.Background()
+		}
+		splitState, err := collection.VectorPartitionSplitInsertLogicalStateV1(metadataContext)
+		if err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
+		if len(splitState) != 0 {
+			writeLogicalDigestU64(h, "collection-split-insert-field-count", uint64(len(splitState)))
+			for i, value := range splitState {
+				name := "collection-split-insert-key"
+				if i%2 == 1 {
+					name = "collection-split-insert-state"
+				}
+				writeLogicalDigestField(h, name, value)
+			}
+		}
 		writeLogicalDigestU64(h, "collection-document-count", count)
 		var documentScratch []byte
 		var hashed uint64

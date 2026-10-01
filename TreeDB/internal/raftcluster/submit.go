@@ -497,8 +497,8 @@ func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry [
 	guardErr := checkSubmitCatalogGuardV1(decoded, catalogVersion)
 	allowStaleCreateRetry := allowPreflightIdempotentCreateRetryV1(decoded, guardErr)
 	allowStaleVectorRetry := guardErr != nil && errors.Is(guardErr, ErrCatalogVersionMismatch) &&
-		preCommit != nil && metadata.ClusterRouteShape == "vector_partition_exact_id" &&
-		decoded.Target.CommandID == iwire.CommandInsertBatch &&
+		preCommit != nil && ((metadata.ClusterRouteShape == "vector_partition_exact_id" && decoded.Target.CommandID == iwire.CommandInsertBatch) ||
+		(metadata.ClusterRouteShape == "split_source_projection_insert" && decoded.Target.CommandID == iwire.CommandSplitVectorInsertV1)) &&
 		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0
 	if guardErr != nil && !allowStaleCreateRetry && !allowStaleVectorRetry {
 		s.submitMu.Unlock()

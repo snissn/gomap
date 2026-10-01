@@ -83,6 +83,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandVectorInsert,
 		nativewire.CommandTypedSourceReplace,
 		nativewire.CommandTypedMetadataUpdate,
+		nativewire.CommandSplitVectorInsertV1,
 	}
 	rows := make([]CommandRowV1, 0, len(ids))
 	for _, id := range ids {
@@ -92,6 +93,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 }
 
 var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
+	nativewire.CommandSplitVectorInsertV1: acceptedRow(nativewire.CommandSplitVectorInsertV1, "CommandSplitVectorInsertV1", "split_vector_insert_v1", "CollectionSplitVectorInsertV1", "fixed-peer split source insert", "bounded insert-only canonical row/intent and projection-only native graph/receipt, with durable completion"),
 	nativewire.CommandCreateCollection: acceptedRow(
 		nativewire.CommandCreateCollection,
 		"CommandCreateCollection",

@@ -45,6 +45,9 @@ type FaultInjector interface {
 // deterministic entry bytes. None of these fields are native-wire request
 // structs or handler inputs.
 type ApplyMetadataV1 struct {
+	// GroupID is assigned by the applying FSM's resolved fixed group, not by
+	// route/request metadata. Only split-source commands require it.
+	GroupID                 string
 	EntryID                 raftentry.ApplyEntryID
 	LocalDurabilityBoundary LocalDurabilityBoundaryV1
 	SyncLocalCommandWAL     bool
@@ -228,6 +231,9 @@ func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 			return PreflightResultV1{}, err
 		}
 		return PreflightResultV1{}, nil
+	case nativewire.CommandSplitVectorInsertV1:
+		_, _, err := h.preflightSplitVectorInsertV1(entry, meta)
+		return PreflightResultV1{}, err
 	default:
 		return PreflightResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand)
 	}
@@ -396,6 +402,8 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	var result raftentry.ApplyResultV1
 	switch entry.Target.CommandID {
+	case nativewire.CommandSplitVectorInsertV1:
+		result, err = h.applySplitVectorInsertV1(entry, meta)
 	case nativewire.CommandCreateCollection:
 		result, err = h.applyCreateCollectionV1(entry, meta)
 	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch, nativewire.CommandUpdateBSONSet:

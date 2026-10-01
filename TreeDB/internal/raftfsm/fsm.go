@@ -406,6 +406,7 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 func (f *FSM) applyMetadata(entry CommittedEntryV1, id raftentry.ApplyEntryID) (raftapply.ApplyMetadataV1, error) {
 	return raftapply.ApplyMetadataV1{
 		EntryID:                  id,
+		GroupID:                  string(f.cluster.GroupID),
 		LocalDurabilityBoundary:  raftapply.LocalDurabilityCommandWALV1,
 		SyncLocalCommandWAL:      entry.SyncLocalCommandWAL,
 		CurrentCatalogVersion:    entry.CurrentCatalogVersion,

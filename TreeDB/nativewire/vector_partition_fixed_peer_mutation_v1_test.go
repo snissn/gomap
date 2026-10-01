@@ -277,6 +277,10 @@ func fixedPeerVectorReadyWithSourceGroupV1(t testing.TB, ctx context.Context, so
 }
 
 func fixedPeerVectorReadyWithSourcePlacementV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID, mode raftplacement.PlacementModeV1) fixedPeerVectorReadyFixtureV1 {
+	return fixedPeerVectorReadyWithSourcePlacementAuthV1(t, ctx, sourceGroup, mode, false)
+}
+
+func fixedPeerVectorReadyWithSourcePlacementAuthV1(t testing.TB, ctx context.Context, sourceGroup raftcluster.GroupID, mode raftplacement.PlacementModeV1, authenticated bool) fixedPeerVectorReadyFixtureV1 {
 	t.Helper()
 	seed := fixedPeerVectorSeedV1(t)
 	switch mode {
@@ -291,6 +295,26 @@ func fixedPeerVectorReadyWithSourcePlacementV1(t testing.TB, ctx context.Context
 		t.Fatalf("unsupported fixture source placement %q", mode)
 	}
 	configs := fixedPeerVectorTestConfigsV1(t, seed)
+	if authenticated {
+		ca := newPeerCAFixtureV1(t)
+		for i := range configs {
+			configs[i].ClusterID = "split-source-insert-checkpoint"
+			configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			// Authenticated roots must receive their persistent identity while
+			// empty, before trusted seed copying makes either root nonempty.
+			validated, _, err := validateFixedPeerConfigV1(configs[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(validated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := preparePeerStorageV1(validated, raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, config := range configs {
 		group := "group-b"
 		if config.NodeID == "ingress" {

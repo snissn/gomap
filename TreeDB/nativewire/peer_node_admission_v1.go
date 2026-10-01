@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 // PeerNodeLimitsV1 bounds all transports sharing one PeerTransportV1. Zero
@@ -115,6 +116,11 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 	}
 	add("control", peerResourceAmountsV1{4, 0, 0})
 	add("control-read", peerResourceAmountsV1{0, 4, 16 << 20})
+	if config.Credentials != nil && config.Vector != nil && config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		// A self proof owns both outbound and inbound work while its leaf reads
+		// progress independently, even when the shared node budget is full.
+		add("control-proof", peerResourceAmountsV1{0, 2, 12 << 20})
+	}
 	add("control-diagnostics", peerResourceAmountsV1{0, 1, 4 << 20})
 	add("control-write", peerResourceAmountsV1{0, 1, 64 << 10})
 	add("control-forward", peerResourceAmountsV1{0, 1, 64 << 10})

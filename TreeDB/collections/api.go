@@ -11637,6 +11637,7 @@ func (c *Collection) insertBatchSchemaLocked(ids, documents [][]byte, trustedVal
 }
 
 type insertBatchExecutionOptions struct {
+	splitInsert              *splitInsertPublicationV1
 	returnResultIDs          bool
 	insertStats              *CollectionInsertStats
 	trustedFloat32Projection *trustedFloat32Projection
@@ -12212,7 +12213,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	plannerOptions.typedProjection = execOpts.trustedFloat32Projection
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode {
+	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode && execOpts.splitInsert == nil {
 		if plannerOptions.documentFormat == DocumentFormatJSON && !commandWALNoIndexBufferedMode {
 			runTestBeforeInsertBatchPlanningHook()
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
@@ -12499,7 +12500,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 			meta: meta, catalog: currentCatalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: insertBatchBaseRootIDMap(rootNames, baseRootIDs),
 			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationInsert,
-			documents: columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
+			splitInsert: execOpts.splitInsert,
+			documents:   columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
 		}
 		if c.typedGraphEncodedAdmissionEnabled() {
 			tables := make([]memtable.Table, len(plan.runs))
@@ -12561,7 +12563,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+				it, err := c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+				if err != nil {
+					return nil, err
+				}
+				return c.appendSplitInsertSystemDeltaV1(it, execOpts.splitInsert)
 			})
 			return err
 		})
@@ -12572,7 +12578,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return c.validateMutationRootDescriptors(pin.Pager(), snapshotUserRoot(pin), baseSystemRoot, baseCommitSeq)
 		}
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+			it, err := c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+			if err != nil {
+				return nil, err
+			}
+			return c.appendSplitInsertSystemDeltaV1(it, execOpts.splitInsert)
 		})
 	}
 	plan.stats.Publish = time.Since(publishStart)
@@ -24903,19 +24913,20 @@ func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) 
 	if !ok || state.SystemRootPageID == 0 {
 		return nil, false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte(key))
+	value, err := snap.GetAtRoot(state.SystemRootPageID, []byte(key))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	return bytes.Clone(entry.Value), true, nil
+	return value, true, nil
 }
 
 type systemTargetEntry struct {
 	key   []byte
 	value []byte
+	ptr   page.ValuePtr
 	flags byte
 }
 
@@ -24974,7 +24985,7 @@ func (it *systemTargetIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr
 	if flags == 0 {
 		flags = node.FlagInline
 	}
-	return entry.value, page.ValuePtr{}, flags, page.LegacyEntryRevision
+	return entry.value, entry.ptr, flags, page.LegacyEntryRevision
 }
 
 func (it *systemTargetIterator) Key() []byte {
@@ -25062,9 +25073,12 @@ func buildSystemTargetIterator(snap *backenddb.Snapshot, updates map[string][]by
 					entries = append(entries, updateEntries[updateIdx])
 					updateIdx++
 				} else {
+					value, ptr, flags := it.UnsafeEntry()
 					entries = append(entries, systemTargetEntry{
 						key:   bytes.Clone(currKey),
-						value: it.ValueCopy(nil),
+						value: bytes.Clone(value),
+						ptr:   ptr,
+						flags: flags,
 					})
 				}
 				it.Next()

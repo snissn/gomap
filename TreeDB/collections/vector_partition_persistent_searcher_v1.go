@@ -1640,13 +1640,6 @@ func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpe
 	if err := manifest.validateWithContextV1(ctx, DefaultVectorPartitionManifestLimits()); err != nil {
 		return nil, fmt.Errorf("%w: replicated live manifest: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	prepared, err := c.PreparedVectorPartitionManifestWithContextV1(ctx, manifest.IndexName, manifest.Generation)
-	if err != nil {
-		return nil, fmt.Errorf("%w: replicated prepared manifest: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	if prepared.IntegrityDigest != manifest.IntegrityDigest {
-		return nil, fmt.Errorf("%w: replicated prepared manifest identity", ErrVectorPartitionSearchUnavailable)
-	}
 	def, err := c.declaredVectorIndexDefinitionPrepared(manifest.IndexName)
 	if err != nil || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
 		return nil, fmt.Errorf("%w: replicated live index definition: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -1660,10 +1653,21 @@ func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpe
 	if loadErr != nil || carrier == nil || !loadStatus.Loaded || !carrier.isPartitionLiveCarrier() {
 		return nil, fmt.Errorf("%w: replicated durable live carrier: status=%+v err=%v", ErrVectorPartitionSearchUnavailable, loadStatus, loadErr)
 	}
-	if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
-		return nil, fmt.Errorf("%w: replicated live authority: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, prepared)
+	var plan *VectorPartitionGenerationSearchOpenPlanV1
+	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		prepared, err := c.preparedVectorPartitionManifestUnderStorageBarrierV1(ctx, manifest.IndexName, manifest.Generation, true)
+		if err != nil {
+			return fmt.Errorf("%w: replicated prepared manifest: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		if prepared.IntegrityDigest != manifest.IntegrityDigest {
+			return fmt.Errorf("%w: replicated prepared manifest identity", ErrVectorPartitionSearchUnavailable)
+		}
+		if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+			return fmt.Errorf("%w: replicated live authority: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		plan, err = NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, prepared)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

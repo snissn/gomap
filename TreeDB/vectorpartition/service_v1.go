@@ -47,16 +47,18 @@ type GenerationIDV1 struct {
 }
 
 type SearchRequestV1 struct {
-	Version     uint32
-	Generation  GenerationIDV1
-	Query       []float32
-	Metric      MetricV1
-	TopK        int
-	Probes      int
-	EfSearch    int
-	Consistency ConsistencyV1
-	Limits      SearchLimitsV1
-	Deadline    time.Time
+	// VisibilityToken is the opaque durable split-insert watermark returned by Insert.
+	VisibilityToken []byte
+	Version         uint32
+	Generation      GenerationIDV1
+	Query           []float32
+	Metric          MetricV1
+	TopK            int
+	Probes          int
+	EfSearch        int
+	Consistency     ConsistencyV1
+	Limits          SearchLimitsV1
+	Deadline        time.Time
 }
 
 type MetricV1 string
@@ -134,6 +136,7 @@ type MutationCountersV1 struct {
 // InsertResponseV1 binds consensus, deterministic apply, and live visibility
 // to the same generation and exact document identity.
 type InsertResponseV1 struct {
+	VisibilityToken      []byte
 	Generation           GenerationIDV1
 	PartitionID          uint32
 	OwnerGroup           string
@@ -370,7 +373,10 @@ func validateSearchRequestV1(ctx context.Context, r SearchRequestV1) error {
 	if r.Version != 1 || len(r.Query) == 0 || r.TopK <= 0 || r.Probes <= 0 || r.EfSearch < r.TopK || r.Metric != MetricCosineV1 || r.Consistency != ConsistencyGenerationSnapshotV1 || r.Limits.RequestBytes == 0 || r.Limits.CandidateBytes == 0 || r.Limits.ResponseBytes == 0 || r.Limits.MergeEntries <= 0 {
 		return invalidV1("version, query, metric, consistency, limits, top_k, probes, and ef_search are required")
 	}
-	if uint64(len(r.Query)) > r.Limits.RequestBytes/4 {
+	if len(r.VisibilityToken) > 128<<10 || uint64(len(r.VisibilityToken)) > r.Limits.RequestBytes {
+		return invalidV1("visibility token exceeds request byte limit")
+	}
+	if uint64(len(r.Query)) > (r.Limits.RequestBytes-uint64(len(r.VisibilityToken)))/4 {
 		return invalidV1("query exceeds request byte limit")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
@@ -379,6 +385,7 @@ func validateSearchRequestV1(ctx context.Context, r SearchRequestV1) error {
 	return nil
 }
 func cloneSearchRequestV1(r SearchRequestV1) SearchRequestV1 {
+	r.VisibilityToken = slices.Clone(r.VisibilityToken)
 	r.Query = slices.Clone(r.Query)
 	return r
 }
@@ -416,7 +423,17 @@ func ValidateInsertResponseV1(request InsertRequestV1, response InsertResponseV1
 	if response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.OwnerGroup == "" || response.CommitTerm == 0 || response.CommitIndex == 0 || response.AppliedIndex < response.CommitIndex || !response.ProductionConsensus || response.LiveRevision == 0 || response.VisibleID != string(request.ID) {
 		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid vector mutation response")}
 	}
-	if response.Counters.Routes != 1 || response.Counters.Commits != 1 || response.Counters.Replications != 1 || response.Counters.Applies != 1 || response.Counters.VisibilityProofs != 1 || response.Counters.Forwards > 1 {
+	commits, proofs := uint64(1), uint64(1)
+	if len(response.VisibilityToken) != 0 {
+		if len(response.VisibilityToken) > 128<<10 {
+			return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend visibility token exceeds bound")}
+		}
+		commits, proofs = response.Counters.Commits, 2
+		if commits != 1 && commits != 3 {
+			return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend split mutation submission count is invalid")}
+		}
+	}
+	if response.Counters.Routes != 1 || response.Counters.Commits != commits || response.Counters.Replications != commits || response.Counters.Applies != commits || response.Counters.VisibilityProofs != proofs || response.Counters.Forwards > 1 {
 		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid vector mutation counters")}
 	}
 	return nil

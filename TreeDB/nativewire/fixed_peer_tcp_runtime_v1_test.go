@@ -1438,3 +1438,35 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		}
 	})
 }
+
+// Generic submit and forward share this validator. Unknown mutation commands
+// otherwise fall back to a collection route, which cannot prove source commit.
+func TestFixedPeerEntryRouteRejectsRawSplitCommandV1(t *testing.T) {
+	metadata := raftentry.RequestMetadataV1{ClusterRouteKnown: true, ClusterRouteDatabase: "default", ClusterRouteCatalog: "default",
+		ClusterRouteCollection: "docs", ClusterRoutePlacementMode: "collection", ClusterRouteShape: "collection"}
+	ordinary := fixedPeerCreateEntryV1(t, "docs", 1)
+	if err := validateFixedPeerEntryRouteV1(ordinary, metadata); err != nil {
+		t.Fatalf("ordinary route changed: %v", err)
+	}
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandSplitVectorInsertV1, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("raw-split-attempt")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: []byte{1}},
+		collectionNameRef("docs"),
+		{ID: iwire.SectionSplitVectorInsertV1, Bytes: []byte("{}")},
+	}
+	validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, validated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFixedPeerEntryRouteV1(entry, metadata); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+		t.Fatalf("raw split accepted as collection mutation: %v", err)
+	}
+	if err := validateFixedPeerEntryRouteV1(entry, raftentry.RequestMetadataV1{}); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+		t.Fatalf("split refusal depends on caller route metadata: %v", err)
+	}
+}

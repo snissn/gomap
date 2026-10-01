@@ -806,7 +806,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	var responseSections []iwire.Section
 	var responseBody []byte
 	responseBodySet := false
-	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
+	if cmd.Header.ID == iwire.CommandSplitVectorInsertV1 {
+		err = protocolError(iwire.ErrUnsupportedFeature, "split insert deterministic command requires the dedicated authenticated runtime producer")
+	} else if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
 	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || cmd.Header.ID == iwire.CommandTypedSourceReplace || cmd.Header.ID == iwire.CommandTypedMetadataUpdate || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")

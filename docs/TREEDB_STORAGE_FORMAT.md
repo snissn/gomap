@@ -458,3 +458,14 @@ Value-log records are checksummed (CRC-32/IEEE). Reads can be configured via:
 
 Skipping checksums trades integrity for throughput and should be treated as an
 explicit “unsafe mode”.
+
+## Bounded split insert metadata
+
+The first split-source insert checkpoint uses native system-root metadata under
+`vector_partition_split_insert_v1:` for one pending operation and at most 64
+completed outcomes per fixed generation/placement identity. Source canonical
+row+intent and target graph+receipt each publish atomically. The target command
+WAL contains projection ID/vector/digests and original source position, never a
+second canonical document. This metadata and command kind 106/payload format 15
+are pre-alpha format additions; no migration or outcome-eviction policy is
+provided. See `TreeDB/docs/spec/vector-partition-split-source-insert-v1.md`.

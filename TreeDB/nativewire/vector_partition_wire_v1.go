@@ -467,6 +467,9 @@ func decodeVectorPartitionInsertRequestV1(src []byte, limits iwire.Limits) (publ
 }
 
 func appendVectorPartitionInsertResponseSectionV1(dst []byte, response public.InsertResponseV1) ([]byte, error) {
+	if len(response.VisibilityToken) > 128<<10 {
+		return nil, protocolError(iwire.ErrResourceExhausted, "visibility token exceeds bound")
+	}
 	consensus := uint64(0)
 	if response.ProductionConsensus {
 		consensus = 1
@@ -475,6 +478,9 @@ func appendVectorPartitionInsertResponseSectionV1(dst []byte, response public.In
 	payloadLen := encodedStringLenV1(response.Generation.Index) + uvarintLen(response.Generation.Generation) + encodedStringLenV1(response.OwnerGroup) + encodedStringLenV1(response.VisibilityGeneration.Index) + encodedStringLenV1(response.VisibleID)
 	for _, value := range values {
 		payloadLen += uvarintLen(value)
+	}
+	if len(response.VisibilityToken) != 0 {
+		payloadLen += uvarintLen(uint64(len(response.VisibilityToken))) + len(response.VisibilityToken)
 	}
 	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorInsertResponse, 0, payloadLen)
 	if err != nil {
@@ -492,6 +498,10 @@ func appendVectorPartitionInsertResponseSectionV1(dst []byte, response public.In
 	body = appendString(body, response.VisibleID)
 	for _, value := range values[7:] {
 		body = binary.AppendUvarint(body, value)
+	}
+	if len(response.VisibilityToken) != 0 {
+		body = binary.AppendUvarint(body, uint64(len(response.VisibilityToken)))
+		body = append(body, response.VisibilityToken...)
 	}
 	return body, nil
 }
@@ -515,6 +525,12 @@ func decodeVectorPartitionInsertResponseV1(src []byte) (public.InsertResponseV1,
 	response.VisibilityGeneration.Index, response.VisibilityGeneration.Generation = r.string(), r.u64()
 	response.VisibleID = r.string()
 	response.Counters = public.MutationCountersV1{Routes: r.u64(), Forwards: r.u64(), Commits: r.u64(), Replications: r.u64(), Applies: r.u64(), VisibilityProofs: r.u64()}
+	if r.err == nil && r.off < len(r.src) {
+		response.VisibilityToken = append([]byte(nil), r.bytes(128<<10)...)
+		if len(response.VisibilityToken) == 0 && r.err == nil {
+			r.err = protocolError(iwire.ErrMalformedFrame, "empty visibility token extension")
+		}
+	}
 	return response, r.done()
 }
 
@@ -635,6 +651,9 @@ func appendVectorPartitionCommandBodyV1(dst []byte, command iwire.CommandID, req
 }
 
 func appendVectorPartitionSearchRequestSectionV1(dst []byte, request public.SearchRequestV1, limits iwire.Limits) ([]byte, error) {
+	if len(request.VisibilityToken) > 128<<10 {
+		return nil, protocolError(iwire.ErrResourceExhausted, "visibility token exceeds bound")
+	}
 	if request.Version != 1 || len(request.Query) == 0 || len(request.Query) > limits.MaxByteVectorItems || len(request.Query) > maxInt/4 || request.TopK < 0 || request.Probes < 0 || request.EfSearch < 0 || request.Limits.MergeEntries < 0 || request.Metric != public.MetricCosineV1 || request.Consistency != public.ConsistencyGenerationSnapshotV1 {
 		return nil, protocolError(iwire.ErrInvalidCommand, "vector search request cannot be encoded")
 	}
@@ -648,6 +667,9 @@ func appendVectorPartitionSearchRequestSectionV1(dst []byte, request public.Sear
 	payloadLen := uvarintLen(uint64(request.Version)) + encodedStringLenV1(request.Generation.Index) + uvarintLen(request.Generation.Generation) + uvarintLen(uint64(len(request.Query))) + 4*len(request.Query) +
 		uvarintLen(1) + uvarintLen(uint64(request.TopK)) + uvarintLen(uint64(request.Probes)) + uvarintLen(uint64(request.EfSearch)) + uvarintLen(1) +
 		uvarintLen(request.Limits.RequestBytes) + uvarintLen(request.Limits.CandidateBytes) + uvarintLen(request.Limits.ResponseBytes) + uvarintLen(uint64(request.Limits.MergeEntries)) + uvarintLen(deadline)
+	if len(request.VisibilityToken) != 0 {
+		payloadLen += uvarintLen(uint64(len(request.VisibilityToken))) + len(request.VisibilityToken)
+	}
 	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorSearchRequest, 0, payloadLen)
 	if err != nil {
 		return nil, err
@@ -661,6 +683,10 @@ func appendVectorPartitionSearchRequestSectionV1(dst []byte, request public.Sear
 	}
 	for _, value := range []uint64{1, uint64(request.TopK), uint64(request.Probes), uint64(request.EfSearch), 1, request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, uint64(request.Limits.MergeEntries), deadline} {
 		body = binary.AppendUvarint(body, value)
+	}
+	if len(request.VisibilityToken) != 0 {
+		body = binary.AppendUvarint(body, uint64(len(request.VisibilityToken)))
+		body = append(body, request.VisibilityToken...)
 	}
 	return body, nil
 }
@@ -717,6 +743,12 @@ func decodeVectorPartitionSearchRequestIntoV1(src []byte, limits iwire.Limits, q
 			r.err = protocolError(iwire.ErrInvalidCommand, "vector deadline overflows time")
 		} else {
 			request.Deadline = time.Unix(0, int64(deadline))
+		}
+	}
+	if r.err == nil && r.off < len(r.src) {
+		request.VisibilityToken = append([]byte(nil), r.bytes(128<<10)...)
+		if len(request.VisibilityToken) == 0 && r.err == nil {
+			r.err = protocolError(iwire.ErrMalformedFrame, "empty visibility token extension")
 		}
 	}
 	return request, r.done()

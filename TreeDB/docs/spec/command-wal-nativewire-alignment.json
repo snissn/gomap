@@ -425,6 +425,18 @@
       "support_matrix_status": "read-only",
       "relationship": "read_rejected_v1",
       "notes": "Native-wire vector snapshot close is connection-local read state and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandSplitVectorInsertV1",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/split_vector_insert_v1_entry.hex",
+      "nativewire_fixture_sha256": "5c31b0ff4f5fbe04829245edabeccad11abbbe51edf03a4174fddf48f5061f40",
+      "command_wal_kind": "CollectionSplitVectorInsertV1",
+      "command_wal_payload_format": "SplitVectorInsertV1 (format 15)",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_split_vector_insert_v1.hex",
+      "local_fixture_sha256": "f90f9c3c5ba8d36fa7d34e6f0dfba129cd86710af12a1a67e7c55f554280706a",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_kind_only_v1",
+      "notes": "Authenticated fixed-peer split source/project/clear commands use collection WAL kind 106, format 15. Golden fixtures pin the same bounded source payload in different envelopes, without byte equivalence. Generic public and peer ingress reject this privileged command with WireError(ErrUnsupportedFeature); it preserves the mutable live generation instead of using the immutable M7 invalidation barrier."
     }
   ]
 }

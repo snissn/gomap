@@ -679,3 +679,17 @@ committed/recoverable.
 
 Detailed indexed collection write-domain semantics are in
 `TreeDB/docs/spec/collections-write-domain.md`.
+
+### Split-source insert first checkpoint
+
+The authenticated fixed-peer insert-only split checkpoint binds an exact
+canonical source operation to one distinct mutable ANN target. A successful
+response proves durable source publication, target graph receipt and source
+intent retirement, and returns an owned bounded visibility token. Strict
+search carrying that token requires fresh current-DB/ACTIVE and real target
+receipt quorum/applied fences before search and final response; unsupported
+generic/fast/pinned paths refuse the token. Ambiguous completion preserves the
+durable pending intent for retry rather than reporting an unproved success.
+This fixed identity accepts one pending and at most 64 completed operations,
+with no completed-outcome eviction. This is a bounded checkpoint, not general
+indefinite write capacity. See [the split insert contract](vector-partition-split-source-insert-v1.md).

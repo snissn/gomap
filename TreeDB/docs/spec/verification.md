@@ -3308,3 +3308,28 @@ require immutable identities and basic statistics. These checks grant no public
 readiness or promotion. Per-request time/MemStats diagnostics include the caller, all five
 Raft nodes, TLS, authority checks, ANN and background work; they are individual
 observations, not server allocations, isolated ANN cost or a throughput comparison.
+
+## Bounded split-source insert checkpoint
+
+The semantic envelope and raw-route refusal are covered by
+TestSplitVectorInsertSemanticEnvelopeV1 and
+TestFixedPeerEntryRouteRejectsRawSplitCommandV1. The two authenticated
+split-source tests cover canonical source storage, target projection without
+canonical bytes, exact duplicates, the 64-outcome lifetime ceiling, strict
+visibility fences, wrong producer identity, automatic pending replay after
+reopen, idle retry without network work, and shutdown while foreground work
+owns the mutation lock. Coupled catalog/target quorum loss refuses cached
+receipts and watermark hits; the source fixture has one voter.
+TestVectorPartitionSplitSourceInsertLegacyRefusedBeforeMutationV1 and
+TestSplitInsertVisibilityWireOwnedAndBoundedV1 cover unsupported legacy
+routing and bounded owned wire extensions.
+
+TestSplitVectorInsertApplyRecoveryV1 covers source/project/clear after local
+WAL append and after publication. TestSplitVectorInsertTargetStoredResultRecoveryV1
+covers result-before-progress replay without another frame.
+TestSplitVectorInsertSourcePublicationProcessExitV1 bypasses Close at the
+existing accepted-source publication hook. TestSplitVectorInsertTerminalTailRecoveryV1
+preserves a complete source intent before an incomplete next frame and refuses
+a corrupt applied durable prefix. These checks do not establish power-loss
+safety, independent quorum-loss qualification, or indefinite writes. Target
+and clear crash cuts remain apply-boundary/reopen controls.

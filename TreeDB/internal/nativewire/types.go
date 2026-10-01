@@ -101,6 +101,7 @@ const (
 	SectionTypedMetadataUpdateResponse  SectionID = 143
 	SectionVectorInsertRequest          SectionID = 144
 	SectionVectorInsertResponse         SectionID = 145
+	SectionSplitVectorInsertV1          SectionID = 146
 )
 
 type CommandID uint64
@@ -143,6 +144,7 @@ const (
 	CommandVectorInsert              CommandID = 66
 	CommandTypedSourceReplace        CommandID = 67
 	CommandTypedMetadataUpdate       CommandID = 68
+	CommandSplitVectorInsertV1       CommandID = 69
 )
 
 type DocumentFormat uint64

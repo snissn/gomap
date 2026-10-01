@@ -80,3 +80,67 @@ func TestPeerSecurityDrainKeepsAdmittedForwardingV1(t *testing.T) {
 		t.Fatalf("fresh ingress reused capability: %v", err)
 	}
 }
+
+func TestSplitProofNodeReservePreservesNestedReadsV1(t *testing.T) {
+	config := fixedPeerTestConfigsV1(t)[0]
+	config.Credentials = &PeerCredentialsV1{}
+	config.Vector = &FixedPeerTCPVectorConfigV1{}
+	a, err := newPeerNodeAdmissionV1(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.cancel()
+	var held []peerResourceLeaseV1
+	defer func() {
+		for i := range held {
+			held[i].release()
+		}
+	}()
+	// Consume actual shared leases while leaving only reserved dependency work.
+	for _, kind := range []int{peerRequestsV1, peerBytesV1} {
+		amount := int64(1)
+		if kind == peerBytesV1 {
+			amount = 1 << 16
+		}
+		for scope := range a.scopes {
+			if scope == "control-proof" || scope == "control-read" {
+				continue
+			}
+			for {
+				lease, err := a.acquire(scope, kind, amount)
+				if err != nil {
+					break
+				}
+				held = append(held, lease)
+			}
+		}
+		if a.shared[kind] != a.sharedLimits[kind] {
+			t.Fatalf("fixture did not saturate shared resource %d: %d/%d", kind, a.shared[kind], a.sharedLimits[kind])
+		}
+	}
+	bound, err := preflightPeerRequestBytesV1(fixedPeerRequestV1{Entry: make([]byte, 128<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		work, err := a.work("control-proof", peerRequestsV1, peerControlBytesV1(bound))
+		if err != nil {
+			t.Fatalf("reserved proof leg %d: %v", i, err)
+		}
+		defer work.release()
+	}
+	if work, err := a.work("control-proof", peerRequestsV1, peerControlBytesV1(bound)); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		work.release()
+		t.Fatalf("third proof exceeded reserved capacity: %v", err)
+	}
+	read, err := a.work("control-read", peerRequestsV1, 4<<20)
+	if err != nil {
+		t.Fatalf("proofs starved reserved leaf read: %v", err)
+	}
+	read.release()
+	for _, operation := range []string{"vector-split-source-proof", "vector-split-receipt", "/v1/vector-split-source-proof", "/v1/vector-split-receipt"} {
+		if peerControlScopeV1(operation) != "control-proof" || peerControlRequestModeV1(operation, peerRequestIngressV1) != peerRequestInternalV1 {
+			t.Fatalf("proof dependency classification changed: %s", operation)
+		}
+	}
+}

@@ -3601,14 +3601,15 @@ func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 		return
 	}
 	idx.mu.Lock()
-	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
+	generationChanged := idx.sourceDocumentGeneration != generation
+	changed := !idx.sourceDocumentRootsValid || generationChanged
 	idx.sourceDocumentRootsValid = true
 	idx.sourceDocumentGeneration = generation
 	idx.sourceDocumentStateValid = false
 	idx.searchViewAcknowledged = false
 	if changed {
 		idx.searchViewCurrent.Store(false)
-		if idx.nativePersistent {
+		if idx.nativePersistent && generationChanged {
 			idx.dirtyMeta = true
 		}
 	}
@@ -3625,7 +3626,8 @@ func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backe
 }
 
 func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state backenddb.StateToken) {
-	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
+	generationChanged := idx.sourceDocumentGeneration != generation
+	changed := !idx.sourceDocumentRootsValid || generationChanged
 	idx.sourceDocumentRootsValid = true
 	idx.sourceDocumentGeneration = generation
 	idx.sourceDocumentState = state
@@ -3640,7 +3642,7 @@ func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state
 	idx.acknowledgeSearchViewStateLocked()
 	if changed {
 		idx.searchViewCurrent.Store(false)
-		if idx.nativePersistent {
+		if idx.nativePersistent && generationChanged {
 			idx.dirtyMeta = true
 		}
 	}

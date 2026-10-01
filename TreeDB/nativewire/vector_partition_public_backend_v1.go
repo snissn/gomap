@@ -45,6 +45,7 @@ type VectorPartitionRoutedInsertV1 struct {
 	RouterModelDigest string
 	PartitionID       uint32
 	OwnerGroup        raftcluster.GroupID
+	SourceGroup       raftcluster.GroupID
 	Forwarded         bool
 }
 
@@ -83,6 +84,9 @@ func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+	if len(request.VisibilityToken) != 0 {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
 	started := time.Now()
 	r, err := b.coordinatorRequestV1(request)
 	if err != nil {
@@ -165,6 +169,9 @@ func vectorPartitionMutationOwnerV1(manifest collections.VectorPartitionManifest
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
+	if len(request.VisibilityToken) != 0 {
+		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
 	started := time.Now()
 	r, err := b.coordinatorRequestV1(request)
 	if err != nil {
@@ -200,6 +207,9 @@ func (b *VectorPartitionPublicBackendV1) PinVectorPartitionSearchSnapshotV1(ctx 
 }
 
 func (p *vectorPartitionPublicPinnedSearchV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+	if len(request.VisibilityToken) != 0 {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
 	if p == nil || p.backend == nil || p.pinned == nil {
 		return public.SearchResponseV1{}, errors.New("pinned vector search is unavailable")
 	}

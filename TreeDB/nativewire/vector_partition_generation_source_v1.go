@@ -298,6 +298,13 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	var authorityToken collections.VectorPartitionActiveAuthorityTokenV1
 	if s.scopedOwnerAuthority != nil {
 		manifest = scopedManifest
+	} else if s.replicatedLive != nil {
+		// The replicated live open plan below verifies these exact prepared bytes
+		// and durable current coverage after the catalog/READY fence.
+		manifest = s.replicatedLive.manifest
+		if manifest.IndexName != key.index || manifest.Generation != key.generation {
+			return nil, fmt.Errorf("%w: replicated live generation", ErrVectorPartitionShardSearchGenerationMismatch)
+		}
 	} else if s.replicatedLifecycle != nil {
 		manifest, err = s.Collection.PreparedVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
 	} else {

@@ -150,10 +150,9 @@ func (idx *VectorIndex) vectorPartitionLiveReplayDurableBaseReasonV1(rootID, cov
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	// A freshly restored native snapshot gets dirtyMeta set when install refreshes
-	// its in-memory state token. That token is not persisted. Permit only that
-	// mutation-sequence-zero bookkeeping state; every real post-load live change
-	// advances the sequence or dirties persisted rows.
+	// In-memory state-token refresh does not dirty persisted metadata. Real
+	// post-load live changes advance the sequence or dirty persisted rows;
+	// persisted document coverage is checked independently below.
 	if idx.persistedEpoch != rootID {
 		return fmt.Sprintf("persisted root %d, want %d", idx.persistedEpoch, rootID)
 	}
@@ -197,6 +196,9 @@ func (c *Collection) validateVectorPartitionLiveReplaySpecsV1(specs []vectorPart
 }
 
 func vectorPartitionLiveReplayMutationsV1(input columnWritePublishInput, vectorColumn int) ([][]byte, [][]float32, error) {
+	if input.splitProjection != nil {
+		return [][]byte{input.splitProjection.ID}, [][]float32{input.splitProjection.Vector}, nil
+	}
 	ids := make([][]byte, 0, len(input.sourceDeleteDocuments)+len(input.documents)+len(input.declaredRows))
 	vectors := make([][]float32, 0, cap(ids))
 	positions := make(map[string]int, cap(ids))
@@ -251,6 +253,14 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 		return nil, errors.New("collections: document generation exhausted")
 	}
 	targetGeneration := state.CommitSeq + 1
+	if input.splitProjection != nil {
+		// Projection-only graph publication must not invent a canonical source
+		// document generation on the ANN owner.
+		if len(specs) != 1 {
+			return nil, ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		targetGeneration = specs[0].baseCoverage
+	}
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: make([]vectorPartitionLiveReplayEntryV1, 0, len(specs))}
 	for _, spec := range specs {
 		candidate, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(spec.definition))

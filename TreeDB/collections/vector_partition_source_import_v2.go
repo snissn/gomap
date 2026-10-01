@@ -506,7 +506,11 @@ func (c *Collection) buildSourceImportRootSystemDeltaV2(input columnWritePublish
 	if err != nil {
 		return nil, err
 	}
-	return c.appendSourceImportSystemDeltaV2(it, input.sourceImportV2)
+	it, err = c.appendSourceImportSystemDeltaV2(it, input.sourceImportV2)
+	if err != nil {
+		return nil, err
+	}
+	return c.appendSplitInsertSystemDeltaV1(it, input.splitInsert)
 }
 
 func (c *Collection) appendSourceImportSystemDeltaV2(it iterator.UnsafeIterator, publication *sourceImportPublicationV2) (iterator.UnsafeIterator, error) {

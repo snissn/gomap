@@ -32,6 +32,7 @@ const (
 	LoweredFrameClassCollectionInsertBatchByID
 	LoweredFrameClassCollectionDeleteBatchByID
 	LoweredFrameClassCollectionUpdateBatchByID
+	LoweredFrameClassCollectionSplitVectorInsertV1
 )
 
 // ApplyMetadata is the explicit metadata slot future R3a apply code will carry
@@ -283,6 +284,15 @@ func validateLoweredFrame(frame LoweredFrame) error {
 		return validateCollectionDeleteBatchByIDFrame(frame)
 	case LoweredFrameClassCollectionUpdateBatchByID:
 		return validateCollectionUpdateBatchByIDFrame(frame)
+	case LoweredFrameClassCollectionSplitVectorInsertV1:
+		if frame.Kind != commitlog.CommandKindCollectionSplitVectorInsertV1 ||
+			frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionSplitVectorInsertV1 {
+			return fmt.Errorf("%w: split vector insert frame identity is invalid", backenddb.ErrCommandWALUnsupported)
+		}
+		if _, err := commitlog.DecodeSplitVectorInsertPayloadV1(frame.Payload); err != nil {
+			return fmt.Errorf("%w: split vector insert frame: %v", backenddb.ErrCommandWALRejected, err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: command wal apply frame class %d is not accepted", backenddb.ErrCommandWALUnsupported, frame.Class)
 	}
