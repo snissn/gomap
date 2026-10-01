@@ -17,6 +17,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 func splitCollectionRecoveryValueV1(m VectorPartitionManifestV1) commitlog.SplitVectorInsertV1 {
@@ -299,5 +300,74 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 			}
 			splitCollectionRecoveryAssertPendingV1(t, c, v)
 		})
+	}
+}
+
+// Large SYSTEM values must remain pointers when unrelated metadata rebuilds
+// the whole SYSTEM tree; resolving them back inline cannot fit a leaf.
+func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	dir, database, collection, _, _ := newVectorPartitionLiveProductionFixtureV1(t)
+	t.Cleanup(func() { _ = database.Close() })
+	publication := &splitInsertPublicationV1{key: "test:oversized-system-value", next: bytes.Repeat([]byte("x"), 8192)}
+	defer func() { database.ReleaseValueLogValues(publication.appendedPtrs) }()
+	snap := database.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	it, err := buildSystemTargetIterator(snap, nil)
+	if err == nil {
+		it, err = collection.appendSplitInsertSystemDeltaV1(it, publication)
+	}
+	if err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	if _, err := database.PublishSystemRootIterator(it); err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database.ReleaseValueLogValues(publication.appendedPtrs)
+	snap = database.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing pointer snapshot")
+	}
+	rebuilt, err := buildSystemTargetIterator(snap, map[string][]byte{"test:unrelated": []byte("small")})
+	if err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	rebuilt.Seek([]byte(publication.key))
+	value, ptr, flags := rebuilt.UnsafeEntry()
+	if !rebuilt.Valid() || !bytes.Equal(rebuilt.UnsafeKey(), []byte(publication.key)) ||
+		flags&node.FlagPointer == 0 || len(value) != 0 || len(publication.appendedPtrs) != 1 || ptr != publication.appendedPtrs[0] {
+		_ = rebuilt.Close()
+		_ = snap.Close()
+		t.Fatalf("SYSTEM rebuild reinlined pointer: flags=%d ptr=%+v value_bytes=%d", flags, ptr, len(value))
+	}
+	rebuilt.Seek(nil)
+	if _, err := database.PublishSystemRootIterator(rebuilt); err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer reopened.Close()
+	snap = reopened.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing reopened snapshot")
+	}
+	defer snap.Close()
+	got, present, err := getSystemValue(snap, publication.key)
+	if err != nil || !present || !bytes.Equal(got, publication.next) {
+		t.Fatalf("reopened SYSTEM value lost: present=%v bytes=%d err=%v", present, len(got), err)
 	}
 }

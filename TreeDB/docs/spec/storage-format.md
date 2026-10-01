@@ -3873,7 +3873,10 @@ collection/index/generation/source/target/catalog identity holds one pending
 canonical source intent and at most 64 sorted completed semantic outcomes;
 target records hold graph-only durable receipts and no canonical document
 copy. The record is bounded to 384 KiB and published in the same ordered native
-root transaction as its row or graph change. Command kind 106 / payload format
+root transaction as its row or graph change. Records that exceed the key-aware
+empty-leaf capacity use existing persistent value-log pointers; dependency sync,
+root reference tracking and reachability GC use the ordinary publication path.
+Whole-SYSTEM reconstruction preserves those pointers. Command kind 106 / payload format
 15 replays these phases and advances applied WAL coverage atomically. Older
 binaries need not accept this added format; no migration support is promised.
 See [the split insert contract](vector-partition-split-source-insert-v1.md) for

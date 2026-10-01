@@ -45,7 +45,11 @@ indefinite writable operation or general retention/GC. The existing generic FSM
 idempotency record is reused for command deduplication but does not carry the
 original source position, target durable receipt and graph revision required
 for retirement and session visibility; those bounded outcomes remain in native
-system metadata.
+system metadata. Large records use persistent value-log pointers within the same
+atomic publication. Replicated reopen requires the exact prepared manifest and
+load-only durable carrier coverage of the current document state; it must never
+publish a missing binding or rebuild the graph. Ordinary/M7 prepared validation
+continues to require the original immutable source to remain current.
 
 Insert returns an owned bounded opaque visibility token binding the durable
 receipt. Strict search with that token repeats current scope/ACTIVE/current-DB

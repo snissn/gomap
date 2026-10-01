@@ -74,9 +74,22 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierReadOnlyV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	beforeMissingLSN := database.State().AppliedCommandLSN
+	if _, err := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest); err == nil {
+		t.Fatal("replicated live open published a missing binding")
+	}
+	if database.State().AppliedCommandLSN != beforeMissingLSN {
+		t.Fatal("missing-binding refusal changed WAL coverage")
+	}
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
+	}
+	if _, err := collection.Insert([]byte("d"), []byte(`{"time_us":4,"kind":"vector","did":"d","embedding":[0.5,0.5]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.PreparedVectorPartitionManifestWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
+		t.Fatal("ordinary prepared open admitted an advanced immutable source")
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -113,6 +126,27 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 		t.Fatal(err)
 	}
 	pin.Release()
+	carrier := reopened.registeredVectorIndex(def.Name)
+	carrier.mu.Lock()
+	oldCoverage, oldSource := carrier.partitionLive.coverage, carrier.partitionLive.source
+	carrier.partitionLive.coverage = oldCoverage + 1
+	carrier.mu.Unlock()
+	if _, err := reopened.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest); err == nil {
+		t.Fatal("replicated live open admitted stale document coverage")
+	}
+	carrier.mu.Lock()
+	carrier.partitionLive.coverage = oldCoverage
+	carrier.partitionLive.source.Checksum ^= 1
+	carrier.mu.Unlock()
+	if _, err := reopened.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest); err == nil {
+		t.Fatal("replicated live open admitted a mismatched immutable source")
+	}
+	carrier.mu.Lock()
+	carrier.partitionLive.source = oldSource
+	carrier.mu.Unlock()
+	if rebuiltLSN := reopenedDB.State().AppliedCommandLSN; rebuiltLSN != beforeLSN || rebuilds != 0 {
+		t.Fatalf("refused recovery changed WAL/rebuilt graph: LSN=%d/%d rebuilds=%d", rebuiltLSN, beforeLSN, rebuilds)
+	}
 }
 
 func TestAppendVectorPartitionMembershipsToPlanV1FailsClosedOnChangedInput(t *testing.T) {

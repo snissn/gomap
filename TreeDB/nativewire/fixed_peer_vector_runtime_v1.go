@@ -412,8 +412,16 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, ErrFixedPeerVectorDocumentV1)
 		}
 		prepared, err = collection.PreparedVectorPartitionManifestWithContextV1(context.Background(), parent.config.Vector.Manifest.IndexName, parent.config.Vector.Manifest.Generation)
-		if err != nil || !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.config.Vector.Manifest) {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("prepared vector manifest mismatch: %v", err))
+		if err != nil {
+			// A committed document may advance the immutable source. Only the
+			// exact persisted live carrier can authorize validation-only recovery.
+			if _, recoveryErr := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(context.Background(), parent.config.Vector.Manifest); recoveryErr != nil {
+				return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err, recoveryErr)
+			}
+			prepared = parent.config.Vector.Manifest
+		}
+		if !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.config.Vector.Manifest) {
+			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("prepared vector manifest mismatch"))
 		}
 	}
 	registry, err := fixedPeerVectorRegistryV1()

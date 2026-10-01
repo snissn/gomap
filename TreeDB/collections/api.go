@@ -24926,6 +24926,7 @@ func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) 
 type systemTargetEntry struct {
 	key   []byte
 	value []byte
+	ptr   page.ValuePtr
 	flags byte
 }
 
@@ -24984,7 +24985,7 @@ func (it *systemTargetIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr
 	if flags == 0 {
 		flags = node.FlagInline
 	}
-	return entry.value, page.ValuePtr{}, flags, page.LegacyEntryRevision
+	return entry.value, entry.ptr, flags, page.LegacyEntryRevision
 }
 
 func (it *systemTargetIterator) Key() []byte {
@@ -25072,9 +25073,12 @@ func buildSystemTargetIterator(snap *backenddb.Snapshot, updates map[string][]by
 					entries = append(entries, updateEntries[updateIdx])
 					updateIdx++
 				} else {
+					value, ptr, flags := it.UnsafeEntry()
 					entries = append(entries, systemTargetEntry{
 						key:   bytes.Clone(currKey),
-						value: it.ValueCopy(nil),
+						value: bytes.Clone(value),
+						ptr:   ptr,
+						flags: flags,
 					})
 				}
 				it.Next()

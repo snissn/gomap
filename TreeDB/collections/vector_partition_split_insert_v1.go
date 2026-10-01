@@ -15,6 +15,8 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -49,6 +51,7 @@ type splitInsertPublicationV1 struct {
 	previous        []byte
 	previousPresent bool
 	next            []byte
+	appendedPtrs    []page.ValuePtr
 }
 
 func splitInsertStateKeyV1(v commitlog.SplitVectorInsertV1) string {
@@ -275,7 +278,22 @@ func (c *Collection) appendSplitInsertSystemDeltaV1(it iterator.UnsafeIterator, 
 	if err != nil || closeErr != nil {
 		return fail(errors.Join(err, closeErr))
 	}
-	base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.key), value: bytes.Clone(publication.next)})
+	entry := systemTargetEntry{key: []byte(publication.key), value: bytes.Clone(publication.next)}
+	inlineCapacity := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(entry.key))
+	if len(entry.value) > inlineCapacity {
+		// Each builder attempt owns fresh pointers until the atomic root publisher
+		// consumes them. Keep pre-publication failures pinned until operation exit.
+		ptrs, appendErr := c.db.AppendValueLogValues([][]byte{entry.value})
+		if appendErr != nil {
+			return fail(appendErr)
+		}
+		publication.appendedPtrs = append(publication.appendedPtrs, ptrs...)
+		if len(ptrs) != 1 {
+			return fail(errors.New("collections: split insert value-log pointer count mismatch"))
+		}
+		entry.value, entry.ptr, entry.flags = nil, ptrs[0], node.FlagPointer
+	}
+	base.entries = append(base.entries, entry)
 	sort.Slice(base.entries, func(i, j int) bool { return bytes.Compare(base.entries[i].key, base.entries[j].key) < 0 })
 	for i := 1; i < len(base.entries); i++ {
 		if bytes.Equal(base.entries[i-1].key, base.entries[i].key) {
@@ -446,6 +464,7 @@ func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx 
 	if err != nil {
 		return err
 	}
+	defer func() { c.db.ReleaseValueLogValues(publication.appendedPtrs) }()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
@@ -549,6 +568,7 @@ func (c *Collection) ProjectVectorPartitionSplitInsertWithCommandWALIntentV1(ctx
 	if err != nil {
 		return zero, err
 	}
+	defer func() { c.db.ReleaseValueLogValues(input.splitInsert.appendedPtrs) }()
 	entry := &attempt.entries[0]
 	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, entry.spec.rootName)
 	if err != nil {
@@ -630,6 +650,7 @@ func (c *Collection) CompleteVectorPartitionSplitInsertWithCommandWALIntentV1(ct
 	if err != nil {
 		return err
 	}
+	defer func() { c.db.ReleaseValueLogValues(publication.appendedPtrs) }()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return backenddb.ErrClosed

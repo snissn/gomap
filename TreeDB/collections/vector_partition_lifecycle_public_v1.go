@@ -135,6 +135,12 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 // DB across snapshot replacement. Its caller must already hold that root's
 // non-reentrant vector-partition storage barrier.
 func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	return c.preparedVectorPartitionManifestUnderStorageBarrierV1(ctx, index, generation, false)
+}
+
+// Only replicated live opens may replace current immutable-source equality with
+// exact durable carrier coverage. Ordinary/M7 prepared reads remain strict.
+func (c *Collection) preparedVectorPartitionManifestUnderStorageBarrierV1(ctx context.Context, index string, generation uint64, allowReplicatedLive bool) (VectorPartitionManifestV1, error) {
 	if c == nil || c.db == nil {
 		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
 	}
@@ -145,7 +151,7 @@ func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithConte
 		return VectorPartitionManifestV1{}, err
 	}
 	var manifest VectorPartitionManifestV1
-	err := func() error {
+	err := func() (err error) {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -171,13 +177,24 @@ func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithConte
 		if snap == nil {
 			return errors.New("collections: vector partition source snapshot unavailable")
 		}
+		defer func() { err = errors.Join(err, snap.Close()) }()
 		source, sourceErr := c.vectorPartitionSourceIdentityAtSnapshotV1(index, snap)
-		closeErr := snap.Close()
-		if sourceErr != nil || closeErr != nil {
-			return errors.Join(sourceErr, closeErr)
+		if sourceErr == nil && manifest.SourceGeneration == source.Generation && manifest.SourceChecksum == source.Checksum && manifest.SourceSchemaHash == source.SchemaHash && manifest.SourceRowCount == source.RowCount {
+			return ctx.Err()
 		}
-		if manifest.SourceGeneration != source.Generation || manifest.SourceChecksum != source.Checksum || manifest.SourceSchemaHash != source.SchemaHash || manifest.SourceRowCount != source.RowCount {
-			return errors.New("collections: vector partition source identity mismatch")
+		if sourceErr == nil {
+			sourceErr = errors.New("collections: vector partition source identity mismatch")
+		}
+		if !allowReplicatedLive {
+			return sourceErr
+		}
+		documentGeneration, err := vectorIndexDocumentGenerationForCollection(snap, c.name)
+		state, ok := snap.StateToken()
+		if err != nil || !ok {
+			return errors.Join(sourceErr, err, ErrVectorIndexPartitionLiveMismatchV1)
+		}
+		if err := c.validateAndRecordVectorPartitionLiveAuthorityStateV1(manifest, documentGeneration, state); err != nil {
+			return errors.Join(sourceErr, err)
 		}
 		return ctx.Err()
 	}()
