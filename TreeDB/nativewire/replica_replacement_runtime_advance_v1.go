@@ -14,6 +14,9 @@ func (r *FixedPeerTCPRuntimeV1) advanceReplacementV1(ctx context.Context, raw []
 	if err != nil {
 		return err
 	}
+	if next.OwnerQualification != nil {
+		return raftplacement.ErrCatalogMetaConflict
+	}
 	if _, err := r.validateReplacementBeginV1(next.Begin); err != nil {
 		return err
 	}

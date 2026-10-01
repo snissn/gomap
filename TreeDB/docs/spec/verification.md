@@ -3093,6 +3093,30 @@ Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
 background work and control polling; they do not measure per-node allocations
 or establish a throughput comparison.
 
+The historical qualification receipt checkpoint maps to
+TestImmutableOwnerReplacementHistoricalQualificationReceiptV1 using the same
+five-node authenticated native-snapshot/nonvoter/private-ANN fixture: genuine
+private execution before the first receipt commit, exact owned-byte retry,
+conflicting query, external raw catalog-publish and generic advance refusal,
+permanent nonvoter/unready behavior and cold restart requiring fresh explicit
+preparation/qualification. TestCatalogOwnerQualificationReceiptIsHistoricalAndAtomicV1
+covers dedicated-command idempotency, generic FSM injection refusal, known
+receipt conflict/erasure atomicity, bounded cold restore, invalid ACTIVE/issuer
+and phase-cap refusals, accessor ownership and one extra snapshot-entry budget,
+including byte-atomic known restore refusal at unchanged AppliedIndex and
+successful install with exactly one additional entry. The real fixture refuses
+retained-result byte exhaustion before ANN/cache hits or commit and checks
+release after successful submission.
+TestReplacementOwnerQualificationReceiptRequestAdmissionV1 covers caller
+capacity refusal before catalog work, later discovery refusal and cancellation
+with no request/byte lease leak; it is semantic admission evidence, not ANN
+or quorum evidence.
+The fixture logs one enabled qualification-plus-commit elapsed/ops-per-second
+and aggregate MemStats sample across the caller, five Raft nodes and background
+work. It is diagnostic, has no before/after throughput claim, and does not measure
+isolated server allocations or retained ANN residency. Existing ordinary
+healthy search/status implementation remains unchanged.
+
 The private ANN qualification checkpoint maps to
 `TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated
 leader-issued ReadIndex plus separate target FSM/Raft applied progress, cold/cache

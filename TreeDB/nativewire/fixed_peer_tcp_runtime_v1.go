@@ -1019,6 +1019,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 	}
 	switch request.URL.Path {
+	case "/v1/replacement-owner-qualification-commit":
+		err = r.commitReplacementOwnerQualificationV1(ctx, body.Entry, &reply)
 	case "/v1/replacement-owner-endpoint", "/v1/replacement-owner-warm", "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion", "/v1/replacement-removal-proof", "/v1/replacement-removal-intent", "/v1/replacement-remove", "/v1/replacement-complete", "/v1/replacement-reconcile":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":

@@ -23,7 +23,7 @@ import (
 )
 
 func TestImmutableOwnerReplacementPrivateANNQualificationV1(t *testing.T) {
-	testImmutableOwnerReplacementPrivateQualificationV1(t, true, true)
+	testImmutableOwnerReplacementPrivateQualificationV1(t, true, true, false)
 }
 
 func replacementOwnerQualificationRequestV1(t *testing.T, ctx context.Context, target *FixedPeerTCPRuntimeV1, command raftplacement.ReplicaReplacementBeginV1) VectorPartitionShardSearchRequestV1 {
