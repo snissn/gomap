@@ -67,8 +67,13 @@ func splitInsertCollectionPrefixV1(collection string) string {
 // semantics in apply and snapshot convergence. Physical root IDs are excluded.
 // At most 64 fixed identities are read; unsupported identity churn fails closed.
 func (c *Collection) VectorPartitionSplitInsertLogicalStateV1(ctx context.Context) ([][]byte, error) {
-	if c == nil || c.db == nil {
+	if c == nil || c.db == nil || c.db.IsClosing() {
 		return nil, backenddb.ErrClosed
+	}
+	// Split state can only be created with column publication enabled. The
+	// option survives index removal, so retained receipts are still hashed.
+	if !columnStoreWriteEnabled(c.meta) {
+		return nil, nil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -357,7 +362,20 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 		if document != nil {
 			return ErrVectorPartitionSplitInsertConflictV1
 		}
-		return nil
+		// Restore checkpointed local carriers before canonical roots change.
+		// This existing replay seam never scans rows or builds a graph.
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return backenddb.ErrClosed
+		}
+		catalog, err := c.catalogForSnapshot(snap)
+		if err == nil && catalog == nil {
+			err = errCollectionNotFound
+		}
+		if err == nil {
+			err = c.loadVectorPartitionLiveCarriersForReplayV1(catalog)
+		}
+		return errors.Join(err, snap.Close())
 	}
 	if v.Operation == "clear" {
 		if state.Pending == nil {
