@@ -163,6 +163,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
+	if envelope.Kind == ReplicaReplacementOwnerQualificationKindV1 {
+		return a.applyCommittedReplicaReplacementOwnerQualificationV1(raw, appliedIndex)
+	}
 	if envelope.Kind == ReplicaReplacementCompleteKindV1 {
 		return a.applyCommittedReplicaReplacementCompleteV1(raw, appliedIndex)
 	}

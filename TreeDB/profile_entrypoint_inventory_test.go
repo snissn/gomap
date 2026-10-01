@@ -31,7 +31,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "Set", "SetMaintenancePhase", "SetSync", "Stats",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetSync", "Stats",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -58,6 +58,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
 	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))
 
+	for _, fragment := range []string{"db.ensureOpen()", "db.cached.SeekGEVersionRange(start, end)", "return db.SeekGE(start, end)"} {
+		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
+	}
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))

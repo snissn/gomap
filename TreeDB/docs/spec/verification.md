@@ -931,6 +931,27 @@ Coverage:
   - single and 32-key `CommitAt` versus an equivalent direct TreeDB batch;
   - `GetAt` versus an equivalent direct bounded seek at version depths 1, 8,
     and 64, including allocation counts.
+- `TreeDB/caching/point_successor_mvcc_test.go` deterministically pauses backend
+  snapshot acquisition to check concurrent readers/point writers, retained
+  exclusive fences, generic/fallback admission, same-timestamp replacement,
+  rotation and partial one-record backend publication. A WAL-admitted writer
+  paused before shard apply cannot insert into the rotated generation. A
+  physical-delete retry must acquire a fresh view. The raw-delete schedule
+  demonstrates why codec shape alone cannot qualify the shared capability.
+- `TreeDB/internal/memtable/mvcc_successor_alias_test.go` checks minimum and long
+  canonical key aliases across replacement/growth for every table mode; run it
+  under the race detector. The minimum key length excludes append-only inline
+  entry-slot key backing, which can be pooled during growth.
+- `TreeDB/mvcc/point_read_concurrency_test.go` checks Store group admission at
+  relaxed and durable public batch publication boundaries. Existing pruning,
+  floor, forced-pointer reopen and snapshot suites also exercise the capability.
+
+For lock attribution, observe `treedb.cache.point_successor.mvcc_shared_total`
+and the `mvcc_{noncanonical,range_span,physical_delete}_fallbacks_total` counters
+alongside existing mutable/queue/backend probe and hit counters. Mutex holder
+delay and block waiter delay require matched timed windows and sampling rates;
+neither is CPU time or a production latency acceptance measurement. Keep
+profile-option changes outside production benchmark acceptance binaries.
 
 The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
@@ -953,9 +974,10 @@ Invariants:
   floor, and removes a tombstone only after older versions cannot resurrect;
 - durable floor-first interruption can be reopened and resumed idempotently;
   pinned pre-prune snapshots remain readable under the race detector;
-- a prune paused after snapshot capture does not block foreground `GetAt`,
-  `CommitAt`, or `IterateVersions` acquisition, while a concurrent floor
-  advance remains serialized behind the prune.
+- a qualified prune paused after snapshot capture blocks foreground point
+  reads and snapshot acquisition until physical deletion completes; batch-only
+  adapters retain nonblocking reads/commits/snapshot capture. Floor advancement
+  stays serialized, and previously pinned snapshots stay readable.
 
 Coverage:
 
@@ -963,10 +985,12 @@ Coverage:
   keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
-- The same suite deterministically pauses prune iterator creation after its
-  snapshot is pinned, proves foreground point reads, commits, and retained-
-  version iterator acquisition complete, and then verifies both the old pinned
-  view and the newly committed version after pruning resumes.
+- The same suite pauses prune iterator creation after snapshot capture and
+  separately checks qualified foreground fencing and batch-only nonblocking
+  reads/commits/iterator acquisition. It verifies old pinned views, completed
+  pruning and subsequent durable commits. The cached successor suite reproduces
+  retained queue/live40 plus a later backend snapshot after logical tomb80
+  deletion, demonstrating why the Store prune fence is necessary.
 - `TreeDB/mvcc/mvcc_bench_test.go` compares all-version scans with physical
   encoded-key scans with the same owned key/value output across key counts
   `{64,256}`, version depths `{1,8,32}`, and both directions. Filtered scans use
@@ -3092,6 +3116,36 @@ genuine current-DB swap retirement. It grants no public readiness or promotion.
 Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
 background work and control polling; they do not measure per-node allocations
 or establish a throughput comparison.
+
+The historical qualification receipt checkpoint maps to
+TestImmutableOwnerReplacementHistoricalQualificationReceiptV1 using the same
+five-node authenticated native-snapshot/nonvoter/private-ANN fixture: genuine
+private execution before the first receipt commit, two overlapping identical
+commands returning the same receipt with one ANN cache hit and one catalog entry,
+cancellation of an actual blocked waiter, nil/empty live-domain owned-byte retry,
+conflicting query, external raw catalog-publish and generic advance refusal,
+permanent nonvoter/unready behavior and cold restart requiring fresh explicit
+preparation/qualification. TestCatalogOwnerQualificationReceiptIsHistoricalAndAtomicV1
+covers dedicated-command idempotency, generic FSM injection refusal, known
+receipt conflict/erasure atomicity, bounded cold restore, invalid ACTIVE/issuer
+and phase-cap refusals, accessor ownership and one extra snapshot-entry budget,
+including byte-atomic known restore refusal at unchanged AppliedIndex and
+successful install with exactly one additional entry. The real fixture refuses
+retained-result byte exhaustion before ANN/cache hits or commit and checks
+release after successful submission.
+TestReplacementOwnerQualificationReceiptRequestAdmissionV1 covers caller
+capacity refusal before catalog work, later discovery refusal and cancellation
+with no request/byte lease leak; it is semantic admission evidence, not ANN
+or quorum evidence.
+TestReplacementOwnerQualificationResultDigestIgnoresTelemetryV1 binds only
+ordered partitions and neighbor IDs/scores; counters, timing and memory changes
+leave the digest unchanged. TestReplacementOwnerQualificationReceiptGateCancellationV1
+checks canceled admission cleanup and reuse of the bounded producer gate.
+The fixture logs one enabled overlapping-qualification-plus-commit elapsed/ops-per-second
+and aggregate MemStats sample across the caller, five Raft nodes and background
+work. It is diagnostic, has no before/after throughput claim, and does not measure
+isolated server allocations or retained ANN residency. Existing ordinary
+healthy search/status implementation remains unchanged.
 
 The private ANN qualification checkpoint maps to
 `TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated

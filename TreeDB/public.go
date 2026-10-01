@@ -2329,6 +2329,20 @@ func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
 	return it.KeyCopy(nil), it.ValueCopy(nil), true, it.Error()
 }
 
+// SeekGEVersionRange is an optional capability for mvcc.Store, whose single
+// owner contract excludes raw reserved-namespace writes. Ordinary callers
+// should use SeekGE. Store also fences multi-record commits and physical pruning
+// against reads and snapshot acquisition. Results own their key/value bytes.
+func (db *DB) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, nil, false, err
+	}
+	if db.cached != nil {
+		return db.cached.SeekGEVersionRange(start, end)
+	}
+	return db.SeekGE(start, end)
+}
+
 // ReverseIterator returns a reverse iterator over the range [start, end).
 func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {

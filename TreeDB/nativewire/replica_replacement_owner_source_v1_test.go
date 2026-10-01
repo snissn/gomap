@@ -25,10 +25,10 @@ func TestImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T) {
 }
 
 func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint bool) {
-	testImmutableOwnerReplacementPrivateQualificationV1(t, endpoint, false)
+	testImmutableOwnerReplacementPrivateQualificationV1(t, endpoint, false, false)
 }
 
-func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint, qualification bool) {
+func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint, qualification, receipt bool) {
 	t.Helper()
 	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
 	var ordinaryOracle VectorPartitionShardSearchResponseV1
@@ -246,6 +246,9 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 		t.Fatalf("warm did not reuse every hosted domain searcher: cold=%+v cached=%+v", cold, cached)
 	}
 	assertPrivate()
+	if receipt {
+		assertReplacementOwnerReceiptV1(t, ctx, client, target, runtimes[3], command)
+	}
 	if qualification {
 		request := replacementOwnerQualificationRequestV1(t, ctx, target, command)
 		wrong := command
@@ -415,6 +418,17 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 	}
 	if source() != nil {
 		t.Fatal("restart/observation warmed source")
+	}
+	if receipt {
+		state, err := runtimes[3].authority.ReplicaReplacementStateV1(command.GroupID)
+		if err != nil || state.OwnerQualification == nil {
+			t.Fatalf("restart lost historical receipt: %+v %v", state, err)
+		}
+		request := replacementOwnerQualificationRequestV1(t, ctx, target, command)
+		result, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, request)
+		if err == nil || len(result.Search.Partials) != 0 {
+			t.Fatalf("historical receipt warmed restart or served hits: %+v %v", result, err)
+		}
 	}
 	warm("restart-cold")
 	retained = source()
