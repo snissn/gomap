@@ -64,7 +64,7 @@ func BenchmarkMVCCOwnership(b *testing.B) {
 						b.ResetTimer()
 						for i := 0; i < b.N; i++ {
 							result, err := store.GetAt([]byte("key"), uint64(depth))
-							if err != nil || result.State != Present || result.Timestamp != uint64(depth) || len(result.Value) != width || result.Value[0] != byte(depth) {
+							if err != nil || result.State != Present || result.Timestamp != uint64(depth) || len(result.Value) != width || result.Value[0] != byte(depth) || result.Value[width-1] != byte(depth) {
 								b.Fatalf("result=%+v err=%v", result, err)
 							}
 							ownedResultSink = result
@@ -115,6 +115,16 @@ func BenchmarkMVCCOwnership(b *testing.B) {
 								closeErr := it.Close()
 								if iterErr != nil || closeErr != nil || seen != depth {
 									b.Fatalf("seen=%d err=%v close=%v", seen, iterErr, closeErr)
+								}
+								if owned {
+									if len(outputs) != depth {
+										b.Fatalf("owned outputs=%d, want %d", len(outputs), depth)
+									}
+									for index, v := range outputs {
+										if string(v.Key) != "key" || v.State != Present || v.Timestamp != uint64(depth-index) || len(v.Value) != width || v.Value[0] != byte(v.Timestamp) || v.Value[width-1] != byte(v.Timestamp) {
+											b.Fatalf("owned output after Close=%+v", v)
+										}
+									}
 								}
 								ownershipChecksum = sum
 								if owned {
