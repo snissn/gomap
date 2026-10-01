@@ -95,6 +95,11 @@ type pointSuccessorDB interface {
 	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
 }
 
+// Store ownership, rather than physical key shape alone, qualifies this seam.
+type versionRangeSuccessorDB interface {
+	SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error)
+}
+
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
 	db treeDB
@@ -103,9 +108,9 @@ type Store struct {
 	// maintenanceMu then mu; foreground reads and commits never take it.
 	maintenanceMu sync.Mutex
 
-	// mu guards the discard-floor cache and serializes its publication against
-	// commits and snapshot acquisition. Reads release it as soon as their
-	// point-in-time iterator is pinned.
+	// mu guards the discard floor and fences multi-record commit application
+	// against qualified successor reads and snapshot acquisition. Single-record
+	// commits and reads share it; groups hold it exclusively through publication.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool
@@ -219,10 +224,21 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 			staged = append(staged, entry)
 		}
 	}
-	if err := s.lockDiscardFloorRead(); err != nil {
-		return err
+	if _, qualified := s.db.(versionRangeSuccessorDB); qualified && len(staged) > 1 {
+		// Cached batches apply across shard tables while holding a shared writer
+		// gate. The Store-owned read capability must not expose that prefix.
+		s.mu.Lock()
+		if err := s.loadDiscardFloorLocked(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		defer s.mu.Unlock()
+	} else {
+		if err := s.lockDiscardFloorRead(); err != nil {
+			return err
+		}
+		defer s.mu.RUnlock()
 	}
-	defer s.mu.RUnlock()
 	floor := s.discardFloor
 	for _, entry := range staged {
 		if entry.timestamp <= floor {
@@ -287,8 +303,14 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		s.mu.RUnlock()
 		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
 	}
-	if seeker, ok := s.db.(pointSuccessorDB); ok {
-		physical, record, found, seekErr := seeker.SeekGE(lower, upper)
+	var seek func([]byte, []byte) ([]byte, []byte, bool, error)
+	if seeker, ok := s.db.(versionRangeSuccessorDB); ok {
+		seek = seeker.SeekGEVersionRange
+	} else if seeker, ok := s.db.(pointSuccessorDB); ok {
+		seek = seeker.SeekGE
+	}
+	if seek != nil {
+		physical, record, found, seekErr := seek(lower, upper)
 		s.mu.RUnlock()
 		if seekErr != nil {
 			return Result{}, storageError("seek version", seekErr)

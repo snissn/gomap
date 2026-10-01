@@ -931,6 +931,27 @@ Coverage:
   - single and 32-key `CommitAt` versus an equivalent direct TreeDB batch;
   - `GetAt` versus an equivalent direct bounded seek at version depths 1, 8,
     and 64, including allocation counts.
+- `TreeDB/caching/point_successor_mvcc_test.go` deterministically pauses backend
+  snapshot acquisition to check concurrent readers/point writers, retained
+  exclusive fences, generic/fallback admission, same-timestamp replacement,
+  rotation and partial one-record backend publication. A WAL-admitted writer
+  paused before shard apply cannot insert into the rotated generation. A
+  physical-delete retry must acquire a fresh view. The raw-delete schedule
+  demonstrates why codec shape alone cannot qualify the shared capability.
+- `TreeDB/internal/memtable/mvcc_successor_alias_test.go` checks minimum and long
+  canonical key aliases across replacement/growth for every table mode; run it
+  under the race detector. The minimum key length excludes append-only inline
+  entry-slot key backing, which can be pooled during growth.
+- `TreeDB/mvcc/point_read_concurrency_test.go` checks Store group admission at
+  relaxed and durable public batch publication boundaries. Existing pruning,
+  floor, forced-pointer reopen and snapshot suites also exercise the capability.
+
+For lock attribution, observe `treedb.cache.point_successor.mvcc_shared_total`
+and the `mvcc_{noncanonical,range_span,physical_delete}_fallbacks_total` counters
+alongside existing mutable/queue/backend probe and hit counters. Mutex holder
+delay and block waiter delay require matched timed windows and sampling rates;
+neither is CPU time or a production latency acceptance measurement. Keep
+profile-option changes outside production benchmark acceptance binaries.
 
 The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,

@@ -81,6 +81,55 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
   underlying error for `errors.Is`/`errors.As`. Present values are caller-owned
   copies.
 
+`Store.GetAt` prefers the optional `SeekGEVersionRange` capability. Its caller
+contract is one Store owning the reserved namespace, with no raw writes there;
+the codec alone does not authorize shared access. Cached reads use the shared
+writer gate only for one canonical version range with no retained range spans.
+Ordinary `SeekGE`, noncanonical bounds and range spans retain the exclusive
+gate. Any observed physical node tombstone releases the shared attempt's view
+and backend leases before a fresh exclusive attempt. MVCC tombstones are value
+records and do not require that fallback. Results own their bytes.
+
+For this capability, multi-record commits hold the existing Store floor lock
+exclusively through batch publication; reads, single-record commits and version
+snapshot acquisition share that lock. This prevents a reader from observing a
+cached batch between shard applications. Batch-only adapters retain their
+existing admission. A durable multi-record commit holds this fence during its
+WAL acknowledgement, so independent multi-record commits through one Store
+cannot form a concurrent durability group. Staging and validation precede the
+fence. The floor read lock does not exclude physical pruning.
+
+The shared source-selection contract depends on these existing invariants:
+
+- All physical versions of one logical key share a mutable shard. Writers
+  select the current table while holding that shard's mutex; rotation freezes
+  and replaces it under the same mutex. A previously admitted WAL/vlog writer
+  cannot insert into a frozen old generation after a newer generation commits.
+- A retained view keeps the captured mutable and immutable tables, their
+  borrowed arenas and published-root leases alive through materialization.
+  Frozen tables remain probed even after their queued units retire. Updates
+  allocate fresh value bytes or replacement nodes; they do not overwrite a
+  previously selected value. Canonical physical keys are at least 19 bytes,
+  excluding append-only's inline 8-byte keys in reusable entry backing.
+- Flush collection takes a global queue prefix, respecting lane and range
+  barriers. Within a canonical run, physical keys publish in sorted order;
+  queued sources retire only after all chunks succeed. Therefore a later
+  backend snapshot cannot expose a new lower-priority eligible version while
+  omitting its previously committed, earlier-sorting predecessor. Native
+  grouped-root publication supplies a stronger all-at-once boundary.
+- A selected old same-timestamp value can linearize before its concurrent
+  replacement. An eligible successor newly observed in the backend can
+  linearize when it became visible, because the source and publication order
+  above covers its earlier eligible predecessors. Versions above the read
+  timestamp fall outside the range.
+- Pruning cannot recreate keys at/below its floor: commits reject them. It
+  retains a live value anchor and deletes a tombstone anchor only after all
+  older versions. Physical tombstone observations take the exclusive retry.
+
+The shared gate remains held until owned-byte materialization and lease cleanup
+finish. Close, checkpoint, conditional/range writes and value-log maintenance
+keep their existing exclusive fences and lock order.
+
 Retained-version iteration and discard/pruning extend that opt-in owner:
 
 - Exactly one `Store` owns one open TreeDB handle. Creating multiple `Store`
