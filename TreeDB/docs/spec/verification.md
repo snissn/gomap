@@ -3173,6 +3173,16 @@ serving state; the test does not assert entry into the barrier wait.
 `TestImmutableOwnerWarmCatalogReadCloseV1` blocks a real mTLS catalog read on an
 already warm owner and proves Close cancels and joins that initial authority
 request, releases request/byte admission and leaves no serving state or tracker.
+`TestImmutableVectorBackendAuthorityReadCloseV1` blocks the router's subsequent
+ACTIVE read after the topology initializer's first fence;
+`TestMutableVectorBackendLifecycleReadCloseV1` blocks a genuine authenticated
+lifecycle request before initial activation. Both require authority I/O outside
+`initMu`, cancellation and join by Close, no late backend installation, and
+request/byte lease release. A waiter observed entering the occupied-slot select
+can cancel without clearing the builder's ownership. The same initialization
+slot covers topology and backend construction; mutable cached backend returns
+retain their existing path. Already committed catalog work is not rolled back
+by cancellation.
 Existing private replacement quorum, operation and asset controls remain in the
 shared fixture, with recovery disabled in all existing wrappers. This is
 ordinary owner recovery only; replacement NONVOTER/add-intent remains unready.

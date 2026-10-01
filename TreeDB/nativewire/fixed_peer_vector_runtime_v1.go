@@ -466,6 +466,48 @@ func fixedPeerVectorRegistryV1() (*iwire.Registry, error) {
 	return iwire.NewRegistry(schemas...)
 }
 
+// One slot owns all lazy topology/backend work, including authority I/O. Close
+// cancels its context and joins it outside initMu; waiters own only their context.
+func (r *fixedPeerVectorRuntimeV1) beginInitializationV1(ctx context.Context) (context.Context, context.CancelFunc, chan struct{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		r.initMu.Lock()
+		if r.closed.Load() {
+			r.initMu.Unlock()
+			return nil, nil, nil, ErrFixedPeerVectorUnavailableV1
+		}
+		if done := r.initDone; done != nil {
+			r.initMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, nil, nil, ctx.Err()
+			case <-done:
+			}
+			continue
+		}
+		workCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		r.initDone, r.initCancel = done, cancel
+		r.initMu.Unlock()
+		return workCtx, cancel, done, nil
+	}
+}
+
+func (r *fixedPeerVectorRuntimeV1) finishInitializationV1(done chan struct{}, cancel context.CancelFunc) {
+	cancel()
+	r.initMu.Lock()
+	if r.initDone == done {
+		r.initDone, r.initCancel = nil, nil
+		close(done)
+	}
+	r.initMu.Unlock()
+}
+
 func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
 	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
@@ -483,12 +525,34 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		return nil, err
 	}
 	r.initMu.Lock()
-	defer r.initMu.Unlock()
 	if r.closed.Load() {
+		r.initMu.Unlock()
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
 	if r.backend != nil {
-		return r.backend, nil
+		backend := r.backend
+		r.initMu.Unlock()
+		return backend, nil
+	}
+	r.initMu.Unlock()
+	workCtx, cancel, done, err := r.beginInitializationV1(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer r.finishInitializationV1(done, cancel)
+	ctx = workCtx
+	r.initMu.Lock()
+	err = ctx.Err()
+	if err == nil && r.closed.Load() {
+		err = ErrFixedPeerVectorUnavailableV1
+	}
+	backend := r.backend
+	r.initMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if backend != nil {
+		return backend, nil
 	}
 
 	vector := r.parent.config.Vector
@@ -610,7 +674,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		}
 		return nil, err
 	}
-	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
+	backend, err = NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
 		Topology: topology, RequestBase: vector.RequestBase, Lifecycle: lifecycle, ReadFence: r.parent,
 		Identity: vector.Identity, RequiredGroups: owners, Builder: fixedPeerVectorBuilderV1{ready: map[raftcluster.GroupID]raftplacement.VectorPartitionLifecycleGroupReadyV1{owner: ready}}, MutationEpoch: record.MutationEpoch,
 		MutationSubmitter: r.parent,
@@ -622,7 +686,22 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		}
 		return nil, err
 	}
-	r.source, r.topology, r.backend = source, topology, backend
+	r.initMu.Lock()
+	err = ctx.Err()
+	if err == nil && r.closed.Load() {
+		err = ErrFixedPeerVectorUnavailableV1
+	}
+	if err == nil {
+		r.source, r.topology, r.backend = source, topology, backend
+	}
+	r.initMu.Unlock()
+	if err != nil {
+		err = errors.Join(err, topology.Close())
+		if source != nil {
+			err = errors.Join(err, source.Close())
+		}
+		return nil, err
+	}
 	return backend, nil
 }
 

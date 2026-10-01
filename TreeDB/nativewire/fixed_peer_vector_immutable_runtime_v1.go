@@ -103,125 +103,101 @@ func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyV1(ctx context.Con
 	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	workCtx, cancel, done, err := r.beginInitializationV1(ctx)
+	if err != nil {
+		return nil, err
 	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		r.initMu.Lock()
-		if r.closed.Load() {
-			r.initMu.Unlock()
-			return nil, ErrFixedPeerVectorUnavailableV1
-		}
-		if done := r.initDone; done != nil {
-			r.initMu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-done:
-			}
-			continue
-		}
-		// Close owns the first authority read as well as construction, including
-		// a cached hit. Waiters acquire their own fresh authority after this slot.
-		workCtx, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		r.initDone, r.initCancel = done, cancel
-		r.initMu.Unlock()
-		defer func() {
-			cancel()
-			r.initMu.Lock()
-			r.initDone, r.initCancel = nil, nil
-			close(done)
-			r.initMu.Unlock()
-		}()
-		vector := r.parent.config.Vector
-		if _, err := r.parent.immutableActiveVectorRecordV1(workCtx, fixedPeerVectorOwnerGroupsV1(vector.Placement)); err != nil {
-			return nil, err
-		}
-		r.initMu.Lock()
-		if err := workCtx.Err(); err != nil {
-			r.initMu.Unlock()
-			return nil, err
-		}
-		if r.closed.Load() {
-			r.initMu.Unlock()
-			return nil, ErrFixedPeerVectorUnavailableV1
-		}
-		guard := r.servingGuard
-		if guard == nil {
-			guard = r.requireCurrentImmutableDBV1
-		}
-		dbErr := guard()
-		if r.topology != nil && dbErr == nil {
-			topology := r.topology
-			r.initMu.Unlock()
-			return topology, nil
-		}
-		if dbErr != nil && !rebind {
-			r.initMu.Unlock()
-			return nil, dbErr
-		}
-		oldTopology, oldSource := r.topology, r.source
-		r.collection, r.topology, r.source, r.backend, r.servingGuard = nil, nil, nil, nil, nil
-		r.initMu.Unlock()
+	defer r.finishInitializationV1(done, cancel)
+	return r.initializeImmutableTopologyOwnedV1(workCtx, rebind)
+}
 
-		// A listener and its requests drain before its source, without initMu or a
-		// storage/FSM barrier held. Close cancels this work and waits outside initMu.
-		err := oldTopology.Close()
-		if oldSource != nil {
-			err = errors.Join(err, oldSource.Close())
-		}
-		data := r.parent.data[r.dataGroup]
-		var collection *collections.Collection
-		var database *backenddb.DB
-		if err == nil && (data == nil || data.fsm == nil) {
-			err = ErrFixedPeerVectorProofStaleV1
-		}
-		if err == nil {
-			if rebind {
-				collection, database, err = data.fsm.OpenCollectionForRaftSourceFromCurrentDBV1(workCtx, raftcluster.AppliedIndexReadBarrier{NodeID: r.parent.config.NodeID, GroupID: r.dataGroup, MinAppliedIndex: 1}, vector.Collection.Collection)
-			} else {
-				collection, err = r.manager.OpenCollection(vector.Collection.Collection)
-				database = data.db
-			}
-		}
-		var topology *VectorPartitionProductionTopologyV1
-		var source *CollectionVectorPartitionGenerationSourceV1
-		if err == nil {
-			guard = r.immutableDBGuardV1(database)
-			topology, source, err = r.buildImmutableTopologyV1(workCtx, collection, database.Dir(), guard)
-		}
-		if err == nil {
-			_, err = r.parent.immutableActiveVectorRecordV1(workCtx, fixedPeerVectorOwnerGroupsV1(vector.Placement))
-		}
-		r.initMu.Lock()
-		if err == nil {
-			err = workCtx.Err()
-		}
-		if err == nil && r.closed.Load() {
-			err = ErrFixedPeerVectorUnavailableV1
-		}
-		if err == nil {
-			err = guard()
-		}
-		if err == nil {
-			r.collection, r.source, r.topology, r.servingGuard = collection, source, topology, guard
-		}
+// The caller retains the initialization slot through any subsequent backend
+// authority read and installation. This body must not acquire another slot.
+func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyOwnedV1(workCtx context.Context, rebind bool) (*VectorPartitionProductionTopologyV1, error) {
+	vector := r.parent.config.Vector
+	if _, err := r.parent.immutableActiveVectorRecordV1(workCtx, fixedPeerVectorOwnerGroupsV1(vector.Placement)); err != nil {
+		return nil, err
+	}
+	r.initMu.Lock()
+	if err := workCtx.Err(); err != nil {
 		r.initMu.Unlock()
-		if err != nil {
-			err = errors.Join(err, topology.Close())
-			if source != nil {
-				err = errors.Join(err, source.Close())
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
+	}
+	if r.closed.Load() {
+		r.initMu.Unlock()
+		return nil, ErrFixedPeerVectorUnavailableV1
+	}
+	guard := r.servingGuard
+	if guard == nil {
+		guard = r.requireCurrentImmutableDBV1
+	}
+	dbErr := guard()
+	if r.topology != nil && dbErr == nil {
+		topology := r.topology
+		r.initMu.Unlock()
 		return topology, nil
 	}
+	if dbErr != nil && !rebind {
+		r.initMu.Unlock()
+		return nil, dbErr
+	}
+	oldTopology, oldSource := r.topology, r.source
+	r.collection, r.topology, r.source, r.backend, r.servingGuard = nil, nil, nil, nil, nil
+	r.initMu.Unlock()
+
+	// A listener and its requests drain before its source, without initMu or a
+	// storage/FSM barrier held. Close cancels this work and waits outside initMu.
+	err := oldTopology.Close()
+	if oldSource != nil {
+		err = errors.Join(err, oldSource.Close())
+	}
+	data := r.parent.data[r.dataGroup]
+	var collection *collections.Collection
+	var database *backenddb.DB
+	if err == nil && (data == nil || data.fsm == nil) {
+		err = ErrFixedPeerVectorProofStaleV1
+	}
+	if err == nil {
+		if rebind {
+			collection, database, err = data.fsm.OpenCollectionForRaftSourceFromCurrentDBV1(workCtx, raftcluster.AppliedIndexReadBarrier{NodeID: r.parent.config.NodeID, GroupID: r.dataGroup, MinAppliedIndex: 1}, vector.Collection.Collection)
+		} else {
+			collection, err = r.manager.OpenCollection(vector.Collection.Collection)
+			database = data.db
+		}
+	}
+	var topology *VectorPartitionProductionTopologyV1
+	var source *CollectionVectorPartitionGenerationSourceV1
+	if err == nil {
+		guard = r.immutableDBGuardV1(database)
+		topology, source, err = r.buildImmutableTopologyV1(workCtx, collection, database.Dir(), guard)
+	}
+	if err == nil {
+		_, err = r.parent.immutableActiveVectorRecordV1(workCtx, fixedPeerVectorOwnerGroupsV1(vector.Placement))
+	}
+	r.initMu.Lock()
+	if err == nil {
+		err = workCtx.Err()
+	}
+	if err == nil && r.closed.Load() {
+		err = ErrFixedPeerVectorUnavailableV1
+	}
+	if err == nil {
+		err = guard()
+	}
+	if err == nil {
+		r.collection, r.source, r.topology, r.servingGuard = collection, source, topology, guard
+	}
+	r.initMu.Unlock()
+	if err != nil {
+		err = errors.Join(err, topology.Close())
+		if source != nil {
+			err = errors.Join(err, source.Close())
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return topology, nil
 }
 
 func (r *fixedPeerVectorRuntimeV1) buildImmutableTopologyV1(ctx context.Context, collection *collections.Collection, root string, guard func() error) (*VectorPartitionProductionTopologyV1, *CollectionVectorPartitionGenerationSourceV1, error) {
@@ -392,25 +368,34 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 		r.parent.config.NodeID != r.parent.config.Vector.RouterNodeID || r.parent.meta == nil || r.parent.authority == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
-	topology, err := r.ensureImmutableTopologyV1(ctx)
+	workCtx, cancel, done, err := r.beginInitializationV1(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer r.finishInitializationV1(done, cancel)
+	topology, err := r.initializeImmutableTopologyOwnedV1(workCtx, false)
 	if err != nil {
 		return nil, err
 	}
 	r.initMu.Lock()
-	defer r.initMu.Unlock()
 	if r.closed.Load() || r.topology != topology || r.servingGuard == nil {
+		r.initMu.Unlock()
 		return nil, ErrFixedPeerVectorProofStaleV1
 	}
-	guard := r.servingGuard
-	if r.backend != nil {
+	guard, cached := r.servingGuard, r.backend
+	r.initMu.Unlock()
+	if err := workCtx.Err(); err != nil {
+		return nil, err
+	}
+	if cached != nil {
 		if err := guard(); err != nil {
 			return nil, err
 		}
-		return r.backend, nil
+		return cached, nil
 	}
 	vector := r.parent.config.Vector
 	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
-	record, err := r.parent.immutableActiveVectorRecordV1(ctx, owners)
+	record, err := r.parent.immutableActiveVectorRecordV1(workCtx, owners)
 	if err != nil {
 		return nil, err
 	}
@@ -423,10 +408,21 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableBackendV1(ctx context.Context)
 	if err != nil {
 		return nil, err
 	}
-	if err := guard(); err != nil {
+	r.initMu.Lock()
+	err = workCtx.Err()
+	if err == nil && (r.closed.Load() || r.topology != topology) {
+		err = ErrFixedPeerVectorProofStaleV1
+	}
+	if err == nil {
+		err = guard()
+	}
+	if err == nil {
+		r.backend = backend
+	}
+	r.initMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
-	r.backend = backend
 	return backend, nil
 }
 
