@@ -245,13 +245,16 @@ func (r *FixedPeerTCPRuntimeV1) immutableVectorWarmReadinessV1(ctx context.Conte
 	if r.vector == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
-	if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+	r.vector.initMu.Lock()
+	backend, topology, source, guard := r.vector.backend, r.vector.topology, r.vector.source, r.vector.servingGuard
+	r.vector.initMu.Unlock()
+	if guard == nil {
+		guard = r.vector.requireCurrentImmutableDBV1
+	}
+	if err := guard(); err != nil {
 		return err
 	}
 	if listener {
-		r.vector.initMu.Lock()
-		backend, topology, source := r.vector.backend, r.vector.topology, r.vector.source
-		r.vector.initMu.Unlock()
 		if topology == nil || (r.config.NodeID == r.config.Vector.RouterNodeID && backend == nil) || (ownerLeader && source == nil) {
 			return ErrFixedPeerVectorUnavailableV1
 		}
@@ -266,7 +269,7 @@ func (r *FixedPeerTCPRuntimeV1) immutableVectorWarmReadinessV1(ctx context.Conte
 	if _, err := r.immutableActiveVectorRecordV1(ctx, owners); err != nil {
 		return err
 	}
-	return r.vector.requireCurrentImmutableDBV1()
+	return guard()
 }
 
 func (c *FixedPeerTCPClientV1) ReadinessV1(ctx context.Context, node raftcluster.NodeID) (FixedPeerReadinessV1, error) {
