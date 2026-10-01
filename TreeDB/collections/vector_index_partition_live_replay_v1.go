@@ -150,10 +150,9 @@ func (idx *VectorIndex) vectorPartitionLiveReplayDurableBaseReasonV1(rootID, cov
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	// A freshly restored native snapshot gets dirtyMeta set when install refreshes
-	// its in-memory state token. That token is not persisted. Permit only that
-	// mutation-sequence-zero bookkeeping state; every real post-load live change
-	// advances the sequence or dirties persisted rows.
+	// In-memory state-token refresh does not dirty persisted metadata. Real
+	// post-load live changes advance the sequence or dirty persisted rows;
+	// persisted document coverage is checked independently below.
 	if idx.persistedEpoch != rootID {
 		return fmt.Sprintf("persisted root %d, want %d", idx.persistedEpoch, rootID)
 	}

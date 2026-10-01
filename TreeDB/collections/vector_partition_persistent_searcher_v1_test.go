@@ -71,6 +71,31 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 	}
 }
 
+func TestVectorIndexSourceRevalidationPreservesPersistenceDebt(t *testing.T) {
+	for _, record := range []func(*VectorIndex, uint64){
+		func(idx *VectorIndex, generation uint64) { idx.recordSourceDocumentGeneration(generation) },
+		func(idx *VectorIndex, generation uint64) {
+			idx.recordSourceDocumentState(generation, idx.sourceDocumentState)
+		},
+	} {
+		idx := &VectorIndex{nativePersistent: true, persistedEpoch: 1, sourceDocumentGeneration: 7, sourceDocumentRootsValid: true}
+		idx.invalidateSourceDocumentRoots()
+		record(idx, 7)
+		if !idx.hasValidSourceDocumentRoots() || idx.needsNativeAutoPersist() {
+			t.Fatal("same-generation revalidation dirtied persistent metadata")
+		}
+		record(idx, 8)
+		if !idx.needsNativeAutoPersist() {
+			t.Fatal("changed source generation lost persistence debt")
+		}
+		idx.invalidateSourceDocumentRoots()
+		record(idx, 8)
+		if !idx.needsNativeAutoPersist() {
+			t.Fatal("same-generation revalidation cleared existing persistence debt")
+		}
+	}
+}
+
 func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierReadOnlyV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
@@ -142,6 +167,16 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	}
 	pin.Release()
 	carrier := reopened.registeredVectorIndex(def.Name)
+	beforeRoot := carrier.nativeSnapshotBaseEpochForFullSave()
+	if carrier.needsNativeAutoPersist() {
+		t.Fatal("unchanged restored carrier needs persistence")
+	}
+	if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if reopenedDB.State().AppliedCommandLSN != beforeLSN || carrier.nativeSnapshotBaseEpochForFullSave() != beforeRoot {
+		t.Fatal("unchanged carrier save published a new WAL entry or graph root")
+	}
 	carrier.mu.Lock()
 	oldCoverage, oldSource := carrier.partitionLive.coverage, carrier.partitionLive.source
 	carrier.partitionLive.coverage = oldCoverage + 1
@@ -169,6 +204,14 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	carrier.mu.Unlock()
 	if rebuiltLSN := reopenedDB.State().AppliedCommandLSN; rebuiltLSN != beforeLSN || rebuilds != 0 {
 		t.Fatalf("refused recovery changed WAL/rebuilt graph: LSN=%d/%d rebuilds=%d", rebuiltLSN, beforeLSN, rebuilds)
+	}
+	if err := reopenedDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closedDB := openCollectionCommandWALDB(t, dir)
+	defer closedDB.Close()
+	if closedDB.State().AppliedCommandLSN != beforeLSN {
+		t.Fatal("unchanged carrier close advanced command-WAL coverage")
 	}
 }
 
