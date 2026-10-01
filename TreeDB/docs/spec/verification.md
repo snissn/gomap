@@ -3107,7 +3107,7 @@ ordinary dispatcher refusal; the real fixture also checks public coordinator
 proof refusal. `TestReplacementPrivateANNLateAdmissionClearsResponseV1` uses the
 existing deterministic service fixture to prove final admission discards all
 partials and releases its generation pin. `TestReplacementPrivateANNRequestAdmissionV1`
-checks pre-dial byte-exhaustion refusal, request-lease release after dial refusal,
+checks pre-dial byte-exhaustion refusal, request-lease release after pre-catalog authentication refusal,
 and canceled admission through the existing shared transport fixture.
 `TestReplacementPrivateANNServiceRejectsMutableShapeV1` rejects non-basic or
 live/strict private requests before authority, proof or generation access.

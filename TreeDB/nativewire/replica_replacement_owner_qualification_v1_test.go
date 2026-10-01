@@ -267,7 +267,7 @@ func TestReplacementPrivateANNRequestAdmissionV1(t *testing.T) {
 	held.release()
 	result, err = client.QualifyReplicaReplacementOwnerV1(t.Context(), command, request)
 	if !errors.Is(err, errPeerAuthenticationV1) || len(result.Search.Partials) != 0 || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
-		t.Fatalf("dial refusal leaked qualification request: result=%+v err=%v resources=%+v", result, err, transport.ResourceStatsV1())
+		t.Fatalf("pre-catalog authentication refusal leaked qualification request: result=%+v err=%v resources=%+v", result, err, transport.ResourceStatsV1())
 	}
 	for _, test := range []struct {
 		name   string
