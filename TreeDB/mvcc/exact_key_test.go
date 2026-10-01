@@ -270,8 +270,6 @@ func TestVersionIteratorExactKeyStorageError(t *testing.T) {
 }
 
 func TestVersionIteratorExactKeyRangeDeleteFallback(t *testing.T) {
-	caching.SetIteratorDebug(true)
-	t.Cleanup(func() { caching.SetIteratorDebug(false) })
 	db, store, _ := prepareExactKeyIteration(t, 8, "FrozenQueue")
 	key := exactKeyIterationTarget()
 	lower, _ := mvcckey.AppendKeyVersionsLower(nil, key)
@@ -287,7 +285,6 @@ func TestVersionIteratorExactKeyRangeDeleteFallback(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		opts := VersionIteratorOptions{ExactKey: key, Reverse: reverse}
 		want := exactGenericOracle(t, store, opts, false, nil, 0)
-		before := exactSourceStat(t, db.Stats())
 		it, err := store.IterateVersions(opts)
 		if err != nil {
 			t.Fatal(err)
@@ -296,14 +293,9 @@ func TestVersionIteratorExactKeyRangeDeleteFallback(t *testing.T) {
 		if !reflect.DeepEqual(got, want) || len(got) != 1 || got[0].Timestamp != 20 {
 			t.Fatalf("range delete result=%+v oracle=%+v", got, want)
 		}
-		after := db.Stats()
-		queue, err := strconv.ParseUint(after["treedb.cache.queue_len"], 10, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if opened := exactSourceStat(t, after) - before; opened != queue+1 {
-			t.Fatalf("range barrier opened %d sources, want full queue+backend=%d", opened, queue+1)
-		}
+		// The flusher can retire live queue entries after this snapshot opens.
+		// Do not compare captured source opens with a later live queue gauge.
+		// Exact full-queue fallback counts are checked on the pinned caching view.
 	}
 }
 

@@ -156,7 +156,9 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
 - Canonical exact-version snapshot bounds select the existing frozen point-shard
   queue and published root when complete shard metadata is available. Snapshot
   cuts still rotate all populated mutable shards and retain the full snapshot
-  owner. Retained range spans, missing queue/point metadata and a singleton
+  owner. Span presence is captured during the existing immutable-view clone,
+  avoiding a full-queue absence scan at iterator open. Retained range spans,
+  missing queue/point metadata and a singleton
   published global root during upgrade use the generic iterator root. An initial
   absent published set keeps the existing backend snapshot fallback. Full-queue
   positional range spans are never attached to a filtered queue; newest-source

@@ -72,7 +72,7 @@ func TestSnapshotExactVersionSourcesFallbackAndPrecedence(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		for _, mode := range []string{"eligible", "missing point roots", "missing queue IDs", "global upgrade", "range spans"} {
 			t.Run(fmt.Sprintf("%t/%s", reverse, mode), func(t *testing.T) {
-				view := &memtableView{queue: snap.view.queue, queueShardIDs: snap.view.queueShardIDs, queueRangeSpans: snap.view.queueRangeSpans}
+				view := &memtableView{queue: snap.view.queue, queueShardIDs: snap.view.queueShardIDs, queueRangeSpans: snap.view.queueRangeSpans, queueHasRangeSpans: snap.view.queueHasRangeSpans}
 				// Borrow immutable state under the real snapshot's lease. Do not copy its
 				// atomics or close this synthetic handle, which owns no independent lease.
 				candidate := &Snapshot{db: snap.db, view: view, backend: snap.backend, backendRootID: snap.backendRootID, backendFallback: snap.backendFallback, rootPointShards: snap.rootPointShards, rootIterator: snap.rootIterator, publishedRoots: snap.publishedRoots}
@@ -87,6 +87,7 @@ func TestSnapshotExactVersionSourcesFallbackAndPrecedence(t *testing.T) {
 				case "global upgrade":
 					candidate.publishedRoots = &publishedRootSet{pointShards: []publishedRootRef{{}}}
 				case "range spans":
+					view.queueHasRangeSpans = true
 					view.queueRangeSpans = make([][]batch.DeleteRange, len(view.queue))
 					// An unrelated span still forbids filtering; all positional metadata
 					// remains attached to the original full queue.
@@ -219,4 +220,30 @@ func (root exactOpenErrorRoot) Iterator([]byte, []byte) (iterator.UnsafeIterator
 }
 func (root exactOpenErrorRoot) ReverseIterator([]byte, []byte) (iterator.UnsafeIterator, error) {
 	return nil, root.err
+}
+
+func TestCloneRangeSpanLayersCapturesPresence(t *testing.T) {
+	for _, fixture := range []struct {
+		name    string
+		layers  [][]batch.DeleteRange
+		present bool
+	}{
+		{name: "nil"},
+		{name: "empty positional layers", layers: make([][]batch.DeleteRange, 3)},
+		{name: "noop filtered", layers: [][]batch.DeleteRange{{{Start: []byte("x"), End: []byte("x")}}}},
+		{name: "retained span", layers: [][]batch.DeleteRange{nil, {{Start: []byte("x"), End: []byte("z")}}, nil}, present: true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			cloned, present := cloneRangeSpanLayers(fixture.layers)
+			if present != fixture.present || len(cloned) != len(fixture.layers) {
+				t.Fatalf("capture: present=%t want=%t layers=%d want=%d", present, fixture.present, len(cloned), len(fixture.layers))
+			}
+			if fixture.present {
+				fixture.layers[1][0].Start[0] = 'y'
+				if string(cloned[1][0].Start) != "x" {
+					t.Fatal("captured span aliases later input mutation")
+				}
+			}
+		})
+	}
 }

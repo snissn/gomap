@@ -640,7 +640,7 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	// Missing shard metadata and global-root upgrade state retain the generic
 	// iterator root.
 	if _, exact := mvcckey.ExactVersionRange(start, end); exact && s.db != nil && s.view != nil &&
-		!memtableViewHasRangeSpans(s.view) && len(s.view.queueShardIDs) == len(s.view.queue) &&
+		!s.view.queueHasRangeSpans && len(s.view.queueShardIDs) == len(s.view.queue) &&
 		len(s.rootPointShards) == len(s.db.mutableShards) &&
 		(s.publishedRoots == nil || len(s.publishedRoots.pointShards) == len(s.rootPointShards)) {
 		rootSnap = rootDomainSnapshotFromCachedSnapshot(s, start)
