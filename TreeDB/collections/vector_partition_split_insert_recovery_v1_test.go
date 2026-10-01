@@ -237,22 +237,27 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				frame, err := commitlog.EncodeCommandFrameV2(commitlog.CommandEnvelope{
+				writer, err := commitlog.NewWriter(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.AppendCommand(commitlog.CommandEnvelope{
 					Version: commitlog.CommandFrameVersionV2, LSN: applied + 1, DurabilityClass: commitlog.CommandDurabilityRelaxed,
 					Kind: commitlog.CommandKindCollectionSplitVectorInsertV1, Scope: commitlog.CommandScopeCollection,
 					PayloadFormat: commitlog.PayloadFormatCollectionSplitVectorInsertV1, Payload: raw,
-				})
+				}); err != nil {
+					_ = writer.Close()
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Stat(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-				if err != nil {
+				if err := os.Truncate(path, info.Size()-1); err != nil {
 					t.Fatal(err)
-				}
-				_, err = file.Write(frame[:len(frame)-1])
-				closeErr := file.Close()
-				if err != nil || closeErr != nil {
-					t.Fatal(err, closeErr)
 				}
 			}
 			reopened, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})

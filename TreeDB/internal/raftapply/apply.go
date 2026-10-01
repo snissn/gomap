@@ -231,6 +231,9 @@ func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 			return PreflightResultV1{}, err
 		}
 		return PreflightResultV1{}, nil
+	case nativewire.CommandSplitVectorInsertV1:
+		_, _, err := h.preflightSplitVectorInsertV1(entry, meta)
+		return PreflightResultV1{}, err
 	default:
 		return PreflightResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand)
 	}

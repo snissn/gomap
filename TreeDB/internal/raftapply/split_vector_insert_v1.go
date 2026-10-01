@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -14,53 +16,15 @@ import (
 // boundary as ordinary deterministic collection mutations. Actual fixed group
 // and semantic consensus positions come from the applying FSM, not the payload.
 func (h *Harness) applySplitVectorInsertV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
-	guard, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	v, collection, err := h.preflightSplitVectorInsertV1(entry, meta)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
-	}
-	if err := checkCatalogVersionGuardV1(meta, guard); err != nil {
-		return raftentry.ApplyResultV1{}, err
-	}
-	raw, err := requiredDeterministicSectionV1(entry, nativewire.SectionSplitVectorInsertV1, "split_vector_insert")
-	if err != nil {
-		return raftentry.ApplyResultV1{}, err
-	}
-	v, err := commitlog.DecodeSplitVectorInsertPayloadV1(raw)
-	if err != nil {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: split vector insert: %v", err)
-	}
-	collectionName, err := lowerCollectionNameV1(entry)
-	if err != nil {
-		return raftentry.ApplyResultV1{}, err
-	}
-	if collectionName != v.Collection {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorTargetMismatchV1, "raftapply: split insert collection target mismatch")
-	}
-	expectedGroup := v.SourceGroup
-	if v.Operation == "project" {
-		expectedGroup = v.TargetGroup
-	}
-	if meta.GroupID == "" || meta.GroupID != expectedGroup {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorTargetMismatchV1, "raftapply: split insert actual FSM group mismatch")
 	}
 	switch v.Operation {
 	case "source":
-		if v.SourceTerm != 0 || v.SourceIndex != 0 {
-			return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: source positions must be assigned by FSM")
-		}
 		v.SourceTerm, v.SourceIndex = meta.EntryID.Term, meta.EntryID.Index
 	case "project":
-		if v.TargetTerm != 0 || v.TargetIndex != 0 {
-			return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: target positions must be assigned by FSM")
-		}
 		v.TargetTerm, v.TargetIndex = meta.EntryID.Term, meta.EntryID.Index
-	}
-	collection, err := h.replayCollectionManager().OpenCollection(v.Collection)
-	if err != nil {
-		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
-	}
-	if err := collection.PreflightVectorPartitionSplitInsertV1(context.Background(), v); err != nil {
-		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
 	}
 	payload, err := commitlog.EncodeSplitVectorInsertPayloadV1(v)
 	if err != nil {
@@ -109,4 +73,56 @@ func (h *Harness) applySplitVectorInsertV1(entry raftentry.CommandEntryV1, meta 
 		affected = 1
 	}
 	return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, CommandDigest: entry.Digest, DeterministicErrorCode: raftentry.ErrorNoneV1, AffectedCount: affected, ResultDigest: raftentry.CommandDigestV1(logical)}, nil
+}
+
+// preflightSplitVectorInsertV1 is shared by admission and committed apply.
+// Group identity is supplied by the actual fixed group; client positions remain unset.
+func (h *Harness) preflightSplitVectorInsertV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (commitlog.SplitVectorInsertV1, *collections.Collection, error) {
+	guard, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	if err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, err
+	}
+	if err := checkCatalogVersionGuardV1(meta, guard); err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, err
+	}
+	raw, err := requiredDeterministicSectionV1(entry, nativewire.SectionSplitVectorInsertV1, "split_vector_insert")
+	if err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, err
+	}
+	v, err := commitlog.DecodeSplitVectorInsertPayloadV1(raw)
+	if err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: split vector insert: %v", err)
+	}
+	collectionName, err := lowerCollectionNameV1(entry)
+	if err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, err
+	}
+	if collectionName != v.Collection {
+		return commitlog.SplitVectorInsertV1{}, nil, codedError(raftentry.ErrorTargetMismatchV1, "raftapply: split insert collection target mismatch")
+	}
+	expectedGroup := v.SourceGroup
+	if v.Operation == "project" {
+		expectedGroup = v.TargetGroup
+	}
+	if meta.GroupID == "" || meta.GroupID != expectedGroup {
+		return commitlog.SplitVectorInsertV1{}, nil, codedError(raftentry.ErrorTargetMismatchV1, "raftapply: split insert actual FSM group mismatch")
+	}
+	switch v.Operation {
+	case "source":
+		if v.SourceTerm != 0 || v.SourceIndex != 0 {
+			return commitlog.SplitVectorInsertV1{}, nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: source positions must be assigned by FSM")
+		}
+	case "project":
+		if v.TargetTerm != 0 || v.TargetIndex != 0 {
+			return commitlog.SplitVectorInsertV1{}, nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: target positions must be assigned by FSM")
+		}
+	}
+	collection, err := h.replayCollectionManager().OpenCollection(v.Collection)
+	if err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, codeCollectionApplyError(err)
+	}
+	if err := collection.PreflightVectorPartitionSplitInsertV1(context.Background(), v); err != nil {
+		return commitlog.SplitVectorInsertV1{}, nil, codeCollectionApplyError(err)
+	}
+	return v, collection, nil
 }

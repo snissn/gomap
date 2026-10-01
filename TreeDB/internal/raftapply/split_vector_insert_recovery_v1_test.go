@@ -43,6 +43,17 @@ func TestSplitVectorInsertApplyRecoveryV1(t *testing.T) {
 				raw := splitApplyRecoveryEntryV1(t, v)
 				beforeLSN := database.State().AppliedCommandLSN
 				frames := len(readCommandWALFrames(t, dir))
+				if _, err := PreflightCommandEntryV1(database, raw, splitApplyRecoveryMetaV1(v), Options{}); err != nil {
+					t.Fatalf("valid split preflight: %v", err)
+				}
+				wrongGroup := splitApplyRecoveryMetaV1(v)
+				wrongGroup.GroupID = "wrong-group"
+				if _, err := PreflightCommandEntryV1(database, raw, wrongGroup, Options{}); err == nil {
+					t.Fatal("wrong actual group passed split preflight")
+				}
+				if len(readCommandWALFrames(t, dir)) != frames {
+					t.Fatal("split preflight appended WAL")
+				}
 				progress, results := NewMemoryApplyProgressStore(8, 8), NewMemoryApplyResultStore(8)
 				result, err := ApplyCommittedEntryV1(database, raw, splitApplyRecoveryMetaV1(v), Options{
 					ProgressStore: progress, ResultStore: results, FaultInjector: singlePointFaultInjector{point: point},
