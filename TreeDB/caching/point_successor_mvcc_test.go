@@ -217,10 +217,13 @@ func TestSeekGEVersionRange_PhysicalDeleteRetriesFreshView(t *testing.T) {
 	idx := db.shardIndex(lower)
 	original := db.mutableShards[idx].mem
 	wrapped := &successorProbeCallback{Table: original, seeker: original.(memtable.SuccessorTable)}
+	var callbackErr error
 	wrapped.after = func() {
-		rotatePointSuccessorMemtables(t, db)
-		if err := db.Set(lower, []byte("new-view")); err != nil {
-			t.Fatal(err)
+		db.mu.Lock()
+		callbackErr = db.rotateMemtableLocked(false)
+		db.mu.Unlock()
+		if callbackErr == nil {
+			callbackErr = db.Set(lower, []byte("new-view"))
 		}
 	}
 	db.mu.Lock()
@@ -229,6 +232,9 @@ func TestSeekGEVersionRange_PhysicalDeleteRetriesFreshView(t *testing.T) {
 	db.publishMemtablesLocked()
 	db.mu.Unlock()
 	k, v, found, err := db.SeekGEVersionRange(lower, upper)
+	if callbackErr != nil {
+		t.Fatalf("probe callback: %v", callbackErr)
+	}
 	if err != nil || !found || !bytes.Equal(k, lower) || string(v) != "new-view" {
 		t.Fatalf("fresh retry = (%x,%q,%t,%v)", k, v, found, err)
 	}
@@ -242,14 +248,35 @@ func TestSeekGEVersionRange_PhysicalDeleteRetriesFreshView(t *testing.T) {
 
 func TestSeekGEVersionRange_ConcurrentReaders(t *testing.T) {
 	db, barrier, lower, upper := openSuccessorAcquireBarrier(t)
+	type result struct {
+		key, value []byte
+		found      bool
+		err        error
+	}
+	results := make(chan result, 2)
 	first := make(chan struct{})
-	go func() { defer close(first); _, _, _, _ = db.SeekGEVersionRange(lower, upper) }()
+	go func() {
+		defer close(first)
+		key, value, found, err := db.SeekGEVersionRange(lower, upper)
+		results <- result{key, value, found, err}
+	}()
 	awaitSuccessorSignal(t, barrier.entered)
 	second := make(chan struct{})
-	go func() { defer close(second); _, _, _, _ = db.SeekGEVersionRange(lower, upper) }()
+	go func() {
+		defer close(second)
+		key, value, found, err := db.SeekGEVersionRange(lower, upper)
+		results <- result{key, value, found, err}
+	}()
 	awaitSuccessorSignal(t, second)
 	close(barrier.resume)
 	awaitSuccessorSignal(t, first)
+	wantKey, _ := mvcckey.Encode([]byte("one-key"), 10)
+	for range 2 {
+		got := <-results
+		if got.err != nil || !got.found || !bytes.Equal(got.key, wantKey) || string(got.value) != "old" {
+			t.Fatalf("concurrent reader = (%x,%q,%t,%v)", got.key, got.value, got.found, got.err)
+		}
+	}
 }
 
 func TestSeekGEVersionRange_AdmittedWriterCannotInsertIntoRotatedGeneration(t *testing.T) {

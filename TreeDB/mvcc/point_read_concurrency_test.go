@@ -35,12 +35,12 @@ func TestCommitGroupAt_QualifiedSuccessorRequiresExclusiveAdmission(t *testing.T
 			wrapped := &groupAdmissionProbeDB{DB: openTestDB(t, t.TempDir(), treedb.DurabilityDurable)}
 			defer wrapped.Close()
 			store := newStore(wrapped)
-			called := false
+			called, readerAdmitted := false, false
 			wrapped.probe = func() {
 				called = true
-				if store.mu.TryRLock() {
+				readerAdmitted = store.mu.TryRLock()
+				if readerAdmitted {
 					store.mu.RUnlock()
-					t.Fatal("multi-record commit permits a Store reader to observe partial shard apply")
 				}
 			}
 			if err := store.CommitGroupAt([]CommitGroup{{Timestamp: 10, Mutations: []Mutation{{Key: []byte("a"), Value: []byte("one")}, {Key: []byte("b"), Value: []byte("two")}}}}, mode); err != nil {
@@ -48,6 +48,9 @@ func TestCommitGroupAt_QualifiedSuccessorRequiresExclusiveAdmission(t *testing.T
 			}
 			if !called {
 				t.Fatal("batch probe not called")
+			}
+			if readerAdmitted {
+				t.Fatal("multi-record commit permits a Store reader to observe partial shard apply")
 			}
 			requireResult(t, store, []byte("a"), 10, Present, 10, []byte("one"))
 			requireResult(t, store, []byte("b"), 10, Present, 10, []byte("two"))
