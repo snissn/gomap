@@ -999,6 +999,19 @@ Coverage:
   keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
+- `TreeDB/mvcc/exact_key_test.go` compares exact-key reads with an unchanged
+  generic scan filtered after consuming owned entries: both directions, nonexact
+  ceilings, seek, empty/binary keys, logical tombstones, empty values, bounds,
+  pinned commit/checkpoint/floor behavior and storage/malformed-record errors.
+  It checks codec-maximum bounds without claiming oversized physical keys fit
+  a published page. Canonical snapshot sources deterministically drop from nine
+  to two on the eight-shard fixture. Malformed/incomplete/oversized timestamp
+  suffixes retain `VersionAffinityPrefix`, so stored malformed records cannot
+  escape fail-closed decoding through source selection.
+- `TreeDB/caching/snapshot_exact_key_test.go` checks newest physical-duplicate
+  precedence, physical tombstones, and full-source fallbacks for missing point
+  roots, missing queue IDs, retained positional spans and global-root upgrade.
+  The public MVCC range-delete test verifies the real full-queue barrier path.
 - The same suite pauses prune iterator creation after snapshot capture and
   separately checks qualified foreground fencing and batch-only nonblocking
   reads/commits/iterator acquisition. It verifies old pinned views, completed
@@ -1019,7 +1032,8 @@ Coverage:
   immediate filesystem reclamation.
 
 `BenchmarkVersionIterationExactKey` is the bounded M0 diagnostic for the
-public all-version posting-read path: 128 populated logical keys over eight
+public all-version posting-read path, activated through `ExactKey` after M1:
+128 populated logical keys over eight
 shards, a binary/NUL target, and depths 1/8/64 with non-exact read timestamps.
 Its FrozenQueue and PublishedRoot rows exclude fixture creation and checkpoint;
 Interleaved includes eight singleton replacements (one per populated shard)

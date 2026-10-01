@@ -277,6 +277,13 @@ and retain concurrent foreground operations, as described in `contracts.md`.
 Shared successor retries release their view/backend leases and shared gate
 before acquiring the exclusive gate and a fresh view; they never upgrade.
 
+Exact-key version iteration uses the same acquired snapshot and iterator gate.
+It selects immutable point-shard sources from that snapshot's captured metadata,
+without consulting a later live view, releasing the full snapshot owner, or
+changing Store admission, mutable rotation or publication. Later commit, flush
+and floor advancement cannot change an already pinned iterator. Iterator methods
+on one handle remain serial; returned `Entry` copies survive its Close.
+
 ### 4.2 Lock-order constraints that must hold
 
 Current order constraints:

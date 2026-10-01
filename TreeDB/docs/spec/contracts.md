@@ -146,6 +146,21 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   full-database materialization. Options are copied at open, returned keys and
   values are caller-owned, and tombstones remain explicit records. Iterator
   accounting reports physical versions visited, filtered/skipped, and returned.
+- `VersionIteratorOptions.ExactKey` intersects the other logical filters with
+  one logical key. Nil disables this filter; a nonnil empty slice selects the
+  empty key. Canonical codec bounds cover all its versions, including binary
+  keys and codec-maximum keys, without a synthetic `key+NUL` upper bound. The
+  codec limit does not guarantee a physical key fits a published TreeDB page.
+  Oversized exact keys fail before copying that option. Valid options and owned
+  results retain the existing floor, error and Close contracts.
+- Canonical exact-version snapshot bounds select the existing frozen point-shard
+  queue and published root when complete shard metadata is available. Snapshot
+  cuts still rotate all populated mutable shards and retain the full snapshot
+  owner. Retained range spans, missing queue/point metadata and a singleton
+  published global root during upgrade use the generic iterator root. An initial
+  absent published set keeps the existing backend snapshot fallback. Full-queue
+  positional range spans are never attached to a filtered queue; newest-source
+  duplicate precedence and physical delete filtering are unchanged.
 - A nonzero global discard floor is the greatest timestamp that may be
   discarded, matching Badger managed-mode `SetDiscardTs` boundary semantics.
   Reads and read-timestamp scans at or below it are rejected; commits must be

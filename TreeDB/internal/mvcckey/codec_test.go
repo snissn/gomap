@@ -285,6 +285,18 @@ func TestVersionPrefixAndExactVersionRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendKeyVersionsUpper: %v", err)
 	}
+	lower, err := AppendKeyVersionsLower(nil, logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefix, ok := ExactVersionRange(lower, upper); !ok || !bytes.Equal(prefix, firstPrefix) {
+		t.Fatalf("prefix-only canonical range=(%x,%t)", prefix, ok)
+	}
+	for _, invalid := range [][]byte{append(append([]byte(nil), lower...), 1), append(append([]byte(nil), lower...), make([]byte, TimestampSize-1)...)} {
+		if _, ok := ExactVersionRange(invalid, upper); ok {
+			t.Fatalf("accepted malformed lower=%x", invalid)
+		}
+	}
 	gotPrefix, ok := ExactVersionRange(second, upper)
 	if !ok || !bytes.Equal(gotPrefix, secondPrefix) {
 		t.Fatalf("ExactVersionRange prefix=%x ok=%t want %x,true", gotPrefix, ok, secondPrefix)
