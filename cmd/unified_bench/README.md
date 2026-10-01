@@ -552,6 +552,18 @@ BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 ./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test random_read_parallel -read-workers 8 -progress=false
 ```
 
+For public MVCC writes with early snapshots, use the standalone
+`BenchmarkAdaptiveMVCCSnapshotCommandWAL` in `TreeDB/caching`:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkAdaptiveMVCCSnapshotCommandWAL$' -benchtime=2240x -count=5 -benchmem
+```
+
+It reports allocation bytes/counts, throughput, selection samples/reasons, and
+command-WAL counters for relaxed/durable profiles and adaptive/fixed modes.
+Use fixed counts >=1120; separate `-cpuprofile`/`-memprofile` runs are Go test
+profiles for `go tool pprof`, not benchprof inputs. See `cmd/benchprof/README.md`.
+
 `-test all` now includes `random_read_parallel` and `random_read_parallel_acquire_snapshot` in the output table:
 
 ```bash

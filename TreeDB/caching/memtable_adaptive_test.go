@@ -4,7 +4,132 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestAdaptiveMemtableMode_EarlyRotationKeepsSampling(t *testing.T) {
+	for _, rotation := range []string{"snapshot", "iterator", "ordinary"} {
+		for _, workload := range []string{"mixed", "sequential"} {
+			t.Run(rotation+"/"+workload, func(t *testing.T) {
+				dir := t.TempDir()
+				backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer backend.Close()
+				db, err := Open(dir, backend, Options{AllowUnsafe: true, DisableWAL: true,
+					FlushThreshold: 1 << 30, MemtableMode: "adaptive", MemtableShards: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				rotate := func() {
+					t.Helper()
+					switch rotation {
+					case "snapshot":
+						snap := db.AcquireSnapshot()
+						if snap == nil {
+							t.Fatal("AcquireSnapshot returned nil")
+						}
+						if err := snap.Close(); err != nil {
+							t.Fatal(err)
+						}
+					case "iterator":
+						it, err := db.Iterator(nil, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := it.Close(); err != nil {
+							t.Fatal(err)
+						}
+					case "ordinary":
+						db.mu.Lock()
+						err := db.rotateMemtableLocked(false)
+						db.mu.Unlock()
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				rng := rand.New(rand.NewSource(1))
+				write := func(first, count int) {
+					t.Helper()
+					for i := first; i < first+count; i++ {
+						var key [8]byte
+						k := uint64(i)
+						if workload == "mixed" {
+							k = rng.Uint64()
+						}
+						binary.BigEndian.PutUint64(key[:], k)
+						if err := db.Set(key[:], []byte("value")); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				write(0, 112)
+				rotate()
+				if got := db.Stats()["treedb.cache.memtable_adaptive.last_reason"]; got != "low_data" {
+					t.Fatalf("early rotation reason=%q, want low_data", got)
+				}
+				if !db.memtableAdaptiveObserve.Load() {
+					t.Fatal("early rotation stopped adaptive sampling below minimum")
+				}
+				write(112, adaptiveMinWrites-112)
+				rotate()
+				stats := db.Stats()
+				wantMode, wantReason := "hash_sorted", "hash_mixed"
+				if workload == "sequential" {
+					wantMode, wantReason = "append_only", "append_sequential"
+				}
+				if stats["treedb.cache.memtable_mode"] != wantMode || stats["treedb.cache.memtable_adaptive.last_reason"] != wantReason {
+					t.Fatalf("mode=%q reason=%q, want %s/%s", stats["treedb.cache.memtable_mode"], stats["treedb.cache.memtable_adaptive.last_reason"], wantMode, wantReason)
+				}
+				if workload == "sequential" {
+					if db.memtableAdaptiveObserve.Load() {
+						t.Fatal("sufficient append-only selection kept sampling")
+					}
+					write(adaptiveMinWrites, adaptiveMinWrites*4)
+					rotate()
+					if got := db.memtableStats.writes.Load(); got != adaptiveMinWrites {
+						t.Fatalf("stopped sample grew to %d writes", got)
+					}
+					if err := db.DeleteRange(nil, nil); err != nil {
+						t.Fatal(err)
+					}
+					if db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 0 {
+						t.Fatal("clearing live counters restarted selected append-only sampling")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAdaptiveMemtableMode_ExplicitModesDoNotObserve(t *testing.T) {
+	for _, mode := range []string{"append_only", "skiplist", "hash_sorted", "btree"} {
+		t.Run(mode, func(t *testing.T) {
+			db, err := Open(t.TempDir(), NewMockBackend(), Options{AllowUnsafe: true,
+				DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: mode, MemtableShards: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			db.noteWriteKey([]byte("key"))
+			db.noteWriteSortedRun([]byte("a"), []byte("z"), adaptiveMinWrites)
+			db.noteIterator(nil, nil)
+			db.mu.Lock()
+			err = db.rotateMemtableLocked(false)
+			db.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if db.currentMemtableMode().String() != mode || db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 0 {
+				t.Fatal("explicit mode changed or enabled adaptive sampling")
+			}
+		})
+	}
+}
 
 func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	dir := t.TempDir()

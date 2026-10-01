@@ -12368,7 +12368,10 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
-	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly {
+	// Early rotations may finish byte warmup before a measured decision. Use
+	// decision samples because range deletion can reset the live write counters.
+	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
+		db.memtableAdaptiveDecisionWrites.Load() >= adaptiveMinWrites {
 		observe = false
 	}
 	db.memtableAdaptiveObserve.Store(observe)
