@@ -570,3 +570,43 @@ BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test all -read-workers 4 -format markdown -progress=false
 ```
+
+## Standalone accepted partition cost profiles
+
+`TestMultiOwnerTCPAcceptedDisjointRetained100KV1` in `TreeDB/nativewire`
+writes ten cumulative sampled allocation profiles when the comparative cost
+opt-in is enabled: `accepted-cost-local-before.pprof`,
+`accepted-cost-local-after.pprof`, and
+`accepted-cost-node-{0,1,2,3}-{before,after}.pprof` (eight daemon files).
+These standalone Go test profiles are **not benchprof inputs** and are not
+`unified-bench -profile-dir` outputs. Retain all ten files with the 516 JSON
+receipts, source/input pins and sampling-rate/boundary metadata.
+
+After harness review/landing, exact-source freeze and runner admission, use
+a reviewed retained-input descriptor and its independently pinned SHA256.
+The descriptor must retain the accepted M3/source/DB provenance; the checksum
+does not replace those guards. Create a fresh receipt directory and run once
+inside the admitted 8 GiB, zero-swap scope with the pinned offline toolchain:
+
+```sh
+mkdir -m 700 "$PARTITION_RECEIPTS"
+unset GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1
+GOWORK=off GOMAXPROCS=4 GOFLAGS='-p=2 -mod=readonly' \
+  GOMAP_SELECTED_LIVE_FIXTURE="$PARTITION_INPUT" \
+  GOMAP_SELECTED_LIVE_FIXTURE_SHA256="$PARTITION_INPUT_SHA256" \
+  GOMAP_SELECTED_LIVE_RECEIPTS="$PARTITION_RECEIPTS" \
+  GOMAP_ACCEPTED_COMPARATIVE_COST_V1=1 \
+  go test ./TreeDB/nativewire \
+    -run '^TestMultiOwnerTCPAcceptedDisjointRetained100KV1$' \
+    -count=1 -timeout=750s -v
+```
+
+Inspect each matched pair directly, for example
+`go tool pprof -sample_index=alloc_space -base BEFORE.pprof AFTER.pprof`;
+repeat with `alloc_objects`. Run analysis under runner admission as well.
+Two GCs flush samples outside search timers. Differences include background,
+observer and profile/control work; they are statistical estimates, not exact
+query/navigation/merge costs. Instrumented timings and global allocations are
+not an apples-to-apples comparison with older uninstrumented samples.
+See [the full observation contract](../../docs/benchmarks/treedb_partition_accepted_cost_diagnostic.md)
+for framed-byte/RSS boundaries, validation and retained-collection limits.
