@@ -401,6 +401,9 @@ and Raft application through that index. The leader proof retains its issuer;
 the response separately names the nonvoter serving node and uses a distinct
 private frame/proof kind that ordinary M5 dispatch/coordinators refuse. The
 shared bounded shard search body reuses the retained hosted domain searchers.
+Private qualification requires immutable requests with basic statistics. The
+client validates the requested partition set, HNSW routes, result ordering,
+finite unique neighbors, proof/counter accounting and request byte/work limits.
 Exact operation, ACTIVE, semantic tail/assets and current DB checks run before
 and after ANN; late refusal clears the entire response. Warm cache cannot replace
 leader quorum. Pending preparation continues to refuse legal ACTIVE invalidation

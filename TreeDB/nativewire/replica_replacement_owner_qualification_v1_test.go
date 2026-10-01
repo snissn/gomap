@@ -254,9 +254,188 @@ func TestReplacementPrivateANNRequestAdmissionV1(t *testing.T) {
 	if !errors.Is(err, errPeerAuthenticationV1) || len(result.Search.Partials) != 0 || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
 		t.Fatalf("dial refusal leaked qualification request: result=%+v err=%v resources=%+v", result, err, transport.ResourceStatsV1())
 	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*VectorPartitionShardSearchRequestV1)
+	}{
+		{"stats_none", func(r *VectorPartitionShardSearchRequestV1) { r.StatsMode = VectorPartitionShardSearchStatsNoneV1 }},
+		{"live_revision", func(r *VectorPartitionShardSearchRequestV1) { r.LiveRevision = 1 }},
+		{"live_coverage", func(r *VectorPartitionShardSearchRequestV1) { r.LiveCoverage = 1 }},
+		{"live_domains", func(r *VectorPartitionShardSearchRequestV1) { r.LiveDomainIDs = []uint32{0} }},
+		{"strict_capability", func(r *VectorPartitionShardSearchRequestV1) {
+			r.StrictCapability = &vectorPartitionStrictSearchCapabilityV1{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := request
+			test.mutate(&invalid)
+			result, err := client.QualifyReplicaReplacementOwnerV1(t.Context(), command, invalid)
+			if !errors.Is(err, raftcluster.ErrUnsupportedFeature) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) ||
+				transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+				t.Fatalf("unsupported qualification consumed resources: %+v %v %+v", result, err, transport.ResourceStatsV1())
+			}
+		})
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, request); !errors.Is(err, context.Canceled) || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
 		t.Fatalf("canceled request consumed resources: %v %+v", err, transport.ResourceStatsV1())
+	}
+}
+
+// Deterministic client-boundary evidence only; the real fixture above proves
+// authenticated quorum, current-FSM application and native ANN execution.
+func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	command := raftplacement.ReplicaReplacementBeginV1{
+		GroupID: request.TargetGroupID, OldNodeID: "node-b",
+		NewPeer: raftcluster.Peer{ID: request.TargetNodeID},
+	}
+	client := &FixedPeerTCPClientV1{config: FixedPeerTCPConfigV1{Groups: []FixedPeerTCPGroupV1{{
+		ID: command.GroupID, Peers: []raftcluster.Peer{{ID: command.OldNodeID}},
+	}}}}
+	makeResponse := func() VectorPartitionShardSearchResponseV1 {
+		response := VectorPartitionShardSearchResponseV1{
+			Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
+			Proof: VectorPartitionShardSearchProofV1{
+				Kind: vectorPartitionShardSearchProofPrivateOwnerV1, ServingNode: command.NewPeer.ID, LeaderNode: command.OldNodeID,
+				GroupID: command.GroupID, ReadySetDigest: request.ReadySetDigest, ReadTerm: 3, ReadIndex: 41, AppliedTerm: 2, AppliedIndex: 43,
+				SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum, SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
+				PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+			},
+			Partials: []VectorPartitionShardSearchPartialV1{{
+				PartitionID: 0, SearchRoute: collections.VectorPartitionSearchRouteHNSWSearchPackV1,
+				Candidates: 2, ScoreCalls: 2, Edges: 1,
+				Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "a", Score: 1}, {ID: "b", Score: 0}},
+			}},
+			Partitions: 1, ReadProofs: 1, GenerationPins: 1, PartitionOpens: 1,
+			ScoreCalls: 2, Candidates: 2, BaseCandidates: 2, BaseResults: 2, Edges: 1,
+		}
+		var err error
+		response.ResponseBytes, err = MeasureVectorPartitionShardSearchResponseBytesV1(response.Partials)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	valid := makeResponse()
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &valid); err != nil || !reflect.DeepEqual(result.Search, valid) {
+		t.Fatalf("valid private ANN payload refused: %+v %v", result, err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*VectorPartitionShardSearchRequestV1)
+	}{
+		{"candidate_bytes_budget", func(r *VectorPartitionShardSearchRequestV1) { r.CandidateBytesLimit = 127 }},
+		{"response_bytes_budget", func(r *VectorPartitionShardSearchRequestV1) { r.ResponseBytesLimit = valid.ResponseBytes - 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bounded := request
+			test.mutate(&bounded)
+			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, bounded, &valid)
+			if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+				t.Fatalf("over-budget private result accepted: %+v %v", result, err)
+			}
+		})
+	}
+	empty := makeResponse()
+	empty.Partials[0].Neighbors = nil
+	empty.Partials[0].ScoreCalls, empty.Partials[0].Candidates, empty.Partials[0].Edges = 0, 0, 0
+	empty.ScoreCalls, empty.Candidates, empty.BaseCandidates, empty.BaseResults, empty.Edges = 0, 0, 0, 0, 0
+	empty.ResponseBytes, _ = MeasureVectorPartitionShardSearchResponseBytesV1(empty.Partials)
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &empty); err != nil || !reflect.DeepEqual(result.Search, empty) {
+		t.Fatalf("coherent empty ANN result refused: %+v %v", result, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(ctx, command, request, &empty); !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+		t.Fatalf("canceled empty result accepted: %+v %v", result, err)
+	}
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, nil); err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+		t.Fatalf("nil private payload accepted: %+v %v", result, err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*VectorPartitionShardSearchResponseV1)
+	}{
+		{"missing_partials", func(r *VectorPartitionShardSearchResponseV1) { r.Partials = nil }},
+		{"wrong_partition", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].PartitionID++ }},
+		{"partition_count", func(r *VectorPartitionShardSearchResponseV1) { r.Partitions = 0 }},
+		{"proof_count", func(r *VectorPartitionShardSearchResponseV1) { r.ReadProofs = 0 }},
+		{"generation_pins", func(r *VectorPartitionShardSearchResponseV1) { r.GenerationPins = 0 }},
+		{"partition_opens", func(r *VectorPartitionShardSearchResponseV1) { r.PartitionOpens = 0 }},
+		{"zero_traversal", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Candidates = 0
+			r.Partials[0].ScoreCalls = 0
+			r.Candidates = 0
+			r.BaseCandidates = 0
+			r.ScoreCalls = 0
+		}},
+		{"exact_fallback", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].SearchRoute = collections.VectorPartitionSearchRouteExactFP32ScanV1
+		}},
+		{"unknown_route", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].SearchRoute = "unknown" }},
+		{"chunk_coherence", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].RequiredChunks = 1 }},
+		{"aggregate_candidates", func(r *VectorPartitionShardSearchResponseV1) { r.Candidates++; r.BaseCandidates++ }},
+		{"aggregate_edges", func(r *VectorPartitionShardSearchResponseV1) { r.Edges++ }},
+		{"aggregate_scores", func(r *VectorPartitionShardSearchResponseV1) { r.ScoreCalls++ }},
+		{"candidates_exceed_source", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Candidates = request.SourceRowCount + 1
+			r.Partials[0].ScoreCalls = r.Partials[0].Candidates
+			r.Candidates = r.Partials[0].Candidates
+			r.BaseCandidates = r.Candidates
+			r.ScoreCalls = r.Partials[0].ScoreCalls
+		}},
+		{"candidates_exceed_scores", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].ScoreCalls = 1; r.ScoreCalls = 1 }},
+		{"candidate_overflow", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Candidates = ^uint64(0)
+			r.BaseCandidates = r.Candidates
+			r.Partials[0].Candidates = r.Candidates
+		}},
+		{"score_budget", func(r *VectorPartitionShardSearchResponseV1) {
+			r.ScoreCalls = request.ScoreCallsLimit + 1
+			r.Partials[0].ScoreCalls = r.ScoreCalls
+		}},
+		{"response_bytes", func(r *VectorPartitionShardSearchResponseV1) { r.ResponseBytes++ }},
+		{"too_few_neighbors", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Neighbors = r.Partials[0].Neighbors[:1]
+			r.BaseResults = 1
+		}},
+		{"too_many_neighbors", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Neighbors = append(r.Partials[0].Neighbors, VectorPartitionShardSearchNeighborV1{ID: "c", Score: -1})
+		}},
+		{"empty_id", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].Neighbors[0].ID = "" }},
+		{"oversized_id", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Neighbors[0].ID = strings.Repeat("a", DefaultVectorPartitionCoordinatorLimitsV1().MaxStableIDBytes+1)
+		}},
+		{"nan_score", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].Neighbors[0].Score = float32(math.NaN()) }},
+		{"inf_score", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].Neighbors[0].Score = float32(math.Inf(1)) }},
+		{"duplicate_id", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].Neighbors[1].ID = "a" }},
+		{"score_order", func(r *VectorPartitionShardSearchResponseV1) { r.Partials[0].Neighbors[1].Score = 2 }},
+		{"tie_order", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Partials[0].Neighbors[0] = VectorPartitionShardSearchNeighborV1{ID: "b", Score: 1}
+			r.Partials[0].Neighbors[1] = VectorPartitionShardSearchNeighborV1{ID: "a", Score: 1}
+		}},
+		{"unknown_issuer", func(r *VectorPartitionShardSearchResponseV1) { r.Proof.LeaderNode = "node-other" }},
+		{"target_issuer", func(r *VectorPartitionShardSearchResponseV1) { r.Proof.LeaderNode = command.NewPeer.ID }},
+		{"ordinary_kind", func(r *VectorPartitionShardSearchResponseV1) {
+			r.Proof.Kind = vectorPartitionShardSearchProofReadIndexV1
+		}},
+		{"zero_applied_term", func(r *VectorPartitionShardSearchResponseV1) { r.Proof.AppliedTerm = 0 }},
+		{"live_proof", func(r *VectorPartitionShardSearchResponseV1) { r.Proof.LiveRevision = 1 }},
+		{"live_counters", func(r *VectorPartitionShardSearchResponseV1) { r.LiveIDs = 1 }},
+		{"strict_grant", func(r *VectorPartitionShardSearchResponseV1) { r.Proof.CatalogAppliedIndex = 1 }},
+		{"base_results", func(r *VectorPartitionShardSearchResponseV1) { r.BaseResults = 0 }},
+		{"delta_results", func(r *VectorPartitionShardSearchResponseV1) { r.DeltaResults = 1 }},
+		{"timing", func(r *VectorPartitionShardSearchResponseV1) { r.Timing.SearchNanos = 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := makeResponse()
+			test.mutate(&response)
+			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &response)
+			if err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+				t.Fatalf("malformed private ANN retained hits: %+v %v", result, err)
+			}
+		})
 	}
 }

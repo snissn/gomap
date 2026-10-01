@@ -3108,8 +3108,12 @@ proof refusal. `TestReplacementPrivateANNLateAdmissionClearsResponseV1` uses the
 existing deterministic service fixture to prove final admission discards all
 partials and releases its generation pin. `TestReplacementPrivateANNRequestAdmissionV1`
 checks pre-dial byte-exhaustion refusal, request-lease release after dial refusal,
-and canceled admission through the existing shared transport fixture. These
-checks grant no public readiness
-or promotion. Per-request time/MemStats diagnostics include the caller, all five
+and canceled admission through the existing shared transport fixture.
+`TestReplacementPrivateANNResponseValidationV1` rejects missing or malformed
+partitions, exact fallback, incoherent counters/chunks, invalid neighbors,
+wrong proof identity and exceeded byte/work budgets through the shared coordinator
+payload validator. Coherent empty partitions remain legal; private requests
+require immutable identities and basic statistics. These checks grant no public
+readiness or promotion. Per-request time/MemStats diagnostics include the caller, all five
 Raft nodes, TLS, authority checks, ANN and background work; they are individual
 observations, not server allocations, isolated ANN cost or a throughput comparison.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -17,14 +18,19 @@ type ReplicaReplacementOwnerQualificationV1 struct {
 }
 
 // QualifyReplicaReplacementOwnerV1 searches an explicitly prepared private
-// endpoint. Each request obtains fresh leader quorum and target applied evidence.
+// endpoint. Requests require StatsBasic and immutable, ANN-only results; each
+// obtains fresh leader quorum and target applied evidence.
 func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, request VectorPartitionShardSearchRequestV1) (ReplicaReplacementOwnerQualificationV1, error) {
 	var result ReplicaReplacementOwnerQualificationV1
 	if c == nil || c.config.Vector == nil || c.peerTransport == nil || command.OwnerPreparation == nil ||
-		request.TargetNodeID != command.NewPeer.ID || request.TargetGroupID != command.GroupID || request.StrictCapability != nil {
+		request.TargetNodeID != command.NewPeer.ID || request.TargetGroupID != command.GroupID || request.StrictCapability != nil ||
+		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 || request.LiveRevision != 0 || request.LiveCoverage != 0 || len(request.LiveDomainIDs) != 0 {
 		return result, raftcluster.ErrUnsupportedFeature
 	}
 	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	if err := (&VectorPartitionShardSearchServiceV1{limits: limits}).validateRequest(request); err != nil {
+		return result, err
+	}
 	requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
 	if err != nil || requestBytes > uint64(limits.MaxRequestBytes) {
 		return result, errors.Join(raftcluster.ErrRouteTargetUnsupported, err)
@@ -83,16 +89,64 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 	if frame.Error != nil {
 		return result, frame.Error.toError()
 	}
-	response := frame.PrivateResponse
-	if response == nil || frame.Response != nil || response.Version != VectorPartitionShardSearchVersionV1 ||
-		response.RequestID != request.RequestID || response.Proof.Kind != vectorPartitionShardSearchProofPrivateOwnerV1 ||
-		response.Proof.ServingNode != command.NewPeer.ID || response.Proof.LeaderNode == "" || response.Proof.LeaderNode == command.NewPeer.ID ||
-		response.Proof.GroupID != command.GroupID || response.Proof.ReadIndex == 0 || response.Proof.ReadTerm == 0 ||
-		response.Proof.AppliedIndex < response.Proof.ReadIndex || response.Proof.ReadySetDigest != request.ReadySetDigest ||
-		response.Proof.SourceGeneration != request.SourceGeneration || response.Proof.SourceChecksum != request.SourceChecksum ||
-		response.Proof.SourceSchemaHash != request.SourceSchemaHash || response.Proof.SourceRowCount != request.SourceRowCount ||
-		response.Proof.PartitionGeneration != request.PartitionGeneration || response.Proof.RouterGeneration != request.RouterGeneration {
+	if frame.Response != nil {
 		return result, ErrVectorPartitionShardSearchRouteMismatch
+	}
+	return c.validateReplacementOwnerQualificationResponseV1(ctx, command, request, frame.PrivateResponse)
+}
+
+func (c *FixedPeerTCPClientV1) validateReplacementOwnerQualificationResponseV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) (ReplicaReplacementOwnerQualificationV1, error) {
+	var result ReplicaReplacementOwnerQualificationV1
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if response == nil {
+		return result, ErrVectorPartitionShardSearchRouteMismatch
+	}
+	proof := response.Proof
+	issuerMember := false
+	for _, group := range c.config.Groups {
+		if group.ID == command.GroupID {
+			for _, peer := range group.Peers {
+				issuerMember = issuerMember || peer.ID == proof.LeaderNode
+			}
+		}
+	}
+	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID ||
+		proof.Kind != vectorPartitionShardSearchProofPrivateOwnerV1 || proof.ServingNode != command.NewPeer.ID ||
+		proof.LeaderNode == command.NewPeer.ID || !issuerMember ||
+		proof.GroupID != command.GroupID || proof.ReadIndex == 0 || proof.ReadTerm == 0 || proof.AppliedTerm == 0 ||
+		proof.AppliedIndex < proof.ReadIndex || proof.ReadySetDigest != request.ReadySetDigest ||
+		proof.SourceGeneration != request.SourceGeneration || proof.SourceChecksum != request.SourceChecksum ||
+		proof.SourceSchemaHash != request.SourceSchemaHash || proof.SourceRowCount != request.SourceRowCount ||
+		proof.PartitionGeneration != request.PartitionGeneration || proof.RouterGeneration != request.RouterGeneration ||
+		proof.LiveRevision != 0 || proof.LiveCoverage != 0 || proof.ServingIdentityDigest != "" ||
+		proof.CatalogAppliedIndex != 0 || proof.GroupAppliedIndex != 0 ||
+		response.Partitions != uint64(len(request.PartitionIDs)) || len(response.Partials) != len(request.PartitionIDs) ||
+		response.ReadProofs != 1 || response.GenerationPins != 1 || response.PartitionOpens != response.Partitions ||
+		response.ScoreCalls > request.ScoreCallsLimit ||
+		response.BaseCandidates != response.Candidates || response.DeltaCandidates != 0 || response.DeltaResults != 0 ||
+		response.LiveDomainsSearched != 0 || response.LiveMutatedIDs != 0 || response.LiveIDs != 0 ||
+		response.Cutovers != 0 || response.RequestPathFullRebuilds != 0 {
+		return result, ErrVectorPartitionShardSearchRouteMismatch
+	}
+	var results uint64
+	for _, partial := range response.Partials {
+		var ok bool
+		results, ok = addUint64V1(results, uint64(len(partial.Neighbors)))
+		if !ok || partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 ||
+			partial.Candidates > request.SourceRowCount || partial.Candidates > partial.ScoreCalls ||
+			partial.RequiredChunks != partial.OpenedChunks || partial.RequiredChunks != partial.AccessedChunks {
+			return result, ErrVectorPartitionShardSearchRouteMismatch
+		}
+	}
+	if response.BaseResults != results {
+		return result, ErrVectorPartitionShardSearchRouteMismatch
+	}
+	coordinator := VectorPartitionCoordinatorV1{limits: DefaultVectorPartitionCoordinatorLimitsV1()}
+	task := vectorPartitionCoordinatorTaskV1{partitionIDs: request.PartitionIDs}
+	if err := coordinator.validateShardResponsePayloadV1(ctx, task, request, *response); err != nil {
+		return result, err
 	}
 	result.Search = *response
 	return result, nil
