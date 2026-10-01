@@ -305,7 +305,7 @@ func (r *FixedPeerTCPRuntimeV1) warmImmutableVectorLocalV1(ctx context.Context) 
 		_, err := r.vector.ensureImmutableBackendV1(ctx)
 		return err
 	}
-	_, err := r.vector.ensureImmutableTopologyV1(ctx)
+	_, err := r.vector.warmImmutableTopologyV1(ctx)
 	return err
 }
 

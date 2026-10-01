@@ -3147,6 +3147,26 @@ work. It is diagnostic, has no before/after throughput claim, and does not measu
 isolated server allocations or retained ANN residency. Existing ordinary
 healthy search/status implementation remains unchanged.
 
+The ordinary immutable-owner recovery checkpoint maps to
+`TestImmutableOwnerOrdinaryServingRecoversCurrentFSMDBV1`. The genuine pre-change
+red is explicit lifecycle Warm refusing the original owner's stale startup DB
+after native provider recovery. The candidate obtains a new ordinary M5 ANN
+response with local ReadIndex after Warm, then performs another actual native
+snapshot installation: cold health/status/ensure refuse, an old response paused
+at its captured final guard returns no partials after a second successful Warm,
+and the retired source cannot reopen. Missing hosted assets refuse Warm;
+startup-only Stage remains stale. Actual root-barrier contention exercises
+canceled construction and concurrent Close with no late topology installation.
+Existing private replacement quorum, operation and asset controls remain in the
+shared fixture, with recovery disabled in all existing wrappers. This is
+ordinary owner recovery only; replacement NONVOTER/add-intent remains unready.
+Healthy-path cost comparison uses the unchanged voter/consumer
+`TestFixedPeerImmutableOwnerReadCostV1` sampler on baseline and candidate,
+including public strict search's captured-backend guard lock. Its fixed ten
+samples report caller/global allocation and wall-time diagnostics; child CPU/RSS
+cover the whole fixture and cannot establish server allocations, ANN residency
+or stable throughput. No measurements are claimed before root execution.
+
 The private ANN qualification checkpoint maps to
 `TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated
 leader-issued ReadIndex plus separate target FSM/Raft applied progress, cold/cache
