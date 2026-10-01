@@ -136,26 +136,28 @@ func (d *fixedPeerDataV1) retireReplacementOwnerSourceV1() error {
 			return nil
 		}
 	}
-	source := slot.ownerSource
-	slot.ownerSource, slot.ownerDB = nil, nil
+	source, endpoint := slot.ownerSource, slot.ownerEndpoint
+	slot.ownerSource, slot.ownerDB, slot.ownerEndpoint = nil, nil, nil
 	slot.mu.Unlock()
+	endpointErr := endpoint.Close()
 	if source != nil {
-		return source.Close()
+		return errors.Join(endpointErr, source.Close())
 	}
-	return nil
+	return endpointErr
 }
 
 // Only the actual worker or shutdown after worker return may call this directly.
 func (d *fixedPeerDataV1) closeReplacementOwnerSourceV1() error {
 	slot := &d.replacementWork
 	slot.mu.Lock()
-	source := slot.ownerSource
-	slot.ownerSource, slot.ownerDB = nil, nil
+	source, endpoint := slot.ownerSource, slot.ownerEndpoint
+	slot.ownerSource, slot.ownerDB, slot.ownerEndpoint = nil, nil, nil
 	slot.mu.Unlock()
+	endpointErr := endpoint.Close()
 	if source != nil {
-		return source.Close()
+		return errors.Join(endpointErr, source.Close())
 	}
-	return nil
+	return endpointErr
 }
 
 func (r *FixedPeerTCPRuntimeV1) replacementOwnerTailV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1) error {

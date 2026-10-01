@@ -56,6 +56,11 @@ func assertImmutableOwnerNonvoterV1(t *testing.T, membership raftcluster.Committ
 // Reuses the existing hosted-only genesis, credential, catalog-consumer and
 // real-Raft TCP fixtures. No child-process helper or public serving flow changes.
 func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPeerTCPClientV1, []*FixedPeerTCPRuntimeV1, []FixedPeerTCPConfigV1, raftplacement.ReplicaReplacementBeginV1) {
+	return immutableOwnerReplacementEndpointFixtureV1(t, false)
+}
+
+// The endpoint case only preauthorizes an address; ordinary fixtures remain cold.
+func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (context.Context, *FixedPeerTCPClientV1, []*FixedPeerTCPRuntimeV1, []FixedPeerTCPConfigV1, raftplacement.ReplicaReplacementBeginV1) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	t.Cleanup(cancel)
@@ -125,6 +130,9 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), FixedPeerTCPNodeV1{ID: target, Address: targetAddress})
 	vector := cloneFixedPeerVectorConfigV1(configs[0].Vector)
 	vector.PublicAddresses[target] = address()
+	if endpoint {
+		vector.ShardAddresses["group-b"][target] = address()
+	}
 	for _, listener := range reserved {
 		if err := listener.Close(); err != nil {
 			t.Fatal(err)
@@ -231,8 +239,13 @@ func immutableOwnerReplacementFixtureV1(t *testing.T) (context.Context, *FixedPe
 	// before BUILD, using the generic native replacement fixture's producer.
 	owner := runtimes[1].localDataV1("group-b")
 	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := owner.provider.RuntimeStatusV1(ctx)
-		return err == nil && status.State == "Leader"
+		for _, config := range configs[:len(configs)-1] {
+			status, err := client.Status(ctx, config.NodeID)
+			if err != nil || len(status.Groups) != 1 || status.Groups[0].LeaderID != config.NodeID {
+				return false
+			}
+		}
+		return true
 	})
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {

@@ -381,6 +381,19 @@ This pending operation
 retains the existing lifecycle/mutation freeze; completion and owner cutover are
 still later work. Static fixed-peer configuration is unchanged.
 
+The explicit `replacement-owner-endpoint` control reuses that retained source
+and the installed current FSM DB to open a credentialed private shard listener.
+An immutable Nodes-only standby may have a preauthorized shard address, but it
+does not enter ordinary owner routing or membership. Listener construction,
+authenticated connections, probes and searches require the exact marked BEGIN
+at add-intent, fresh ACTIVE, current semantic tail and old-voter/target-nonvoter
+roster. Ordinary strong searches retain the local leader ReadIndex contract and
+return typed NOT_LEADER with no hits on this nonvoter. The listener grants no
+READY, public route, promotion or completion. Restart remains cold until explicit
+preparation; refusal closes the request, and a refused preparation retry retires
+the listener before its shared cache. Shutdown drains shard requests before
+closing the cache and FSM DB.
+
 ## Vector partition placement (M1)
 
 `VectorPartitionPlacementRecordV1` validates a complete generation-bound

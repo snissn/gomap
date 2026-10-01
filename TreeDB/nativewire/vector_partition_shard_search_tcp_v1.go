@@ -459,6 +459,7 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
+	preparedOwnerAdmission   func(context.Context) error
 	PeerTransport            *PeerTransportV1
 	PeerGroupID              raftcluster.GroupID
 	Service                  VectorPartitionShardSearchHandlerV1
@@ -538,7 +539,14 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	defer conn.Close()
 	if s.PeerTransport != nil {
 		var err error
-		conn, err = s.PeerTransport.accept(ctx, conn, s.PeerGroupID)
+		if s.preparedOwnerAdmission != nil {
+			conn, err = s.PeerTransport.acceptAuthenticatedV1(ctx, conn)
+			if err == nil {
+				err = s.preparedOwnerAdmission(ctx)
+			}
+		} else {
+			conn, err = s.PeerTransport.accept(ctx, conn, s.PeerGroupID)
+		}
 		if err != nil {
 			return
 		}
@@ -582,6 +590,12 @@ func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Conte
 		return false
 	}
 	if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
+		if s.preparedOwnerAdmission != nil {
+			if err := s.preparedOwnerAdmission(ctx); err != nil {
+				_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Message: err.Error()}}, maxResponseFrame, time.Now().Add(initialTimeout))
+				return false
+			}
+		}
 		identity := s.EndpointIdentity
 		if s.EndpointIdentityProvider != nil {
 			identity = s.EndpointIdentityProvider()

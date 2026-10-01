@@ -338,6 +338,8 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 		return err
 	}
 	switch operation {
+	case "/v1/replacement-owner-endpoint":
+		return r.prepareReplacementOwnerEndpointV1(ctx, command)
 	case "/v1/replacement-owner-warm":
 		return r.replacementOwnerWarmV1(ctx, command, reply)
 	case "/v1/replacement-removal-proof":
