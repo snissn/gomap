@@ -31,12 +31,13 @@ const (
 // applying this record binds them but cannot itself prove remote installation.
 // Only the trusted runtime may advance after checking that receiver boundary.
 type ReplicaReplacementStateV1 struct {
-	Format uint16                                 `json:"format"`
-	Kind   string                                 `json:"kind"`
-	Begin  ReplicaReplacementBeginV1              `json:"begin"`
-	Phase  ReplicaReplacementPhaseV1              `json:"phase"`
-	Seed   *raftcluster.ReplacementSnapshotSeedV1 `json:"seed,omitempty"`
-	Tail   *raftcluster.ReplacementTailV1         `json:"tail,omitempty"`
+	Format             uint16                                         `json:"format"`
+	Kind               string                                         `json:"kind"`
+	Begin              ReplicaReplacementBeginV1                      `json:"begin"`
+	Phase              ReplicaReplacementPhaseV1                      `json:"phase"`
+	Seed               *raftcluster.ReplacementSnapshotSeedV1         `json:"seed,omitempty"`
+	Tail               *raftcluster.ReplacementTailV1                 `json:"tail,omitempty"`
+	OwnerQualification *ReplicaReplacementOwnerQualificationReceiptV1 `json:"owner_qualification,omitempty"`
 	// Peers is current catalog membership with transport addresses. Nil means the
 	// original anchored roster; completion always persists an explicit roster.
 	Peers        []raftcluster.Peer          `json:"peers,omitempty"`
@@ -114,6 +115,9 @@ func EncodeReplicaReplacementStateV1(state ReplicaReplacementStateV1) ([]byte, e
 	} else if state.Result != nil {
 		return nil, ErrInvalidCatalogMeta
 	}
+	if state.OwnerQualification != nil && validateReplicaReplacementOwnerQualificationReceiptV1(state) != nil {
+		return nil, ErrInvalidCatalogMeta
+	}
 	raw, err := json.Marshal(state)
 	if len(raw) > maxReplicaReplacementCommandBytesV1 {
 		return nil, ErrCatalogMetaLimit
@@ -173,6 +177,9 @@ func replicaReplacementStateExtendsV1(old, next ReplicaReplacementStateV1) bool 
 	if !reflect.DeepEqual(old.Peers, next.Peers) || old.RemovalIndex != 0 && old.RemovalIndex != next.RemovalIndex || old.Result != nil && (next.Result == nil || *old.Result != *next.Result) {
 		return false
 	}
+	if old.OwnerQualification != nil && (next.OwnerQualification == nil || *old.OwnerQualification != *next.OwnerQualification) {
+		return false
+	}
 	if old.Tail != nil && (next.Tail == nil || *old.Tail != *next.Tail) {
 		return false
 	}
@@ -202,6 +209,9 @@ func replicaReplacementSnapshotEntryCostV1(old, next map[raftcluster.GroupID][]b
 		}
 		// A newly observed operation requires BEGIN and all earlier phases.
 		entries := replacementPhaseOrdinalV1(incoming.Phase) + 1
+		if incoming.OwnerQualification != nil {
+			entries++
+		}
 		if priorRaw := old[group]; len(priorRaw) != 0 {
 			prior, err := decodeReplicaReplacementCurrentV1(priorRaw)
 			if err != nil {
@@ -209,6 +219,9 @@ func replicaReplacementSnapshotEntryCostV1(old, next map[raftcluster.GroupID][]b
 			}
 			if sameReplicaReplacementBeginV1(prior.Begin, incoming.Begin) {
 				entries = replacementPhaseOrdinalV1(incoming.Phase) - replacementPhaseOrdinalV1(prior.Phase)
+				if incoming.OwnerQualification != nil && prior.OwnerQualification == nil {
+					entries++
+				}
 			}
 		}
 		if entries < 0 || uint64(entries) > remaining {
@@ -236,7 +249,8 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementAdvanceV1(raw [
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
-	if next.Phase == ReplicaReplacementCompletedV1 {
+	// Only the dedicated qualification command may install or retry receipt bytes.
+	if next.OwnerQualification != nil || next.Phase == ReplicaReplacementCompletedV1 {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 	}
 	a.mu.Lock()

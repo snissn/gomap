@@ -19,6 +19,30 @@ func validateReplicaReplacementOwnerPreparationPhaseV1(record CatalogMetaRecordV
 		if !ok || active.Identity != *identity || active.State != VectorPartitionLifecycleActiveV1 || identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{}) || identity.Index.CatalogEpoch != record.Epoch || identity.Index.CatalogDigest != record.Digest || state.Begin.ExpectedEpoch != record.Epoch || state.Begin.CatalogDigest != record.Digest || !slices.Contains(active.RequiredGroups, state.Begin.GroupID) {
 			return ErrVectorPartitionLifecycleGuard
 		}
+		if receipt := state.OwnerQualification; receipt != nil {
+			if receipt.ReadySetDigest != active.ReadySetDigest {
+				return ErrVectorPartitionLifecycleGuard
+			}
+			issuer, tailLeader := false, false
+			if len(state.Peers) != 0 {
+				for _, peer := range state.Peers {
+					issuer = issuer || peer.ID == receipt.IssuerNode
+					tailLeader = tailLeader || peer.ID == receipt.Tail.LeaderID
+				}
+			} else {
+				for _, group := range record.Catalog.Groups {
+					if group.ID == state.Begin.GroupID {
+						for _, member := range group.Members {
+							issuer = issuer || member == receipt.IssuerNode
+							tailLeader = tailLeader || member == receipt.Tail.LeaderID
+						}
+					}
+				}
+			}
+			if !issuer || !tailLeader {
+				return ErrVectorPartitionLifecycleGuard
+			}
+		}
 		for _, existing := range lifecycle {
 			if existing.State != VectorPartitionLifecycleAbsentV1 && (existing.State != VectorPartitionLifecycleActiveV1 || existing.Identity.Immutable == (VectorPartitionLifecycleImmutableAuthorityV1{})) {
 				return ErrVectorPartitionLifecycleGuard

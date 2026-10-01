@@ -394,6 +394,45 @@ preparation; refusal closes the request, and a refused preparation retry retires
 the listener before its shared cache. Shutdown drains shard requests before
 closing the cache and FSM DB.
 
+An explicit catalog-coordinator qualification commit can record one historical
+receipt for that exact marked operation while it remains at add-intent. The
+authenticated control request accepts BEGIN and a bounded private ANN request,
+not receipt bytes. The trusted producer performs the existing private ANN
+qualification, then rechecks exact BEGIN/seed, ACTIVE/current roster and the
+leader's verified target semantic tail before the dedicated catalog command.
+The receipt stores bounded query/result/ReadySet digests, the original proof
+issuer/read index, independent target Raft application index and semantic tail;
+it stores no query vectors or neighbors. Query identity omits request/cancellation
+IDs and transport deadline and canonicalizes the accepted empty live-domain slice.
+Exact logical-query retry returns the same owned
+historical bytes without another ANN execution or catalog entry. A receipt-only
+catalog producer gate serializes concurrent commands under existing bounded control
+admission and the earlier caller/query deadline; queued identical retries re-read
+owned authority before ANN. This is a per-coordinator serialization ceiling, not
+distributed exactly-once execution: catalog leadership changes may duplicate ANN
+across coordinators. Leadership-loss or ambiguous submission errors remain typed
+failures; an exact caller retry with a live context discovers the current leader
+and returns any matching committed historical receipt. Conflict reconciliation
+succeeds only after a fresh authoritative read by a still-authoritative producer;
+it never returns unfenced local state or replaces the owned proof indexes.
+The immutable result digest excludes operational counters, memory and timing. It is not a
+current readiness observation. A conflicting query or changed receipt refuses
+atomically. Generic advance cannot install receipts, including through raw FSM
+apply, and external catalog-publish rejects the dedicated command.
+Snapshot admission reserves an extra entry for the first receipt and known
+restore rejects receipt erasure or alteration. Cold restore validates bounded
+canonical identity/phase/ACTIVE bindings; a privileged raw in-process command or
+trusted backup cannot itself prove ANN execution. The receipt never lifts the
+permanent add-intent cap, warms restart, grants READY/voting/routes, or permits
+promotion/removal. Fresh preparation and actual private qualification remain
+necessary after restart. Enabled receipt creation adds private qualification,
+post-search authority/tail reads and one catalog commit. Caller encoding is
+covered by existing request admission before JSON allocation; producer result
+ownership and JSON/hash scratch retain an actual fanout/top-k byte reservation
+until submission finishes. These fail-fast reservations overlap the ordinary
+qualification transport lease and may refuse requests above local capacity.
+Ordinary healthy search/status paths add no work.
+
 An explicit private ANN qualification request carries canonical marked BEGIN
 bytes to that endpoint. It obtains the unchanged authenticated original group
 leader's quorum ReadIndex proof, then separately waits for the replacement FSM
