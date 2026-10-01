@@ -125,15 +125,17 @@ func rangeSpanLayerCounts(layers [][]batch.DeleteRange) (layerCount, spanCount i
 	return layerCount, spanCount
 }
 
-func cloneRangeSpanLayers(layers [][]batch.DeleteRange) [][]batch.DeleteRange {
+func cloneRangeSpanLayers(layers [][]batch.DeleteRange) ([][]batch.DeleteRange, bool) {
 	if len(layers) == 0 {
-		return nil
+		return nil, false
 	}
 	out := make([][]batch.DeleteRange, len(layers))
+	hasSpans := false
 	for i := range layers {
 		out[i] = cloneRangeSpans(layers[i])
+		hasSpans = hasSpans || len(out[i]) != 0
 	}
-	return out
+	return out, hasSpans
 }
 
 func appendNewerRangeSpansForSource(dst []batch.DeleteRange, layers [][]batch.DeleteRange, sourceIdx int) []batch.DeleteRange {

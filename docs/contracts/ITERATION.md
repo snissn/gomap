@@ -31,6 +31,17 @@
 - The backend engine does not currently persist tombstones to disk.
 - The cached write-back layer uses tombstones internally and filters deleted keys from iterator output.
 
+### Retained external-MVCC versions
+
+`mvcc.Store.IterateVersions` pins one snapshot and returns retained logical
+versions with owned `Entry` bytes and explicit logical tombstones. Set
+`VersionIteratorOptions.ExactKey` to scan one logical key, intersected with
+prefix/bounds and the timestamp ceiling. Nil leaves this filter disabled; use
+`[]byte{}` for the empty logical key. Forward timestamps descend; reverse
+timestamps ascend. Seek stays inside the original physical domain. Close the
+iterator to release its full snapshot. See the [canonical MVCC contract](../../TreeDB/docs/spec/contracts.md)
+for floor and source-selection fallback rules.
+
 ## HashDB
 
 - HashDB does not expose an ordered iterator.

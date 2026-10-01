@@ -47,6 +47,11 @@ type Version struct {
 // order is (logical key descending, timestamp ascending), exactly mirroring
 // the physical codec order.
 type VersionIteratorOptions struct {
+	// ExactKey restricts iteration to this logical key, intersected with Prefix
+	// and the logical bounds. Nil leaves the range unrestricted; a nonnil empty
+	// slice selects the empty logical key. Canonical physical bounds support
+	// maximum-size codec keys without appending a synthetic NUL suffix.
+	ExactKey      []byte
 	Prefix        []byte
 	LowerBound    []byte
 	UpperBound    []byte
@@ -81,6 +86,12 @@ type VersionIterator struct {
 func (s *Store) IterateVersions(options VersionIteratorOptions) (*VersionIterator, error) {
 	if s == nil || s.db == nil {
 		return nil, storageError("open version iterator", treedb.ErrClosed)
+	}
+	// Reject oversized exact keys before copying the newly introduced option.
+	if options.ExactKey != nil {
+		if _, err := mvcckey.EncodedLen(options.ExactKey); err != nil {
+			return nil, fmt.Errorf("%w: exact key: %w", ErrInvalidKey, err)
+		}
 	}
 	options = copyVersionIteratorOptions(options)
 	if err := s.lockDiscardFloorRead(); err != nil {
@@ -127,6 +138,7 @@ func (s *Store) IterateVersions(options VersionIteratorOptions) (*VersionIterato
 }
 
 func copyVersionIteratorOptions(options VersionIteratorOptions) VersionIteratorOptions {
+	options.ExactKey = cloneBytesPreserveNil(options.ExactKey)
 	options.Prefix = cloneBytesPreserveNil(options.Prefix)
 	options.LowerBound = cloneBytesPreserveNil(options.LowerBound)
 	options.UpperBound = cloneBytesPreserveNil(options.UpperBound)
@@ -251,6 +263,9 @@ func (it *VersionIterator) advance() {
 }
 
 func logicalMatchesOptions(logical []byte, options VersionIteratorOptions) bool {
+	if options.ExactKey != nil && !bytes.Equal(logical, options.ExactKey) {
+		return false
+	}
 	if options.Prefix != nil && !bytes.HasPrefix(logical, options.Prefix) {
 		return false
 	}
@@ -261,8 +276,21 @@ func logicalMatchesOptions(logical []byte, options VersionIteratorOptions) bool 
 }
 
 func versionPhysicalBounds(options VersionIteratorOptions) ([]byte, []byte, error) {
-	lower := mvcckey.AppendNamespaceLower(nil)
-	upper := mvcckey.AppendNamespaceUpper(nil)
+	var lower, upper []byte
+	if options.ExactKey != nil {
+		var err error
+		lower, err = mvcckey.AppendKeyVersionsLower(nil, options.ExactKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: exact key: %w", ErrInvalidKey, err)
+		}
+		upper, err = mvcckey.AppendKeyVersionsUpper(nil, options.ExactKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: exact key: %w", ErrInvalidKey, err)
+		}
+	} else {
+		lower = mvcckey.AppendNamespaceLower(nil)
+		upper = mvcckey.AppendNamespaceUpper(nil)
+	}
 	if options.Prefix != nil {
 		prefixLower, err := mvcckey.AppendLogicalPrefixLower(nil, options.Prefix)
 		if err != nil {

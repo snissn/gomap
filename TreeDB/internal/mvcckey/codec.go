@@ -177,10 +177,17 @@ func VersionPrefix(physical []byte) (prefix []byte, ok bool) {
 }
 
 // ExactVersionRange reports whether [start,end) is the canonical range from
-// one encoded version lower bound through the exclusive upper bound of all
-// versions of that same logical key. The returned prefix aliases start.
+// one encoded version (or AppendKeyVersionsLower) through the exclusive upper
+// bound of all versions of that same logical key. The returned prefix aliases
+// start. A prefix-only lower bound must still fit a complete encoded version.
 func ExactVersionRange(start, end []byte) (prefix []byte, ok bool) {
 	prefix, ok = VersionPrefix(start)
+	if !ok {
+		prefix, ok = VersionAffinityPrefix(start)
+		if !ok || len(prefix) != len(start) || len(prefix)+TimestampSize > MaxEncodedKeySize {
+			return nil, false
+		}
+	}
 	if !ok || len(end) != len(prefix) || len(prefix) == 0 || prefix[len(prefix)-1] != 0 {
 		return nil, false
 	}
