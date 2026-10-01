@@ -2050,20 +2050,21 @@ func (db *DB) Set(key, value []byte) error {
 func (db *DB) SetSync(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	// Select the route before acquiring the point operation's lifecycle lock
-	// or appending any value/WAL bytes. Never retry an ambiguous point error.
-	if db != nil && db.commandWALCached && int64(len(key)) > db.commandWALPointMaxPayloadBytes-int64(len(value)) {
-		batch := db.NewBatchWithSize(1)
-		if batch == nil {
-			return ErrClosed
-		}
+	if err := db.beginPublicOperation(); err != nil {
+		return err
+	}
+	// Select the route before appending any value/WAL bytes. Never retry an
+	// ambiguous point error. Construct the fallback under the admission lock
+	// so batch creation preserves the same poison/closed error as the point route.
+	if db.commandWALCached && int64(len(key)) > db.commandWALPointMaxPayloadBytes-int64(len(value)) {
+		batch := newCommandWALPublicBatch(db, db.cached.NewBatchWithSize(1), 1)
+		// WriteSync takes its own admission lock. Release this read lock first
+		// so a pending Close writer cannot deadlock a nested read acquisition.
+		db.lifecycleMu.RUnlock()
 		if err := batch.Set(key, value); err != nil {
 			return errors.Join(err, batch.Close())
 		}
 		return errors.Join(batch.WriteSync(), batch.Close())
-	}
-	if err := db.beginPublicOperation(); err != nil {
-		return err
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
