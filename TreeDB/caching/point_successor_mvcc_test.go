@@ -430,6 +430,10 @@ func TestSeekGEVersionRange_AllowsPointWriterDuringBackendAcquire(t *testing.T) 
 // backend snapshot whose winning logical tombstone anchor has been removed.
 func TestSeekGEVersionRange_PruneRequiresStoreFence(t *testing.T) {
 	db, barrier, lower, upper := openSuccessorAcquireBarrier(t)
+	seed, _ := mvcckey.Encode([]byte("one-key"), 10)
+	if err := barrier.BackendDB.(*backenddb.DB).Delete(seed); err != nil {
+		t.Fatal(err)
+	}
 	old, _ := mvcckey.Encode([]byte("one-key"), 40)
 	anchor, _ := mvcckey.Encode([]byte("one-key"), 80)
 	if err := barrier.BackendDB.(*backenddb.DB).Set(anchor, []byte{2}); err != nil {
@@ -458,6 +462,17 @@ func TestSeekGEVersionRange_PruneRequiresStoreFence(t *testing.T) {
 	rotatePointSuccessorMemtables(t, db)
 	for len(db.queue) > 0 {
 		db.flushOneLocked(false)
+	}
+	it, e := barrier.BackendDB.Iterator(lower, upper)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if it.Valid() {
+		_ = it.Close()
+		t.Fatal("backend range still contains a version after physical prune")
+	}
+	if e := it.Close(); e != nil {
+		t.Fatal(e)
 	}
 	close(barrier.resume)
 	awaitSuccessorSignal(t, done)
