@@ -3092,3 +3092,21 @@ genuine current-DB swap retirement. It grants no public readiness or promotion.
 Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
 background work and control polling; they do not measure per-node allocations
 or establish a throughput comparison.
+
+The private ANN qualification checkpoint maps to
+`TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated
+leader-issued ReadIndex plus separate target FSM/Raft applied progress, cold/cache
+parity with the original owner's unchanged leader-bound M5 shard route, one logical
+two-pack domain graph traversal and zero exact fallback, ordinary NONVOTER
+NOT_LEADER/no hits, exact BEGIN/wrong-node/unmarked refusal, warm-cache leader
+quorum loss, restart, missing hosted assets and genuine current-DB swap refusal.
+The legal ACTIVE invalidation producer remains blocked by pending preparation;
+no artificial ACTIVE transition is used as evidence.
+`TestReplacementPrivateANNFrameDiscriminatorsV1` checks distinct framing and
+ordinary dispatcher refusal; the real fixture also checks public coordinator
+proof refusal. `TestReplacementPrivateANNLateAdmissionClearsResponseV1` uses the
+existing deterministic service fixture to prove final admission discards all
+partials and releases its generation pin. These checks grant no public readiness
+or promotion. Per-request time/MemStats diagnostics include the caller, all five
+Raft nodes, TLS, authority checks, ANN and background work; they are individual
+observations, not server allocations, isolated ANN cost or a throughput comparison.
