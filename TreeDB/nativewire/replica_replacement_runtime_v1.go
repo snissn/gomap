@@ -31,7 +31,11 @@ func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, transpor
 	defer close(providerReady)
 
 	var err error
-	d.db, err = backenddb.Open(backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true})
+	if r.config.QuiescedANNMoveDestination != nil && cfg.GroupID == r.config.QuiescedANNMoveDestination.DestinationGroup && r.data[cfg.GroupID] != nil {
+		d.db = r.data[cfg.GroupID].db
+	} else {
+		d.db, err = backenddb.Open(backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true})
+	}
 	if err != nil {
 		return d, err
 	}

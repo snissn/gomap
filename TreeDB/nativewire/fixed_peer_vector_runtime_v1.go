@@ -302,6 +302,10 @@ func (b *fixedPeerVectorBackendV1) VectorPartitionCleanupEligibilityV1(ctx conte
 }
 
 func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
+	if b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.config.QuiescedANNMoveDestination != nil {
+		identity := b.runtime.parent.config.QuiescedANNMoveDestination.Identity
+		return public.OperationsHealthV1{Generation: public.GenerationIDV1{Index: identity.Index.IndexName, Generation: identity.Generation}, Reason: "dormant_destination"}, nil
+	}
 	if b.immutableOwnerV1() {
 		vector := b.runtime.parent.config.Vector
 		id := public.GenerationIDV1{Index: vector.Identity.Index.IndexName, Generation: vector.Identity.Generation}
@@ -413,7 +417,7 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 	manager := collections.NewCollectionManager(data.db)
 	var collection *collections.Collection
 	var prepared collections.VectorPartitionManifestV1
-	if parent.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if parent.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) && parent.config.QuiescedANNMoveDestination == nil {
 		// Mutable D1 still requires its complete local source before advertising
 		// the public listener. An immutable owner may have only hosted assets;
 		// its lazy backend must prove scoped state against ACTIVE catalog authority.
@@ -1072,7 +1076,7 @@ func fixedPeerImmutableVectorStandbyV1(config FixedPeerTCPConfigV1) bool {
 // Raft barrier and fresh live pin authorize it. Immutable search is coordinated
 // at the public ingress and may dispatch to several independently hosted owners.
 func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil {
+	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.QuiescedANNMoveDestination != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
 	if r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {

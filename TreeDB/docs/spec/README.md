@@ -81,6 +81,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - #3908 M0/M1/M4 contracts for derived vector-partition identity, durable
     generation lifecycle, deterministic persisted representative routing,
     simulation/local-path evidence boundaries, and clean-room provenance.
+- `TreeDB/docs/spec/vector-partition-quiesced-domain-move-v1.md`
+  - #4812 dormant empty destination admission checkpoint and proposed whole
+    mutable ANN domain transfer, fencing and cutover boundaries.
 - `TreeDB/docs/spec/vector-partition-coordinator-v1.md`
   - #3915 M6 contract for bounded transport-neutral fanout, strict M5 proof
     validation, deterministic stable-ID merge, all-or-error cancellation, and
