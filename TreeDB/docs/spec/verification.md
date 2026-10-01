@@ -1013,10 +1013,12 @@ Its FrozenQueue and PublishedRoot rows exclude fixture creation and checkpoint;
 Interleaved includes eight singleton replacements (one per populated shard)
 per completed read and holds physical history cardinality constant. All rows
 time and charge iterator open, explicit seek, owned `Entry` consumption,
-validation/accounting and close. Useful versions are consumed once; physical
-visited/retained counters include the first version examined at both open and
-seek. Observed and unobserved rows separately report B/op and allocs/op.
-`TestVersionIterationExactKeyFixture` conserves this work and verifies cached
+validation/accounting and close. Useful versions are consumed once; the current
+physical visited/retained counters include the first version examined at both
+open and seek. The benchmark reports these work counters without asserting
+their values, allowing equivalent optimized reads to reduce work. Observed and
+unobserved rows separately report B/op and allocs/op.
+`TestVersionIterationExactKeyFixture` checks the result oracle and verifies cached
 versus backend-only public routing. Codec maximum-length coverage remains in
 `internal/mvcckey/codec_test.go`; this fixture does not claim every codec-sized
 key fits a published TreeDB page.

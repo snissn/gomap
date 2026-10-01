@@ -676,6 +676,7 @@ func BenchmarkVersionIterationExactKey(b *testing.B) {
 						stats, copied := consumeExactKeyIteration(b, store, target, readTimestamp, depth)
 						total.Visited += stats.Visited
 						total.Skipped += stats.Skipped
+						total.Retained += stats.Retained
 						ownedBytes += copied
 					}
 					b.StopTimer()
@@ -683,6 +684,7 @@ func BenchmarkVersionIterationExactKey(b *testing.B) {
 					b.ReportMetric(1, "iterator_opens/read")
 					b.ReportMetric(float64(total.Visited)/float64(b.N), "physical_visits/read")
 					b.ReportMetric(float64(total.Skipped)/float64(b.N), "skipped_versions/read")
+					b.ReportMetric(float64(total.Retained)/float64(b.N), "retained_versions/read")
 					b.ReportMetric(float64(ownedBytes)/float64(b.N), "owned_output_bytes/read")
 					useful := max(depth/2, 1)
 					b.ReportMetric(float64(useful), "useful_versions/read")
@@ -784,7 +786,11 @@ func consumeExactKeyIteration(t testing.TB, store *Store, target []byte, readTim
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer it.Close()
+	defer func() {
+		if err := it.Close(); err != nil {
+			t.Errorf("close exact-key iterator: %v", err)
+		}
+	}()
 	it.Seek(target, readTimestamp)
 	seen, copied := 0, uint64(0)
 	for it.Valid() {
@@ -799,11 +805,9 @@ func consumeExactKeyIteration(t testing.TB, store *Store, target []byte, readTim
 	}
 	stats := it.Stats()
 	iterErr := it.Error()
-	closeErr := it.Close()
 	useful := uint64(max(depth/2, 1))
-	// Open examined the first retained version; Seek examines it again.
-	if seen != int(useful) || stats.Visited != uint64(depth)+1 || stats.Skipped != uint64(depth)-useful || stats.Retained != useful+1 || iterErr != nil || closeErr != nil {
-		t.Fatalf("seen=%d stats=%+v iterErr=%v closeErr=%v", seen, stats, iterErr, closeErr)
+	if seen != int(useful) || iterErr != nil {
+		t.Fatalf("seen=%d stats=%+v iterErr=%v", seen, stats, iterErr)
 	}
 	return stats, copied
 }
