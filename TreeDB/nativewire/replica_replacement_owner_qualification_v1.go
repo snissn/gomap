@@ -24,7 +24,24 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 		request.TargetNodeID != command.NewPeer.ID || request.TargetGroupID != command.GroupID || request.StrictCapability != nil {
 		return result, raftcluster.ErrUnsupportedFeature
 	}
+	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+	if err != nil || requestBytes > uint64(limits.MaxRequestBytes) {
+		return result, errors.Join(raftcluster.ErrRouteTargetUnsupported, err)
+	}
 	begin, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err != nil {
+		return result, err
+	}
+	requestBytes += uint64(4 + len(begin))
+	if requestBytes > uint64(limits.MaxRequestBytes) {
+		return result, raftcluster.ErrRouteTargetUnsupported
+	}
+	configuredBound, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
+	if err != nil {
+		return result, err
+	}
+	bound, err := peerShardResponseFrameV1(request, configuredBound)
 	if err != nil {
 		return result, err
 	}
@@ -37,6 +54,15 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 		return result, err
 	}
 	defer cancel()
+	// Reserve input/decoder expansion and actual fanout/top-k response before
+	// dial, wire encoding or response allocation. Reuse request cancellation
+	// and drain lifetime instead of creating an unaccounted private caller.
+	work, err := c.peerTransport.admission.request(ctx, "shard:"+string(request.TargetGroupID), int64(requestBytes)*8+int64(bound)*2, peerRequestDescendantV1)
+	if err != nil {
+		return result, err
+	}
+	defer work.release()
+	ctx = work.ctx
 	conn, err := c.peerTransport.dialScope(ctx, endpoint, command.NewPeer.ID, "shard:"+string(command.GroupID))
 	if err != nil {
 		return result, err
@@ -47,12 +73,7 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 	if err := vectorPartitionShardSearchTCPDeadlineV1(ctx, request.DeadlineUnixNano, conn); err != nil {
 		return result, err
 	}
-	limits := DefaultVectorPartitionShardSearchLimitsV1()
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{PrivateRequest: &request, PrivateBegin: begin}, uint32(limits.MaxRequestBytes)); err != nil {
-		return result, err
-	}
-	bound, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
-	if err != nil {
 		return result, err
 	}
 	frame, err := readVectorPartitionShardSearchTCPResponseFrameV1(conn, bound, request)

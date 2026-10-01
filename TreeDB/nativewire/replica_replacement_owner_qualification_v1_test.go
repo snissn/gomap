@@ -7,6 +7,7 @@ import (
 	"net"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,5 +190,57 @@ func TestReplacementPrivateANNLateAdmissionClearsResponseV1(t *testing.T) {
 	if !errors.Is(err, ErrFixedPeerVectorProofStaleV1) || !reflect.DeepEqual(response, VectorPartitionShardSearchResponseV1{}) ||
 		source.pins != 1 || source.releases != 1 || source.opens != 1 {
 		t.Fatalf("late refusal retained hits or generation lease: response=%+v err=%v pins=%d releases=%d opens=%d", response, err, source.pins, source.releases, source.opens)
+	}
+}
+
+// Exercise shared admission without another Raft cluster. Identity is codec-valid;
+// disabled TLS dial refuses, so this unit fixture claims no authority/ANN success.
+func TestReplacementPrivateANNRequestAdmissionV1(t *testing.T) {
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	group, node := config.Groups[0].ID, config.NodeID
+	digest := strings.Repeat("a", 64)
+	identity := raftplacement.VectorPartitionLifecycleIdentityV1{
+		Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{
+			Collection:            raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"},
+			CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: digest,
+			IndexEpoch: 1, CatalogEpoch: 1, CatalogDigest: digest,
+		},
+		Source:     raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2},
+		Generation: 7,
+		Immutable:  raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{ManifestDigest: digest, PlacementDigest: digest},
+	}
+	command := raftplacement.ReplicaReplacementBeginV1{
+		OperationID: "admission-only", ConfigDigest: digest, ExpectedEpoch: 1, CatalogDigest: digest,
+		GroupID: group, OldNodeID: "different-old-node", NewPeer: raftcluster.Peer{ID: node, Address: "127.0.0.1:1"}, OwnerPreparation: &identity,
+	}
+	if _, err := raftplacement.EncodeReplicaReplacementBeginV1(command); err != nil {
+		t.Fatal(err)
+	}
+	config.Vector = &FixedPeerTCPVectorConfigV1{ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{group: {node: "127.0.0.1:1"}}}
+	client := &FixedPeerTCPClientV1{config: config, peerTransport: transport}
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	request.TargetGroupID, request.TargetNodeID = group, node
+	a := transport.admission
+	held, err := a.acquire("shard:"+string(group), peerBytesV1, a.scopes["shard:"+string(group)].limits[peerBytesV1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+	before := transport.ResourceStatsV1().Current
+	transport.security = nil // resource refusal must precede the disabled dial
+	result, err := client.QualifyReplicaReplacementOwnerV1(t.Context(), command, request)
+	if !errors.Is(err, raftcluster.ErrAdmissionUnavailable) || len(result.Search.Partials) != 0 || transport.ResourceStatsV1().Current != before {
+		t.Fatalf("byte exhaustion reached dial or leaked request: result=%+v err=%v resources=%+v", result, err, transport.ResourceStatsV1())
+	}
+	held.release()
+	result, err = client.QualifyReplicaReplacementOwnerV1(t.Context(), command, request)
+	if !errors.Is(err, errPeerAuthenticationV1) || len(result.Search.Partials) != 0 || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+		t.Fatalf("dial refusal leaked qualification request: result=%+v err=%v resources=%+v", result, err, transport.ResourceStatsV1())
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := client.QualifyReplicaReplacementOwnerV1(ctx, command, request); !errors.Is(err, context.Canceled) || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+		t.Fatalf("canceled request consumed resources: %v %+v", err, transport.ResourceStatsV1())
 	}
 }
