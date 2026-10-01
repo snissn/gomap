@@ -185,7 +185,11 @@ func assertVectorBackendAuthorityReadCloseV1(t *testing.T, ctx context.Context, 
 	readClient, writeClient := *original.readHTTP, *original.http
 	readClient.Transport, writeClient.Transport = transport, transport
 	probe.readHTTP, probe.http = &readClient, &writeClient
-	before := original.peerTransport.ResourceStatsV1()
+	admission := original.peerTransport.admission
+	scope := peerControlScopeV1(operation)
+	admission.mu.Lock()
+	before := admission.scopes[scope].used
+	admission.mu.Unlock()
 	node.client = &probe
 	workCtx, cancel := context.WithCancel(ctx)
 	workDone := make(chan error, 1)
@@ -263,8 +267,10 @@ func assertVectorBackendAuthorityReadCloseV1(t *testing.T, ctx context.Context, 
 	if late {
 		t.Fatal("backend construction installed state after Close")
 	}
-	after := original.peerTransport.ResourceStatsV1()
-	if after.Current[peerRequestsV1] != before.Current[peerRequestsV1] || after.Current[peerBytesV1] != before.Current[peerBytesV1] {
-		t.Fatalf("backend initialization leaked admission: before=%v after=%v", before.Current, after.Current)
+	admission.mu.Lock()
+	after := admission.scopes[scope].used
+	admission.mu.Unlock()
+	if after[peerRequestsV1] != before[peerRequestsV1] || after[peerBytesV1] != before[peerBytesV1] {
+		t.Fatalf("backend initialization leaked %s admission: before=%v after=%v", scope, before, after)
 	}
 }
