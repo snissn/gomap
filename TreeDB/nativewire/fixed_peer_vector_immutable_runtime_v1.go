@@ -305,7 +305,24 @@ func (r *FixedPeerTCPRuntimeV1) immutableActiveVectorRecordV1(ctx context.Contex
 	return snapshot.Record, nil
 }
 
+// Compute only configuration-derived expectations. Fresh catalog records and
+// their readiness/applied indices are validated separately on every request.
+func fixedPeerImmutableVectorAssetDigestsV1(vector *FixedPeerTCPVectorConfigV1) map[raftcluster.GroupID]string {
+	if vector == nil || vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		return nil
+	}
+	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
+	digests := make(map[raftcluster.GroupID]string, len(owners))
+	for _, owner := range owners {
+		digests[owner] = vectorPartitionM8GroupAssetSetDigestV1(string(owner), vector.Manifest)
+	}
+	return digests
+}
+
 func (r *FixedPeerTCPRuntimeV1) validateImmutableActiveVectorRecordV1(record raftplacement.VectorPartitionLifecycleRecordV1, owners []raftcluster.GroupID) error {
+	if r == nil || r.config.Vector == nil {
+		return ErrFixedPeerVectorProofStaleV1
+	}
 	identity := r.config.Vector.Identity
 	if record.Identity != identity || record.Aborted ||
 		record.State != raftplacement.VectorPartitionLifecycleActiveV1 || record.InvalidationEpoch != 0 ||
@@ -314,8 +331,9 @@ func (r *FixedPeerTCPRuntimeV1) validateImmutableActiveVectorRecordV1(record raf
 	}
 	for i, owner := range owners {
 		ready := record.ReadyGroups[i]
-		if ready.GroupID != owner || ready.AppliedIndex == 0 ||
-			ready.AssetSetDigest != vectorPartitionM8GroupAssetSetDigestV1(string(owner), r.config.Vector.Manifest) {
+		expected, ok := r.immutableVectorAssetDigests[owner]
+		if !ok || expected == "" || ready.GroupID != owner || ready.AppliedIndex == 0 ||
+			ready.AssetSetDigest != expected {
 			return ErrFixedPeerVectorProofStaleV1
 		}
 	}
