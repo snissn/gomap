@@ -110,10 +110,6 @@ func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyV1(ctx context.Con
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		vector := r.parent.config.Vector
-		if _, err := r.parent.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(vector.Placement)); err != nil {
-			return nil, err
-		}
 		r.initMu.Lock()
 		if r.closed.Load() {
 			r.initMu.Unlock()
@@ -127,6 +123,32 @@ func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyV1(ctx context.Con
 			case <-done:
 			}
 			continue
+		}
+		// Close owns the first authority read as well as construction, including
+		// a cached hit. Waiters acquire their own fresh authority after this slot.
+		workCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		r.initDone, r.initCancel = done, cancel
+		r.initMu.Unlock()
+		defer func() {
+			cancel()
+			r.initMu.Lock()
+			r.initDone, r.initCancel = nil, nil
+			close(done)
+			r.initMu.Unlock()
+		}()
+		vector := r.parent.config.Vector
+		if _, err := r.parent.immutableActiveVectorRecordV1(workCtx, fixedPeerVectorOwnerGroupsV1(vector.Placement)); err != nil {
+			return nil, err
+		}
+		r.initMu.Lock()
+		if err := workCtx.Err(); err != nil {
+			r.initMu.Unlock()
+			return nil, err
+		}
+		if r.closed.Load() {
+			r.initMu.Unlock()
+			return nil, ErrFixedPeerVectorUnavailableV1
 		}
 		guard := r.servingGuard
 		if guard == nil {
@@ -144,9 +166,6 @@ func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyV1(ctx context.Con
 		}
 		oldTopology, oldSource := r.topology, r.source
 		r.collection, r.topology, r.source, r.backend, r.servingGuard = nil, nil, nil, nil, nil
-		workCtx, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		r.initDone, r.initCancel = done, cancel
 		r.initMu.Unlock()
 
 		// A listener and its requests drain before its source, without initMu or a
@@ -198,11 +217,6 @@ func (r *fixedPeerVectorRuntimeV1) initializeImmutableTopologyV1(ctx context.Con
 				err = errors.Join(err, source.Close())
 			}
 		}
-		cancel()
-		r.initMu.Lock()
-		r.initDone, r.initCancel = nil, nil
-		close(done)
-		r.initMu.Unlock()
 		if err != nil {
 			return nil, err
 		}

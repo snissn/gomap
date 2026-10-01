@@ -3,21 +3,147 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestImmutableOwnerOrdinaryServingRecoversCurrentFSMDBV1(t *testing.T) {
 	testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t, true, true, false, true)
+}
+
+func TestImmutableOwnerWarmCatalogReadCloseV1(t *testing.T) {
+	ctx, _, runtimes, _, _ := immutableOwnerReplacementFixtureV1(t)
+	owner, leader := runtimes[1], runtimes[3]
+	vector := owner.vector
+	vector.initMu.Lock()
+	cached := vector.topology != nil && vector.source != nil
+	vector.initMu.Unlock()
+	if !cached || owner.meta != nil {
+		t.Fatal("fixture did not install a cached catalog-consumer owner")
+	}
+	entered, canceled := make(chan struct{}), make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/vector-catalog-read" {
+			leader.server.Handler.ServeHTTP(w, request)
+			return
+		}
+		if request.TLS == nil || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.PeerCertificates) == 0 {
+			t.Error("catalog read was not authenticated")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if node, err := leader.client.security.identity(request.TLS.PeerCertificates[0]); err != nil || node != owner.config.NodeID {
+			t.Errorf("catalog client identity: %s %v", node, err)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if _, err := io.Copy(io.Discard, request.Body); err != nil {
+			t.Error(err)
+			return
+		}
+		close(entered)
+		<-request.Context().Done()
+		close(canceled)
+	}))
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{leader.client.security.certificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: leader.client.security.roots}
+	server.StartTLS()
+	defer server.Close()
+	defer server.CloseClientConnections()
+
+	// The fixture is quiescent. Override only this owner's read client, retaining
+	// its real credentialed transport/admission; restore it after all work joins.
+	original := owner.client
+	probe := *original
+	probe.addresses = make(map[raftcluster.NodeID]string, len(original.addresses))
+	for node, address := range original.addresses {
+		probe.addresses[node] = address
+	}
+	address := server.Listener.Addr().String()
+	probe.addresses[leader.config.NodeID] = address
+	transport := original.readHTTP.Transport.(*http.Transport).Clone()
+	originalDial := transport.DialTLSContext
+	transport.DialTLSContext = func(ctx context.Context, network, destination string) (net.Conn, error) {
+		if destination == address {
+			return original.peerTransport.dialScope(ctx, destination, leader.config.NodeID, "control")
+		}
+		return originalDial(ctx, network, destination)
+	}
+	defer transport.CloseIdleConnections()
+	readClient := *original.readHTTP
+	readClient.Transport = transport
+	probe.readHTTP = &readClient
+	before := original.peerTransport.ResourceStatsV1()
+	owner.client = &probe
+	warmCtx, cancel := context.WithCancel(ctx)
+	warmDone := make(chan error, 1)
+	go func() { _, err := vector.warmImmutableTopologyV1(warmCtx); warmDone <- err }()
+	joined := false
+	defer func() {
+		cancel()
+		if !joined {
+			<-warmDone
+		}
+		owner.client = original
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	vector.initMu.Lock()
+	tracked := vector.initDone != nil && vector.initCancel != nil
+	vector.initMu.Unlock()
+	if !tracked {
+		t.Fatal("initial catalog read escaped Close tracker")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- vector.Close() }()
+	select {
+	case err := <-warmDone:
+		joined = true
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close did not cancel initial catalog read: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	select {
+	case <-canceled:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close during initial catalog read: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	vector.initMu.Lock()
+	late := vector.topology != nil || vector.source != nil || vector.initDone != nil || vector.initCancel != nil
+	vector.initMu.Unlock()
+	if late {
+		t.Fatal("catalog Warm retained state after Close")
+	}
+	after := original.peerTransport.ResourceStatsV1()
+	if after.Current[peerRequestsV1] != before.Current[peerRequestsV1] || after.Current[peerBytesV1] != before.Current[peerBytesV1] {
+		t.Fatalf("catalog Warm leaked admission: before=%v after=%v", before.Current, after.Current)
+	}
 }
 
 func assertImmutableOwnerServingBindingLifetimeV1(t *testing.T, ctx context.Context, client *FixedPeerTCPClientV1, target, owner *FixedPeerTCPRuntimeV1, command raftplacement.ReplicaReplacementBeginV1) {
@@ -166,8 +292,9 @@ func assertImmutableOwnerServingBindingLifetimeV1(t *testing.T, ctx context.Cont
 		t.Fatalf("serving Warm rebound staging manager: %v", err)
 	}
 
-	// Make a new construction necessary, then hold the actual root barrier. Close
-	// cancels the real blocked accessor and waits for cleanup without holding it.
+	// Hold the actual root barrier while construction is registered. Cancellation
+	// and Close must finish without releasing it or installing serving state;
+	// registration alone does not prove entry into the barrier wait.
 	payload = snapshotBytes()
 	if err := data.fsm.InstallRaftSnapshotV1(bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
@@ -195,6 +322,9 @@ func assertImmutableOwnerServingBindingLifetimeV1(t *testing.T, ctx context.Cont
 			close(barrierResume)
 		}
 	}()
+	vector.initMu.Lock()
+	beforeCanceledTopology, beforeCanceledSource := vector.topology, vector.source
+	vector.initMu.Unlock()
 	canceledCtx, cancelWarm := context.WithCancel(ctx)
 	canceledDone := make(chan error, 1)
 	go func() { _, err := vector.warmImmutableTopologyV1(canceledCtx); canceledDone <- err }()
@@ -209,7 +339,10 @@ func assertImmutableOwnerServingBindingLifetimeV1(t *testing.T, ctx context.Cont
 		t.Fatal(ctx.Err())
 	}
 	vector.initMu.Lock()
-	canceledInstall := vector.topology != nil || vector.source != nil || vector.initDone != nil
+	// Cancellation can precede detaching the unchanged stale binding, while the
+	// first catalog read is pending. It must never publish a new binding.
+	canceledInstall := (vector.topology != nil && vector.topology != beforeCanceledTopology) ||
+		(vector.source != nil && vector.source != beforeCanceledSource) || vector.initDone != nil || vector.initCancel != nil
 	vector.initMu.Unlock()
 	if canceledInstall {
 		t.Fatal("canceled Warm installed serving state")

@@ -3155,8 +3155,12 @@ response with local ReadIndex after Warm, then performs another actual native
 snapshot installation: cold health/status/ensure refuse, an old response paused
 at its captured final guard returns no partials after a second successful Warm,
 and the retired source cannot reopen. Missing hosted assets refuse Warm;
-startup-only Stage remains stale. Actual root-barrier contention exercises
-canceled construction and concurrent Close with no late topology installation.
+startup-only Stage remains stale. With the actual root barrier held, registered
+construction is canceled or joined by concurrent Close without installing
+serving state; the test does not assert entry into the barrier wait.
+`TestImmutableOwnerWarmCatalogReadCloseV1` blocks a real mTLS catalog read on an
+already warm owner and proves Close cancels and joins that initial authority
+request, releases request/byte admission and leaves no serving state or tracker.
 Existing private replacement quorum, operation and asset controls remain in the
 shared fixture, with recovery disabled in all existing wrappers. This is
 ordinary owner recovery only; replacement NONVOTER/add-intent remains unready.
