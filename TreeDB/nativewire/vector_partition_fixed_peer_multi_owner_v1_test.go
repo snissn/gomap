@@ -174,6 +174,20 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		BytesPerQuery, AllocsPerQuery float64
 	}
 	var localCost, tcpClientCost costWindow
+	var profilePaths []string
+	var profileBoundaries []fixedPeerCostBoundaryV1
+	var frameBefore, frameAfter fixedPeerCostBoundaryV1
+	var servingRSS fixedPeerCostRSSV1
+	var rssObserver *fixedPeerCostRSSObserverV1
+	profileDir := os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS")
+	if comparativeCost && (!filepath.IsAbs(profileDir) || runtime.MemProfileRate <= 0) {
+		t.Fatal("comparative cost requires absolute retained output directory and enabled sampled memory profiles")
+	}
+	profilePath := func(name string) string {
+		path := filepath.Join(profileDir, "accepted-cost-"+name+".pprof")
+		profilePaths = append(profilePaths, path)
+		return path
+	}
 	// These two batch-boundary samples include all activity in this process.
 	// OS observations use the existing diagnostics reader; no query is sampled.
 	sampleParent := func(before bool) FixedPeerDiagnosticsV1 {
@@ -321,6 +335,9 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 			}
 			validateLocal(i, result)
 		}
+		if err := fixedPeerCostProfileV1(profilePath("local-before")); err != nil {
+			t.Fatal(err)
+		}
 		localCost.Before = sampleParent(true)
 		localStarted = time.Now()
 	}
@@ -344,6 +361,9 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	}
 	if comparativeCost {
 		finishCost(&localCost, localStarted)
+		if err := fixedPeerCostProfileV1(profilePath("local-after")); err != nil {
+			t.Fatal(err)
+		}
 		for i, result := range localResults {
 			validateLocal(i, result)
 		}
@@ -491,6 +511,11 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		}
 		return true
 	})
+	if comparativeCost {
+		for _, process := range processes {
+			fixedPeerCostObserveV1(t, ctx, process, "setup", "")
+		}
+	}
 	for _, node := range []raftcluster.NodeID{"ingress", "owner-b", "owner-c"} {
 		if report, err := client.ReadinessV1(ctx, node); err == nil || report.Ready {
 			t.Fatalf("%s reported immutable readiness before ACTIVE and listener warm: %+v err=%v", node, report, err)
@@ -648,6 +673,16 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 			publicRequests[i].Query = append([]float32(nil), query...)
 		}
 		daemonCosts = make([]daemonCost, len(configs))
+		for i, process := range processes {
+			boundary := fixedPeerCostObserveV1(t, ctx, process, "before", profilePath(fmt.Sprintf("node-%d-before", i)))
+			if boundary.MemoryProfileRate != runtime.MemProfileRate {
+				t.Fatal("child allocation profile sampling rate mismatch")
+			}
+			profileBoundaries = append(profileBoundaries, boundary)
+			if configs[i].NodeID == "ingress" {
+				frameBefore = boundary
+			}
+		}
 		for i, config := range configs {
 			before, err := client.DiagnosticsV1(ctx, config.NodeID)
 			if err != nil {
@@ -655,6 +690,16 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 			}
 			daemonCosts[i] = daemonCost{NodeID: config.NodeID, PID: processes[i].command.Process.Pid, Before: before}
 		}
+		pids := make([]int, len(processes))
+		for i, process := range processes {
+			pids[i] = process.command.Process.Pid
+		}
+		rssObserver = fixedPeerStartCostRSSV1(ctx, pids)
+		defer func() {
+			if rssObserver != nil {
+				rssObserver.stop()
+			}
+		}()
 		tcpClientCost.Before = sampleParent(true)
 		tcpStarted = time.Now()
 	}
@@ -680,6 +725,11 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	}
 	if comparativeCost {
 		finishCost(&tcpClientCost, tcpStarted)
+		servingRSS = rssObserver.stop()
+		rssObserver = nil
+		if servingRSS.Unavailable != "" || servingRSS.Samples == 0 {
+			t.Fatalf("serving RSS observation unavailable: %+v", servingRSS)
+		}
 		for i := range daemonCosts {
 			d := &daemonCosts[i]
 			after, err := client.DiagnosticsV1(ctx, d.NodeID)
@@ -713,6 +763,20 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 				d.PeerStreamWrittenBytes = &written
 			}
 		}
+		for i, process := range processes {
+			boundary := fixedPeerCostObserveV1(t, ctx, process, "after", profilePath(fmt.Sprintf("node-%d-after", i)))
+			if boundary.MemoryProfileRate != runtime.MemProfileRate || boundary.SampleUnixNano <= profileBoundaries[i].SampleUnixNano {
+				t.Fatal("child allocation profile boundary drift")
+			}
+			profileBoundaries = append(profileBoundaries, boundary)
+			if configs[i].NodeID == "ingress" {
+				frameAfter = boundary
+			}
+		}
+		if frameAfter.SampleUnixNano <= frameBefore.SampleUnixNano ||
+			frameAfter.RequestFrameBytes <= frameBefore.RequestFrameBytes || frameAfter.ResponseFrameBytes <= frameBefore.ResponseFrameBytes {
+			t.Fatal("ingress shard frame counter boundary drift")
+		}
 		for i, result := range publicResults {
 			validatePublic(i, result)
 		}
@@ -735,7 +799,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 		var daemonBytesPerQuery, daemonAllocsPerQuery float64
 		var daemonRSSBefore, daemonRSSAfter, peerStreamWrittenBytes uint64
 		allRSSAvailable, allStreamsAvailable := true, true
-		unavailable := []string{"exact navigation allocations", "exact merge allocations", "unique RPC bytes", "simultaneous all-daemon peak RSS", "query-attributed process allocations", "repeated-run latency statistics"}
+		unavailable := []string{"exact navigation allocations", "exact merge allocations", "wire bytes outside the declared ingress-to-owner plaintext shard frame boundary", "simultaneous all-daemon peak RSS", "query-attributed process allocations", "repeated-run latency statistics"}
 		for _, d := range daemonCosts {
 			daemonBytesPerQuery += d.BytesPerQuery
 			daemonAllocsPerQuery += d.AllocsPerQuery
@@ -775,12 +839,20 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 			LocalCandidateBytes, PublicCandidateBytes                                     uint64
 			CounterReceipt, Scope                                                         string
 			Unavailable                                                                   []string
+			ShardFramesBefore, ShardFramesAfter                                           fixedPeerCostBoundaryV1
+			ShardRequestFrameBytes, ShardResponseFrameBytes                               uint64
+			ServingRSS                                                                    fixedPeerCostRSSV1
+			AllocationProfiles                                                            []string
+			DaemonProfileBoundaries                                                       []fixedPeerCostBoundaryV1
+			MemoryProfileRate                                                             int
 		}{len(queries), warmQueries, probes, efSearch, topK, 256, mergeEntries,
 			localCost, tcpClientCost, daemonCosts,
 			tcpClientCost.BytesPerQuery + daemonBytesPerQuery, tcpClientCost.AllocsPerQuery + daemonAllocsPerQuery,
 			rssBefore, rssAfter, streamWritten, localCandidateBytes, publicCandidateBytes,
-			"accepted-public-parity", "one ordered pass per arm; process-global allocations; daemon intervals are staggered and include diagnostics/background; RSS snapshots and process-lifetime peak RSS; peer transport stream writes include control/raft/diagnostics and exclude public nativewire sockets; candidate bytes and algorithm counters are semantic counters, not allocation or unique wire bytes",
-			unavailable})
+			"accepted-public-parity", "one ordered pass per arm; process-global allocations; daemon intervals are staggered and include diagnostics/background; RSS snapshots and process-lifetime peak RSS; peer transport stream writes include control/raft/diagnostics and exclude public nativewire sockets; candidate bytes and algorithm counters are semantic counters; instrumentation envelope includes atomic shard-frame counters and parent RSS observer allocations; per-node and aggregate RSS maxima are sampled lower bounds, with serial-round skew; sampled alloc-profile intervals include background and profile/control work, not exact stage attribution; framed plaintext bytes count ingress dispatcher writes and reads once, including length prefixes and retries, excluding warmup, HTTP/control/Raft, public-client socket, TLS/IP/TCP overhead",
+			unavailable, frameBefore, frameAfter,
+			frameAfter.RequestFrameBytes - frameBefore.RequestFrameBytes, frameAfter.ResponseFrameBytes - frameBefore.ResponseFrameBytes,
+			servingRSS, profilePaths, profileBoundaries, runtime.MemProfileRate})
 	}
 	if readCost {
 		fixedPeerImmutableOwnerReadCostV1(t, ctx, configs, publicClient, request, consumerOwner)
