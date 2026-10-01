@@ -1,6 +1,7 @@
 package mvcc
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestCommitGroupAtPublishesVersionsAndTombstones(t *testing.T) {
@@ -42,8 +44,10 @@ func TestCommitGroupAtValidationPrecedesStorageWrite(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := store.CommitGroupAt(tc.groups, CommitRelaxed); !errors.Is(err, tc.want) {
-				t.Fatalf("CommitGroupAt error=%v want %v", err, tc.want)
+			for _, mode := range []CommitMode{CommitRelaxed, CommitDurable} {
+				if err := store.CommitGroupAt(tc.groups, mode); !errors.Is(err, tc.want) {
+					t.Fatalf("CommitGroupAt mode=%d error=%v want %v", mode, err, tc.want)
+				}
 			}
 		})
 	}
@@ -132,10 +136,11 @@ func TestCommitGroupAtRoutesSingletonToPointWriter(t *testing.T) {
 		name      string
 		mode      CommitMode
 		wantSet   int64
+		wantSync  int64
 		wantBatch int64
 	}{
 		{name: "relaxed", mode: CommitRelaxed, wantSet: 1},
-		{name: "durable", mode: CommitDurable, wantBatch: 1},
+		{name: "durable", mode: CommitDurable, wantSync: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openTestDB(t, t.TempDir(), treedb.DurabilityWALOnRelaxed)
@@ -148,8 +153,8 @@ func TestCommitGroupAtRoutesSingletonToPointWriter(t *testing.T) {
 			if got := spy.setCalls.Load(); got != tc.wantSet {
 				t.Fatalf("Set calls=%d want %d", got, tc.wantSet)
 			}
-			if got := spy.setSyncCalls.Load(); got != 0 {
-				t.Fatalf("SetSync calls=%d want 0", got)
+			if got := spy.setSyncCalls.Load(); got != tc.wantSync {
+				t.Fatalf("SetSync calls=%d want %d", got, tc.wantSync)
 			}
 			if got := spy.batchCalls.Load(); got != tc.wantBatch {
 				t.Fatalf("batch creations=%d want %d", got, tc.wantBatch)
@@ -160,19 +165,155 @@ func TestCommitGroupAtRoutesSingletonToPointWriter(t *testing.T) {
 }
 
 func TestCommitGroupAtSingletonPointWriterFailureIsStorageError(t *testing.T) {
+	for _, mode := range []CommitMode{CommitRelaxed, CommitDurable} {
+		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+		defer db.Close()
+		injected := commitlog.ErrRecordTooLarge
+		spy := &pointRouteSpyDB{DB: db, pointErr: injected}
+		err := newStore(spy).CommitAt(8, []Mutation{{Key: []byte("key"), Delete: true}}, mode)
+		if !errors.Is(err, ErrStorage) || !errors.Is(err, injected) {
+			t.Fatalf("CommitAt error=%v want ErrStorage and injected error", err)
+		}
+		if got := spy.setCalls.Load() + spy.setSyncCalls.Load(); got != 1 {
+			t.Fatalf("point calls=%d want 1", got)
+		}
+		if got := spy.batchCalls.Load(); got != 0 {
+			t.Fatalf("batch creations=%d want 0", got)
+		}
+	}
+}
+
+func TestCommitGroupAtSingletonWithoutSyncCapabilityUsesBatch(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
-	injected := errors.New("injected point failure")
-	spy := &pointRouteSpyDB{DB: db, pointErr: injected}
-	err := newStore(spy).CommitAt(8, []Mutation{{Key: []byte("key"), Delete: true}}, CommitRelaxed)
-	if !errors.Is(err, ErrStorage) || !errors.Is(err, injected) {
-		t.Fatalf("CommitAt error=%v want ErrStorage and injected error", err)
+	spy := &pointRouteSpyDB{DB: db}
+	// Hiding SetSync preserves both batch-only and Set-only adapter behavior.
+	batchOnly := struct{ treeDB }{spy}
+	setOnly := struct {
+		treeDB
+		pointWriter
+	}{spy, spy}
+	for i, adapter := range []treeDB{batchOnly, setOnly} {
+		if err := newStore(adapter).CommitAt(uint64(i+1), []Mutation{{Key: []byte("single"), Value: []byte("value")}}, CommitDurable); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := spy.setCalls.Load(); got != 1 {
-		t.Fatalf("Set calls=%d want 1", got)
+	if spy.batchCalls.Load() != 2 || spy.setCalls.Load() != 0 || spy.setSyncCalls.Load() != 0 {
+		t.Fatalf("batch=%d Set=%d SetSync=%d", spy.batchCalls.Load(), spy.setCalls.Load(), spy.setSyncCalls.Load())
 	}
-	if got := spy.batchCalls.Load(); got != 0 {
-		t.Fatalf("batch creations=%d want 0", got)
+	if err := newStore(setOnly).CommitAt(3, []Mutation{{Key: []byte("single"), Value: []byte("relaxed")}}, CommitRelaxed); err != nil {
+		t.Fatal(err)
+	}
+	if spy.setCalls.Load() != 1 || spy.batchCalls.Load() != 2 {
+		t.Fatal("Set-only adapter lost its relaxed point route")
+	}
+}
+
+func TestCommitGroupAtDurableSingletonCommandWALBoundary(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
+		for _, shape := range []string{"inline", "tombstone", "pointer", "oversize"} {
+			t.Run(string(profile)+"/"+shape, func(t *testing.T) {
+				opts := treedb.OptionsFor(profile, t.TempDir())
+				opts.DisableSideStores = true
+				opts.BackgroundCheckpointInterval = -1
+				mutation := Mutation{Key: []byte("singleton"), Value: []byte("value")}
+				if shape == "tombstone" {
+					mutation.Delete = true
+				}
+				if shape == "pointer" || shape == "oversize" {
+					opts.ValueLog.PointerThreshold = 1
+					opts.ValueLog.ForcePointers = true
+					mutation.Value = bytes.Repeat([]byte("v"), 2048)
+				}
+				if shape == "oversize" {
+					opts.WALMaxSegmentBytes = 1024
+				}
+				db, err := treedb.Open(opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				before := db.Stats()
+				store := New(db)
+				if err := store.CommitAt(11, []Mutation{mutation}, CommitDurable); err != nil {
+					t.Fatal(err)
+				}
+				after := db.Stats()
+				point, batch := uint64(1), uint64(0)
+				if shape == "oversize" {
+					point, batch = 0, 1
+				}
+				requireMVCCStatDelta(t, before, after, "treedb.command_wal.append.point.count_total", point)
+				requireMVCCStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", batch)
+				requireMVCCStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
+				requireMVCCStatDelta(t, before, after, "treedb.public.checkpoint.calls_total", 0)
+				logical, value := bytes.Clone(mutation.Key), bytes.Clone(mutation.Value)
+				for i := range mutation.Key {
+					mutation.Key[i] = 'x'
+				}
+				for i := range mutation.Value {
+					mutation.Value[i] = 'x'
+				}
+				state := Present
+				if mutation.Delete {
+					state, value = Tombstone, nil
+				}
+				requireResult(t, store, logical, 11, state, 11, value)
+			})
+		}
+	}
+}
+
+func TestCommitGroupAtDurableSingletonProcessCrashRecovery(t *testing.T) {
+	const childEnv = "TREEDB_MVCC_SINGLETON_CRASH_DIR"
+	options := func(profile treedb.Profile, dir, shape string) treedb.Options {
+		opts := treedb.OptionsFor(profile, dir)
+		opts.DisableSideStores = true
+		opts.BackgroundCheckpointInterval = -1
+		opts.ValueLog.PointerThreshold = 1 << 20
+		if shape != "inline" {
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.ForcePointers = true
+		}
+		if shape == "oversize" {
+			opts.WALMaxSegmentBytes = 1024
+		}
+		return opts
+	}
+	mutations := []Mutation{{Key: []byte("value"), Value: bytes.Repeat([]byte("p"), 2048)}, {Key: []byte("gone"), Delete: true}}
+	if dir := os.Getenv(childEnv); dir != "" {
+		opts := options(treedb.Profile(os.Getenv(childEnv+"_PROFILE")), dir, os.Getenv(childEnv+"_SHAPE"))
+		db, err := treedb.Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := New(db)
+		for _, mutation := range mutations {
+			if err := store.CommitAt(31, []Mutation{mutation}, CommitDurable); err != nil {
+				t.Fatal(err)
+			}
+		}
+		os.Exit(0) // Omit Close: only acknowledged command frames may recover.
+	}
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
+		for _, shape := range []string{"inline", "pointer", "oversize"} {
+			t.Run(string(profile)+"/"+shape, func(t *testing.T) {
+				opts := options(profile, t.TempDir(), shape)
+				cmd := exec.Command(os.Args[0], "-test.run=^TestCommitGroupAtDurableSingletonProcessCrashRecovery$")
+				cmd.Env = append(os.Environ(), childEnv+"="+opts.Dir, childEnv+"_PROFILE="+string(profile), childEnv+"_SHAPE="+shape)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("crash child: %v\n%s", err, output)
+				}
+				db, err := treedb.Open(opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				store := New(db)
+				requireResult(t, store, mutations[0].Key, 31, Present, 31, mutations[0].Value)
+				requireResult(t, store, mutations[1].Key, 31, Tombstone, 31, nil)
+			})
+		}
 	}
 }
 

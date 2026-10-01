@@ -4,6 +4,17 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Pebble
 
 ## Run
 
+For the standalone public MVCC durable singleton point/batch comparison:
+
+```sh
+GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCommitAtCommandWALDurableSingleton$' -benchmem -benchtime=1000x -count=5
+```
+
+Inline, pointer and oversized cases report `B/op`, `allocs/op` and
+frame/sync/checkpoint counters. Output is Go benchmark text; optional Go test
+profiles are not benchprof inputs. Use matched fresh-process controls on the
+same host for performance acceptance.
+
 - Build: `make unified-bench` (writes `bin/unified-bench`)
 - Run: `./bin/unified-bench`
 - Or: `go run ./cmd/unified_bench`
