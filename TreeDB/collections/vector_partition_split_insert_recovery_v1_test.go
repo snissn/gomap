@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -379,5 +381,106 @@ func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testin
 	got, present, err := getSystemValue(snap, publication.key)
 	if err != nil || !present || !bytes.Equal(got, publication.next) {
 		t.Fatalf("reopened SYSTEM value lost: present=%v bytes=%d err=%v", present, len(got), err)
+	}
+}
+
+// The digest reader's identity bound must refuse before durable admission and
+// again at publication, even if another identity was added after preflight.
+func TestSplitInsertCollectionIdentityCapacityV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	dir, database, c, _, m := newVectorPartitionLiveProductionFixtureV1(t, backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})
+	if err := c.EnsureVectorPartitionLiveBindingV1(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	v := splitCollectionRecoveryValueV1(m)
+	v.CatalogEpoch = 1000
+	publication, err := c.newSplitInsertPublicationV1(v, vectorPartitionSplitInsertStateV1{Version: 1, Pending: &v}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PreflightVectorPartitionSplitInsertV1(t.Context(), v); err != nil {
+		t.Fatal(err)
+	}
+	var existing commitlog.SplitVectorInsertV1
+	for i := 1; i <= commitlog.SplitVectorInsertMaxAttemptsV1; i++ {
+		identity := v
+		identity.CatalogEpoch = uint64(i)
+		identity.ID = []byte(fmt.Sprintf("capacity-row-%d", i))
+		identity.Attempt = []byte(fmt.Sprintf("capacity-attempt-%d", i))
+		identity.SourceIndex = uint64(100 + i)
+		handle := splitCollectionRecoveryAppendV1(t, database, c, identity)
+		if err := c.InsertVectorPartitionSplitSourceWithCommandWALIntentV1(t.Context(), identity, handle.CommandWALIntent()); err != nil {
+			commandwalapply.Abort(database, handle)
+			t.Fatal(err)
+		}
+		if _, err := commandwalapply.Finalize(database, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true}); err != nil {
+			t.Fatal(err)
+		}
+		existing = identity
+	}
+	before := database.State()
+	if err := c.PreflightVectorPartitionSplitInsertV1(t.Context(), v); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
+		t.Fatalf("new identity admission: %v", err)
+	}
+	if _, err := c.appendSplitInsertSystemDeltaV1(&systemTargetIterator{}, publication); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
+		t.Fatalf("stale preflight publication: %v", err)
+	}
+	after := database.State()
+	if before.SystemRootPageID != after.SystemRootPageID || before.AppliedCommandLSN != after.AppliedCommandLSN {
+		t.Fatal("capacity refusal changed durable roots or WAL coverage")
+	}
+	if row, err := c.Get(v.ID); err != nil || row != nil {
+		t.Fatalf("capacity refusal published canonical row: %q %v", row, err)
+	}
+	if err := c.PreflightVectorPartitionSplitInsertV1(t.Context(), existing); err != nil {
+		t.Fatalf("existing identity refused at capacity: %v", err)
+	}
+	if records, err := c.VectorPartitionSplitInsertLogicalStateV1(t.Context()); err != nil || len(records) != 2*commitlog.SplitVectorInsertMaxAttemptsV1 {
+		t.Fatalf("bounded digest records=%d err=%v", len(records), err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openVectorPartitionLiveDurableDBV1(t, dir)
+	defer reopened.Close()
+	c, err = NewCollectionManager(reopened).OpenCollection(m.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PreflightVectorPartitionSplitInsertV1(t.Context(), v); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
+		t.Fatalf("reopened identity capacity admission: %v", err)
+	}
+}
+
+func TestSplitInsertIdentityCapacityCountsTombstonesV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	c := &Collection{db: database, name: "docs"}
+	v := commitlog.SplitVectorInsertV1{Collection: c.name}
+	it := &systemTargetIterator{}
+	for i := 1; i <= commitlog.SplitVectorInsertMaxAttemptsV1; i++ {
+		v.CatalogEpoch = uint64(i)
+		it.entries = append(it.entries, systemTargetEntry{key: []byte(splitInsertStateKeyV1(v)), flags: node.FlagTombstone})
+	}
+	sort.Slice(it.entries, func(i, j int) bool { return bytes.Compare(it.entries[i].key, it.entries[j].key) < 0 })
+	if _, err := database.PublishSystemRootIterator(it); err != nil {
+		t.Fatal(err)
+	}
+	snap := database.AcquireSnapshot()
+	defer snap.Close()
+	if err := c.preflightSplitInsertIdentityV1(snap, splitInsertStateKeyV1(v)); err != nil {
+		t.Fatalf("existing tombstone consumed a new slot: %v", err)
+	}
+	v.CatalogEpoch++
+	if err := c.preflightSplitInsertIdentityV1(snap, splitInsertStateKeyV1(v)); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
+		t.Fatalf("retained tombstones did not occupy identity slots: %v", err)
 	}
 }

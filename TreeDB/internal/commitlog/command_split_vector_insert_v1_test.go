@@ -18,6 +18,11 @@ func TestSplitVectorInsertSemanticEnvelopeV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Persisted receipt identity also pins the V1 semantic JSON field order
+	// and encoding; changing it requires an explicit format version change.
+	if hex.EncodeToString(semantic[:]) != "ac083cd2055a5721e51d88f17b02a02943f10feb52209739c9487fc7a9edab95" {
+		t.Fatalf("V1 semantic digest changed: %x", semantic)
+	}
 	source, err := EncodeSplitVectorInsertPayloadV1(v)
 	if err != nil {
 		t.Fatal(err)

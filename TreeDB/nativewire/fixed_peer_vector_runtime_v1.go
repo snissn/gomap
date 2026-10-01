@@ -1075,12 +1075,12 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 	if r == nil || r.vector == nil || r.config.Vector == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
-	if len(request.VisibilityToken) != 0 {
-		if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
-			return public.SearchResponseV1{}, publicBackendErrorV1(err)
-		}
-	}
 	if r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		if len(request.VisibilityToken) != 0 {
+			if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
+				return public.SearchResponseV1{}, publicBackendErrorV1(err)
+			}
+		}
 		if r.config.NodeID != r.config.Vector.RouterNodeID {
 			// Owners expose status and the authenticated shard listener, but do not
 			// host the router asset required by public strict search.
@@ -1130,6 +1130,9 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
 	if leader == r.config.NodeID {
+		if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
 		backend, err := r.vector.ensureBackendV1(ctx)
 		if err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
@@ -1152,6 +1155,8 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 	if reply.VectorSearch == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
+	// Retain the ingress response fence: authority may change while the
+	// owner's already-fenced response travels back to this process.
 	if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}

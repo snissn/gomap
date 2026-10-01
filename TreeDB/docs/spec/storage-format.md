@@ -3872,7 +3872,10 @@ the versioned `vector_partition_split_insert_v1:` prefix. Each fixed
 collection/index/generation/source/target/catalog identity holds one pending
 canonical source intent and at most 64 sorted completed semantic outcomes;
 target records hold graph-only durable receipts and no canonical document
-copy. The record is bounded to 384 KiB and published in the same ordered native
+copy. Each collection retains at most 64 fixed identity keys, counting SYSTEM
+tombstones. A new identity exceeding that bound refuses before WAL append and
+again at atomic root publication; an existing identity consumes no additional
+slot. The record is bounded to 384 KiB and published in the same ordered native
 root transaction as its row or graph change. Records that exceed the key-aware
 empty-leaf capacity use existing persistent value-log pointers; dependency sync,
 root reference tracking and reachability GC use the ordinary publication path.

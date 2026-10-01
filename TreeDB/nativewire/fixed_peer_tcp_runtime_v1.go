@@ -150,6 +150,7 @@ type FixedPeerTCPRuntimeV1 struct {
 	requests     chan struct{}
 	forwards     chan struct{}
 	reads        chan struct{}
+	proofs       chan struct{}
 	ownerReceipt chan struct{}
 	splitRetryMu sync.Mutex
 	splitRetry   *fixedPeerSplitRetryV1
@@ -430,7 +431,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return nil, err
 	}
-	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4), ownerReceipt: make(chan struct{}, 1)}
+	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), proofs: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4), ownerReceipt: make(chan struct{}, 1)}
 	r.immutableVectorAssetDigests = fixedPeerImmutableVectorAssetDigestsV1(r.config.Vector)
 	if _, hosted := r.config.RaftListen[r.config.Catalog.ID]; hosted {
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
@@ -970,13 +971,15 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			return
 		}
 	}
-	// The dependency order is ingress -> forward -> status/catalog-read. Give
+	// The dependency order is ingress -> forward -> proof -> status/catalog-read. Give
 	// each stage bounded capacity so callers cannot starve their own callees.
 	requests := r.requests
 	switch request.URL.Path {
 	case "/v1/forward", "/v1/vector-forward", "/v1/vector-split-project", "/v1/vector-lifecycle":
 		requests = r.forwards
-	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof", "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
+	case "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
+		requests = r.proofs
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -1217,8 +1220,11 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	}
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
+	// Split proofs use ordinary outbound capacity: the vector runtime hosts
+	// exactly one data group, so source/project cross distinct clients, and
+	// proof handlers only issue leaf reads on readHTTP.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" || operation == "vector-split-source-proof" || operation == "vector-split-receipt" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

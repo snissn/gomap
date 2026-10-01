@@ -369,3 +369,82 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 		t.Fatal(err)
 	}
 }
+
+// A real target self-receipt must not occupy the leaf read slot needed by its
+// nested catalog/status RPCs, or the forward slots held by source writes.
+func TestAuthenticatedSplitProofSaturationPreservesLeafReadsV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	f := fixedPeerVectorReadyWithSourcePlacementAuthV1(t, ctx, "group-a", raftplacement.PlacementModeCollectionV1, true)
+	var configs []FixedPeerTCPConfigV1
+	for i, c := range f.configs {
+		if c.NodeID != "ingress" {
+			configs = append(configs, c)
+			f.processes[i].stop(t)
+		}
+	}
+	var targets []*FixedPeerTCPRuntimeV1
+	for _, config := range configs {
+		node, err := OpenFixedPeerTCPRuntimeV1(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, node)
+		t.Cleanup(func() { _ = node.Close() })
+	}
+	var target *FixedPeerTCPRuntimeV1
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, node := range targets {
+			s, e := node.Status(ctx)
+			if e == nil && len(s.Groups) == 1 && s.Groups[0].State == "Leader" {
+				target = node
+				return true
+			}
+		}
+		return false
+	})
+	client, err := DialContext(ctx, "tcp", f.IngressPublicAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ownerClient, err := DialContext(ctx, "tcp", target.config.Vector.PublicAddresses[target.config.NodeID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerClient.Close()
+	fixedPeerWaitV1(t, ctx, func() bool {
+		owner, ownerErr := ownerClient.VectorStatusV1(ctx)
+		ingress, ingressErr := client.VectorStatusV1(ctx)
+		return ownerErr == nil && ingressErr == nil && owner.Health.Ready && ingress.Health.Ready
+	})
+	insert := splitInsertRequestV1(f, 1)
+	result, err := client.VectorInsertV1(ctx, insert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search := f.SearchRequest(insert.Vector, 1)
+	search.VisibilityToken = result.VisibilityToken
+	target.client.http.Transport.(*http.Transport).MaxConnsPerHost = 1
+	target.client.readHTTP.Transport.(*http.Transport).MaxConnsPerHost = 1
+	reserve := func(slots chan struct{}, count int) {
+		for i := 0; i < count; i++ {
+			slots <- struct{}{}
+		}
+		t.Cleanup(func() {
+			for i := 0; i < count; i++ {
+				<-slots
+			}
+		})
+	}
+	reserve(target.reads, cap(target.reads)-1)
+	reserve(target.client.readCalls, cap(target.client.readCalls)-1)
+	reserve(target.forwards, cap(target.forwards))
+	if err := target.requireSplitVectorVisibilityV1(ctx, search); err != nil {
+		t.Fatalf("self receipt starved its nested leaf reads: %v", err)
+	}
+	reserve(target.proofs, cap(target.proofs))
+	if err := target.requireSplitVectorVisibilityV1(ctx, search); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("proof overflow did not refuse: %v", err)
+	}
+}

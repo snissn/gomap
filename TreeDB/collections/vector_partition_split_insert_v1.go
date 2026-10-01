@@ -124,6 +124,43 @@ func (c *Collection) VectorPartitionSplitInsertLogicalStateV1(ctx context.Contex
 	return records, it.Error()
 }
 
+// New identities must fit the same collection-wide bound used by logical
+// convergence. Count tombstones too; reviving an existing key adds no slot.
+func (c *Collection) preflightSplitInsertIdentityV1(snap *backenddb.Snapshot, key string) error {
+	prefix := []byte(splitInsertCollectionPrefixV1(c.name))
+	state, ok := snap.StateToken()
+	if !ok {
+		return backenddb.ErrClosed
+	}
+	if state.SystemRootPageID == 0 {
+		return nil
+	}
+	it, err := snap.IteratorAtRootWithOptions(state.SystemRootPageID, prefix, prefixEnd(prefix), backenddb.IteratorOptions{IncludeTombstones: true})
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	count, existing := 0, false
+	for it.Valid() && bytes.HasPrefix(it.UnsafeKey(), prefix) {
+		count++
+		if count > commitlog.SplitVectorInsertMaxAttemptsV1 {
+			return ErrVectorPartitionSplitInsertCapacityV1
+		}
+		existing = existing || bytes.Equal(it.UnsafeKey(), []byte(key))
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	if count == commitlog.SplitVectorInsertMaxAttemptsV1 && !existing {
+		return ErrVectorPartitionSplitInsertCapacityV1
+	}
+	return nil
+}
+
 // A duplicate durable command still consumes its WAL coverage. Metadata-only
 // publication changes the state token without changing canonical generation.
 func (c *Collection) publishSplitInsertNoopV1(intent *backenddb.CommandWALIntent) error {
@@ -274,6 +311,9 @@ func (c *Collection) appendSplitInsertSystemDeltaV1(it iterator.UnsafeIterator, 
 	if err == nil && (present != publication.previousPresent || !bytes.Equal(previous, publication.previous)) {
 		err = errConcurrentRootModification(c.name, "split_insert_v1")
 	}
+	if err == nil && !present && bytes.HasPrefix([]byte(publication.key), []byte(splitInsertCollectionPrefixV1(c.name))) {
+		err = c.preflightSplitInsertIdentityV1(snap, publication.key)
+	}
 	closeErr := snap.Close()
 	if err != nil || closeErr != nil {
 		return fail(errors.Join(err, closeErr))
@@ -344,9 +384,19 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 			return ErrVectorPartitionSplitInsertConflictV1
 		}
 	}
-	state, _, _, err := c.readSplitInsertStateV1(v)
+	state, _, present, err := c.readSplitInsertStateV1(v)
 	if err != nil {
 		return err
+	}
+	if !present {
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return backenddb.ErrClosed
+		}
+		err = c.preflightSplitInsertIdentityV1(snap, splitInsertStateKeyV1(v))
+		if err := errors.Join(err, snap.Close()); err != nil {
+			return err
+		}
 	}
 	receipt, known, err := splitInsertFindReceiptV1(state, v)
 	if err != nil {

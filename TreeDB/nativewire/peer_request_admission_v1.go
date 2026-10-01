@@ -44,8 +44,10 @@ func (w *peerWorkLeaseV1) release() {
 
 func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
-	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof", "vector-split-source-proof", "vector-split-receipt":
+	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
 		return "control-read"
+	case "vector-split-source-proof", "vector-split-receipt":
+		return "control-proof"
 	case "readiness", "diagnostics":
 		return "control-diagnostics"
 	case "forward":
@@ -59,7 +61,7 @@ func peerControlScopeV1(operation string) string {
 // draining. Forwarding and writes require a live local originating request.
 func peerControlRequestModeV1(operation string, ordinary peerRequestModeV1) peerRequestModeV1 {
 	switch peerControlScopeV1(operation) {
-	case "control-read", "control-diagnostics":
+	case "control-read", "control-proof", "control-diagnostics":
 		return peerRequestInternalV1
 	default:
 		return ordinary
