@@ -98,6 +98,7 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "empty command entry")
 	}
 	meta := raftapply.ApplyMetadataV1{
+		GroupID:                  string(f.cluster.GroupID),
 		LocalDurabilityBoundary:  raftapply.LocalDurabilityCommandWALV1,
 		SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
 		CurrentCatalogVersion:    req.CurrentCatalogVersion,
