@@ -818,8 +818,11 @@ changed DB, or corrupt assets fail public strict search without a partial top-K.
 The immutable profile refuses public vector mutation and unsupported snapshot-style
 commands. This fixed-peer path has request-side catalog fences and is not the
 no-quorum snapshot-cache cost model described above for `OperationsV1.Search`.
-The separate catalog/data-leader topology, broader failure and recovery
-behavior, and representative local-versus-TCP cost remain open under #4809.
+Separate catalog/data-leader topologies have focused deployment coverage, and
+#4809 retains a single-pass accepted local-versus-TCP correctness and global
+cost observation. The cost diagnostic documents its instrumentation boundary
+and unavailable exact stage attribution/serving-window peaks. Broader failure,
+recovery and capacity claims require their own evidence.
 
 ### Lifecycle, publication, and cleanup authority
 
