@@ -64,6 +64,7 @@ type FixedPeerGroupReadinessV1 struct {
 // FixedPeerReadinessV1 is a fresh operational observation, never a reusable
 // route/read capability. ANN generation readiness remains the product's gate.
 type FixedPeerReadinessV1 struct {
+	VectorPhase           string `json:",omitempty"`
 	Live, Ready, Draining bool
 	NodeID                raftcluster.NodeID
 	CatalogEpoch          uint64
@@ -103,6 +104,9 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 	ctx, cancel := context.WithTimeout(ctx, r.config.RequestTimeout)
 	defer cancel()
 	report := FixedPeerReadinessV1{Live: !r.closed.Load(), NodeID: r.config.NodeID, Draining: r.draining.Load()}
+	if r.config.VectorInitialization != nil {
+		report.VectorPhase = FixedPeerVectorPhaseInitializingV1
+	}
 	if !report.Live || report.Draining {
 		report.Error = "node is draining or closed"
 		return report, raftcluster.ErrAdmissionUnavailable
@@ -230,6 +234,9 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 	if r.draining.Load() {
 		report.Draining = true
 		failures = append(failures, raftcluster.ErrAdmissionUnavailable)
+	}
+	if r.config.VectorInitialization != nil {
+		failures = append(failures, ErrFixedPeerVectorUnavailableV1)
 	}
 	err = errors.Join(failures...)
 	report.Ready = err == nil

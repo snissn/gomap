@@ -326,3 +326,54 @@ create operation, four real processes and three repeats for both sparse and
 and per-node RSS/FDs/goroutines. The dormant inventory is not a 40-machine run.
 See [P7 evidence](../evidence/peer-security-4813/README.md); no EC2, ANN-quality or
 horizontal-speedup acceptance follows from these local measurements.
+
+
+## First-boot vector initialization intent
+
+An authenticated fixed-peer configuration may supply `VectorInitialization`
+instead of `Vector`. This is an immutable initialization identity, retained by
+JSON configuration, the normalized shared digest, and the existing paired
+persistent-root markers. It must be present before the first root is opened;
+adding, removing, or changing it on existing roots is refused. Omitted intent
+preserves the existing non-vector configuration identity and behavior.
+
+The bounded v1 layout is one or two disjoint RF3 data groups, three or six nodes,
+with every node also a catalog voter and hosting exactly one data group. No
+spare or dormant destination is admitted. The intent binds `SourceGroupID`,
+`Collection`, `IndexDefinition`, `CatalogEpoch` (1), nonzero `Generation`,
+`MaxSourceRows` (1..512), and complete `PublicAddresses`/`ShardAddresses` maps.
+`Collection.Database` and `Collection.Catalog` must both be `default`, the
+scope supported by the existing routed consensus create/ingest commands. Other
+scopes are refused during config validation before persistent roots are opened.
+Reserved vector addresses use the existing authenticated mutable-vector
+loopback boundary and must be distinct from all configured endpoints. They are
+not opened during initialization. A six-container two-host placement does not
+guarantee quorum after either physical host is lost.
+
+The index uses the existing collection definition normalizer and is limited to
+cosine float32 `column_graph`, dimensions up to 4096, M up to 64, and construction
+and search effort up to 4096. Representation, quantized variants, and an already
+assigned schema generation are outside this checkpoint. The catalog lifecycle
+feature floor is reserved in the catalog config and every catalog voter's
+capabilities from first boot. The canonical initial catalog contains all fixed
+data groups and exactly the intended collection's placement on `SourceGroupID`.
+Its feature inventory uses the placement `collection_groups` floor plus the
+vector lifecycle requirement. Raft runtime/catalog-authority features remain
+in the separate fixed catalog Raft configuration, not the placement catalog.
+Operators publish this catalog through the existing authenticated catalog API,
+then create the collection with the intended index and ingest source documents
+through the ordinary authenticated routed consensus command API. Initialization
+never creates a collection implicitly or invents Raft apply/WAL progress.
+
+Status and readiness report `VectorPhase: "initializing"`. The control and real
+Raft runtimes can be live and data group fences can succeed, but aggregate
+`Ready` remains false. Every vector search, routed insert, and lifecycle action
+remains unavailable. Generic source ingest remains available; `MaxSourceRows`
+is a future preparation input bound, **not** a generic insert quota or a promise
+of long-lived vector-write throughput. No per-request source scan is added.
+
+This prerequisite provides no prepare command, manifest acceptance, vector
+listener, or transition to serving. The next checkpoint must validate real
+committed source/schema/index evidence, prepare and durably accept assets, then
+bind serving to this retained intent without editing root identity or weakening
+FSM/WAL coverage, root authentication, or snapshot catch-up requirements.

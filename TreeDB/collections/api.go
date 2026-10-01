@@ -25432,6 +25432,13 @@ func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 	}
 }
 
+// NormalizeVectorIndexDefinitionV1 validates and canonicalizes a definition
+// without opening a collection or constructing an index. It uses the same
+// rules and defaults as collection metadata normalization.
+func NormalizeVectorIndexDefinitionV1(def VectorIndexDefinition) (VectorIndexDefinition, error) {
+	return normalizeVectorIndexDefinition(def)
+}
+
 func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefinition, error) {
 	if def.Name == "" {
 		def.Name = vectorIndexDefaultName(def.Field)

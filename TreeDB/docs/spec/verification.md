@@ -3333,3 +3333,24 @@ preserves a complete source intent before an incomplete next frame and refuses
 a corrupt applied durable prefix. These checks do not establish power-loss
 safety, independent quorum-loss qualification, or indefinite writes. Target
 and clear crash cuts remain apply-boundary/reopen controls.
+
+
+### Fixed-peer vector initialization prerequisite (#4250)
+
+`TestFixedPeerVectorInitializationJSONIdentityV1` is the retained semantic red
+contract: on ef22 it compiles and fails because JSON discards the intent.
+`TestFixedPeerVectorInitializationCloneDigestAndValidationV1` checks canonical
+identity, caller-owned map isolation, malformed/coexisting mode refusal, and
+canonical membership. `TestFixedPeerVectorInitializationRootIdentityV1` checks
+paired-root binding, unchanged reopen, mutation/removal/retrofit refusal, and
+unmarked nonempty root refusal. `TestFixedPeerVectorInitializationSixNodeLayoutV1`
+checks admission of the intended six-node/two-RF3-group layout without deployment.
+`TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1` starts a tiny
+fresh authenticated RF3 cluster, commits a real catalog and indexed collection
+create plus a fresh document insert, observes the document and actual applied
+progress on all three replicas, and reopens matching roots. It also checks
+initializing status, non-readiness, unopened reserved listeners, and refused
+vector operations before and after reopen. This is not cluster qualification
+or proof of serving activation. Existing nil-intent runtime/security/readiness
+regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
+configuration path; startup overhead should be compared at the exact base/head.
