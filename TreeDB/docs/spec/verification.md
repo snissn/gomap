@@ -3112,7 +3112,13 @@ and canceled admission through the existing shared transport fixture.
 `TestReplacementPrivateANNResponseValidationV1` rejects missing or malformed
 partitions, exact fallback, incoherent counters/chunks, invalid neighbors,
 wrong proof identity and exceeded byte/work budgets through the shared coordinator
-payload validator. Coherent empty partitions remain legal; private requests
+payload validator. Its authenticated controlled-catalog cases accept a previous
+replacement issuer from the committed roster and reject removed startup peers,
+stale BEGIN, wrong phase, missing seed, missing authority and unanchored peers. These are transport
+and semantic controls, not fabricated owner promotion or additional quorum
+evidence. The admission test also rejects a private BEGIN frame that exceeds
+the caller's ordinary-body byte limit before authority lookup or dial.
+Coherent empty partitions remain legal; private requests
 require immutable identities and basic statistics. These checks grant no public
 readiness or promotion. Per-request time/MemStats diagnostics include the caller, all five
 Raft nodes, TLS, authority checks, ANN and background work; they are individual

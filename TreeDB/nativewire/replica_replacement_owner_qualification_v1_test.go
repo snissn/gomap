@@ -2,12 +2,17 @@ package nativewire
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"math"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,9 +239,18 @@ func TestReplacementPrivateANNRequestAdmissionV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.Vector = &FixedPeerTCPVectorConfigV1{ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{group: {node: "127.0.0.1:1"}}}
-	client := &FixedPeerTCPClientV1{config: config, peerTransport: transport}
+	client := &FixedPeerTCPClientV1{config: config, digest: command.ConfigDigest, peerTransport: transport}
 	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
 	request.TargetGroupID, request.TargetNodeID = group, node
+	ordinaryBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounded := request
+	bounded.RequestBytesLimit = ordinaryBytes
+	if result, err := client.QualifyReplicaReplacementOwnerV1(t.Context(), command, bounded); !errors.Is(err, ErrVectorPartitionShardSearchInvalidRequest) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+		t.Fatalf("private BEGIN bypassed request byte limit: %+v %v %+v", result, err, transport.ResourceStatsV1())
+	}
 	a := transport.admission
 	held, err := a.acquire("shard:"+string(group), peerBytesV1, a.scopes["shard:"+string(group)].limits[peerBytesV1])
 	if err != nil {
@@ -319,8 +333,135 @@ func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
 		return response
 	}
 	valid := makeResponse()
-	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &valid); err != nil || !reflect.DeepEqual(result.Search, valid) {
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], request, &valid); err != nil || !reflect.DeepEqual(result.Search, valid) {
 		t.Fatalf("valid private ANN payload refused: %+v %v", result, err)
+	}
+	// Authenticated catalog transport with controlled semantic replies. This
+	// proves roster/operation validation, not Raft completion or quorum; the
+	// real fixture and existing sequential-replacement tests provide those.
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	digest := strings.Repeat("a", 64)
+	identity := raftplacement.VectorPartitionLifecycleIdentityV1{
+		Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{
+			Collection:            raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"},
+			CollectionIncarnation: 1, IndexName: "embedding", IndexDefinitionDigest: digest,
+			IndexEpoch: 1, CatalogEpoch: 1, CatalogDigest: digest,
+		},
+		Source:     raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2},
+		Generation: 7, Immutable: raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{ManifestDigest: digest, PlacementDigest: digest},
+	}
+	boundCommand := raftplacement.ReplicaReplacementBeginV1{
+		OperationID: "next-preparation", ConfigDigest: digest, ExpectedEpoch: 1, CatalogDigest: digest,
+		GroupID: command.GroupID, OldNodeID: "previous-replacement", NewPeer: raftcluster.Peer{ID: command.NewPeer.ID, Address: "127.0.0.1:19002"}, OwnerPreparation: &identity,
+	}
+	begin, err := raftplacement.EncodeReplicaReplacementBeginV1(boundCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, _, _ := replacementGateSeedForTestV1()
+	current := raftplacement.ReplicaReplacementStateV1{
+		Begin: boundCommand, Phase: raftplacement.ReplicaReplacementAddIntentV1, Seed: &seed,
+		Peers: []raftcluster.Peer{{ID: boundCommand.OldNodeID, Address: "127.0.0.1:19001"}, {ID: "survivor", Address: "127.0.0.1:19003"}},
+	}
+	var observedMu sync.Mutex
+	var observed *raftplacement.ReplicaReplacementStateV1 = &current
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+			t.Error("catalog request was not authenticated")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if node, err := transport.security.identity(r.TLS.PeerCertificates[0]); err != nil || node != config.NodeID {
+			t.Errorf("catalog client identity: %s %v", node, err)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		reply := fixedPeerReplyV1{NodeID: config.NodeID, ConfigDigest: digest}
+		switch r.URL.Path {
+		case "/v1/status":
+			reply.Status.CatalogRaft = raftcluster.RuntimeStatusV1{GroupID: config.Catalog.ID, LeaderID: config.NodeID}
+		case "/v1/replacement-read":
+			var request fixedPeerRequestV1
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || string(request.Entry) != string(begin) {
+				t.Errorf("catalog BEGIN mismatch: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			observedMu.Lock()
+			if observed != nil {
+				snapshot := *observed
+				reply.ReplacementState = &snapshot
+			}
+			observedMu.Unlock()
+		default:
+			t.Errorf("unexpected catalog operation: %s", r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(reply); err != nil {
+			t.Error(err)
+		}
+	}))
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{transport.security.certificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: transport.security.roots}
+	server.StartTLS()
+	defer server.Close()
+	address := server.Listener.Addr().String()
+	httpTransport := &http.Transport{DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return transport.dialScope(ctx, address, config.NodeID, "control")
+	}}
+	defer httpTransport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: httpTransport, Timeout: config.RequestTimeout}
+	config.Vector = &FixedPeerTCPVectorConfigV1{Identity: identity}
+	config.Groups = client.config.Groups // Deliberately retain the removed startup peer.
+	authorityClient := &FixedPeerTCPClientV1{config: config, digest: digest, security: transport.security, peerTransport: transport,
+		http: httpClient, readHTTP: httpClient, calls: make(chan struct{}, 4), readCalls: make(chan struct{}, 4),
+		addresses: map[raftcluster.NodeID]string{config.NodeID: address, command.OldNodeID: address, boundCommand.OldNodeID: address, "survivor": address},
+	}
+	for _, test := range []struct {
+		name     string
+		mutate   func(*raftplacement.ReplicaReplacementStateV1)
+		missing  bool
+		issuer   raftcluster.NodeID
+		accepted bool
+	}{
+		{name: "committed_previous_replacement", issuer: boundCommand.OldNodeID, accepted: true},
+		{name: "removed_startup_issuer", issuer: command.OldNodeID},
+		{name: "stale_begin", mutate: func(s *raftplacement.ReplicaReplacementStateV1) { s.Begin.OperationID += "-stale" }},
+		{name: "wrong_phase", mutate: func(s *raftplacement.ReplicaReplacementStateV1) {
+			s.Phase = raftplacement.ReplicaReplacementInstalledV1
+		}},
+		{name: "missing_seed", mutate: func(s *raftplacement.ReplicaReplacementStateV1) { s.Seed = nil }},
+		{name: "missing_authority", missing: true},
+		{name: "unanchored_committed_peer", mutate: func(s *raftplacement.ReplicaReplacementStateV1) { s.Peers[1].ID = "unanchored" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := current
+			state.Peers = append([]raftcluster.Peer(nil), current.Peers...)
+			if test.mutate != nil {
+				test.mutate(&state)
+			}
+			observedMu.Lock()
+			observed = &state
+			if test.missing {
+				observed = nil
+			}
+			observedMu.Unlock()
+			group, err := authorityClient.replacementOwnerQualificationGroupV1(t.Context(), boundCommand, begin)
+			var result ReplicaReplacementOwnerQualificationV1
+			if err == nil {
+				response := makeResponse()
+				response.Proof.LeaderNode = test.issuer
+				result, err = authorityClient.validateReplacementOwnerQualificationResponseV1(t.Context(), boundCommand, group, request, &response)
+			}
+			if test.accepted {
+				if err != nil || result.Search.Proof.LeaderNode != boundCommand.OldNodeID {
+					t.Fatalf("committed replacement issuer refused: %+v %v", result, err)
+				}
+			} else if err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+				t.Fatalf("stale roster/authority retained private hits: %+v %v", result, err)
+			}
+		})
 	}
 	for _, test := range []struct {
 		name   string
@@ -332,7 +473,7 @@ func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			bounded := request
 			test.mutate(&bounded)
-			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, bounded, &valid)
+			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], bounded, &valid)
 			if !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
 				t.Fatalf("over-budget private result accepted: %+v %v", result, err)
 			}
@@ -343,15 +484,15 @@ func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
 	empty.Partials[0].ScoreCalls, empty.Partials[0].Candidates, empty.Partials[0].Edges = 0, 0, 0
 	empty.ScoreCalls, empty.Candidates, empty.BaseCandidates, empty.BaseResults, empty.Edges = 0, 0, 0, 0, 0
 	empty.ResponseBytes, _ = MeasureVectorPartitionShardSearchResponseBytesV1(empty.Partials)
-	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &empty); err != nil || !reflect.DeepEqual(result.Search, empty) {
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], request, &empty); err != nil || !reflect.DeepEqual(result.Search, empty) {
 		t.Fatalf("coherent empty ANN result refused: %+v %v", result, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if result, err := client.validateReplacementOwnerQualificationResponseV1(ctx, command, request, &empty); !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(ctx, command, client.config.Groups[0], request, &empty); !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
 		t.Fatalf("canceled empty result accepted: %+v %v", result, err)
 	}
-	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, nil); err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
+	if result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], request, nil); err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
 		t.Fatalf("nil private payload accepted: %+v %v", result, err)
 	}
 	for _, test := range []struct {
@@ -432,7 +573,7 @@ func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			response := makeResponse()
 			test.mutate(&response)
-			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, request, &response)
+			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], request, &response)
 			if err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
 				t.Fatalf("malformed private ANN retained hits: %+v %v", result, err)
 			}

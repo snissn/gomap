@@ -40,8 +40,8 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 		return result, err
 	}
 	requestBytes += uint64(4 + len(begin))
-	if requestBytes > uint64(limits.MaxRequestBytes) {
-		return result, raftcluster.ErrRouteTargetUnsupported
+	if requestBytes > uint64(limits.MaxRequestBytes) || requestBytes > request.RequestBytesLimit {
+		return result, ErrVectorPartitionShardSearchInvalidRequest
 	}
 	configuredBound, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
 	if err != nil {
@@ -69,6 +69,10 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 	}
 	defer work.release()
 	ctx = work.ctx
+	group, err := c.replacementOwnerQualificationGroupV1(ctx, command, begin)
+	if err != nil {
+		return result, err
+	}
 	conn, err := c.peerTransport.dialScope(ctx, endpoint, command.NewPeer.ID, "shard:"+string(command.GroupID))
 	if err != nil {
 		return result, err
@@ -92,10 +96,62 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 	if frame.Response != nil {
 		return result, ErrVectorPartitionShardSearchRouteMismatch
 	}
-	return c.validateReplacementOwnerQualificationResponseV1(ctx, command, request, frame.PrivateResponse)
+	return c.validateReplacementOwnerQualificationResponseV1(ctx, command, group, request, frame.PrivateResponse)
 }
 
-func (c *FixedPeerTCPClientV1) validateReplacementOwnerQualificationResponseV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) (ReplicaReplacementOwnerQualificationV1, error) {
+// Resolve the exact pending operation through the existing authenticated,
+// quorum-fenced catalog read. Startup peers are not the committed roster after
+// a completed replacement; this request-scoped decision is never cached.
+func (c *FixedPeerTCPClientV1) replacementOwnerQualificationGroupV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, begin []byte) (FixedPeerTCPGroupV1, error) {
+	var group FixedPeerTCPGroupV1
+	if c.security == nil || c.peerTransport == nil || c.peerTransport.security == nil {
+		return group, errPeerAuthenticationV1
+	}
+	if command.ConfigDigest != c.digest || c.config.Vector == nil || command.OwnerPreparation == nil ||
+		*command.OwnerPreparation != c.config.Vector.Identity {
+		return group, raftcluster.ErrInvalidConfig
+	}
+	leader, err := c.leader(ctx, c.config.Catalog)
+	if err != nil {
+		return group, err
+	}
+	reply, err := c.call(ctx, leader, "replacement-read", fixedPeerRequestV1{Entry: begin}, false)
+	if err != nil {
+		return group, err
+	}
+	if reply.ReplacementState == nil {
+		return group, raftplacement.ErrCatalogMetaUnavailable
+	}
+	state := *reply.ReplacementState
+	actual, err := raftplacement.EncodeReplicaReplacementBeginV1(state.Begin)
+	if err != nil || string(actual) != string(begin) {
+		return group, errors.Join(raftplacement.ErrCatalogMetaConflict, err)
+	}
+	if state.Phase != raftplacement.ReplicaReplacementAddIntentV1 || state.Seed == nil {
+		return group, raftcluster.ErrAdmissionUnavailable
+	}
+	for _, candidate := range c.config.Groups {
+		if candidate.ID == command.GroupID {
+			group = candidate
+			break
+		}
+	}
+	if group.ID == "" {
+		return group, raftcluster.ErrRouteTargetUnknown
+	}
+	group, err = replacementGroupPeersV1(group, state, false)
+	if err != nil {
+		return FixedPeerTCPGroupV1{}, err
+	}
+	for _, peer := range group.Peers {
+		if c.addresses[peer.ID] == "" {
+			return FixedPeerTCPGroupV1{}, raftcluster.ErrInvalidConfig
+		}
+	}
+	return group, nil
+}
+
+func (c *FixedPeerTCPClientV1) validateReplacementOwnerQualificationResponseV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, group FixedPeerTCPGroupV1, request VectorPartitionShardSearchRequestV1, response *VectorPartitionShardSearchResponseV1) (ReplicaReplacementOwnerQualificationV1, error) {
 	var result ReplicaReplacementOwnerQualificationV1
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -105,15 +161,11 @@ func (c *FixedPeerTCPClientV1) validateReplacementOwnerQualificationResponseV1(c
 	}
 	proof := response.Proof
 	issuerMember := false
-	for _, group := range c.config.Groups {
-		if group.ID == command.GroupID {
-			for _, peer := range group.Peers {
-				issuerMember = issuerMember || peer.ID == proof.LeaderNode
-			}
-		}
+	for _, peer := range group.Peers {
+		issuerMember = issuerMember || peer.ID == proof.LeaderNode
 	}
 	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID ||
-		proof.Kind != vectorPartitionShardSearchProofPrivateOwnerV1 || proof.ServingNode != command.NewPeer.ID ||
+		group.ID != command.GroupID || proof.Kind != vectorPartitionShardSearchProofPrivateOwnerV1 || proof.ServingNode != command.NewPeer.ID ||
 		proof.LeaderNode == command.NewPeer.ID || !issuerMember ||
 		proof.GroupID != command.GroupID || proof.ReadIndex == 0 || proof.ReadTerm == 0 || proof.AppliedTerm == 0 ||
 		proof.AppliedIndex < proof.ReadIndex || proof.ReadySetDigest != request.ReadySetDigest ||

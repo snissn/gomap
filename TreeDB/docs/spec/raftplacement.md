@@ -401,7 +401,14 @@ and Raft application through that index. The leader proof retains its issuer;
 the response separately names the nonvoter serving node and uses a distinct
 private frame/proof kind that ordinary M5 dispatch/coordinators refuse. The
 shared bounded shard search body reuses the retained hosted domain searchers.
-Private qualification requires immutable requests with basic statistics. The
+Private qualification requires immutable requests with basic statistics. Each
+qualification reserves its outbound request/response budget before discovering
+the authenticated catalog leader and reading the exact marked BEGIN under a
+fresh catalog fence. Its issuer must belong to that operation's committed
+current roster, including earlier replacement members; removed startup peers
+are refused. This adds catalog discovery and one fenced catalog read per
+qualification, without a cached membership grant. Canonical BEGIN frame bytes
+count toward the caller's request byte limit. The
 client validates the requested partition set, HNSW routes, result ordering,
 finite unique neighbors, proof/counter accounting and request byte/work limits.
 Exact operation, ACTIVE, semantic tail/assets and current DB checks run before
