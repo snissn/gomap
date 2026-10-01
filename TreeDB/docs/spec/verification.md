@@ -810,6 +810,8 @@ Coverage:
     selection, and stop sampling after a sufficient append-only choice.
   - `TestAdaptiveMemtableMode_ExplicitModesDoNotObserve`: fixed modes never
     enable adaptive observation or change mode during rotation.
+  - `TestAdaptiveMemtableMode_StartsSamplingWithoutByteWarmup`: small flush
+    thresholds and adaptive aliases start observation before any decision.
 - `TreeDB/caching/memtable_adaptive_public_bench_test.go`:
   - `BenchmarkAdaptiveMVCCSnapshotCommandWAL`: public MVCC commits and early
     snapshots under relaxed/durable command-WAL profiles, with explicit-mode

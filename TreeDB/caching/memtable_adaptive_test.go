@@ -100,6 +100,11 @@ func TestAdaptiveMemtableMode_EarlyRotationKeepsSampling(t *testing.T) {
 					if db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 0 {
 						t.Fatal("clearing live counters restarted selected append-only sampling")
 					}
+					write(adaptiveMinWrites*5, 1)
+					rotate()
+					if db.memtableAdaptiveObserve.Load() {
+						t.Fatal("rotation after counter reset restarted selected append-only sampling")
+					}
 				}
 			})
 		}
@@ -126,6 +131,34 @@ func TestAdaptiveMemtableMode_ExplicitModesDoNotObserve(t *testing.T) {
 			}
 			if db.currentMemtableMode().String() != mode || db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 0 {
 				t.Fatal("explicit mode changed or enabled adaptive sampling")
+			}
+		})
+	}
+}
+
+func TestAdaptiveMemtableMode_StartsSamplingWithoutByteWarmup(t *testing.T) {
+	for _, mode := range []string{"adaptive", "auto", "adaptive:append_only", "adaptive:skiplist"} {
+		t.Run(mode, func(t *testing.T) {
+			db, err := Open(t.TempDir(), NewMockBackend(), Options{AllowUnsafe: true,
+				DisableWAL: true, FlushThreshold: 64 << 10, MemtableMode: mode, MemtableShards: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if db.memtableWarmupActive || !db.memtableAdaptiveObserve.Load() {
+				t.Fatal("adaptive sampling did not start independently of byte warmup")
+			}
+			if err := db.Set([]byte("key"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			db.mu.Lock()
+			err = db.rotateMemtableLocked(false)
+			db.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 1 {
+				t.Fatal("low-data rotation stopped sampling without byte warmup")
 			}
 		})
 	}
