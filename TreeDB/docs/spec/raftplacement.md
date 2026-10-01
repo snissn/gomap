@@ -409,8 +409,12 @@ historical bytes without another ANN execution or catalog entry. A receipt-only
 catalog producer gate serializes concurrent commands under existing bounded control
 admission and the earlier caller/query deadline; queued identical retries re-read
 owned authority before ANN. This is a per-coordinator serialization ceiling, not
-distributed exactly-once execution: a catalog leadership race may duplicate ANN,
-but a fresh same-query committed receipt wins without replacing its proof indexes.
+distributed exactly-once execution: catalog leadership changes may duplicate ANN
+across coordinators. Leadership-loss or ambiguous submission errors remain typed
+failures; an exact caller retry with a live context discovers the current leader
+and returns any matching committed historical receipt. Conflict reconciliation
+succeeds only after a fresh authoritative read by a still-authoritative producer;
+it never returns unfenced local state or replaces the owned proof indexes.
 The immutable result digest excludes operational counters, memory and timing. It is not a
 current readiness observation. A conflicting query or changed receipt refuses
 atomically. Generic advance cannot install receipts, including through raw FSM
