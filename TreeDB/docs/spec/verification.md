@@ -999,6 +999,13 @@ Coverage:
   keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
+- `TreeDB/mvcc/ownership_test.go` checks borrowed inspection without additional
+  Value calls or allocations, owned Entry independence through movement/Close,
+  owned payload transfer on both successor capabilities, borrowed iterator
+  poisoning at Close, eager storage/malformed-envelope errors, and public
+  ordinary/forced-pointer output survival after mutation, replacement,
+  checkpoint and DB Close. Close clears the decoded borrowed current/key buffer,
+  preserving raw Error forwarding, statistics and cleanup-error behavior.
 - `TreeDB/mvcc/exact_key_test.go` compares exact-key reads with an unchanged
   generic scan filtered after consuming owned entries: both directions, nonexact
   ceilings, seek, empty/binary keys, logical tombstones, empty values, bounds,
@@ -1071,6 +1078,23 @@ performance acceptance; M0 consumes the accepted #4862 matrix after exact
 runtime/harness/workload closure checks and publishes lane decisions separately.
 
 Measurement boundary:
+
+- `BenchmarkMVCCOwnership` measures public GetAt and exact-key iterator
+  inspection versus owned collection at widths 8/16/4096/32768 and depths
+  1/8/64, with ordinary and forced-pointer routing. Owned collection charges
+  its output slice and every Entry copy; borrowed inspection validates the same
+  metadata and payload endpoints before movement. Baselines without EntryView
+  use Entry, with dispatch once per opened iterator. Both iterator rows include
+  identical clock samples for first-entry latency; total ns/op includes complete
+  consumption and Close. Existing Filtered rows never call Entry and serve only
+  as traversal guards. Ordinary large values may use automatic value pointers.
+- Opt-in `TestMVCCRetainedOwnedOutputs` retains 4096 public GetAt results of
+  each width after store closure and two GCs, validates every output, and holds
+  them through heap measurement with KeepAlive. Use one selected subtest per
+  fresh process, identical fixture source on both binaries, and report raw
+  HeapAlloc/HeapObjects plus equal payload bytes. Size-class/header retention
+  can increase despite lower allocation traffic; no cap-based GC claim or noisy
+  CI heap threshold is made. This diagnostic does not establish throughput.
 
 - scan fixtures are built before `ResetTimer`; scan time and allocations cover
   iterator open, owned decode/copy, traversal, accounting, and close;
