@@ -780,9 +780,7 @@ func prepareExactKeyIteration(t testing.TB, depth int, source string) (*treedb.D
 
 func consumeExactKeyIteration(t testing.TB, store *Store, target []byte, readTimestamp uint64, depth int) (VersionIteratorStats, uint64) {
 	t.Helper()
-	// key+NUL is the immediate logical upper bound, including binary/NUL keys.
-	upper := append(append([]byte(nil), target...), 0)
-	it, err := store.IterateVersions(VersionIteratorOptions{LowerBound: target, UpperBound: upper, ReadTimestamp: readTimestamp})
+	it, err := store.IterateVersions(VersionIteratorOptions{ExactKey: target, ReadTimestamp: readTimestamp})
 	if err != nil {
 		t.Fatal(err)
 	}

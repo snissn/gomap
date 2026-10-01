@@ -12,6 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -633,6 +634,18 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	var queueRangeSpans [][]batch.DeleteRange
 	if s.view != nil && len(s.view.queueRangeSpans) == len(queue) {
 		queueRangeSpans = s.view.queueRangeSpans
+	}
+	// Frozen point roots preserve queue priority within each shard. Positional
+	// range spans belong to the full queue and must not follow a filtered queue.
+	// Missing shard metadata and global-root upgrade state retain the generic
+	// iterator root.
+	if _, exact := mvcckey.ExactVersionRange(start, end); exact && s.db != nil && s.view != nil &&
+		!s.view.queueHasRangeSpans && len(s.view.queueShardIDs) == len(s.view.queue) &&
+		len(s.rootPointShards) == len(s.db.mutableShards) &&
+		(s.publishedRoots == nil || len(s.publishedRoots.pointShards) == len(s.rootPointShards)) {
+		rootSnap = rootDomainSnapshotFromCachedSnapshot(s, start)
+		queue = rootSnap.immutables
+		queueRangeSpans = nil
 	}
 	sources := make([]merging.IteratorSource, 0, len(queue)+1)
 	prio := 0

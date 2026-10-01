@@ -161,6 +161,10 @@ GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkVersionIterationExa
 
 The smoke exercises depths 1/8/64 over 128 logical keys and eight populated
 shards, with non-exact timestamps and full open/seek/owned-consume/close cost.
+The M1 fixture selects `VersionIteratorOptions.ExactKey`; a before/after packet
+must declare the baseline's original logical `key` to `key+NUL` selection and
+retain both fixture identities. Results and ownership work are equivalent;
+canonical bounds and shard-local source opens are the intended difference.
 FrozenQueue and PublishedRoot exclude setup; Interleaved includes eight
 singleton replacements per completed read. `observe=false/true` isolates the
 existing default-disabled iterator diagnostic switch. Cached cut/source metrics

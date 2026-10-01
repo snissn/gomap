@@ -10305,6 +10305,7 @@ type memtableView struct {
 	queueShardIDs            []uint16
 	queueRanges              []keyRange
 	queueRangeSpans          [][]batch.DeleteRange
+	queueHasRangeSpans       bool // captured while cloning the immutable span layers
 	rootVersion              uint64
 	rootPointShards          []rootDomainSnapshot
 	rootSnapshotShards       []rootDomainSnapshot
@@ -11837,7 +11838,7 @@ func (db *DB) publishMemtablesLocked() {
 		view.queueRanges = qr
 	}
 	if len(db.queueRangeSpans) > 0 {
-		view.queueRangeSpans = cloneRangeSpanLayers(db.queueRangeSpans)
+		view.queueRangeSpans, view.queueHasRangeSpans = cloneRangeSpanLayers(db.queueRangeSpans)
 	}
 	view.rootVersion = db.rootDomainVersion.Add(1)
 	db.publishRootDomainSnapshotsLocked(view)
