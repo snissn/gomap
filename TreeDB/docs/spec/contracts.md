@@ -81,6 +81,59 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
   underlying error for `errors.Is`/`errors.As`. Present values are caller-owned
   copies.
 
+`Store.GetAt` prefers the optional `SeekGEVersionRange` capability. Its caller
+contract is one Store owning the reserved namespace, with no raw writes there;
+the codec alone does not authorize shared access. Cached reads use the shared
+writer gate only for one canonical version range with no retained range spans.
+Ordinary `SeekGE`, noncanonical bounds and range spans retain the exclusive
+gate. Any observed physical node tombstone releases the shared attempt's view
+and backend leases before a fresh exclusive attempt. MVCC tombstones are value
+records and do not require that fallback. Results own their bytes.
+
+For this capability, multi-record commits hold the existing Store floor lock
+exclusively through batch publication; reads, single-record commits and version
+snapshot acquisition share that lock. This prevents a reader from observing a
+cached batch between shard applications. Batch-only adapters retain their
+existing admission. A durable multi-record commit holds this fence during its
+WAL acknowledgement, so independent multi-record commits through one Store
+cannot form a concurrent durability group. Staging and validation precede the
+fence. Qualified pruning holds the same Store lock exclusively through physical
+pruning and lease cleanup.
+
+The shared source-selection contract depends on these existing invariants:
+
+- All physical versions of one logical key share a mutable shard. Writers
+  select the current table while holding that shard's mutex; rotation freezes
+  and replaces it under the same mutex. A previously admitted WAL/vlog writer
+  cannot insert into a frozen old generation after a newer generation commits.
+- A retained view keeps the captured mutable and immutable tables, their
+  borrowed arenas and published-root leases alive through materialization.
+  Frozen tables remain probed even after their queued units retire. Updates
+  allocate fresh value bytes or replacement nodes; they do not overwrite a
+  previously selected value. Canonical physical keys are at least 19 bytes,
+  excluding append-only's inline 8-byte keys in reusable entry backing.
+- Flush collection takes a global queue prefix, respecting lane and range
+  barriers. Within a canonical run, physical keys publish in sorted order;
+  queued sources retire only after all chunks succeed. Therefore a later
+  backend snapshot cannot expose a new lower-priority eligible version while
+  omitting its previously committed, earlier-sorting predecessor. Native
+  grouped-root publication supplies a stronger all-at-once boundary.
+- A selected old same-timestamp value can linearize before its concurrent
+  replacement. An eligible successor newly observed in the backend can
+  linearize when it became visible, because the source and publication order
+  above covers its earlier eligible predecessors. Versions above the read
+  timestamp fall outside the range.
+- Pruning cannot recreate keys at/below its floor: commits reject them. It
+  retains a live value anchor and deletes a tombstone anchor only after all
+  older versions. Qualified pruning also holds the Store lock exclusively:
+  ordering alone cannot exclude a retained old queue value combined with a
+  later backend snapshot after its winning tombstone anchor has been deleted.
+  Physical tombstone observations still take the exclusive retry.
+
+The shared gate remains held until owned-byte materialization and lease cleanup
+finish. Close, checkpoint, conditional/range writes and value-log maintenance
+keep their existing exclusive fences and lock order.
+
 Retained-version iteration and discard/pruning extend that opt-in owner:
 
 - Exactly one `Store` owns one open TreeDB handle. Creating multiple `Store`
@@ -107,12 +160,15 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   idempotent. TreeDB snapshots acquired before floor advancement keep their
   pinned physical view until close.
 - Floor advancement and pruning are serialized by one owner-local maintenance
-  lock. Pruning holds the floor lock only while it loads/re-syncs the captured
-  floor and pins its snapshot, then releases that lock before scanning or
-  publishing delete batches. Foreground reads and retained-version iterators
-  may therefore pin snapshots, and commits strictly above the captured floor
-  may publish, while pruning continues. The maintenance lock prevents the
-  captured floor from advancing underneath that prune.
+  lock. With the qualified successor capability, pruning holds the Store
+  floor lock exclusively through its scan, physical delete batches (including
+  durable acknowledgement), and iterator/snapshot cleanup. Foreground reads,
+  commits and snapshot acquisition wait; snapshots already pinned remain
+  readable. This full-prune foreground fence is a correctness-driven ceiling,
+  pending measurement before any narrower capture protocol. Adapters without
+  the capability retain the earlier release after floor/snapshot capture and
+  allow foreground operations during pruning. The maintenance lock prevents
+  the captured floor from advancing underneath either prune path.
 - Successful prune accounting satisfies `Visited = Retained + Pruned`.
   `Skipped` is the subset of `Retained` with timestamps above the captured
   floor, not a disjoint outcome counter. Partial-error statistics report only
@@ -246,8 +302,12 @@ Target versioned entry APIs return the visible value together with an
 - Cached batch `DeleteRange` uses a serialized materialization fallback and
   fails closed with `ErrBatchDeleteRangeTooLarge` if the bounded fallback cap is
   exceeded; the backend TreeDB path applies range deletes natively.
-- `Write` commits without strict sync guarantee.
-- `WriteSync` commits with sync guarantee only in durable mode.
+- `Write` follows the profile's ordinary ACK class: `command_wal_durable`
+  covers a stable recoverable command-WAL prefix; `command_wal_relaxed` drains
+  command-WAL buffers to the kernel and publishes without forcing fsync.
+- `WriteSync` forces the profile's explicit durability boundary, including
+  durable opt-up on a relaxed command-WAL profile. Neither command-WAL ACK
+  class requires a per-call backend flush or checkpoint.
 
 For WAL replay, commit-log batches are treated atomically at replay boundaries.
 

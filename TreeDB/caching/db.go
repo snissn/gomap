@@ -9349,6 +9349,10 @@ type DB struct {
 	iteratorSourcesMax                                           atomic.Uint64
 	iteratorQueueLenMax                                          atomic.Uint64
 	pointSuccessorCallsTotal                                     atomic.Uint64
+	pointSuccessorMVCCSharedTotal                                atomic.Uint64
+	pointSuccessorMVCCNoncanonicalFallbacksTotal                 atomic.Uint64
+	pointSuccessorMVCCRangeSpanFallbacksTotal                    atomic.Uint64
+	pointSuccessorMVCCPhysicalDeleteFallbacksTotal               atomic.Uint64
 	pointSuccessorHitsTotal                                      atomic.Uint64
 	pointSuccessorMutableHitsTotal                               atomic.Uint64
 	pointSuccessorQueueHitsTotal                                 atomic.Uint64
@@ -31639,6 +31643,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.iterator.sources_max"] = fmt.Sprintf("%d", db.iteratorSourcesMax.Load())
 	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())
 	stats["treedb.cache.point_successor.calls_total"] = fmt.Sprintf("%d", db.pointSuccessorCallsTotal.Load())
+	stats["treedb.cache.point_successor.mvcc_shared_total"] = fmt.Sprintf("%d", db.pointSuccessorMVCCSharedTotal.Load())
+	stats["treedb.cache.point_successor.mvcc_noncanonical_fallbacks_total"] = fmt.Sprintf("%d", db.pointSuccessorMVCCNoncanonicalFallbacksTotal.Load())
+	stats["treedb.cache.point_successor.mvcc_range_span_fallbacks_total"] = fmt.Sprintf("%d", db.pointSuccessorMVCCRangeSpanFallbacksTotal.Load())
+	stats["treedb.cache.point_successor.mvcc_physical_delete_fallbacks_total"] = fmt.Sprintf("%d", db.pointSuccessorMVCCPhysicalDeleteFallbacksTotal.Load())
 	stats["treedb.cache.point_successor.hits_total"] = fmt.Sprintf("%d", db.pointSuccessorHitsTotal.Load())
 	stats["treedb.cache.point_successor.mutable_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableHitsTotal.Load())
 	stats["treedb.cache.point_successor.queue_hits_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueHitsTotal.Load())

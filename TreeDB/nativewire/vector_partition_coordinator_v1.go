@@ -2104,6 +2104,11 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 			return ErrVectorPartitionCoordinatorMalformedResponse
 		}
 	}
+	return c.validateShardResponsePayloadV1(ctx, task, request, response)
+}
+
+// Share result accounting without granting either ordinary or private proof authority.
+func (c *VectorPartitionCoordinatorV1) validateShardResponsePayloadV1(ctx context.Context, task vectorPartitionCoordinatorTaskV1, request VectorPartitionShardSearchRequestV1, response VectorPartitionShardSearchResponseV1) error {
 	var timingSubtotal uint64
 	for _, component := range [...]uint64{
 		response.Timing.RouteOwnerNanos,

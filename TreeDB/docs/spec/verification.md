@@ -943,6 +943,27 @@ Coverage:
   - single and 32-key `CommitAt` versus an equivalent direct TreeDB batch;
   - `GetAt` versus an equivalent direct bounded seek at version depths 1, 8,
     and 64, including allocation counts.
+- `TreeDB/caching/point_successor_mvcc_test.go` deterministically pauses backend
+  snapshot acquisition to check concurrent readers/point writers, retained
+  exclusive fences, generic/fallback admission, same-timestamp replacement,
+  rotation and partial one-record backend publication. A WAL-admitted writer
+  paused before shard apply cannot insert into the rotated generation. A
+  physical-delete retry must acquire a fresh view. The raw-delete schedule
+  demonstrates why codec shape alone cannot qualify the shared capability.
+- `TreeDB/internal/memtable/mvcc_successor_alias_test.go` checks minimum and long
+  canonical key aliases across replacement/growth for every table mode; run it
+  under the race detector. The minimum key length excludes append-only inline
+  entry-slot key backing, which can be pooled during growth.
+- `TreeDB/mvcc/point_read_concurrency_test.go` checks Store group admission at
+  relaxed and durable public batch publication boundaries. Existing pruning,
+  floor, forced-pointer reopen and snapshot suites also exercise the capability.
+
+For lock attribution, observe `treedb.cache.point_successor.mvcc_shared_total`
+and the `mvcc_{noncanonical,range_span,physical_delete}_fallbacks_total` counters
+alongside existing mutable/queue/backend probe and hit counters. Mutex holder
+delay and block waiter delay require matched timed windows and sampling rates;
+neither is CPU time or a production latency acceptance measurement. Keep
+profile-option changes outside production benchmark acceptance binaries.
 
 The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
@@ -965,9 +986,10 @@ Invariants:
   floor, and removes a tombstone only after older versions cannot resurrect;
 - durable floor-first interruption can be reopened and resumed idempotently;
   pinned pre-prune snapshots remain readable under the race detector;
-- a prune paused after snapshot capture does not block foreground `GetAt`,
-  `CommitAt`, or `IterateVersions` acquisition, while a concurrent floor
-  advance remains serialized behind the prune.
+- a qualified prune paused after snapshot capture blocks foreground point
+  reads and snapshot acquisition until physical deletion completes; batch-only
+  adapters retain nonblocking reads/commits/snapshot capture. Floor advancement
+  stays serialized, and previously pinned snapshots stay readable.
 
 Coverage:
 
@@ -975,10 +997,12 @@ Coverage:
   keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
-- The same suite deterministically pauses prune iterator creation after its
-  snapshot is pinned, proves foreground point reads, commits, and retained-
-  version iterator acquisition complete, and then verifies both the old pinned
-  view and the newly committed version after pruning resumes.
+- The same suite pauses prune iterator creation after snapshot capture and
+  separately checks qualified foreground fencing and batch-only nonblocking
+  reads/commits/iterator acquisition. It verifies old pinned views, completed
+  pruning and subsequent durable commits. The cached successor suite reproduces
+  retained queue/live40 plus a later backend snapshot after logical tomb80
+  deletion, demonstrating why the Store prune fence is necessary.
 - `TreeDB/mvcc/mvcc_bench_test.go` compares all-version scans with physical
   encoded-key scans with the same owned key/value output across key counts
   `{64,256}`, version depths `{1,8,32}`, and both directions. Filtered scans use
@@ -3104,3 +3128,41 @@ genuine current-DB swap retirement. It grants no public readiness or promotion.
 Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
 background work and control polling; they do not measure per-node allocations
 or establish a throughput comparison.
+
+The private ANN qualification checkpoint maps to
+`TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated
+leader-issued ReadIndex plus separate target FSM/Raft applied progress, cold/cache
+parity with the original owner's unchanged leader-bound M5 shard route, one logical
+two-pack domain graph traversal and zero exact fallback, ordinary NONVOTER
+NOT_LEADER/no hits, exact BEGIN/wrong-node/unmarked refusal, warm-cache leader
+quorum loss, restart, missing hosted assets and genuine current-DB swap refusal.
+The legal ACTIVE invalidation producer remains blocked by pending preparation;
+no artificial ACTIVE transition is used as evidence.
+`TestReplacementPrivateANNFrameDiscriminatorsV1` checks distinct framing and
+ordinary dispatcher refusal; the real fixture also checks public coordinator
+proof refusal. `TestReplacementPrivateANNLateAdmissionClearsResponseV1` uses the
+existing deterministic service fixture to prove final admission discards all
+partials and releases its generation pin. `TestReplacementPrivateANNRequestAdmissionV1`
+checks pre-dial byte-exhaustion refusal, request-lease release after pre-catalog authentication refusal,
+and canceled admission through the existing shared transport fixture.
+`TestReplacementPrivateANNServiceRejectsMutableShapeV1` rejects non-basic or
+live/strict private requests before authority, proof or generation access.
+`TestReplacementPrivateANNReceiveValidationV1` sends authenticated direct frames
+without the exported client: shape and BEGIN-inclusive caller-budget refusals,
+exact augmented-budget handoff and configured frame bounds leave no result or
+transport lease. Its accepted boundary uses a refusal-only callback and claims
+no operation authority or ANN success.
+`TestReplacementPrivateANNResponseValidationV1` rejects missing or malformed
+partitions, exact fallback, incoherent counters/chunks, invalid neighbors,
+wrong proof identity and exceeded byte/work budgets through the shared coordinator
+payload validator. Its authenticated controlled-catalog cases accept a previous
+replacement issuer from the committed roster and reject removed startup peers,
+stale BEGIN, wrong phase, missing seed, missing authority and unanchored peers. These are transport
+and semantic controls, not fabricated owner promotion or additional quorum
+evidence. The admission test also rejects a private BEGIN frame that exceeds
+the caller's ordinary-body byte limit before authority lookup or dial.
+Coherent empty partitions remain legal; private requests
+require immutable identities and basic statistics. These checks grant no public
+readiness or promotion. Per-request time/MemStats diagnostics include the caller, all five
+Raft nodes, TLS, authority checks, ANN and background work; they are individual
+observations, not server allocations, isolated ANN cost or a throughput comparison.

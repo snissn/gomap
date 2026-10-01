@@ -139,6 +139,61 @@ func BenchmarkCommitAtCommandWALRelaxedSingleton(b *testing.B) {
 	}
 }
 
+// The batch control hides optional point capabilities while using the same
+// public DB, profile, values and durable barrier. Counters exclude cleanup.
+func BenchmarkCommitAtCommandWALDurableSingleton(b *testing.B) {
+	for _, shape := range []string{"Inline", "Pointer", "Oversize"} {
+		for _, route := range []string{"Point", "Batch"} {
+			b.Run(shape+"/"+route, func(b *testing.B) {
+				opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, b.TempDir())
+				opts.DisableSideStores = true
+				opts.BackgroundCheckpointInterval = -1
+				opts.FlushThreshold = 64 << 20
+				opts.MemtableShards = 1
+				opts.ValueLog.PointerThreshold = 1 << 20
+				value := make([]byte, 512)
+				if shape != "Inline" {
+					opts.ValueLog.PointerThreshold = 1
+					opts.ValueLog.ForcePointers = true
+					value = make([]byte, 2048)
+				}
+				if shape == "Oversize" {
+					opts.WALMaxSegmentBytes = 1024
+				}
+				db, err := treedb.Open(opts)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() { _ = db.Close() })
+				store := New(db)
+				if route == "Batch" {
+					store = newStore(struct{ treeDB }{db})
+				}
+				keys := [][]byte{[]byte("dgraph-posting-0"), []byte("dgraph-posting-1"), []byte("dgraph-posting-2"), []byte("dgraph-posting-3")}
+				before := db.Stats()
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if err := store.CommitAt(uint64(i+1), []Mutation{{Key: keys[i%len(keys)], Value: value}}, CommitDurable); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				after := db.Stats()
+				for metric, stat := range map[string]string{
+					"point_appends/op": "treedb.command_wal.append.point.count_total",
+					"batch_writes/op":  "treedb.public.batch.write_sync.calls_total",
+					"wal_syncs/op":     "treedb.command_wal.file_sync.calls_total",
+					"vlog_syncs/op":    "treedb.cache.value_log.file_sync.calls_total",
+					"checkpoints/op":   "treedb.public.checkpoint.calls_total",
+				} {
+					b.ReportMetric(benchmarkStatDelta(b, before, after, stat)/float64(b.N), metric)
+				}
+			})
+		}
+	}
+}
+
 func benchmarkStatDelta(b *testing.B, before, after map[string]string, key string) float64 {
 	b.Helper()
 	parse := func(stats map[string]string) uint64 {
@@ -309,6 +364,10 @@ func BenchmarkCommitAtGetAtInterleaved(b *testing.B) {
 	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.queue_len_max", "iterator_queue_len_max")
 	reportMVCCBenchGauge(b, after, "treedb.cache.queue_len", "iterator_queue_len_end")
 	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.calls_total", "point_successor_calls/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mvcc_shared_total", "point_successor_mvcc_shared/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mvcc_noncanonical_fallbacks_total", "point_successor_mvcc_noncanonical_fallbacks/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mvcc_range_span_fallbacks_total", "point_successor_mvcc_range_span_fallbacks/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mvcc_physical_delete_fallbacks_total", "point_successor_mvcc_physical_delete_fallbacks/op")
 	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.sources_total", "point_successor_sources/op")
 	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mutable_probes_total", "point_successor_mutable_probes/op")
 	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.backend_probes_total", "point_successor_backend_probes/op")

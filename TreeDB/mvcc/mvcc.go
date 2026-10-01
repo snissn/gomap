@@ -19,10 +19,10 @@ import (
 type CommitMode uint8
 
 const (
-	// CommitRelaxed publishes one atomic TreeDB batch with Batch.Write. It does
-	// not promise an fsync boundary and may be lost after a crash.
+	// CommitRelaxed publishes atomically using the profile's ordinary ACK class.
+	// Relaxed profiles do not promise an fsync boundary.
 	CommitRelaxed CommitMode = iota
-	// CommitDurable publishes one atomic batch with Batch.WriteSync. Production
+	// CommitDurable publishes atomically with SetSync or Batch.WriteSync. Production
 	// profiles support this explicit durability opt-up even when ordinary ACKs
 	// are relaxed.
 	CommitDurable
@@ -91,8 +91,19 @@ type pointWriter interface {
 	Set(key, value []byte) error
 }
 
+// Keep sync capability independent so Set-only adapters retain their relaxed
+// point route and batch-only adapters retain the existing durable contract.
+type pointSyncWriter interface {
+	SetSync(key, value []byte) error
+}
+
 type pointSuccessorDB interface {
 	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
+}
+
+// Store ownership, rather than physical key shape alone, qualifies this seam.
+type versionRangeSuccessorDB interface {
+	SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error)
 }
 
 // Store owns the external-version namespace of one TreeDB handle.
@@ -103,9 +114,10 @@ type Store struct {
 	// maintenanceMu then mu; foreground reads and commits never take it.
 	maintenanceMu sync.Mutex
 
-	// mu guards the discard-floor cache and serializes its publication against
-	// commits and snapshot acquisition. Reads release it as soon as their
-	// point-in-time iterator is pinned.
+	// mu guards the discard floor and fences multi-record commit application
+	// against qualified successor reads and snapshot acquisition. Single-record
+	// commits and reads share it; groups hold it exclusively through publication,
+	// and qualified pruning holds it through physical deletion and lease cleanup.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool
@@ -145,9 +157,9 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 }
 
 // CommitGroupAt validates and atomically publishes timestamped mutation groups.
-// A single relaxed physical record uses TreeDB's equivalent point-write path
-// when the handle supports it; durable and larger publications use exactly one
-// TreeDB Batch.Write or Batch.WriteSync call. Every group is validated before
+// A single physical record uses TreeDB's equivalent Set or SetSync path when
+// the handle supports the selected mode; larger publications and batch-only
+// handles use one Batch.Write or Batch.WriteSync call. Every group is validated before
 // storage is accessed: timestamps must be non-zero and
 // above the discard floor, keys must fit the MVCC codec, and no physical MVCC
 // key may occur twice. Thus the same logical key at distinct timestamps is
@@ -219,10 +231,21 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 			staged = append(staged, entry)
 		}
 	}
-	if err := s.lockDiscardFloorRead(); err != nil {
-		return err
+	if _, qualified := s.db.(versionRangeSuccessorDB); qualified && len(staged) > 1 {
+		// Cached batches apply across shard tables while holding a shared writer
+		// gate. The Store-owned read capability must not expose that prefix.
+		s.mu.Lock()
+		if err := s.loadDiscardFloorLocked(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		defer s.mu.Unlock()
+	} else {
+		if err := s.lockDiscardFloorRead(); err != nil {
+			return err
+		}
+		defer s.mu.RUnlock()
 	}
-	defer s.mu.RUnlock()
 	floor := s.discardFloor
 	for _, entry := range staged {
 		if entry.timestamp <= floor {
@@ -232,6 +255,14 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	if mode == CommitRelaxed && len(staged) == 1 {
 		if writer, ok := s.db.(pointWriter); ok {
 			if err := writer.Set(staged[0].physical, staged[0].record); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
+	if mode == CommitDurable && len(staged) == 1 {
+		if writer, ok := s.db.(pointSyncWriter); ok {
+			if err := writer.SetSync(staged[0].physical, staged[0].record); err != nil {
 				return storageError("commit point", err)
 			}
 			return nil
@@ -287,8 +318,14 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		s.mu.RUnlock()
 		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
 	}
-	if seeker, ok := s.db.(pointSuccessorDB); ok {
-		physical, record, found, seekErr := seeker.SeekGE(lower, upper)
+	var seek func([]byte, []byte) ([]byte, []byte, bool, error)
+	if seeker, ok := s.db.(versionRangeSuccessorDB); ok {
+		seek = seeker.SeekGEVersionRange
+	} else if seeker, ok := s.db.(pointSuccessorDB); ok {
+		seek = seeker.SeekGE
+	}
+	if seek != nil {
+		physical, record, found, seekErr := seek(lower, upper)
 		s.mu.RUnlock()
 		if seekErr != nil {
 			return Result{}, storageError("seek version", seekErr)

@@ -133,6 +133,17 @@ single-row profiling run, restrict `-bench` to the desired profile/mode and add
 The text output reports `B/op`, `allocs/op`, `writes/s`, sampling/selection and
 command-WAL counters. These Go test profiles are not benchprof inputs.
 
+The standalone durable MVCC singleton route comparison is:
+
+```sh
+GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCommitAtCommandWALDurableSingleton$' -benchmem -benchtime=1000x -count=5
+```
+
+It compares public point and batch routes for inline, pointer and oversized
+values, reporting `B/op`, `allocs/op`, frame/sync/checkpoint counters. Output is
+Go benchmark text; optional Go test profiles are not benchprof inputs. Run
+matched fresh-process controls on the same host for performance acceptance.
+
 If `unified-bench` profile naming, profile-dir defaults, or benchmark test names
 change, update `benchprof` in the same PR:
 

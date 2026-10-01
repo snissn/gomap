@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -65,6 +66,10 @@ func (e *replacementOwnerEndpointV1) Close() error {
 }
 
 func (r *FixedPeerTCPRuntimeV1) prepareReplacementOwnerEndpointV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1) error {
+	encoded, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err != nil {
+		return err
+	}
 	d := r.localDataV1(command.GroupID)
 	if _, _, err := r.replacementOwnerCatalogV1(ctx, command, d); err != nil {
 		if d != nil && ctx.Err() == nil {
@@ -128,6 +133,9 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementOwnerEndpointV1(ctx context.Co
 	if err != nil {
 		return err
 	}
+	service.privateOwnerReadBarrier = func(ctx context.Context) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, error) {
+		return r.replacementOwnerReadBarrierV1(ctx, command, d)
+	}
 	service.postSearchGuard = func() error {
 		if !d.fsm.HasCurrentDBV1(database) {
 			return ErrFixedPeerVectorProofStaleV1
@@ -160,7 +168,12 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementOwnerEndpointV1(ctx context.Co
 	endpoint := &replacementOwnerEndpointV1{listener: listener, vectorPartitionShardConnectionsV1: vectorPartitionShardConnectionsV1{conns: make(map[net.Conn]struct{})}}
 	slot.ownerEndpoint = endpoint
 	server := VectorPartitionShardSearchTCPServerV1{
-		PeerTransport: r.PeerTransportV1(), PeerGroupID: command.GroupID, Service: service, preparedOwnerAdmission: admission,
+		PeerTransport: r.PeerTransportV1(), PeerGroupID: command.GroupID, Service: service, preparedOwnerAdmission: admission, privateOwnerSearch: func(ctx context.Context, begin []byte, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			if !bytes.Equal(begin, encoded) {
+				return VectorPartitionShardSearchResponseV1{}, raftplacement.ErrCatalogMetaConflict
+			}
+			return service.searchPrivateOwnerV1(ctx, request)
+		},
 		EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(command.GroupID), InstanceIdentity: r.client.digest},
 		MaxFrame:         uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes), MaxResponseFrame: responseBound, InitialTimeout: r.config.RequestTimeout,
 	}
