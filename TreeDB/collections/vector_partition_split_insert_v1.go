@@ -432,7 +432,7 @@ func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx 
 	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	if c.meta.Options.DocumentFormat != DocumentFormatJSON || !columnStoreWriteEnabled(c.meta) {
+	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatJSON || !columnStoreWriteEnabled(c.meta) {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked([][]byte{v.ID}, [][]byte{v.Document}, false, nil, intent, insertBatchExecutionOptions{returnResultIDs: true, splitInsert: publication})

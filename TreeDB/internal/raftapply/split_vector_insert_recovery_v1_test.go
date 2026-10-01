@@ -231,7 +231,7 @@ func newSplitApplyRecoveryFixtureV1(t *testing.T) (string, *backenddb.DB, *colle
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {
 		t.Fatal(err)
 	}
 	// Direct construction is trusted fixture genesis. The opaque command-WAL

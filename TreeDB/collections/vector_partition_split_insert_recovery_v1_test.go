@@ -29,8 +29,12 @@ func splitCollectionRecoveryValueV1(m VectorPartitionManifestV1) commitlog.Split
 		SourceTerm: 3, SourceIndex: 11}
 }
 
-func splitCollectionRecoveryAppendV1(t *testing.T, database *backenddb.DB, v commitlog.SplitVectorInsertV1) commandwalapply.Handle {
+func splitCollectionRecoveryAppendV1(t *testing.T, database *backenddb.DB, c *Collection, v commitlog.SplitVectorInsertV1) commandwalapply.Handle {
 	t.Helper()
+	// Supported fixture admission must succeed before a durable frame is appended.
+	if err := c.PreflightVectorPartitionSplitInsertV1(t.Context(), v); err != nil {
+		t.Fatalf("supported split source preflight: %v", err)
+	}
 	raw, err := commitlog.EncodeSplitVectorInsertPayloadV1(v)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +92,7 @@ func TestSplitVectorInsertSourcePublicationProcessExitV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		v := splitCollectionRecoveryValueV1(m)
-		handle := splitCollectionRecoveryAppendV1(t, database, v)
+		handle := splitCollectionRecoveryAppendV1(t, database, c, v)
 		vectorPartitionLiveReplayAfterAcceptedHookV1.Lock()
 		vectorPartitionLiveReplayAfterAcceptedHookV1.fn = func() { os.Exit(23) }
 		vectorPartitionLiveReplayAfterAcceptedHookV1.Unlock()
@@ -139,7 +143,7 @@ func TestSplitVectorInsertSourcePublicationProcessExitV1(t *testing.T) {
 		t.Fatalf("source graph revision=%d want 1", revision)
 	}
 	// Reapplying the exact original source frame consumes WAL coverage only.
-	handle := splitCollectionRecoveryAppendV1(t, reopened, v)
+	handle := splitCollectionRecoveryAppendV1(t, reopened, c, v)
 	if err := c.InsertVectorPartitionSplitSourceWithCommandWALIntentV1(t.Context(), v, handle.CommandWALIntent()); err != nil {
 		commandwalapply.Abort(reopened, handle)
 		t.Fatal(err)
@@ -171,7 +175,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			v := splitCollectionRecoveryValueV1(m)
-			handle := splitCollectionRecoveryAppendV1(t, database, v)
+			handle := splitCollectionRecoveryAppendV1(t, database, c, v)
 			if err := c.InsertVectorPartitionSplitSourceWithCommandWALIntentV1(t.Context(), v, handle.CommandWALIntent()); err != nil {
 				commandwalapply.Abort(database, handle)
 				t.Fatal(err)
@@ -277,7 +281,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 			if reopened.State().AppliedCommandLSN != applied {
 				t.Fatal("torn frame advanced applied coverage")
 			}
-			retry := splitCollectionRecoveryAppendV1(t, reopened, v)
+			retry := splitCollectionRecoveryAppendV1(t, reopened, c, v)
 			if retry.LSN() != applied+1 {
 				t.Fatalf("retry LSN=%d want %d", retry.LSN(), applied+1)
 			}

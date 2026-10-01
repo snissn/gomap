@@ -223,6 +223,8 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 	go func() { _, e := client.VectorInsertV1(callCtx, request); insertDone <- e }()
 	select {
 	case <-arrived:
+	case err := <-insertDone:
+		t.Fatalf("source producer completed before projection arrived: %v", err)
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
