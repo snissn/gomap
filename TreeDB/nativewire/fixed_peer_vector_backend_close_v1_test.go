@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -44,6 +45,17 @@ func TestMutableVectorBackendLifecycleReadCloseV1(t *testing.T) {
 	for i := range configs {
 		configs[i].ClusterID = "mutable-backend-close"
 		configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		validated, _, err := validateFixedPeerConfigV1(configs[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(validated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := preparePeerStorageV1(validated, raw); err != nil {
+			t.Fatal(err)
+		}
 		group := "group-b"
 		if configs[i].NodeID == "ingress" {
 			group = "group-a"
