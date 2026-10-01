@@ -365,8 +365,20 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncFailurePoisonsLaterAppends(t 
 	if !errors.Is(err, cutErr) {
 		t.Fatalf("SetSync error=%v, want %v", err, cutErr)
 	}
-	if err := db.SetSync([]byte("after-poison"), []byte("value")); !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("SetSync after solo sync failure error=%v, want ErrRecoveryRequired", err)
+	for _, tc := range []struct {
+		name  string
+		value []byte
+	}{
+		{name: "point", value: []byte("value")},
+		{name: "oversize-batch", value: make([]byte, db.commandWALPointMaxPayloadBytes+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := db.Stats()
+			if err := db.SetSync([]byte("after-poison"), tc.value); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("SetSync after solo sync failure error=%v, want ErrRecoveryRequired", err)
+			}
+			requirePublicStatDelta(t, before, db.Stats(), "treedb.command_wal.append.count_total", 0)
+		})
 	}
 	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total"); got != 0 {
 		t.Fatalf("solo durable bypasses=%d, want 0 after failed sync", got)

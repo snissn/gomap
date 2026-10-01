@@ -163,6 +163,7 @@ type DB struct {
 	writePath                            writePathInfo
 	lifecycleMu                          sync.RWMutex
 	commandWALCached                     bool
+	commandWALPointMaxPayloadBytes       int64
 	commandWALPendingMu                  sync.Mutex
 	commandWALPublicPublishMu            sync.Mutex
 	commandWALPublicOperationGate        sync.RWMutex
@@ -1184,6 +1185,13 @@ func openResolved(opts Options) (*DB, error) {
 	cached.SetTemplateStore(templateStore)
 	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
+		// ponytail: reuse the existing bounded logical-payload budget. Larger
+		// point values use the batch's compact persistent-value references.
+		out.commandWALPointMaxPayloadBytes = db.RawKVCommandWALMaterializedRIDMaxFrameBytes
+		if opts.WALMaxSegmentBytes > 0 && opts.WALMaxSegmentBytes < out.commandWALPointMaxPayloadBytes {
+			out.commandWALPointMaxPayloadBytes = opts.WALMaxSegmentBytes
+		}
+		out.commandWALPointMaxPayloadBytes -= db.RawKVCommandWALMaterializedRIDFrameReserve
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
@@ -2044,6 +2052,19 @@ func (db *DB) SetSync(key, value []byte) error {
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
+	}
+	// Select the route before appending any value/WAL bytes. Never retry an
+	// ambiguous point error. Construct the fallback under the admission lock
+	// so batch creation preserves the same poison/closed error as the point route.
+	if db.commandWALCached && int64(len(key)) > db.commandWALPointMaxPayloadBytes-int64(len(value)) {
+		batch := newCommandWALPublicBatch(db, db.cached.NewBatchWithSize(1), 1)
+		// WriteSync takes its own admission lock. Release this read lock first
+		// so a pending Close writer cannot deadlock a nested read acquisition.
+		db.lifecycleMu.RUnlock()
+		if err := batch.Set(key, value); err != nil {
+			return errors.Join(err, batch.Close())
+		}
+		return errors.Join(batch.WriteSync(), batch.Close())
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {

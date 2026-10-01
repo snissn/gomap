@@ -295,8 +295,12 @@ Target versioned entry APIs return the visible value together with an
 - Cached batch `DeleteRange` uses a serialized materialization fallback and
   fails closed with `ErrBatchDeleteRangeTooLarge` if the bounded fallback cap is
   exceeded; the backend TreeDB path applies range deletes natively.
-- `Write` commits without strict sync guarantee.
-- `WriteSync` commits with sync guarantee only in durable mode.
+- `Write` follows the profile's ordinary ACK class: `command_wal_durable`
+  covers a stable recoverable command-WAL prefix; `command_wal_relaxed` drains
+  command-WAL buffers to the kernel and publishes without forcing fsync.
+- `WriteSync` forces the profile's explicit durability boundary, including
+  durable opt-up on a relaxed command-WAL profile. Neither command-WAL ACK
+  class requires a per-call backend flush or checkpoint.
 
 For WAL replay, commit-log batches are treated atomically at replay boundaries.
 

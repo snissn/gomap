@@ -5863,16 +5863,21 @@ func TestPublicCommandWALCloseRejectsLateSetSyncWithErrClosed(t *testing.T) {
 		t.Fatalf("Set(seed): %v", err)
 	}
 
-	started := make(chan struct{})
-	done := make(chan error, 1)
+	values := [][]byte{[]byte("v2"), make([]byte, db.commandWALPointMaxPayloadBytes+1)}
+	started := make(chan struct{}, len(values))
+	done := make(chan error, len(values))
 	var once sync.Once
 	testDuringPublicCloseAfterCheckpoint = func() {
 		once.Do(func() {
-			go func() {
-				close(started)
-				done <- db.SetSync([]byte("late-shutdown"), []byte("v2"))
-			}()
-			<-started
+			for _, value := range values {
+				go func() {
+					started <- struct{}{}
+					done <- db.SetSync([]byte("late-shutdown"), value)
+				}()
+			}
+			for range values {
+				<-started
+			}
 			select {
 			case err := <-done:
 				t.Fatalf("late SetSync completed before Close released lifecycle lock: %v", err)
@@ -5885,12 +5890,14 @@ func TestPublicCommandWALCloseRejectsLateSetSyncWithErrClosed(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	err = <-done
-	if !errors.Is(err, ErrClosed) {
-		t.Fatalf("late SetSync error=%v, want ErrClosed", err)
-	}
-	if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
-		t.Fatalf("late SetSync leaked command journal shutdown error: %v", err)
+	for range values {
+		err = <-done
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("late SetSync error=%v, want ErrClosed", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
+			t.Fatalf("late SetSync leaked command journal shutdown error: %v", err)
+		}
 	}
 }
 
