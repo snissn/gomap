@@ -585,7 +585,8 @@ receipts, source/input pins and sampling-rate/boundary metadata.
 After harness review/landing, exact-source freeze and runner admission, use
 a reviewed retained-input descriptor and its independently pinned SHA256.
 The descriptor must retain the accepted M3/source/DB provenance; the checksum
-does not replace those guards. Create a fresh receipt directory and run once
+does not replace those guards. Use absolute input/receipt paths, create a fresh
+receipt directory and run once
 inside the admitted 8 GiB, zero-swap scope with the pinned offline toolchain:
 
 ```sh
