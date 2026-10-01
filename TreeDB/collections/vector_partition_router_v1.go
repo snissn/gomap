@@ -1012,10 +1012,21 @@ func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context,
 // pointer. Replicated lifecycle authority remains responsible for admitting
 // that generation before the caller performs routing or shard dispatch.
 func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx context.Context, index string, generation uint64) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	return c.openPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, index, generation, false)
+}
+
+// OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1 opens
+// the exact replicated generation using its existing durable live binding. It
+// neither consults standalone ACTIVE nor publishes a binding or rebuilds.
+func (c *Collection) OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(ctx context.Context, index string, generation uint64) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	return c.openPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, index, generation, true)
+}
+
+func (c *Collection) openPreparedVectorPartitionRouterForGenerationWithContextV1(ctx context.Context, index string, generation uint64, replicatedLive bool) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	if generation == 0 {
 		return nil, VectorPartitionRouterOpenStatusV1{FailureReason: "collections: invalid vector partition router generation"}, errors.New("collections: invalid vector partition router generation")
 	}
-	return c.openVectorPartitionRouterWithContextV1(ctx, index, false, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, replicatedLive, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
 		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
 		if err != nil {
 			return VectorPartitionManifestV1{}, err
@@ -1024,7 +1035,11 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1
 		if !present || !ok || entry.Manifest == nil || entry.Scope != nil || entry.Deleting || entry.Manifest.State != "ready" {
 			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
 		}
-		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		manifest, err := vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		if err == nil && replicatedLive {
+			err = c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest)
+		}
+		return manifest, err
 	}, false)
 }
 

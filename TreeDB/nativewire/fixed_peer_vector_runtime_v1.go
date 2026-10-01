@@ -92,6 +92,20 @@ type fixedPeerVectorCoordinatorRouterSourceV1 struct {
 	CollectionVectorPartitionCoordinatorRouterSourceV1
 }
 
+func (s fixedPeerVectorCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
+	if s.Collection == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	router, _, err := s.Collection.OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(ctx, index, generation)
+	if err != nil {
+		return nil, err
+	}
+	if router == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	return router, nil
+}
+
 func (s fixedPeerVectorCoordinatorRouterSourceV1) acquireVectorPartitionCoordinatorReplicatedLivePinV1(ctx context.Context, manifest collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
 	if s.Collection == nil {
 		return nil, ErrVectorPartitionCoordinatorUnavailable
@@ -428,8 +442,7 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 	if err != nil {
 		return nil, err
 	}
-	owners := fixedPeerVectorOwnerGroupsV1(parent.config.Vector.Placement)
-	if collection != nil && slices.Contains(owners, group) {
+	if collection != nil {
 		// Replicated fixed-peer startup is validation-only: publishing a missing
 		// binding here would create local command-WAL coverage outside Raft. The
 		// prepared binding must already be durable before this process advertises

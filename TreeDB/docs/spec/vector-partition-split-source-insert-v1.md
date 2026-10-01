@@ -78,3 +78,5 @@ and reopen are not SIGKILL or power-loss certification; command-WAL truncation
 and power-loss evidence and broader #4810 throughput/backlog/capacity acceptance
 remain separate required work. No runtime acceptance is claimed by this source
 checkpoint.
+
+Replicated mutable source/router startup also requires the exact durable live binding already to exist. Startup restores and validates it without publishing missing binding coverage outside Raft; a ready TVIS with no durable binding is refused. Ordinary prepared-generation opens remain strict.

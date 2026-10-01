@@ -81,6 +81,10 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if database.State().AppliedCommandLSN != beforeMissingLSN {
 		t.Fatal("missing-binding refusal changed WAL coverage")
 	}
+	if router, _, err := collection.OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
+		_ = router.Close()
+		t.Fatal("replicated live router admitted a missing binding")
+	}
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
@@ -104,6 +108,10 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if got := reopened.registeredVectorIndex(def.Name); got != nil {
 		t.Fatalf("collection reopen eagerly registered carrier=%p", got)
 	}
+	if router, _, err := reopened.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
+		_ = router.Close()
+		t.Fatal("ordinary router open admitted an advanced source")
+	}
 	beforeLSN := reopenedDB.State().AppliedCommandLSN
 	rebuilds := 0
 	restoreHook := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { rebuilds++ })
@@ -121,6 +129,13 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if rebuilds != 0 {
 		t.Fatalf("read-only replicated live carrier restore rebuilt graph %d times", rebuilds)
 	}
+	router, _, err := reopened.OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
 	pin, err := reopened.AcquireVectorPartitionLiveSearchPinV1(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -134,12 +149,20 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if _, err := reopened.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest); err == nil {
 		t.Fatal("replicated live open admitted stale document coverage")
 	}
+	if router, _, err := reopened.OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
+		_ = router.Close()
+		t.Fatal("replicated live router admitted stale document coverage")
+	}
 	carrier.mu.Lock()
 	carrier.partitionLive.coverage = oldCoverage
 	carrier.partitionLive.source.Checksum ^= 1
 	carrier.mu.Unlock()
 	if _, err := reopened.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(t.Context(), manifest); err == nil {
 		t.Fatal("replicated live open admitted a mismatched immutable source")
+	}
+	if router, _, err := reopened.OpenPreparedVectorPartitionRouterForReplicatedLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
+		_ = router.Close()
+		t.Fatal("replicated live router admitted a mismatched immutable source")
 	}
 	carrier.mu.Lock()
 	carrier.partitionLive.source = oldSource

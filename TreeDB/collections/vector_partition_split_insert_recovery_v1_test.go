@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -307,8 +308,14 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 // the whole SYSTEM tree; resolving them back inline cannot fit a leaf.
 func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
-	dir, database, collection, _, _ := newVectorPartitionLiveProductionFixtureV1(t)
-	t.Cleanup(func() { _ = database.Close() })
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+	collection := &Collection{db: database}
 	publication := &splitInsertPublicationV1{key: "test:oversized-system-value", next: bytes.Repeat([]byte("x"), 8192)}
 	defer func() { database.ReleaseValueLogValues(publication.appendedPtrs) }()
 	snap := database.AcquireSnapshot()
@@ -356,11 +363,14 @@ func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testin
 	if err := snap.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Close(); err != nil {
+	if err := closeDB(); err != nil {
 		t.Fatal(err)
 	}
-	reopened := openCollectionCommandWALDB(t, dir)
-	defer reopened.Close()
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopenedCleanup() }()
 	snap = reopened.AcquireSnapshot()
 	if snap == nil {
 		t.Fatal("missing reopened snapshot")

@@ -24913,14 +24913,14 @@ func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) 
 	if !ok || state.SystemRootPageID == 0 {
 		return nil, false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte(key))
+	value, err := snap.GetAtRoot(state.SystemRootPageID, []byte(key))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	return bytes.Clone(entry.Value), true, nil
+	return value, true, nil
 }
 
 type systemTargetEntry struct {
