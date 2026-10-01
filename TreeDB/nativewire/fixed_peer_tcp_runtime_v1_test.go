@@ -1346,7 +1346,7 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		select {
 		case err := <-done:
 			var exit *exec.ExitError
-			if !errors.As(err, &exit) {
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 				t.Fatalf("out-of-order command exit: %v", err)
 			}
 		case <-time.After(8 * time.Second):
@@ -1355,7 +1355,7 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 			t.Fatal("out-of-order command child required forced cleanup")
 		}
 		raw, err := os.ReadFile(process.log.Name())
-		if err != nil || !bytes.Contains(raw, []byte("invalid trusted cost observation command")) {
+		if err != nil || !bytes.Contains(raw, []byte("invalid trusted cost observation command")) || bytes.Contains(raw, []byte("WARNING: DATA RACE")) {
 			t.Fatalf("wrong child rejection: err=%v log=%s", err, raw)
 		}
 		for _, path := range []string{ack, profile} {
