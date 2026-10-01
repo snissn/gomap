@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -869,7 +873,11 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixedPeerActiveInvalidationChildV1(runtime)
-	_, _ = io.Copy(io.Discard, os.Stdin)
+	if os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" || os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1") == "1" {
+		fixedPeerCostChildV1(t, runtime)
+	} else {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -929,7 +937,7 @@ func TestFixedPeerTCPRuntimeConfigFileV1(t *testing.T) {
 
 type fixedPeerTestProcessV1 struct {
 	command *exec.Cmd
-	input   io.Closer
+	input   io.WriteCloser
 	log     *os.File
 	stopped bool
 }
@@ -1059,4 +1067,374 @@ func fixedPeerCreateEntryV1(t testing.TB, name string, version uint64) []byte {
 		t.Fatal(err)
 	}
 	return entry
+}
+
+// These trusted test-pipe commands never enter the serving protocol. A single
+// setup/before/after sequence is allowed, and EOF retains the normal drain path.
+type fixedPeerCostCommandV1 struct {
+	Action, Ack, Profile string
+}
+
+type fixedPeerCostBoundaryV1 struct {
+	SampleUnixNano                        int64
+	MemoryProfileRate                     int
+	RequestFrameBytes, ResponseFrameBytes uint64
+}
+
+type fixedPeerCostConnV1 struct {
+	net.Conn
+	written, read *atomic.Uint64
+}
+
+func (c *fixedPeerCostConnV1) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.written.Add(uint64(n))
+	return n, err
+}
+
+func (c *fixedPeerCostConnV1) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.read.Add(uint64(n))
+	return n, err
+}
+
+func fixedPeerCostProfileV1(path string) error {
+	// Match the existing interval allocation-profile flush idiom. These GCs and
+	// writes are outside search timers/counter boundaries. Profiles are sampled
+	// cumulative snapshots; subtraction is statistical, not exact stage cost.
+	runtime.GC()
+	runtime.GC()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return errors.Join(pprof.Lookup("allocs").WriteTo(file, 0), file.Close())
+}
+
+func fixedPeerCostInstallFramesV1(r *FixedPeerTCPRuntimeV1, written, read *atomic.Uint64) error {
+	if r.config.NodeID != "ingress" {
+		return nil
+	}
+	if r.vector == nil {
+		return errors.New("cost frame observer requires ingress vector runtime")
+	}
+	r.vector.initMu.Lock()
+	topology := r.vector.topology
+	r.vector.initMu.Unlock()
+	if topology == nil || topology.dispatcher == nil {
+		return errors.New("cost frame observer requires warmed ingress topology")
+	}
+	d := topology.dispatcher
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.pools) != 0 || d.closed {
+		return errors.New("cost frame observer must precede every shard connection")
+	}
+	dial := d.dial
+	d.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &fixedPeerCostConnV1{Conn: conn, written: written, read: read}, nil
+	}
+	return nil
+}
+
+func fixedPeerCostChildV1(t *testing.T, r *FixedPeerTCPRuntimeV1) {
+	t.Helper()
+	var written, read atomic.Uint64
+	decoder := json.NewDecoder(io.LimitReader(os.Stdin, 16<<10))
+	for _, expected := range []string{"setup", "before", "after"} {
+		var command fixedPeerCostCommandV1
+		if err := decoder.Decode(&command); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatal(err)
+		}
+		if command.Action != expected || !filepath.IsAbs(command.Ack) ||
+			(expected != "setup" && (!filepath.IsAbs(command.Profile) || filepath.Dir(command.Profile) != filepath.Clean(os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS")))) {
+			t.Fatal("invalid trusted cost observation command")
+		}
+		if expected == "setup" {
+			if err := fixedPeerCostInstallFramesV1(r, &written, &read); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if expected != "setup" {
+			if err := fixedPeerCostProfileV1(command.Profile); err != nil {
+				t.Fatal(err)
+			}
+		}
+		report := fixedPeerCostBoundaryV1{time.Now().UnixNano(), runtime.MemProfileRate, written.Load(), read.Load()}
+		raw, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.OpenFile(command.Ack, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, writeErr := file.Write(raw)
+		if err := errors.Join(writeErr, file.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+}
+
+func fixedPeerCostObserveV1(t *testing.T, ctx context.Context, p *fixedPeerTestProcessV1, action, profile string) fixedPeerCostBoundaryV1 {
+	t.Helper()
+	ack := filepath.Join(t.TempDir(), "boundary.json")
+	if err := json.NewEncoder(p.input).Encode(fixedPeerCostCommandV1{action, ack, profile}); err != nil {
+		t.Fatal(err)
+	}
+	var report fixedPeerCostBoundaryV1
+	fixedPeerWaitV1(t, ctx, func() bool {
+		raw, err := os.ReadFile(ack)
+		return err == nil && json.Unmarshal(raw, &report) == nil
+	})
+	return report
+}
+
+// Each RSS round visits the fixed, owned PID set serially. The maximum sum and
+// per-node maxima are sampled lower bounds, never an exact simultaneous peak.
+type fixedPeerCostRSSV1 struct {
+	PIDs                                                 []int
+	MaxSampledRSSBytes                                   []uint64
+	MaxSampledAggregateRSSBytes                          uint64
+	Samples                                              uint64
+	FirstRoundUnixNano, LastRoundUnixNano, MaxRoundNanos int64
+	IntervalNanos                                        int64
+	Unavailable                                          string
+}
+
+type fixedPeerCostRSSObserverV1 struct {
+	cancel context.CancelFunc
+	done   chan fixedPeerCostRSSV1
+}
+
+func fixedPeerCostRSSBytesV1(pid int, buffer []byte) (uint64, error) {
+	file, err := os.Open(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, err
+	}
+	n, readErr := io.ReadFull(file, buffer)
+	if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+		readErr = nil
+	}
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return 0, err
+	}
+	if n > 64<<10 {
+		return 0, errors.New("oversized process status")
+	}
+	for _, line := range bytes.Split(buffer[:n], []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("VmRSS:")) {
+			continue
+		}
+		fields := bytes.Fields(line)
+		if len(fields) == 3 && string(fields[2]) == "kB" {
+			value, err := strconv.ParseUint(string(fields[1]), 10, 64)
+			if err != nil || value > ^uint64(0)/1024 {
+				return 0, errors.New("invalid RSS value")
+			}
+			return value * 1024, nil
+		}
+	}
+	return 0, errors.New("RSS unavailable")
+}
+
+func fixedPeerStartCostRSSV1(ctx context.Context, pids []int) *fixedPeerCostRSSObserverV1 {
+	ctx, cancel := context.WithCancel(ctx)
+	observer := &fixedPeerCostRSSObserverV1{cancel: cancel, done: make(chan fixedPeerCostRSSV1, 1)}
+	report := fixedPeerCostRSSV1{PIDs: append([]int(nil), pids...), MaxSampledRSSBytes: make([]uint64, len(pids)), IntervalNanos: int64(10 * time.Millisecond)}
+	go func() {
+		buffer := make([]byte, (64<<10)+1)
+		ticker := time.NewTicker(time.Duration(report.IntervalNanos))
+		defer ticker.Stop()
+		defer func() { observer.done <- report }()
+		for {
+			started := time.Now()
+			var sum uint64
+			for i, pid := range report.PIDs {
+				rss, err := fixedPeerCostRSSBytesV1(pid, buffer)
+				if err != nil {
+					report.Unavailable = err.Error()
+					return
+				}
+				if rss > report.MaxSampledRSSBytes[i] {
+					report.MaxSampledRSSBytes[i] = rss
+				}
+				sum += rss
+			}
+			if sum > report.MaxSampledAggregateRSSBytes {
+				report.MaxSampledAggregateRSSBytes = sum
+			}
+			if report.Samples == 0 {
+				report.FirstRoundUnixNano = started.UnixNano()
+			}
+			report.Samples++
+			report.LastRoundUnixNano = time.Now().UnixNano()
+			if elapsed := time.Since(started).Nanoseconds(); elapsed > report.MaxRoundNanos {
+				report.MaxRoundNanos = elapsed
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return observer
+}
+
+func (o *fixedPeerCostRSSObserverV1) stop() fixedPeerCostRSSV1 {
+	o.cancel()
+	return <-o.done
+}
+
+func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
+	t.Run("child-profile-sequence-EOF", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		dir := t.TempDir()
+		t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "1")
+		t.Setenv("GOMAP_SELECTED_LIVE_RECEIPTS", dir)
+		// A real non-ingress runtime exercises the trusted pipe and profile
+		// sequence without opening ANN assets or relaxing the 512-query guard.
+		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t)[1])
+		setup := fixedPeerCostObserveV1(t, ctx, process, "setup", "")
+		beforePath := filepath.Join(dir, "before.pprof")
+		afterPath := filepath.Join(dir, "after.pprof")
+		before := fixedPeerCostObserveV1(t, ctx, process, "before", beforePath)
+		after := fixedPeerCostObserveV1(t, ctx, process, "after", afterPath)
+		if setup.MemoryProfileRate <= 0 || setup.MemoryProfileRate != before.MemoryProfileRate || before.MemoryProfileRate != after.MemoryProfileRate ||
+			setup.SampleUnixNano >= before.SampleUnixNano || before.SampleUnixNano >= after.SampleUnixNano ||
+			setup.RequestFrameBytes != 0 || setup.ResponseFrameBytes != 0 || before.RequestFrameBytes != 0 || before.ResponseFrameBytes != 0 || after.RequestFrameBytes != 0 || after.ResponseFrameBytes != 0 {
+			t.Fatalf("child observation boundary drift: setup=%+v before=%+v after=%+v", setup, before, after)
+		}
+		for _, path := range []string{beforePath, afterPath} {
+			info, err := os.Stat(path)
+			if err != nil || info.Size() == 0 {
+				t.Fatalf("child profile missing/empty: path=%s info=%v err=%v", path, info, err)
+			}
+		}
+		process.stop(t) // EOF reaches runtime.Close; forced/error exit fails.
+		if process.command.ProcessState == nil || !process.command.ProcessState.Success() {
+			t.Fatal("child observation sequence did not exit cleanly after EOF")
+		}
+	})
+	t.Run("child-rejects-out-of-order", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "1")
+		t.Setenv("GOMAP_SELECTED_LIVE_RECEIPTS", dir)
+		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t)[1])
+		ack := filepath.Join(t.TempDir(), "rejected.json")
+		profile := filepath.Join(dir, "rejected.pprof")
+		if err := json.NewEncoder(process.input).Encode(fixedPeerCostCommandV1{"before", ack, profile}); err != nil {
+			t.Fatal(err)
+		}
+		// This case expects failure, so reap directly instead of the helper's
+		// successful-exit assertion. Cleanup still uses its existing 8s bound.
+		process.stopped = true
+		process.input.Close()
+		defer process.log.Close()
+		done := make(chan error, 1)
+		go func() { done <- process.command.Wait() }()
+		select {
+		case err := <-done:
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("out-of-order command exit: %v", err)
+			}
+		case <-time.After(8 * time.Second):
+			process.command.Process.Kill()
+			<-done
+			t.Fatal("out-of-order command child required forced cleanup")
+		}
+		raw, err := os.ReadFile(process.log.Name())
+		if err != nil || !bytes.Contains(raw, []byte("invalid trusted cost observation command")) || bytes.Contains(raw, []byte("WARNING: DATA RACE")) {
+			t.Fatalf("wrong child rejection: err=%v log=%s", err, raw)
+		}
+		for _, path := range []string{ack, profile} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected command produced output: %s err=%v", path, err)
+			}
+		}
+	})
+	t.Run("framed-bytes-once", func(t *testing.T) {
+		left, right := net.Pipe()
+		defer left.Close()
+		defer right.Close()
+		if err := left.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := right.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var written, read atomic.Uint64
+		dispatcher := &VectorPartitionShardSearchTCPDispatcherV1{
+			dial:  func(context.Context, string, string) (net.Conn, error) { return left, nil },
+			pools: make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
+		}
+		r := &FixedPeerTCPRuntimeV1{
+			config: FixedPeerTCPConfigV1{NodeID: "ingress"},
+			vector: &fixedPeerVectorRuntimeV1{topology: &VectorPartitionProductionTopologyV1{dispatcher: dispatcher}},
+		}
+		if err := fixedPeerCostInstallFramesV1(r, &written, &read); err != nil {
+			t.Fatal(err)
+		}
+		// An occupied pool refuses reinstall; the existing dial wrapper remains
+		// single-counted through the actual frame exchange below.
+		dispatcher.pools["occupied"] = &vectorPartitionShardSearchTCPEndpointPoolV1{}
+		if err := fixedPeerCostInstallFramesV1(r, &written, &read); err == nil {
+			t.Fatal("observer accepted an existing connection pool")
+		}
+		conn, err := dispatcher.dial(t.Context(), "tcp", "unused-test-address")
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame := vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(errors.New("bounded diagnostic"))}
+		body, err := appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(nil, frame, 4096)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			if _, err := readVectorPartitionShardSearchTCPFrameV1(right, 4096); err != nil {
+				done <- err
+				return
+			}
+			done <- writeVectorPartitionShardSearchTCPFrameV1(right, frame, 4096)
+		}()
+		if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, 4096); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readVectorPartitionShardSearchTCPFrameV1(conn, 4096); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		want := uint64(4 + len(body))
+		if written.Load() != want || read.Load() != want {
+			t.Fatalf("framed plaintext accounting: written=%d read=%d want=%d", written.Load(), read.Load(), want)
+		}
+	})
+	t.Run("RSS-cancel-drain", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("retained RSS observation uses Linux procfs")
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		observer := fixedPeerStartCostRSSV1(ctx, []int{os.Getpid(), os.Getppid()})
+		report := observer.stop()
+		if report.Unavailable != "" || report.Samples != 1 || report.MaxSampledRSSBytes[0] == 0 || report.MaxSampledRSSBytes[1] == 0 ||
+			report.MaxSampledAggregateRSSBytes != report.MaxSampledRSSBytes[0]+report.MaxSampledRSSBytes[1] ||
+			report.LastRoundUnixNano < report.FirstRoundUnixNano || report.MaxRoundNanos <= 0 {
+			t.Fatalf("canceled one-round RSS observer did not drain consistently: %+v", report)
+		}
+	})
 }
