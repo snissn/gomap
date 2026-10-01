@@ -492,6 +492,19 @@ checks through this authenticated request-scoped path while remaining outside
 voting, or installed authority. The source holder and router remain catalog
 voters. See the [fixed-peer immutable owner contract](vector-partition-raft-v1.md#fixed-peer-immutable-multi-owner-serving-bounded-profile).
 
+After native snapshot recovery replaces an ordinary immutable owner's FSM DB,
+only an explicit authenticated lifecycle Warm may retire its old serving topology
+and capture the installed collection and DB together. Each installed source,
+shard service, status/readiness observation and final response keeps that exact
+DB witness; another Warm cannot validate an old handle or in-flight response.
+Cold observations and ordinary search do not rebind. Router recovery, mutable
+serving, BUILD/Stage and source attestation retain their startup-manager rules.
+The captured collection is not a DB lease: source access still uses the existing
+storage barrier and fresh current-DB checks. Construction is cancelable; Close
+prevents late installation and drains listeners before sources outside the
+initialization, storage and FSM locks. This recovery does not grant replacement
+READY, voting or public routing authority.
+
 Publication, epoch/digest validation and exact route comparison remain existing
 catalog-authority operations. Consumers cannot publish or serve authoritative
 catalog reads locally. Fixed membership validation and unsupported topology

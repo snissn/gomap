@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -112,10 +113,14 @@ type fixedPeerVectorRuntimeV1 struct {
 	source     *CollectionVectorPartitionGenerationSourceV1
 	backend    *VectorPartitionPublicBackendV1
 
-	initMu     sync.Mutex
-	mutationMu sync.Mutex
-	closeOnce  sync.Once
-	closeErr   error
+	servingGuard func() error
+	initDone     chan struct{}
+	initCancel   context.CancelFunc
+	closed       atomic.Bool
+	initMu       sync.Mutex
+	mutationMu   sync.Mutex
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 type fixedPeerVectorBuilderV1 struct {
@@ -196,11 +201,11 @@ func (b *fixedPeerVectorBackendV1) GenerationStatusV1(ctx context.Context, id pu
 		if id.Index != vector.Identity.Index.IndexName || id.Generation != vector.Identity.Generation {
 			return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: ErrFixedPeerVectorProofStaleV1}
 		}
-		_, record, err := b.runtime.observeImmutableTopologyV1(ctx)
+		_, record, guard, err := b.runtime.observeImmutableTopologyV1(ctx)
 		if err != nil {
 			return public.GenerationStatusV1{}, publicBackendErrorV1(err)
 		}
-		if err := b.runtime.requireCurrentImmutableDBV1(); err != nil {
+		if err := guard(); err != nil {
 			return public.GenerationStatusV1{}, publicBackendErrorV1(err)
 		}
 		return publicStatusV1(record), nil
@@ -286,9 +291,9 @@ func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (publ
 	if b.immutableOwnerV1() {
 		vector := b.runtime.parent.config.Vector
 		id := public.GenerationIDV1{Index: vector.Identity.Index.IndexName, Generation: vector.Identity.Generation}
-		topology, _, err := b.runtime.observeImmutableTopologyV1(raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1))
+		topology, _, guard, err := b.runtime.observeImmutableTopologyV1(raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1))
 		if err != nil {
-			if dbErr := b.runtime.requireCurrentImmutableDBV1(); dbErr != nil {
+			if dbErr := b.runtime.requireCurrentImmutableServingDBV1(); dbErr != nil {
 				return public.OperationsHealthV1{Generation: id, Reason: "authority_unavailable"}, dbErr
 			}
 			b.runtime.initMu.Lock()
@@ -302,7 +307,7 @@ func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (publ
 		if !vectorPartitionTopologyHealthyV1(topology.Status(), fixedPeerVectorOwnerGroupsV1(vector.Placement)) {
 			return public.OperationsHealthV1{Generation: id, Reason: "topology_unavailable"}, nil
 		}
-		if err := b.runtime.requireCurrentImmutableDBV1(); err != nil {
+		if err := guard(); err != nil {
 			return public.OperationsHealthV1{Generation: id, Reason: "authority_unavailable"}, err
 		}
 		return public.OperationsHealthV1{Ready: true, Generation: id, State: public.GenerationActiveV1, Reason: "ready"}, nil
@@ -319,20 +324,31 @@ func (r *fixedPeerVectorRuntimeV1) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		r.initMu.Lock()
+		r.closed.Store(true)
+		topology, source, cancel, done := r.topology, r.source, r.initCancel, r.initDone
+		if r.parent != nil && r.parent.config.Vector != nil && r.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+			r.collection, r.topology, r.source, r.backend, r.servingGuard = nil, nil, nil, nil, nil
+		}
+		r.initMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		var errs []error
-		// The accept loop is owned here rather than registered with Server, so
-		// always close its listener before draining active public connections.
+		// Public/shard requests drain before source close, outside initialization,
+		// storage and FSM locks. An in-progress constructor cannot install after Close.
 		if r.listener != nil {
 			errs = append(errs, r.listener.Close())
 		}
 		if r.server != nil {
 			errs = append(errs, r.server.Close())
 		}
-		if r.topology != nil {
-			errs = append(errs, r.topology.Close())
+		errs = append(errs, topology.Close())
+		if source != nil {
+			errs = append(errs, source.Close())
 		}
-		if r.source != nil {
-			errs = append(errs, r.source.Close())
+		if done != nil {
+			<-done
 		}
 		r.closeErr = errors.Join(errs...)
 	})
@@ -450,6 +466,48 @@ func fixedPeerVectorRegistryV1() (*iwire.Registry, error) {
 	return iwire.NewRegistry(schemas...)
 }
 
+// One slot owns all lazy topology/backend work, including authority I/O. Close
+// cancels its context and joins it outside initMu; waiters own only their context.
+func (r *fixedPeerVectorRuntimeV1) beginInitializationV1(ctx context.Context) (context.Context, context.CancelFunc, chan struct{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		r.initMu.Lock()
+		if r.closed.Load() {
+			r.initMu.Unlock()
+			return nil, nil, nil, ErrFixedPeerVectorUnavailableV1
+		}
+		if done := r.initDone; done != nil {
+			r.initMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, nil, nil, ctx.Err()
+			case <-done:
+			}
+			continue
+		}
+		workCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		r.initDone, r.initCancel = done, cancel
+		r.initMu.Unlock()
+		return workCtx, cancel, done, nil
+	}
+}
+
+func (r *fixedPeerVectorRuntimeV1) finishInitializationV1(done chan struct{}, cancel context.CancelFunc) {
+	cancel()
+	r.initMu.Lock()
+	if r.initDone == done {
+		r.initDone, r.initCancel = nil, nil
+		close(done)
+	}
+	r.initMu.Unlock()
+}
+
 func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
 	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
@@ -467,9 +525,34 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		return nil, err
 	}
 	r.initMu.Lock()
-	defer r.initMu.Unlock()
+	if r.closed.Load() {
+		r.initMu.Unlock()
+		return nil, ErrFixedPeerVectorUnavailableV1
+	}
 	if r.backend != nil {
-		return r.backend, nil
+		backend := r.backend
+		r.initMu.Unlock()
+		return backend, nil
+	}
+	r.initMu.Unlock()
+	workCtx, cancel, done, err := r.beginInitializationV1(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer r.finishInitializationV1(done, cancel)
+	ctx = workCtx
+	r.initMu.Lock()
+	err = ctx.Err()
+	if err == nil && r.closed.Load() {
+		err = ErrFixedPeerVectorUnavailableV1
+	}
+	backend := r.backend
+	r.initMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if backend != nil {
+		return backend, nil
 	}
 
 	vector := r.parent.config.Vector
@@ -591,7 +674,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		}
 		return nil, err
 	}
-	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
+	backend, err = NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
 		Topology: topology, RequestBase: vector.RequestBase, Lifecycle: lifecycle, ReadFence: r.parent,
 		Identity: vector.Identity, RequiredGroups: owners, Builder: fixedPeerVectorBuilderV1{ready: map[raftcluster.GroupID]raftplacement.VectorPartitionLifecycleGroupReadyV1{owner: ready}}, MutationEpoch: record.MutationEpoch,
 		MutationSubmitter: r.parent,
@@ -603,7 +686,22 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		}
 		return nil, err
 	}
-	r.source, r.topology, r.backend = source, topology, backend
+	r.initMu.Lock()
+	err = ctx.Err()
+	if err == nil && r.closed.Load() {
+		err = ErrFixedPeerVectorUnavailableV1
+	}
+	if err == nil {
+		r.source, r.topology, r.backend = source, topology, backend
+	}
+	r.initMu.Unlock()
+	if err != nil {
+		err = errors.Join(err, topology.Close())
+		if source != nil {
+			err = errors.Join(err, source.Close())
+		}
+		return nil, err
+	}
 	return backend, nil
 }
 
@@ -966,6 +1064,13 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		if err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
+		r.vector.initMu.Lock()
+		guard := r.vector.servingGuard
+		current := r.vector.backend == backend && guard != nil
+		r.vector.initMu.Unlock()
+		if !current {
+			return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorProofStaleV1)
+		}
 		response, err := backend.SearchVectorPartitionV1(ctx, request)
 		if err != nil {
 			return public.SearchResponseV1{}, err
@@ -975,7 +1080,7 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		if _, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)); err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
-		if err := r.vector.requireCurrentImmutableDBV1(); err != nil {
+		if err := guard(); err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
 		return response, nil

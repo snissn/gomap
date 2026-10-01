@@ -29,6 +29,10 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 }
 
 func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint, qualification, receipt bool) {
+	testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t, endpoint, qualification, receipt, false)
+}
+
+func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, endpoint, qualification, receipt, recoverOrdinary bool) {
 	t.Helper()
 	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
 	var ordinaryOracle VectorPartitionShardSearchResponseV1
@@ -300,7 +304,30 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 		if _, err := runtimes[1].vector.ensureImmutableTopologyV1(ctx); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 			t.Fatalf("restored ordinary topology accepted stale startup DB: %v", err)
 		}
-		ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
+		if recoverOrdinary {
+			backend := &fixedPeerVectorBackendV1{runtime: runtimes[1].vector}
+			if health, err := backend.OperationsHealthV1(ctx); health.Ready || !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+				t.Fatalf("cold recovered owner observation admitted stale DB: %+v %v", health, err)
+			}
+			runtimes[1].vector.initMu.Lock()
+			cold := runtimes[1].vector.topology == nil && runtimes[1].vector.source == nil
+			runtimes[1].vector.initMu.Unlock()
+			if !cold {
+				t.Fatal("cold recovered owner observation warmed topology")
+			}
+			_, err := client.call(ctx, command.OldNodeID, "vector-lifecycle", fixedPeerRequestV1{
+				VectorLifecycle: &fixedPeerVectorLifecycleRequestV1{Action: fixedPeerVectorLifecycleWarmImmutableV1},
+			}, true)
+			if err != nil {
+				t.Fatalf("explicit ordinary Warm after genuine FSM DB recovery: %v", err)
+			}
+			// A new genuine ordinary response must be obtained after explicit Warm;
+			// the old immutable oracle is not accepted as current serving authority.
+			ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, VectorPartitionShardSearchResponseV1{})
+			assertImmutableOwnerServingBindingLifetimeV1(t, ctx, client, target, runtimes[1], command)
+		} else {
+			ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(configs[targetIndex].RaftRoot, "nodes", string(command.NewPeer.ID), "groups", string(configs[targetIndex].Catalog.ID))); !os.IsNotExist(err) {
 		t.Fatalf("warm created catalog storage: %v", err)
