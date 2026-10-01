@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -12,6 +13,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+var errPointSuccessorExclusiveRetry = errors.New("cachingdb: successor requires exclusive retry")
 
 type pointSuccessorCandidate struct {
 	key      []byte
@@ -172,6 +175,21 @@ func (db *DB) pointSuccessorDiskIterator(view *memtableView, start, end []byte) 
 // [start,end). It captures mutable and immutable state without rotating the
 // mutable memtables and never constructs a general merging iterator.
 func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err error) {
+	return db.seekGE(start, end, false)
+}
+
+// SeekGEVersionRange is the MVCC Store-owned successor capability. The caller
+// must own the reserved namespace through a single Store: no raw writes may
+// recreate physical versions deleted by pruning, and Store must fence grouped
+// commits and physical pruning against reads/snapshot acquisition. Logical
+// tombstones are value records. Noncanonical ranges, range spans and physical
+// tombstones use the
+// generic exclusive path instead.
+func (db *DB) SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error) {
+	return db.seekGE(start, end, true)
+}
+
+func (db *DB) seekGE(start, end []byte, mvccOwned bool) (key, value []byte, found bool, err error) {
 	if db == nil || db.backend == nil {
 		return nil, nil, false, backenddb.ErrClosed
 	}
@@ -196,14 +214,50 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	db.beginForegroundRead()
 	defer db.endForegroundRead()
 
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	if mvccOwned {
+		if _, canonical := mvcckey.ExactVersionRange(start, end); canonical {
+			key, value, found, err = db.seekGEAttempt(start, end, true, recordSelection)
+			if err != errPointSuccessorExclusiveRetry {
+				return key, value, found, err
+			}
+		} else {
+			db.pointSuccessorMVCCNoncanonicalFallbacksTotal.Add(1)
+		}
+	}
+	return db.seekGEAttempt(start, end, false, recordSelection)
+}
+
+// Each attempt owns its gate, view and backend/vlog leases through copying.
+// A shared attempt that needs the exclusive path releases all of them before
+// the caller starts a fresh attempt; there is no lock upgrade or stale view.
+func (db *DB) seekGEAttempt(start, end []byte, shared bool, recordSelection func()) (key, value []byte, found bool, err error) {
+	if shared {
+		db.writeMu.RLock()
+		defer db.writeMu.RUnlock()
+	} else {
+		db.writeMu.Lock()
+		defer db.writeMu.Unlock()
+	}
 	if db.closing.Load() {
 		return nil, nil, false, backenddb.ErrClosed
 	}
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
+	}
+	if shared {
+		if memtableViewHasRangeSpans(view) {
+			db.pointSuccessorMVCCRangeSpanFallbacksTotal.Add(1)
+			return nil, nil, false, errPointSuccessorExclusiveRetry
+		}
+		db.pointSuccessorMVCCSharedTotal.Add(1)
+	}
+	requiresExclusive := func(candidate pointSuccessorCandidate) bool {
+		if shared && candidate.found && candidate.flags&node.FlagTombstone != 0 {
+			db.pointSuccessorMVCCPhysicalDeleteFallbacksTotal.Add(1)
+			return true
+		}
+		return false
 	}
 
 	var mutables []memtable.Table
@@ -242,6 +296,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 			initialCandidate.layer = pointSuccessorLayerMutable
 			db.pointSuccessorMutableProbesTotal.Add(1)
 			callSources++
+			if requiresExclusive(initialCandidate) {
+				return nil, nil, false, errPointSuccessorExclusiveRetry
+			}
 			if initialCandidate.found && bytes.Equal(initialCandidate.key, start) && initialCandidate.flags&node.FlagTombstone == 0 {
 				recordSelection()
 				return db.materializePointSuccessor(initialCandidate)
@@ -273,6 +330,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 					callSources++
 				}
 				best = choosePointSuccessor(best, candidate)
+				if requiresExclusive(candidate) {
+					return nil, nil, false, errPointSuccessorExclusiveRetry
+				}
 				priority++
 				if candidate.found && bytes.Equal(candidate.key, lower) && candidate.flags&node.FlagTombstone == 0 {
 					recordSelection()
@@ -288,6 +348,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 				}
 				candidate := seekPointSuccessorTable(mt, lower, end, nil, 0, priority)
 				candidate.layer = pointSuccessorLayerMutable
+				if requiresExclusive(candidate) {
+					return nil, nil, false, errPointSuccessorExclusiveRetry
+				}
 				best = choosePointSuccessor(best, candidate)
 				db.pointSuccessorMutableProbesTotal.Add(1)
 				callSources++
@@ -297,6 +360,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		for i := len(queue) - 1; i >= 0; i-- {
 			candidate := seekPointSuccessorTable(queue[i], lower, end, spans, i+1, priority)
 			candidate.layer = pointSuccessorLayerQueue
+			if requiresExclusive(candidate) {
+				return nil, nil, false, errPointSuccessorExclusiveRetry
+			}
 			best = choosePointSuccessor(best, candidate)
 			db.pointSuccessorQueueProbesTotal.Add(1)
 			callSources++
@@ -309,6 +375,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 			callSources++
 			if probeErr != nil {
 				return nil, nil, false, probeErr
+			}
+			if requiresExclusive(candidate) {
+				return nil, nil, false, errPointSuccessorExclusiveRetry
 			}
 			best = choosePointSuccessor(best, candidate)
 		}

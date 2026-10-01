@@ -424,7 +424,16 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 		return stats, ErrSnapshotUnavailable
 	}
 	snapshot := snapshotter.AcquireSnapshot()
-	s.mu.Unlock()
+	if _, qualified := s.db.(versionRangeSuccessorDB); qualified {
+		// The shared successor combines retained tables with a later backend
+		// snapshot. Deleting its winning tombstone anchor could otherwise expose
+		// an older retained value without an observed physical tombstone.
+		// ponytail: fence the whole streaming prune with the existing Store lock;
+		// consider narrower capture only after measurement and a source proof.
+		defer s.mu.Unlock()
+	} else {
+		s.mu.Unlock()
+	}
 	if snapshot == nil {
 		return stats, storageError("acquire prune snapshot", treedb.ErrClosed)
 	}
