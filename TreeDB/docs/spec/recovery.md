@@ -399,20 +399,27 @@ If command LSN `N` is ready but a lower LSN is neither already applied nor part
 of the same publish boundary, recovery must stop or fail closed rather than
 publishing `N` out of order.
 
-### 4.4 External-version MVCC batches
+### 4.4 External-version MVCC publications
 
-`TreeDB/mvcc.CommitAt` uses the existing raw batch recovery path; it does not
-add an independent timestamp log or recovery sidecar. Every physical key in a
-logical commit carries the same caller timestamp, and every physical value
-carries either a present-value or tombstone envelope. Recovery therefore
-replays or skips the underlying raw batch as one unit under the same command-WAL
-frame or legacy batch fence rules described above.
+`TreeDB/mvcc.CommitAt` and `CommitGroupAt` use existing raw TreeDB recovery;
+they add no independent timestamp log or recovery sidecar. One physical record
+uses optional public `Set`/`SetSync`; larger publications and batch-only adapters
+use `Batch.Write`/`Batch.WriteSync`. Every physical key carries its group's
+caller timestamp, and every value carries a present-value or tombstone envelope.
+Recovery replays or skips the complete underlying publication under the same
+command-WAL frame or legacy batch fence rules described above.
 
-A durable-mode successful `CommitDurable` is process-crash recoverable without
-`Close` or `Checkpoint`. A relaxed commit has no such per-call promise; a later
-successful `Checkpoint`/safe `Close` establishes the mode's documented reopen
-boundary. Truncated WAL tails may discard an incomplete final batch but must not
-publish a prefix. Malformed MVCC key/value records are not guessed or repaired:
+A successful `CommitDurable` follows the selected profile's sync boundary. In
+command-WAL profiles it covers a stable recoverable WAL prefix and memtable
+publication, including required external payload dependencies, without forcing
+a backend-root checkpoint. It is process-crash recoverable without `Close` or
+`Checkpoint`; production profiles support this explicit durable opt-up.
+`CommitRelaxed` follows the profile's ordinary ACK: `command_wal_relaxed` provides
+atomic visibility and kernel-drained WAL without forced fsync, whereas
+`no_wal_fast` has no WAL recovery boundary. A later successful
+`Checkpoint`/safe `Close` establishes the profile's documented reopen boundary.
+Empty mutation lists create no storage or durability boundary. Truncated WAL
+tails may discard an incomplete final publication but must not publish a prefix. Malformed MVCC key/value records are not guessed or repaired:
 `GetAt` reports them explicitly if they occupy the requested visible position.
 
 The external-version discard floor uses the same raw atomic-batch recovery

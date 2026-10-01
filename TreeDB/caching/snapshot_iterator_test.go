@@ -2,7 +2,9 @@ package caching
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -553,5 +555,128 @@ func TestSnapshot_IteratorDoesNotFallBackToViewWhenNoCapturedRuns(t *testing.T) 
 	}
 	if err := it.Error(); err != nil {
 		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+// Direct snapshots must be counted at their own entry point, including cuts
+// of populated shards unrelated to the iterator's eventual range.
+func TestAcquireSnapshotDebugAccounting(t *testing.T) {
+	previous := iteratorDebugEnabled.Load()
+	SetIteratorDebug(true)
+	t.Cleanup(func() { SetIteratorDebug(previous) })
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableShards: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	keys := make([][]byte, 8)
+	for i := 0; ; i++ {
+		key := []byte(fmt.Sprintf("snapshot-accounting-%d", i))
+		shard := db.shardIndex(key)
+		keys[shard] = key
+		complete := true
+		for _, key := range keys {
+			complete = complete && key != nil
+		}
+		if complete {
+			break
+		}
+	}
+	for _, key := range keys {
+		if err := db.Set(key, []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var bytes uint64
+	for i := range db.mutableShards {
+		bytes += uint64(db.mutableShards[i].mem.Size())
+	}
+	stat := func(key string) uint64 {
+		t.Helper()
+		n, err := strconv.ParseUint(db.Stats()["treedb.cache."+key], 10, 64)
+		if err != nil {
+			t.Fatalf("stat %s: %v", key, err)
+		}
+		return n
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+	for key, want := range map[string]uint64{
+		"snapshot.calls_total": 1, "snapshot.rotations_total": 1,
+		"snapshot.rotated_shards_total": 8, "snapshot.enqueued_records_total": 8,
+		"snapshot.enqueued_bytes_total": bytes, "iterator.snapshot_rotations_total": 0,
+	} {
+		if got := stat(key); got != want {
+			t.Fatalf("%s=%d want %d", key, got, want)
+		}
+	}
+	it, err := snap.Iterator(keys[0], append(append([]byte(nil), keys[0]...), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stat("snapshot.iterator_calls_total"); got != 1 {
+		t.Fatalf("snapshot iterator calls=%d", got)
+	}
+	if got := stat("iterator.sources_total"); got != 9 {
+		t.Fatalf("snapshot sources=%d want 9", got)
+	}
+	second := db.AcquireSnapshot()
+	if second == nil {
+		t.Fatal("second AcquireSnapshot=nil")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stat("snapshot.calls_total"); got != 2 {
+		t.Fatalf("calls=%d want 2", got)
+	}
+	if got := stat("snapshot.rotations_total"); got != 1 {
+		t.Fatalf("empty cut rotations=%d want 1", got)
+	}
+	// A DB.Iterator cut is attributed to that entry point, not AcquireSnapshot.
+	if err := db.Set(keys[0], []byte("later")); err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ordinary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stat("iterator.snapshot_rotations_total"); got != 1 {
+		t.Fatalf("DB.Iterator rotations=%d", got)
+	}
+	if got := stat("snapshot.rotations_total"); got != 1 {
+		t.Fatalf("direct rotations=%d", got)
+	}
+	SetIteratorDebug(false)
+	if err := db.Set(keys[0], []byte("debug-off")); err != nil {
+		t.Fatal(err)
+	}
+	unobserved := db.AcquireSnapshot()
+	if unobserved == nil {
+		t.Fatal("disabled AcquireSnapshot=nil")
+	}
+	if err := unobserved.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stat("snapshot.calls_total"); got != 2 {
+		t.Fatalf("disabled calls=%d", got)
+	}
+	if got := stat("snapshot.rotations_total"); got != 1 {
+		t.Fatalf("disabled rotations=%d", got)
 	}
 }

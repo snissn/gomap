@@ -212,6 +212,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
+	snapshotDebug := iteratorDebugEnabled.Load()
+	if snapshotDebug {
+		db.snapshotCallsTotal.Add(1)
+	}
 	if backendSnap := db.AcquireBackendSnapshotFastPath(); backendSnap != nil {
 		var backendRootID uint64
 		if state, ok := backendSnap.StateToken(); ok {
@@ -251,6 +255,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			}
 		}
 		if rotate {
+			queueStart := len(db.queue)
 			// Rotate to freeze the mutable memtables for snapshot isolation. Use the
 			// iterator prealloc policy to keep the rotation cheap for read-heavy paths.
 			if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
@@ -259,6 +264,15 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 					db.notifyError(err)
 				}
 				return nil
+			}
+			if snapshotDebug {
+				db.snapshotRotationsTotal.Add(1)
+				// Every shard is replaced, including empty/unrelated shards.
+				db.snapshotRotatedShardsTotal.Add(uint64(len(db.mutableShards)))
+				for _, mt := range db.queue[queueStart:] {
+					db.snapshotEnqueuedRecordsTotal.Add(uint64(mt.Len()))
+					db.snapshotEnqueuedBytesTotal.Add(uint64(mt.Size()))
+				}
 			}
 		}
 		view = db.retainMemtableView()
@@ -701,6 +715,10 @@ func (s *Snapshot) buildIteratorLocked(start, end []byte, reverse bool) (merging
 	sources, err := s.iteratorSources(start, end, reverse)
 	if err != nil {
 		return nil, err
+	}
+	if s.db != nil && iteratorDebugEnabled.Load() {
+		s.db.snapshotIteratorCallsTotal.Add(1)
+		s.db.observeIteratorShape(len(rootDomainIteratorSnapshotFromCachedSnapshot(s).immutables), len(sources))
 	}
 	if len(sources) == 0 {
 		return &emptyIterator{start: start, end: end}, nil
