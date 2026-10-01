@@ -3092,3 +3092,41 @@ genuine current-DB swap retirement. It grants no public readiness or promotion.
 Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
 background work and control polling; they do not measure per-node allocations
 or establish a throughput comparison.
+
+The private ANN qualification checkpoint maps to
+`TestImmutableOwnerReplacementPrivateANNQualificationV1`: genuine authenticated
+leader-issued ReadIndex plus separate target FSM/Raft applied progress, cold/cache
+parity with the original owner's unchanged leader-bound M5 shard route, one logical
+two-pack domain graph traversal and zero exact fallback, ordinary NONVOTER
+NOT_LEADER/no hits, exact BEGIN/wrong-node/unmarked refusal, warm-cache leader
+quorum loss, restart, missing hosted assets and genuine current-DB swap refusal.
+The legal ACTIVE invalidation producer remains blocked by pending preparation;
+no artificial ACTIVE transition is used as evidence.
+`TestReplacementPrivateANNFrameDiscriminatorsV1` checks distinct framing and
+ordinary dispatcher refusal; the real fixture also checks public coordinator
+proof refusal. `TestReplacementPrivateANNLateAdmissionClearsResponseV1` uses the
+existing deterministic service fixture to prove final admission discards all
+partials and releases its generation pin. `TestReplacementPrivateANNRequestAdmissionV1`
+checks pre-dial byte-exhaustion refusal, request-lease release after pre-catalog authentication refusal,
+and canceled admission through the existing shared transport fixture.
+`TestReplacementPrivateANNServiceRejectsMutableShapeV1` rejects non-basic or
+live/strict private requests before authority, proof or generation access.
+`TestReplacementPrivateANNReceiveValidationV1` sends authenticated direct frames
+without the exported client: shape and BEGIN-inclusive caller-budget refusals,
+exact augmented-budget handoff and configured frame bounds leave no result or
+transport lease. Its accepted boundary uses a refusal-only callback and claims
+no operation authority or ANN success.
+`TestReplacementPrivateANNResponseValidationV1` rejects missing or malformed
+partitions, exact fallback, incoherent counters/chunks, invalid neighbors,
+wrong proof identity and exceeded byte/work budgets through the shared coordinator
+payload validator. Its authenticated controlled-catalog cases accept a previous
+replacement issuer from the committed roster and reject removed startup peers,
+stale BEGIN, wrong phase, missing seed, missing authority and unanchored peers. These are transport
+and semantic controls, not fabricated owner promotion or additional quorum
+evidence. The admission test also rejects a private BEGIN frame that exceeds
+the caller's ordinary-body byte limit before authority lookup or dial.
+Coherent empty partitions remain legal; private requests
+require immutable identities and basic statistics. These checks grant no public
+readiness or promotion. Per-request time/MemStats diagnostics include the caller, all five
+Raft nodes, TLS, authority checks, ANN and background work; they are individual
+observations, not server allocations, isolated ANN cost or a throughput comparison.

@@ -394,6 +394,32 @@ preparation; refusal closes the request, and a refused preparation retry retires
 the listener before its shared cache. Shutdown drains shard requests before
 closing the cache and FSM DB.
 
+An explicit private ANN qualification request carries canonical marked BEGIN
+bytes to that endpoint. It obtains the unchanged authenticated original group
+leader's quorum ReadIndex proof, then separately waits for the replacement FSM
+and Raft application through that index. The leader proof retains its issuer;
+the response separately names the nonvoter serving node and uses a distinct
+private frame/proof kind that ordinary M5 dispatch/coordinators refuse. The
+shared bounded shard search body reuses the retained hosted domain searchers.
+Private qualification requires immutable requests with basic statistics. The
+private service and authenticated TCP receiver enforce this shape independently
+of the client; the receiver counts the actual BEGIN bytes against the caller
+request limit before private dispatch or response reservation. Each
+qualification reserves its outbound request/response budget before discovering
+the authenticated catalog leader and reading the exact marked BEGIN under a
+fresh catalog fence. Its issuer must belong to that operation's committed
+current roster, including earlier replacement members; removed startup peers
+are refused. This adds catalog discovery and one fenced catalog read per
+qualification, without a cached membership grant. Canonical BEGIN frame bytes
+count toward the caller's request byte limit. The
+client validates the requested partition set, HNSW routes, result ordering,
+finite unique neighbors, proof/counter accounting and request byte/work limits.
+Exact operation, ACTIVE, semantic tail/assets and current DB checks run before
+and after ANN; late refusal clears the entire response. Warm cache cannot replace
+leader quorum. Pending preparation continues to refuse legal ACTIVE invalidation
+producers. This private evidence grants no READY, public route, vote, promotion,
+removal or completion, and restart remains cold.
+
 ## Vector partition placement (M1)
 
 `VectorPartitionPlacementRecordV1` validates a complete generation-bound
