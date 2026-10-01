@@ -119,6 +119,20 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
 
 ## Maintenance Expectations
 
+The standalone `BenchmarkAdaptiveMVCCSnapshotCommandWAL` in `TreeDB/caching`
+captures public MVCC writes with a snapshot every 112 writes under relaxed and
+durable command-WAL profiles. Run from the repo root:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkAdaptiveMVCCSnapshotCommandWAL$' -benchtime=2240x -count=5 -benchmem
+```
+
+Use fixed counts of at least 1120 to reach adaptive selection. For a separate
+single-row profiling run, restrict `-bench` to the desired profile/mode and add
+`-cpuprofile cpu.pprof -memprofile allocs.pprof`; inspect with `go tool pprof`.
+The text output reports `B/op`, `allocs/op`, `writes/s`, sampling/selection and
+command-WAL counters. These Go test profiles are not benchprof inputs.
+
 The standalone durable MVCC singleton route comparison is:
 
 ```sh
