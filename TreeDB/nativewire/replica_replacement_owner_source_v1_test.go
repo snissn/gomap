@@ -31,6 +31,7 @@ func testImmutableOwnerReplacementPrivateSourceWarmV1(t *testing.T, endpoint boo
 func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint, qualification bool) {
 	t.Helper()
 	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
+	var ordinaryOracle VectorPartitionShardSearchResponseV1
 	identity := configs[0].Vector.Identity
 	command.OwnerPreparation = &identity
 	if err := client.WarmReplicaReplacementOwnerV1(ctx, command); !errors.Is(err, raftplacement.ErrCatalogMetaUnavailable) {
@@ -104,7 +105,7 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 			}
 			assertReplacementOwnerEndpointSearchV1(t, ctx, client, target, runtimes[1], command)
 			if qualification {
-				assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command)
+				ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
 			}
 		}
 		for _, operation := range []string{"replacement-promotion-intent", "replacement-promote", "replacement-complete-promotion", "replacement-removal-intent", "replacement-remove", "replacement-complete"} {
@@ -287,7 +288,16 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 			return err == nil && len(status.Groups) == 1 && status.Groups[0].LeaderID == command.OldNodeID
 		})
 		waitTail()
-		assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command)
+		// Native provider recovery replaces the startup DB. It restores quorum
+		// proof issuance, but does not rebind the ordinary ANN serving runtime.
+		oldData := runtimes[1].localDataV1(command.GroupID)
+		if oldData.fsm.HasCurrentDBV1(oldData.db) {
+			t.Fatal("original owner snapshot recovery retained startup DB")
+		}
+		if _, err := runtimes[1].vector.ensureImmutableTopologyV1(ctx); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+			t.Fatalf("restored ordinary topology accepted stale startup DB: %v", err)
+		}
+		ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
 	}
 	if _, err := os.Stat(filepath.Join(configs[targetIndex].RaftRoot, "nodes", string(command.NewPeer.ID), "groups", string(configs[targetIndex].Catalog.ID))); !os.IsNotExist(err) {
 		t.Fatalf("warm created catalog storage: %v", err)
@@ -409,7 +419,7 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 	warm("restart-cold")
 	retained = source()
 	if qualification {
-		assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command)
+		ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
 	}
 	// Finish actual cached work without consuming its result. Mutation after
 	// worker completion must still be refused by the later completion poll.

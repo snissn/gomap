@@ -36,7 +36,7 @@ func replacementOwnerQualificationRequestV1(t *testing.T, ctx context.Context, t
 	return request
 }
 
-func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Context, client *FixedPeerTCPClientV1, target, oldOwner *FixedPeerTCPRuntimeV1, command raftplacement.ReplicaReplacementBeginV1) {
+func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Context, client *FixedPeerTCPClientV1, target, oldOwner *FixedPeerTCPRuntimeV1, command raftplacement.ReplicaReplacementBeginV1, ordinary VectorPartitionShardSearchResponseV1) VectorPartitionShardSearchResponseV1 {
 	t.Helper()
 	request := replacementOwnerQualificationRequestV1(t, ctx, target, command)
 	var first ReplicaReplacementOwnerQualificationV1
@@ -64,43 +64,58 @@ func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Conte
 			t.Fatalf("cached private ANN differs: cold=%+v cached=%+v", first, result)
 		}
 	}
-	// The original owner remains the serving leader and ordinary shard route.
-	topology, err := oldOwner.vector.ensureImmutableTopologyV1(ctx)
-	if err != nil {
-		t.Fatal(err)
+	// Capture a genuine ordinary oracle before snapshot recovery retires its
+	// startup DB. Later comparisons reuse only immutable results, never authority.
+	if ordinary.Version == 0 {
+		topology, err := oldOwner.vector.ensureImmutableTopologyV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		group, ok := topology.coordinator.groups[command.GroupID]
+		if !ok {
+			t.Fatal("original owner group missing")
+		}
+		ordinaryRequest := request
+		ordinaryRequest.TargetNodeID = command.OldNodeID
+		task := vectorPartitionCoordinatorTaskV1{group: group, partitionIDs: request.PartitionIDs, candidateRows: []uint64{4}}
+		if err := topology.coordinator.validateShardResponse(ctx, task, ordinaryRequest, first.Search); !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) {
+			t.Fatalf("public coordinator accepted private target evidence: %v", err)
+		}
+		memberShaped := first.Search
+		memberShaped.Proof.ServingNode, memberShaped.Proof.LeaderNode = command.OldNodeID, command.OldNodeID
+		if err := topology.coordinator.validateShardResponse(ctx, task, ordinaryRequest, memberShaped); !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) {
+			t.Fatalf("private proof kind acquired ordinary M5 authority: %v", err)
+		}
+		endpoints := client.config.Vector.ShardAddresses[command.GroupID]
+		dispatcher, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(client.peerTransport,
+			map[raftcluster.GroupID]string{command.GroupID: endpoints[command.OldNodeID]},
+			map[raftcluster.GroupID]map[raftcluster.NodeID]string{command.GroupID: {command.OldNodeID: endpoints[command.OldNodeID]}},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dispatcher.Close()
+		ordinary, err = dispatcher.DispatchVectorPartitionShardSearchV1(ctx, ordinaryRequest)
+		if err != nil {
+			t.Fatalf("original owner ordinary shard search: %v", err)
+		}
+		if ordinary.Proof.Kind != vectorPartitionShardSearchProofReadIndexV1 || ordinary.Proof.ServingNode != command.OldNodeID ||
+			ordinary.Proof.LeaderNode != command.OldNodeID || len(ordinary.Partials) != len(first.Search.Partials) {
+			t.Fatalf("ordinary proof or private parity shape=%+v", ordinary)
+		}
 	}
-	group, ok := topology.coordinator.groups[command.GroupID]
-	if !ok {
-		t.Fatal("original owner group missing")
+	proof := ordinary.Proof
+	if proof.GroupID != request.TargetGroupID || proof.SourceGeneration != request.SourceGeneration ||
+		proof.SourceChecksum != request.SourceChecksum || proof.SourceSchemaHash != request.SourceSchemaHash ||
+		proof.SourceRowCount != request.SourceRowCount || proof.PartitionGeneration != request.PartitionGeneration ||
+		proof.RouterGeneration != request.RouterGeneration || proof.ReadySetDigest != request.ReadySetDigest ||
+		len(ordinary.Partials) != len(request.PartitionIDs) {
+		t.Fatalf("ordinary oracle identity changed: request=%+v oracle=%+v", request, ordinary)
 	}
-	ordinaryRequest := request
-	ordinaryRequest.TargetNodeID = command.OldNodeID
-	task := vectorPartitionCoordinatorTaskV1{group: group, partitionIDs: request.PartitionIDs, candidateRows: []uint64{4}}
-	if err := topology.coordinator.validateShardResponse(ctx, task, ordinaryRequest, first.Search); !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) {
-		t.Fatalf("public coordinator accepted private target evidence: %v", err)
-	}
-	memberShaped := first.Search
-	memberShaped.Proof.ServingNode, memberShaped.Proof.LeaderNode = command.OldNodeID, command.OldNodeID
-	if err := topology.coordinator.validateShardResponse(ctx, task, ordinaryRequest, memberShaped); !errors.Is(err, ErrVectorPartitionCoordinatorMalformedResponse) {
-		t.Fatalf("private proof kind acquired ordinary M5 authority: %v", err)
-	}
-	endpoints := client.config.Vector.ShardAddresses[command.GroupID]
-	dispatcher, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(client.peerTransport,
-		map[raftcluster.GroupID]string{command.GroupID: endpoints[command.OldNodeID]},
-		map[raftcluster.GroupID]map[raftcluster.NodeID]string{command.GroupID: {command.OldNodeID: endpoints[command.OldNodeID]}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dispatcher.Close()
-	request.TargetNodeID = command.OldNodeID
-	ordinary, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, request)
-	if err != nil {
-		t.Fatalf("original owner ordinary shard search: %v", err)
-	}
-	if ordinary.Proof.Kind != vectorPartitionShardSearchProofReadIndexV1 || ordinary.Proof.ServingNode != command.OldNodeID ||
-		ordinary.Proof.LeaderNode != command.OldNodeID || len(ordinary.Partials) != len(first.Search.Partials) {
-		t.Fatalf("ordinary proof or private parity shape=%+v", ordinary)
+	for i, partial := range ordinary.Partials {
+		if partial.PartitionID != request.PartitionIDs[i] {
+			t.Fatalf("ordinary oracle partition changed: request=%+v oracle=%+v", request, ordinary)
+		}
 	}
 	assertReplacementOwnerANNRouteV1(t, ordinary)
 	for i, partial := range ordinary.Partials {
@@ -114,6 +129,7 @@ func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Conte
 			}
 		}
 	}
+	return ordinary
 }
 
 func TestReplacementPrivateANNFrameDiscriminatorsV1(t *testing.T) {
