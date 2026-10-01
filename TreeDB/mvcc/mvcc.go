@@ -19,10 +19,10 @@ import (
 type CommitMode uint8
 
 const (
-	// CommitRelaxed publishes one atomic TreeDB batch with Batch.Write. It does
-	// not promise an fsync boundary and may be lost after a crash.
+	// CommitRelaxed publishes atomically using the profile's ordinary ACK class.
+	// Relaxed profiles do not promise an fsync boundary.
 	CommitRelaxed CommitMode = iota
-	// CommitDurable publishes one atomic batch with Batch.WriteSync. Production
+	// CommitDurable publishes atomically with SetSync or Batch.WriteSync. Production
 	// profiles support this explicit durability opt-up even when ordinary ACKs
 	// are relaxed.
 	CommitDurable
@@ -91,6 +91,12 @@ type pointWriter interface {
 	Set(key, value []byte) error
 }
 
+// Keep sync capability independent so Set-only adapters retain their relaxed
+// point route and batch-only adapters retain the existing durable contract.
+type pointSyncWriter interface {
+	SetSync(key, value []byte) error
+}
+
 type pointSuccessorDB interface {
 	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
 }
@@ -145,9 +151,9 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 }
 
 // CommitGroupAt validates and atomically publishes timestamped mutation groups.
-// A single relaxed physical record uses TreeDB's equivalent point-write path
-// when the handle supports it; durable and larger publications use exactly one
-// TreeDB Batch.Write or Batch.WriteSync call. Every group is validated before
+// A single physical record uses TreeDB's equivalent Set or SetSync path when
+// the handle supports the selected mode; larger publications and batch-only
+// handles use one Batch.Write or Batch.WriteSync call. Every group is validated before
 // storage is accessed: timestamps must be non-zero and
 // above the discard floor, keys must fit the MVCC codec, and no physical MVCC
 // key may occur twice. Thus the same logical key at distinct timestamps is
@@ -232,6 +238,14 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	if mode == CommitRelaxed && len(staged) == 1 {
 		if writer, ok := s.db.(pointWriter); ok {
 			if err := writer.Set(staged[0].physical, staged[0].record); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
+	if mode == CommitDurable && len(staged) == 1 {
+		if writer, ok := s.db.(pointSyncWriter); ok {
+			if err := writer.SetSync(staged[0].physical, staged[0].record); err != nil {
 				return storageError("commit point", err)
 			}
 			return nil
