@@ -365,7 +365,13 @@ must remain outside that final serialized boundary.
 
 ### 5.1 Non-sync APIs
 
-- `Set`, `Delete`, `Batch.Write`: higher throughput, no fsync durability guarantee.
+- `Set`, `Delete`, `Batch.Write` follow the selected profile's ordinary ACK
+  class. `command_wal_durable` covers a stable recoverable command-WAL prefix
+  before memtable publication and return. `command_wal_relaxed` drains WAL
+  userspace buffers to the kernel and publishes without forcing fsync; ACKed
+  WAL bytes are not retained solely in userspace. Kernel draining is not a
+  backend tree flush or checkpoint. Other relaxed profiles retain their
+  documented profile-specific recovery boundaries.
 
 ### 5.2 Sync APIs
 
@@ -376,19 +382,24 @@ must remain outside that final serialized boundary.
 
 ### 5.3 External-version MVCC commits
 
-The opt-in `TreeDB/mvcc.Store.CommitAt` stages every encoded put/tombstone for a
-caller timestamp into one raw TreeDB batch. Validation and duplicate detection
-finish before batch creation. A staging error closes the unwritten batch; a
-commit error may be ambiguous as to whether the whole batch published, but
-partial visibility is forbidden by the underlying batch boundary.
+The opt-in `TreeDB/mvcc.Store.CommitAt` and `CommitGroupAt` validate encoded
+puts/tombstones, duplicate physical keys and the discard floor before writing.
+A single record uses optional public `Set` or `SetSync` capability; larger
+publications and adapters without that capability use one raw TreeDB batch.
+An oversized command-WAL `SetSync` selects the batch route before any append,
+allowing compact persistent-value references. A point-write error is never
+retried as a batch. A staging error closes the unwritten batch; a commit error
+may be ambiguous as to whether the complete publication committed, but partial
+visibility is forbidden.
 
-- `CommitRelaxed` calls `Batch.Write`. It is an atomic visibility boundary, not
-  an fsync promise. Survival follows the configured relaxed mode and later
-  checkpoint/close boundaries.
-- `CommitDurable` fails with `ErrDurabilityUnavailable` unless the handle's
-  effective mode is `DurabilityDurable`, then calls `Batch.WriteSync`. A nil
-  return covers the configured WAL/value payload fsync recovery boundary; it
-  does not force an immediate backend-root checkpoint.
+- `CommitRelaxed` uses `Set` or `Batch.Write` and follows the selected profile's
+  ordinary ACK class. On a relaxed command-WAL profile it is an atomic
+  visibility and kernel-drained WAL boundary without forced fsync.
+- `CommitDurable` uses `SetSync` or `Batch.WriteSync`. Production profiles
+  support explicit durable opt-up even when ordinary ACKs are relaxed. In a
+  command-WAL profile a nil return covers the stable recoverable WAL prefix
+  and memtable publication, including required external payload dependencies;
+  it does not force a backend-root checkpoint.
 - After timestamp/mode and non-nil Store validation, empty mutation lists are
   no-ops: they do not access storage, probe the handle's open/durability state,
   or manufacture a sync boundary.
@@ -398,8 +409,9 @@ select TreeDB's internal commit sequence nor invoke conditional transactions;
 the caller owns conflict detection and timestamp assignment.
 
 `AdvanceDiscardFloor` and `PruneVersions` accept the same relaxed/durable mode
-split. Durable floor advancement requires `DurabilityDurable` and publishes its
-metadata record with `Batch.WriteSync`. Durable pruning first re-writes and
+split. Durable floor advancement publishes its metadata record with
+`Batch.WriteSync`, including explicit opt-up on relaxed production profiles.
+Durable pruning first re-writes and
 syncs the already-published floor, then syncs each bounded delete batch. Thus a
 recovered physical deletion cannot exist without a recovered floor that rejects
 affected historical reads. Relaxed maintenance is atomic and ordered but has

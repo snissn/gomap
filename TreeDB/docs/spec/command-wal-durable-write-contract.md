@@ -5,7 +5,9 @@ RID-plus-bytes materialization path from issue #3731 and the conservative
 `SetRID` fallback.
 
 This document defines the durability boundary used by cached public raw-KV
-operations in `ProfileCommandWALDurable`. It distinguishes a logical public
+operations in command-WAL profiles. Ordinary writes in
+`ProfileCommandWALDurable` and explicit sync writes in either command-WAL
+profile use the durable boundary below. It distinguishes a logical public
 operation, a logical writer flush or sync, an actual file-sync hook, and the
 Linux syscall reached by that hook. It does not authorize an optimization or a
 weaker durability mode.
@@ -15,8 +17,9 @@ weaker durability mode.
 For `SetSync`, `DeleteSync`, and a dirty `Batch.WriteSync`, a nil return means:
 
 1. any external value-log records referenced by the command frame have passed a
-   file sync boundary, while any materialized RID operation carries the exact
-   RID and logical bytes needed to recreate that record;
+   file sync boundary, while a point frame carries full logical bytes and a
+   materialized RID operation carries the exact RID and logical bytes needed
+   to recreate that record;
 2. the complete typed command-WAL frame has been written and the command-WAL
    file has passed a later file sync boundary; and
 3. the mutation has been published to the cached memtable before the call
@@ -34,11 +37,33 @@ poisoned and must be reopened; recovery may apply the durable frame. An error
 while ordering external value-log references occurs before the command frame
 sync and must not advance that command durability boundary.
 
-`DurabilityWALOnRelaxed` retains the same ordering but replaces file-sync
-guarantees with flush-to-kernel boundaries. Nothing in this document upgrades a
-relaxed operation to power-loss durability.
+Ordinary `Set`, `Delete` and `Batch.Write` in `ProfileCommandWALRelaxed`
+retain append-before-publication ordering but drain WAL userspace buffers to
+the kernel without forcing fsync. Relaxed ACKs do not permit retaining the
+command WAL solely in userspace. Explicit `SetSync`, `DeleteSync` and
+`Batch.WriteSync` opt up to the durable boundary regardless of the relaxed
+ordinary ACK class. Neither class requires a backend tree flush or checkpoint.
 
 ## Current ordered paths
+
+### Durable singleton `SetSync`
+
+```text
+public SetSync (including singleton MVCC put/tombstone)
+  -> append any persistent value-log record without fsync
+  -> append one point command frame containing the full key/value bytes
+  -> sync the recoverable command-WAL prefix and any prior dependency debt
+  -> publish the inline value or persistent pointer to the cached memtable
+  -> return nil
+```
+
+The point frame can recreate its value from logical bytes; its own value-log
+record therefore needs no separate file sync. Earlier external-reference debt
+still participates in the prefix barrier. Before any append, `SetSync` falls
+back to a singleton `WriteSync` batch if key plus value bytes exceed the
+existing 1 MiB frame budget (or a smaller configured WAL segment cap), less the
+256-byte framing reserve. The batch can use the compact `SetRID` path below.
+An error from an attempted point write is returned, never retried as a batch.
 
 ### Inline dirty `WriteSync`
 
