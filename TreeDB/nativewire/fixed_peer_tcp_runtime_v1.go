@@ -142,14 +142,15 @@ type FixedPeerTCPRuntimeV1 struct {
 		Close() error
 		CloseStreams()
 	}
-	server    *http.Server
-	listener  net.Listener
-	reopened  bool
-	closeOnce sync.Once
-	closeErr  error
-	requests  chan struct{}
-	forwards  chan struct{}
-	reads     chan struct{}
+	server       *http.Server
+	listener     net.Listener
+	reopened     bool
+	closeOnce    sync.Once
+	closeErr     error
+	requests     chan struct{}
+	forwards     chan struct{}
+	reads        chan struct{}
+	ownerReceipt chan struct{}
 
 	// Fixed asset bindings from the runtime-owned cloned config, never a serving grant.
 	immutableVectorAssetDigests map[raftcluster.GroupID]string
@@ -427,7 +428,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return nil, err
 	}
-	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4)}
+	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4), ownerReceipt: make(chan struct{}, 1)}
 	r.immutableVectorAssetDigests = fixedPeerImmutableVectorAssetDigestsV1(r.config.Vector)
 	if _, hosted := r.config.RaftListen[r.config.Catalog.ID]; hosted {
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
@@ -1019,6 +1020,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 	}
 	switch request.URL.Path {
+	case "/v1/replacement-owner-qualification-commit":
+		err = r.commitReplacementOwnerQualificationV1(ctx, body.Entry, &reply)
 	case "/v1/replacement-owner-endpoint", "/v1/replacement-owner-warm", "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion", "/v1/replacement-removal-proof", "/v1/replacement-removal-intent", "/v1/replacement-remove", "/v1/replacement-complete", "/v1/replacement-reconcile":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":

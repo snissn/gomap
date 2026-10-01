@@ -395,6 +395,20 @@ applied authority; altered, duplicated, omitted or foreign commands refuse.
 This developmental profile retains one pending command per group and refuses
 catalog mutation while it is pending. BEGIN changes no catalog membership or
 placement and is not snapshot-installation, tail-readiness or promotion proof.
+A replacement state may additionally contain one optional bounded
+owner_qualification receipt. Existing states omit it and retain their canonical
+bytes. Its dedicated replica-replacement-owner-qualification-v1 command installs
+only this first receipt at the existing marked add-intent phase. The record binds
+query/result/ReadySet SHA-256 digests, original read-proof issuer/term/index,
+independent target Raft applied index and durable semantic-tail identity. The
+result digest covers ordered partition IDs and ordered neighbor IDs/scores only;
+operational counters, memory observations and timings are excluded. Empty neighbor
+lists have one canonical encoding. No query vectors or neighbors are persisted. Snapshot entry accounting reserves
+one additional catalog entry, and known successors cannot erase or alter it.
+Cold restore retains historical evidence without creating serving authority;
+trusted backup/raw in-process provenance cannot prove the historical execution.
+This pre-alpha metadata extension has no migration scaffolding.
+
 Lifecycle-bearing fixed-peer replacement stays closed except the explicitly
 capped immutable ANN-only owner preparation described below.
 
