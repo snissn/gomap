@@ -97,7 +97,8 @@ cached batch between shard applications. Batch-only adapters retain their
 existing admission. A durable multi-record commit holds this fence during its
 WAL acknowledgement, so independent multi-record commits through one Store
 cannot form a concurrent durability group. Staging and validation precede the
-fence. The floor read lock does not exclude physical pruning.
+fence. Qualified pruning holds the same Store lock exclusively through physical
+pruning and lease cleanup.
 
 The shared source-selection contract depends on these existing invariants:
 
@@ -124,7 +125,10 @@ The shared source-selection contract depends on these existing invariants:
   timestamp fall outside the range.
 - Pruning cannot recreate keys at/below its floor: commits reject them. It
   retains a live value anchor and deletes a tombstone anchor only after all
-  older versions. Physical tombstone observations take the exclusive retry.
+  older versions. Qualified pruning also holds the Store lock exclusively:
+  ordering alone cannot exclude a retained old queue value combined with a
+  later backend snapshot after its winning tombstone anchor has been deleted.
+  Physical tombstone observations still take the exclusive retry.
 
 The shared gate remains held until owned-byte materialization and lease cleanup
 finish. Close, checkpoint, conditional/range writes and value-log maintenance
@@ -156,12 +160,15 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   idempotent. TreeDB snapshots acquired before floor advancement keep their
   pinned physical view until close.
 - Floor advancement and pruning are serialized by one owner-local maintenance
-  lock. Pruning holds the floor lock only while it loads/re-syncs the captured
-  floor and pins its snapshot, then releases that lock before scanning or
-  publishing delete batches. Foreground reads and retained-version iterators
-  may therefore pin snapshots, and commits strictly above the captured floor
-  may publish, while pruning continues. The maintenance lock prevents the
-  captured floor from advancing underneath that prune.
+  lock. With the qualified successor capability, pruning holds the Store
+  floor lock exclusively through its scan, physical delete batches (including
+  durable acknowledgement), and iterator/snapshot cleanup. Foreground reads,
+  commits and snapshot acquisition wait; snapshots already pinned remain
+  readable. This full-prune foreground fence is a correctness-driven ceiling,
+  pending measurement before any narrower capture protocol. Adapters without
+  the capability retain the earlier release after floor/snapshot capture and
+  allow foreground operations during pruning. The maintenance lock prevents
+  the captured floor from advancing underneath either prune path.
 - Successful prune accounting satisfies `Visited = Retained + Pruned`.
   `Skipped` is the subset of `Retained` with timestamps above the captured
   floor, not a disjoint outcome counter. Partial-error statistics report only

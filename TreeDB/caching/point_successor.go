@@ -181,8 +181,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 // SeekGEVersionRange is the MVCC Store-owned successor capability. The caller
 // must own the reserved namespace through a single Store: no raw writes may
 // recreate physical versions deleted by pruning, and Store must fence grouped
-// commits against reads/snapshot acquisition. Logical tombstones are value
-// records. Noncanonical ranges, range spans and physical tombstones use the
+// commits and physical pruning against reads/snapshot acquisition. Logical
+// tombstones are value records. Noncanonical ranges, range spans and physical
+// tombstones use the
 // generic exclusive path instead.
 func (db *DB) SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error) {
 	return db.seekGE(start, end, true)

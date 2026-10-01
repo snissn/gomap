@@ -490,7 +490,7 @@ func TestPruneConcurrentSnapshotReaders(t *testing.T) {
 	}
 }
 
-func TestPruneAfterSnapshotCaptureDoesNotBlockForegroundOperations(t *testing.T) {
+func TestPruneAfterSnapshotCapture_BatchOnlyDoesNotBlockForegroundOperations(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
 	pausingDB := &pruneSnapshotPauseDB{
@@ -498,7 +498,7 @@ func TestPruneAfterSnapshotCaptureDoesNotBlockForegroundOperations(t *testing.T)
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	store := newStore(pausingDB)
+	store := newStore(&batchOnlyPrunePauseDB{treeDB: pausingDB, snapshotDB: pausingDB})
 	for timestamp := uint64(1); timestamp <= 8; timestamp++ {
 		if err := store.CommitAt(timestamp, []Mutation{{Key: []byte("k"), Value: []byte(fmt.Sprint(timestamp))}}, CommitRelaxed); err != nil {
 			t.Fatalf("CommitAt(%d): %v", timestamp, err)
@@ -1026,5 +1026,103 @@ func TestVersionIteratorArbitraryBinaryLogicalKeys(t *testing.T) {
 	versions := collectVersions(t, it)
 	if len(versions) != 1 || !bytes.Equal(versions[0].Key, key) || !bytes.Equal(versions[0].Value, []byte{0, 1}) {
 		t.Fatalf("versions=%+v", versions)
+	}
+}
+
+// Mask the qualified native capability while preserving the existing batch and
+// snapshot contract; these adapters keep the historical foreground behavior.
+type batchOnlyPrunePauseDB struct {
+	treeDB
+	snapshotDB
+}
+
+func TestPruneAfterSnapshotCapture_QualifiedForegroundWaits(t *testing.T) {
+	for _, mode := range []CommitMode{CommitRelaxed, CommitDurable} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+			defer db.Close()
+			paused := &pruneSnapshotPauseDB{DB: db, entered: make(chan struct{}), release: make(chan struct{})}
+			store := newStore(paused)
+			if err := store.CommitAt(40, []Mutation{{Key: []byte("k"), Value: []byte("old")}}, CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CommitAt(80, []Mutation{{Key: []byte("k"), Delete: true}}, CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AdvanceDiscardFloor(80, CommitDurable); err != nil {
+				t.Fatal(err)
+			}
+			paused.pauseNextReverse.Store(true)
+			var once sync.Once
+			release := func() { once.Do(func() { close(paused.release) }) }
+			defer release()
+			prune := make(chan error, 1)
+			go func() { _, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: mode}); prune <- err }()
+			select {
+			case <-paused.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("prune did not capture snapshot")
+			}
+			point, snapshot, commit := make(chan error, 1), make(chan error, 1), make(chan error, 1)
+			pointStarted, snapshotStarted, commitStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				close(pointStarted)
+				result, err := store.GetAt([]byte("k"), 100)
+				if err == nil && result.State != Absent {
+					err = fmt.Errorf("postprune point result: %+v", result)
+				}
+				point <- err
+			}()
+			go func() {
+				close(snapshotStarted)
+				it, err := store.IterateVersions(VersionIteratorOptions{ReadTimestamp: 100, Prefix: []byte("k"), Reverse: true})
+				if err == nil {
+					if it.Valid() {
+						err = fmt.Errorf("postprune snapshot contains %+v", it.Entry())
+					}
+					err = errors.Join(err, it.Close())
+				}
+				snapshot <- err
+			}()
+			go func() {
+				close(commitStarted)
+				commit <- store.CommitAt(101, []Mutation{{Key: []byte("other"), Value: []byte("new")}}, CommitDurable)
+			}()
+			<-pointStarted
+			<-snapshotStarted
+			<-commitStarted
+			timer := time.NewTimer(30 * time.Millisecond)
+			select {
+			case err := <-point:
+				timer.Stop()
+				t.Fatalf("qualified point escaped physical prune fence: %v", err)
+			case err := <-snapshot:
+				timer.Stop()
+				t.Fatalf("qualified snapshot escaped physical prune fence: %v", err)
+			case err := <-commit:
+				timer.Stop()
+				t.Fatalf("qualified commit escaped physical prune fence: %v", err)
+			case <-timer.C:
+			}
+			release()
+			if err := <-prune; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-point; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-snapshot; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-commit; err != nil {
+				t.Fatal(err)
+			}
+			// Exercise admission cleanup after the durable delete/iterator close path.
+			if err := store.CommitAt(100, []Mutation{{Key: []byte("k"), Value: []byte("new")}}, CommitDurable); err != nil {
+				t.Fatal(err)
+			}
+			requireResult(t, store, []byte("k"), 100, Present, 100, []byte("new"))
+
+		})
 	}
 }

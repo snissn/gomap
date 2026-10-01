@@ -974,9 +974,10 @@ Invariants:
   floor, and removes a tombstone only after older versions cannot resurrect;
 - durable floor-first interruption can be reopened and resumed idempotently;
   pinned pre-prune snapshots remain readable under the race detector;
-- a prune paused after snapshot capture does not block foreground `GetAt`,
-  `CommitAt`, or `IterateVersions` acquisition, while a concurrent floor
-  advance remains serialized behind the prune.
+- a qualified prune paused after snapshot capture blocks foreground point
+  reads and snapshot acquisition until physical deletion completes; batch-only
+  adapters retain nonblocking reads/commits/snapshot capture. Floor advancement
+  stays serialized, and previously pinned snapshots stay readable.
 
 Coverage:
 
@@ -984,10 +985,12 @@ Coverage:
   keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
-- The same suite deterministically pauses prune iterator creation after its
-  snapshot is pinned, proves foreground point reads, commits, and retained-
-  version iterator acquisition complete, and then verifies both the old pinned
-  view and the newly committed version after pruning resumes.
+- The same suite pauses prune iterator creation after snapshot capture and
+  separately checks qualified foreground fencing and batch-only nonblocking
+  reads/commits/iterator acquisition. It verifies old pinned views, completed
+  pruning and subsequent durable commits. The cached successor suite reproduces
+  retained queue/live40 plus a later backend snapshot after logical tomb80
+  deletion, demonstrating why the Store prune fence is necessary.
 - `TreeDB/mvcc/mvcc_bench_test.go` compares all-version scans with physical
   encoded-key scans with the same owned key/value output across key counts
   `{64,256}`, version depths `{1,8,32}`, and both directions. Filtered scans use

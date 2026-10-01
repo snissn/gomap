@@ -424,3 +424,48 @@ func TestSeekGEVersionRange_AllowsPointWriterDuringBackendAcquire(t *testing.T) 
 		t.Fatalf("read = (%x,%q,%t,%v)", key, value, found, readErr)
 	}
 }
+
+// A Store must exclude physical prune for the whole qualified seek. Sorted
+// oldest-first deletion alone cannot protect a retained old table from a later
+// backend snapshot whose winning logical tombstone anchor has been removed.
+func TestSeekGEVersionRange_PruneRequiresStoreFence(t *testing.T) {
+	db, barrier, lower, upper := openSuccessorAcquireBarrier(t)
+	old, _ := mvcckey.Encode([]byte("one-key"), 40)
+	anchor, _ := mvcckey.Encode([]byte("one-key"), 80)
+	if err := barrier.BackendDB.(*backenddb.DB).Set(anchor, []byte{2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set(old, []byte{1, 'o', 'l', 'd'}); err != nil {
+		t.Fatal(err)
+	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	rotatePointSuccessorMemtables(t, db)
+	done := make(chan struct{})
+	var key, value []byte
+	var found bool
+	var err error
+	go func() { defer close(done); key, value, found, err = db.SeekGEVersionRange(lower, upper) }()
+	awaitSuccessorSignal(t, barrier.entered)
+	// Simulate already-active prune after it captured its snapshot. No new Store
+	// admission is acquired here: this is the source-level counterexample.
+	if e := db.Delete(old); e != nil {
+		t.Fatal(e)
+	}
+	if e := db.Delete(anchor); e != nil {
+		t.Fatal(e)
+	}
+	rotatePointSuccessorMemtables(t, db)
+	for len(db.queue) > 0 {
+		db.flushOneLocked(false)
+	}
+	close(barrier.resume)
+	awaitSuccessorSignal(t, done)
+	if count := db.pointSuccessorMVCCPhysicalDeleteFallbacksTotal.Load(); count != 0 {
+		t.Fatalf("counterexample observed physical tombstones: %d", count)
+	}
+	t.Logf("unfenced prune returned retained live40 after backend tomb80 deletion: key=%x value=%x", key, value)
+	if err != nil || !found || !bytes.Equal(key, old) || !bytes.Equal(value, []byte{1, 'o', 'l', 'd'}) {
+		t.Fatalf("prune counterexample not reproduced: %x %x %t %v", key, value, found, err)
+	}
+}

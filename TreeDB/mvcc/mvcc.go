@@ -116,7 +116,8 @@ type Store struct {
 
 	// mu guards the discard floor and fences multi-record commit application
 	// against qualified successor reads and snapshot acquisition. Single-record
-	// commits and reads share it; groups hold it exclusively through publication.
+	// commits and reads share it; groups hold it exclusively through publication,
+	// and qualified pruning holds it through physical deletion and lease cleanup.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool

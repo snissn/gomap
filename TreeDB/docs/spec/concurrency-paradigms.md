@@ -253,9 +253,12 @@ Limits:
 MVCC Store admission precedes the cached gate. Qualified point reads and
 single-record commits share the existing Store floor lock; multi-record
 commits hold it exclusively through publication to fence partial shard apply.
-Version iterator acquisition pins its snapshot under that lock. Pruning holds
-it only through floor/snapshot capture and publishes physical delete batches
-after releasing it, under the anchor ordering described in `contracts.md`.
+Version iterator acquisition pins its snapshot under that lock. Qualified
+pruning holds it exclusively through physical deletion and lease cleanup, so
+retained old tables cannot resurrect a value after a later backend snapshot
+loses its logical tombstone anchor. Already pinned iterators remain readable.
+Adapters without the qualified capability release after floor/snapshot capture
+and retain concurrent foreground operations, as described in `contracts.md`.
 Shared successor retries release their view/backend leases and shared gate
 before acquiring the exclusive gate and a fresh view; they never upgrade.
 
