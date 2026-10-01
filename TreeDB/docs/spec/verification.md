@@ -3082,3 +3082,13 @@ owner-separated generation, rather than demanding that the installed index
 remain identical to the original. A reused build retains its original builder
 head, executable, recipe and receipts, separately from the current caller
 head. No prior failed caller is reclassified as passing by this installation.
+
+The operation-owned endpoint checkpoint is mapped to
+`TestImmutableOwnerReplacementPrivateEndpointV1`: preauthorized Nodes-only
+address, fresh exact marked preparation, shared cold/cached domain source,
+credentialed probe, NONVOTER strong-search NOT_LEADER/no hits, unchanged old-voter
+endpoint, wrong-node/unmarked refusal, restart cold, hosted-asset refusal and
+genuine current-DB swap retirement. It grants no public readiness or promotion.
+Normal cold/cache diagnostics include all five Raft nodes, caller allocations,
+background work and control polling; they do not measure per-node allocations
+or establish a throughput comparison.

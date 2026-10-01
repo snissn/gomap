@@ -98,6 +98,15 @@ func (p *PeerTransportV1) ProbeShardEndpointV1(ctx context.Context, endpoint str
 	if p == nil || !p.groups[group][node] {
 		return identity, errPeerAuthenticationV1
 	}
+	return p.probeAuthenticatedShardEndpointV1(ctx, endpoint, node, group)
+}
+
+// Private callers establish exact operation authority before probing a spare.
+func (p *PeerTransportV1) probeAuthenticatedShardEndpointV1(ctx context.Context, endpoint string, node raftcluster.NodeID, group raftcluster.GroupID) (VectorPartitionShardEndpointIdentityV1, error) {
+	var identity VectorPartitionShardEndpointIdentityV1
+	if p == nil || p.security == nil {
+		return identity, errPeerAuthenticationV1
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -139,6 +148,15 @@ func (p *PeerTransportV1) dialScope(ctx context.Context, address string, node ra
 
 func (p *PeerTransportV1) accept(ctx context.Context, raw net.Conn, group raftcluster.GroupID) (net.Conn, error) {
 	if p == nil || p.security == nil || (group != "" && !p.groups[group][p.node]) {
+		return nil, errPeerAuthenticationV1
+	}
+	return p.acceptAuthenticatedV1(ctx, raw)
+}
+
+// Authenticate the peer before callers perform operation-specific remote
+// authority checks. This handshake does not grant local endpoint authority.
+func (p *PeerTransportV1) acceptAuthenticatedV1(ctx context.Context, raw net.Conn) (net.Conn, error) {
+	if p == nil || p.security == nil {
 		return nil, errPeerAuthenticationV1
 	}
 	if ctx == nil {

@@ -529,6 +529,9 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		endpoints[groupID] = vector.ShardAddresses[groupID][group.LeaderHint]
 		nodeEndpoints[groupID] = make(map[raftcluster.NodeID]string, len(vector.ShardAddresses[groupID]))
 		for node, endpoint := range vector.ShardAddresses[groupID] {
+			if group, ok := resolved.Group(groupID); !ok || !slices.Contains(group.Members, node) {
+				continue
+			}
 			nodeEndpoints[groupID][node] = endpoint
 		}
 		if r.dataGroup == groupID {
@@ -783,8 +786,36 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 				break
 			}
 		}
-		if fixed == nil || len(vector.ShardAddresses[group]) != len(fixed.Peers) {
+		if fixed == nil || len(vector.ShardAddresses[group]) < len(fixed.Peers) {
 			return fmt.Errorf("vector shard address coverage is incomplete for group %q", group)
+		}
+		members := make(map[raftcluster.NodeID]bool, len(fixed.Peers))
+		for _, peer := range fixed.Peers {
+			members[peer.ID] = true
+		}
+		for node, address := range vector.ShardAddresses[group] {
+			if members[node] {
+				continue
+			}
+			candidate := config
+			candidate.NodeID = node
+			candidate.RaftListen = nil
+			known := false
+			assigned := node == vector.RouterNodeID
+			for _, peer := range config.Catalog.Peers {
+				assigned = assigned || peer.ID == node
+			}
+			for _, configuredGroup := range config.Groups {
+				for _, peer := range configuredGroup.Peers {
+					assigned = assigned || peer.ID == node
+				}
+			}
+			for _, configured := range config.Nodes {
+				known = known || configured.ID == node
+			}
+			if !immutable || config.Credentials == nil || !known || assigned || !fixedPeerImmutableVectorStandbyV1(candidate) || !peerPrivateEndpointV1(address) {
+				return fmt.Errorf("invalid replacement shard address for node %q", node)
+			}
 		}
 		for _, peer := range fixed.Peers {
 			address := vector.ShardAddresses[group][peer.ID]

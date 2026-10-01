@@ -30,12 +30,13 @@ type replacementNativeWorkV1 struct {
 }
 
 type replacementNativeSlotV1 struct {
-	mu          sync.Mutex
-	closed      bool
-	work        *replacementNativeWorkV1
-	begin       raftplacement.ReplicaReplacementBeginV1
-	ownerSource *CollectionVectorPartitionGenerationSourceV1
-	ownerDB     *backenddb.DB
+	mu            sync.Mutex
+	closed        bool
+	work          *replacementNativeWorkV1
+	begin         raftplacement.ReplicaReplacementBeginV1
+	ownerSource   *CollectionVectorPartitionGenerationSourceV1
+	ownerDB       *backenddb.DB
+	ownerEndpoint *replacementOwnerEndpointV1
 }
 
 // Only a freshly fenced committed BEGIN may supersede the process-local slot.

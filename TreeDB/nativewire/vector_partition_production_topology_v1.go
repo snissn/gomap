@@ -73,12 +73,18 @@ type VectorPartitionProductionTopologyV1 struct {
 	identities        map[raftcluster.GroupID]string
 	identityProviders map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1
 	serving           map[raftcluster.GroupID]bool
-	mu                sync.Mutex
-	conns             map[net.Conn]struct{}
-	wg                sync.WaitGroup
-	closed            bool
-	closeOnce         sync.Once
-	closeErr          error
+	vectorPartitionShardConnectionsV1
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Both ordinary topology and operation-owned private endpoints drain this same
+// bounded shard connection loop before releasing their generation source.
+type vectorPartitionShardConnectionsV1 struct {
+	mu     sync.Mutex
+	conns  map[net.Conn]struct{}
+	wg     sync.WaitGroup
+	closed bool
 }
 
 func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopologyOptionsV1) (_ *VectorPartitionProductionTopologyV1, err error) {
@@ -106,7 +112,7 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if opts.ShardIdleTimeout == 0 {
 		opts.ShardIdleTimeout = 30 * time.Second
 	}
-	h := &VectorPartitionProductionTopologyV1{peerTransport: opts.PeerTransport, listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), identityProviders: make(map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1), serving: make(map[raftcluster.GroupID]bool), conns: make(map[net.Conn]struct{})}
+	h := &VectorPartitionProductionTopologyV1{peerTransport: opts.PeerTransport, listeners: make(map[raftcluster.GroupID]net.Listener), endpoints: make(map[raftcluster.GroupID]string, len(opts.Endpoints)), services: make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1), identities: make(map[raftcluster.GroupID]string), identityProviders: make(map[raftcluster.GroupID]func() VectorPartitionShardEndpointIdentityV1), serving: make(map[raftcluster.GroupID]bool), vectorPartitionShardConnectionsV1: vectorPartitionShardConnectionsV1{conns: make(map[net.Conn]struct{})}}
 	defer func() {
 		if err != nil {
 			_ = h.Close()
@@ -308,14 +314,21 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 }
 
 func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, listener net.Listener, service *VectorPartitionShardSearchServiceV1, identity string, idleTimeout time.Duration, maxConnections int, maxRequestFrame, maxResponseFrame uint32) {
-	connectionSlots := make(chan struct{}, maxConnections)
 	h.mu.Lock()
 	h.serving[group] = true
 	h.mu.Unlock()
+	server := VectorPartitionShardSearchTCPServerV1{PeerTransport: h.peerTransport, PeerGroupID: group, Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, EndpointIdentityProvider: h.identityProviders[group], MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}
+	h.vectorPartitionShardConnectionsV1.serveV1(listener, server, maxConnections, func() { h.mu.Lock(); h.serving[group] = false; h.mu.Unlock() })
+}
+
+func (h *vectorPartitionShardConnectionsV1) serveV1(listener net.Listener, server VectorPartitionShardSearchTCPServerV1, maxConnections int, stopped func()) {
+	connectionSlots := make(chan struct{}, maxConnections)
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		defer func() { h.mu.Lock(); h.serving[group] = false; h.mu.Unlock() }()
+		if stopped != nil {
+			defer stopped()
+		}
 		var retryDelay time.Duration
 		for {
 			conn, err := listener.Accept()
@@ -356,7 +369,7 @@ func (h *VectorPartitionProductionTopologyV1) serve(group raftcluster.GroupID, l
 				defer h.wg.Done()
 				defer func() { <-connectionSlots }()
 				defer func() { h.mu.Lock(); delete(h.conns, conn); h.mu.Unlock() }()
-				(VectorPartitionShardSearchTCPServerV1{PeerTransport: h.peerTransport, PeerGroupID: group, Service: service, EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: string(group), InstanceIdentity: identity}, EndpointIdentityProvider: h.identityProviders[group], MaxFrame: maxRequestFrame, MaxResponseFrame: maxResponseFrame, InitialTimeout: idleTimeout}).ServeConn(context.Background(), conn)
+				server.ServeConn(context.Background(), conn)
 			}()
 		}
 	}()

@@ -129,6 +129,9 @@ func (r *fixedPeerVectorRuntimeV1) ensureImmutableTopologyV1(ctx context.Context
 		endpoints[owner] = vector.ShardAddresses[owner][group.LeaderHint]
 		nodeEndpoints[owner] = make(map[raftcluster.NodeID]string, len(vector.ShardAddresses[owner]))
 		for node, endpoint := range vector.ShardAddresses[owner] {
+			if !slices.Contains(group.Members, node) {
+				continue
+			}
 			nodeEndpoints[owner][node] = endpoint
 		}
 		if r.dataGroup == owner {

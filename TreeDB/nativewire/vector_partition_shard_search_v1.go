@@ -340,16 +340,17 @@ type vectorPartitionShardSearchRouteV1 struct {
 }
 
 type VectorPartitionShardSearchServiceV1 struct {
-	localNodeID      raftcluster.NodeID
-	localGroup       raftcluster.GroupID
-	readCoordinator  raftcluster.RoutedReadIndexCoordinator
-	generationSource VectorPartitionGenerationSourceV1
-	limits           VectorPartitionShardSearchLimitsV1
-	route            vectorPartitionShardSearchRouteV1
-	stats            vectorPartitionShardSearchStatsAccumulatorV1
-	servingSnapshot  *VectorPartitionServingSnapshotPublisherV1
-	strictKey        []byte
-	postSearchGuard  func() error // immutable fixed-peer DB witness after searching cached assets
+	localNodeID            raftcluster.NodeID
+	localGroup             raftcluster.GroupID
+	readCoordinator        raftcluster.RoutedReadIndexCoordinator
+	generationSource       VectorPartitionGenerationSourceV1
+	limits                 VectorPartitionShardSearchLimitsV1
+	route                  vectorPartitionShardSearchRouteV1
+	stats                  vectorPartitionShardSearchStatsAccumulatorV1
+	servingSnapshot        *VectorPartitionServingSnapshotPublisherV1
+	strictKey              []byte
+	preparedOwnerAdmission func(context.Context) error
+	postSearchGuard        func() error // immutable fixed-peer DB witness after searching cached assets
 
 	// Narrow package-test seams for cancellation and timing at the response boundary.
 	testBeforePartialMaterialization func()
@@ -367,6 +368,10 @@ func (s *VectorPartitionShardSearchServiceV1) bindServingSnapshotV1(publisher *V
 }
 
 func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServiceOptionsV1) (*VectorPartitionShardSearchServiceV1, error) {
+	return newVectorPartitionShardSearchServiceV1(opts, nil)
+}
+
+func newVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServiceOptionsV1, preparedOwnerAdmission func(context.Context) error) (*VectorPartitionShardSearchServiceV1, error) {
 	limits, err := normalizeVectorPartitionShardSearchLimitsV1(opts.Limits)
 	if err != nil {
 		return nil, err
@@ -384,7 +389,7 @@ func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServi
 	if !ok {
 		return nil, fmt.Errorf("%w: local group %q is absent from the resolved catalog", ErrVectorPartitionShardSearchRouteMismatch, opts.LocalGroupID)
 	}
-	if !slices.Contains(localGroup.Members, opts.LocalNodeID) {
+	if preparedOwnerAdmission == nil && !slices.Contains(localGroup.Members, opts.LocalNodeID) {
 		return nil, fmt.Errorf("%w: local node %q is not a member of group %q", ErrVectorPartitionShardSearchRouteMismatch, opts.LocalNodeID, opts.LocalGroupID)
 	}
 	owners := make(map[uint32]raftcluster.GroupID, len(opts.Placement.Partitions))
@@ -398,11 +403,12 @@ func NewVectorPartitionShardSearchServiceV1(opts VectorPartitionShardSearchServi
 	placement := opts.Placement
 	placement.Partitions = slices.Clone(opts.Placement.Partitions)
 	return &VectorPartitionShardSearchServiceV1{
-		localNodeID:      opts.LocalNodeID,
-		localGroup:       opts.LocalGroupID,
-		readCoordinator:  opts.ReadCoordinator,
-		generationSource: opts.GenerationSource,
-		limits:           limits,
+		preparedOwnerAdmission: preparedOwnerAdmission,
+		localNodeID:            opts.LocalNodeID,
+		localGroup:             opts.LocalGroupID,
+		readCoordinator:        opts.ReadCoordinator,
+		generationSource:       opts.GenerationSource,
+		limits:                 limits,
 		route: vectorPartitionShardSearchRouteV1{
 			placement: placement,
 			owners:    owners,
@@ -436,6 +442,11 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 	started := time.Now()
 	if s == nil {
 		return response, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Err: ErrVectorPartitionShardSearchAssetsUnavailable}
+	}
+	if s.preparedOwnerAdmission != nil {
+		if err := s.preparedOwnerAdmission(ctx); err != nil {
+			return response, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Err: err}
+		}
 	}
 	s.stats.begin()
 	defer func() {
