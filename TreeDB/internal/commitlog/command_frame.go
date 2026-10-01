@@ -78,6 +78,7 @@ const (
 	CommandKindCollectionRebuildVectorIndex   CommandKind = 103
 	CommandKindCollectionReplaceSourceByID    CommandKind = 104
 	CommandKindCollectionPersistPartitionLive CommandKind = 105
+	CommandKindCollectionSplitVectorInsertV1  CommandKind = 106
 	CommandKindCatalogCreateCollection        CommandKind = 200
 	CommandKindCatalogMutationPlaceholder     CommandKind = CommandKindCatalogCreateCollection
 	CommandKindDurablePrefixBarrier           CommandKind = 300
@@ -111,6 +112,7 @@ const (
 	PayloadFormatCollectionTypedSourceByIDV1    PayloadFormat = 12
 	PayloadFormatCollectionTypedMetadataByIDV1  PayloadFormat = 13
 	PayloadFormatCollectionSourceImportV2       PayloadFormat = 14
+	PayloadFormatCollectionSplitVectorInsertV1  PayloadFormat = 15
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -2190,6 +2192,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionSplitVectorInsertV1:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionSplitVectorInsertV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogCreateCollection:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 			return ErrCorrupt
@@ -2233,6 +2239,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionRebuildVectorIndex, CommandKindCollectionPersistPartitionLive:
 		return validateCollectionRebuildVectorIndexPayload(env.Payload)
+	case CommandKindCollectionSplitVectorInsertV1:
+		_, err := DecodeSplitVectorInsertPayloadV1(env.Payload)
+		return err
 	case CommandKindCatalogCreateCollection:
 		return validateCatalogCreateCollectionPayload(env.Payload)
 	default:

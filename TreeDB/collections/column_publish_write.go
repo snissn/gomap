@@ -10,6 +10,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -37,6 +38,8 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	splitInsert          *splitInsertPublicationV1
+	splitProjection      *commitlog.SplitVectorInsertV1
 	sourceImportV2       *sourceImportPublicationV2
 	preparedInsert       bool
 	preparedTypedBatch   *typedColumnAdapterPreparedBatch
@@ -383,6 +386,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			iter, err = c.appendSourceImportSystemDeltaV2(iter, input.sourceImportV2)
 		}
 		if err == nil {
+			iter, err = c.appendSplitInsertSystemDeltaV1(iter, input.splitInsert)
+		}
+		if err == nil {
 			updatedMeta = nextMeta
 		}
 		return iter, err
@@ -664,6 +670,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMetaWithPreparedRaw(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan, preparedSystemMetaRaw)
 		if err == nil {
 			iter, err = c.appendSourceImportSystemDeltaV2(iter, input.sourceImportV2)
+		}
+		if err == nil {
+			iter, err = c.appendSplitInsertSystemDeltaV1(iter, input.splitInsert)
 		}
 		if err == nil {
 			updatedMeta = nextMeta

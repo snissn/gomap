@@ -1054,6 +1054,11 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 	if r == nil || r.vector == nil || r.config.Vector == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
+	if len(request.VisibilityToken) != 0 {
+		if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
+	}
 	if r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		if r.config.NodeID != r.config.Vector.RouterNodeID {
 			// Owners expose status and the authenticated shard listener, but do not
@@ -1108,7 +1113,16 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		if err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
-		return backend.SearchVectorPartitionV1(ctx, request)
+		searchRequest := request
+		searchRequest.VisibilityToken = nil // runtime holds the token fence; generic backend cannot consume it
+		response, err := backend.SearchVectorPartitionV1(ctx, searchRequest)
+		if err != nil {
+			return public.SearchResponseV1{}, err
+		}
+		if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
+		return response, nil
 	}
 	reply, err := r.client.call(ctx, leader, "vector-search", fixedPeerRequestV1{VectorSearch: &request}, false)
 	if err != nil {
@@ -1116,6 +1130,9 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 	}
 	if reply.VectorSearch == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
+	if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
 	return *reply.VectorSearch, nil
 }
@@ -1144,9 +1161,24 @@ func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Contex
 	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
+	routeGroup := request.OwnerGroup
+	if r.authority != nil {
+		source, err := r.authority.RouteDocumentToken(ctx, request.CatalogProof, r.config.Vector.Collection, raftplacement.DocumentIDTokenV1(request.Request.ID))
+		if err != nil {
+			return public.InsertResponseV1{}, err
+		}
+		if source.GroupID() != request.OwnerGroup {
+			canonical, target, err := r.splitVectorGroupsV1(ctx)
+			if err != nil || canonical != source.GroupID() || target != request.OwnerGroup {
+				return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+			}
+			request.SourceGroup = canonical
+			routeGroup = canonical
+		}
+	}
 	var group *FixedPeerTCPGroupV1
 	for i := range r.config.Groups {
-		if r.config.Groups[i].ID == request.OwnerGroup {
+		if r.config.Groups[i].ID == routeGroup {
 			group = &r.config.Groups[i]
 			break
 		}
@@ -1172,6 +1204,9 @@ func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Contex
 func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
 	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
+	}
+	if request.SourceGroup != "" {
+		return r.applySplitVectorSourceInsertV1(ctx, request)
 	}
 	r.vector.mutationMu.Lock()
 	defer r.vector.mutationMu.Unlock()

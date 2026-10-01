@@ -151,6 +151,8 @@ type FixedPeerTCPRuntimeV1 struct {
 	forwards     chan struct{}
 	reads        chan struct{}
 	ownerReceipt chan struct{}
+	splitRetryMu sync.Mutex
+	splitRetry   *fixedPeerSplitRetryV1
 
 	// Fixed asset bindings from the runtime-owned cloned config, never a serving grant.
 	immutableVectorAssetDigests map[raftcluster.GroupID]string
@@ -585,6 +587,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		r.vector.start()
 	}
 	go func() { _ = r.server.Serve(r.listener) }()
+	r.startSplitVectorRetryV1()
 	return r, nil
 }
 
@@ -609,6 +612,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 	defer r.closeMu.Unlock()
 	r.closeOnce.Do(func() {
 		r.BeginDrainV1()
+		r.stopSplitVectorRetryV1()
 		r.groupsMu.Lock()
 		data := make([]*fixedPeerDataV1, 0, len(r.data))
 		for _, d := range r.data {
@@ -818,6 +822,11 @@ func validateFixedPeerEntryRouteV1(entry []byte, metadata raftentry.RequestMetad
 	if err != nil {
 		return err
 	}
+	// Generic peer routes cannot supply the source proof required by the
+	// dedicated authenticated producer. Reuse the one route-validation decode.
+	if decoded.CommandID == iwire.CommandSplitVectorInsertV1 {
+		return raftcluster.ErrRouteTargetUnsupported
+	}
 	request, err := clusterMutationRouteRequest(iwire.ValidatedCommand{Header: iwire.CommandHeader{ID: decoded.CommandID, Version: decoded.CommandVersion}, Known: decoded.Sections}, iwire.Limits{})
 	if err != nil {
 		return err
@@ -947,7 +956,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	// Vector control forwards have no authenticated continuation token in the
 	// fixed-peer vector mode. A cross-node forward arriving after owner drain
 	// must fail closed even if its public ingress began before the drain.
-	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || request.URL.Path == "/v1/vector-forward" || request.URL.Path == "/v1/vector-lifecycle" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" && request.URL.Path != "/v1/replacement-tail-check") {
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || request.URL.Path == "/v1/vector-forward" || request.URL.Path == "/v1/vector-split-project" || request.URL.Path == "/v1/vector-lifecycle" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" && request.URL.Path != "/v1/replacement-tail-check") {
 		err = raftcluster.ErrAdmissionUnavailable
 		return
 	}
@@ -965,9 +974,9 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	// each stage bounded capacity so callers cannot starve their own callees.
 	requests := r.requests
 	switch request.URL.Path {
-	case "/v1/forward", "/v1/vector-forward", "/v1/vector-lifecycle":
+	case "/v1/forward", "/v1/vector-forward", "/v1/vector-split-project", "/v1/vector-lifecycle":
 		requests = r.forwards
-	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof", "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -1092,6 +1101,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err == nil {
 			reply.Catalog, _ = r.authority.Status()
 		}
+	case "/v1/vector-split-project", "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
+		err = r.handleSplitVectorControlV1(ctx, strings.TrimPrefix(request.URL.Path, "/v1/"), caller, body.Entry, &reply)
 	case "/v1/vector-forward":
 		if body.VectorInsert == nil {
 			err = ErrFixedPeerVectorProofMissingV1
@@ -1207,7 +1218,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" || operation == "vector-split-source-proof" || operation == "vector-split-receipt" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

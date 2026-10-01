@@ -44,7 +44,7 @@ func (w *peerWorkLeaseV1) release() {
 
 func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
-	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
+	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof", "vector-split-source-proof", "vector-split-receipt":
 		return "control-read"
 	case "readiness", "diagnostics":
 		return "control-diagnostics"
@@ -92,6 +92,17 @@ func preflightPeerRequestBytesV1(body fixedPeerRequestV1) (int64, error) {
 	}
 	for _, value := range m.ClusterRouteMembers {
 		if !charge(len(value)+1, 6) {
+			return 0, raftcluster.ErrRouteTargetUnsupported
+		}
+	}
+	if body.VectorSearch != nil {
+		if !charge(len(body.VectorSearch.Query), 24) || !charge(len(body.VectorSearch.VisibilityToken), 2) || !charge(len(body.VectorSearch.Generation.Index), 6) {
+			return 0, raftcluster.ErrRouteTargetUnsupported
+		}
+	}
+	if body.VectorInsert != nil {
+		v := body.VectorInsert
+		if !charge(len(v.Request.ID), 2) || !charge(len(v.Request.Document), 2) || !charge(len(v.Request.IdempotencyKey), 2) || !charge(len(v.Request.Vector), 24) || !charge(len(v.Request.Generation.Index), 6) || !charge(len(v.SourceGroup), 6) || !charge(len(v.OwnerGroup), 6) {
 			return 0, raftcluster.ErrRouteTargetUnsupported
 		}
 	}

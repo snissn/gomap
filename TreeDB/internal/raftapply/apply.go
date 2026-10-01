@@ -45,6 +45,9 @@ type FaultInjector interface {
 // deterministic entry bytes. None of these fields are native-wire request
 // structs or handler inputs.
 type ApplyMetadataV1 struct {
+	// GroupID is assigned by the applying FSM's resolved fixed group, not by
+	// route/request metadata. Only split-source commands require it.
+	GroupID                 string
 	EntryID                 raftentry.ApplyEntryID
 	LocalDurabilityBoundary LocalDurabilityBoundaryV1
 	SyncLocalCommandWAL     bool
@@ -396,6 +399,8 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	var result raftentry.ApplyResultV1
 	switch entry.Target.CommandID {
+	case nativewire.CommandSplitVectorInsertV1:
+		result, err = h.applySplitVectorInsertV1(entry, meta)
 	case nativewire.CommandCreateCollection:
 		result, err = h.applyCreateCollectionV1(entry, meta)
 	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch, nativewire.CommandUpdateBSONSet:

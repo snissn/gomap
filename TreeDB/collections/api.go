@@ -11637,6 +11637,7 @@ func (c *Collection) insertBatchSchemaLocked(ids, documents [][]byte, trustedVal
 }
 
 type insertBatchExecutionOptions struct {
+	splitInsert              *splitInsertPublicationV1
 	returnResultIDs          bool
 	insertStats              *CollectionInsertStats
 	trustedFloat32Projection *trustedFloat32Projection
@@ -12212,7 +12213,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	plannerOptions.typedProjection = execOpts.trustedFloat32Projection
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode {
+	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode && execOpts.splitInsert == nil {
 		if plannerOptions.documentFormat == DocumentFormatJSON && !commandWALNoIndexBufferedMode {
 			runTestBeforeInsertBatchPlanningHook()
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
@@ -12499,7 +12500,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 			meta: meta, catalog: currentCatalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: insertBatchBaseRootIDMap(rootNames, baseRootIDs),
 			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationInsert,
-			documents: columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
+			splitInsert: execOpts.splitInsert,
+			documents:   columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
 		}
 		if c.typedGraphEncodedAdmissionEnabled() {
 			tables := make([]memtable.Table, len(plan.runs))
@@ -12561,7 +12563,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+				it, err := c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+				if err != nil {
+					return nil, err
+				}
+				return c.appendSplitInsertSystemDeltaV1(it, execOpts.splitInsert)
 			})
 			return err
 		})
@@ -12572,7 +12578,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return c.validateMutationRootDescriptors(pin.Pager(), snapshotUserRoot(pin), baseSystemRoot, baseCommitSeq)
 		}
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+			it, err := c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
+			if err != nil {
+				return nil, err
+			}
+			return c.appendSplitInsertSystemDeltaV1(it, execOpts.splitInsert)
 		})
 	}
 	plan.stats.Publish = time.Since(publishStart)

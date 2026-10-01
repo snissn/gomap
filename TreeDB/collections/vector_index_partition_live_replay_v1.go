@@ -197,6 +197,9 @@ func (c *Collection) validateVectorPartitionLiveReplaySpecsV1(specs []vectorPart
 }
 
 func vectorPartitionLiveReplayMutationsV1(input columnWritePublishInput, vectorColumn int) ([][]byte, [][]float32, error) {
+	if input.splitProjection != nil {
+		return [][]byte{input.splitProjection.ID}, [][]float32{input.splitProjection.Vector}, nil
+	}
 	ids := make([][]byte, 0, len(input.sourceDeleteDocuments)+len(input.documents)+len(input.declaredRows))
 	vectors := make([][]float32, 0, cap(ids))
 	positions := make(map[string]int, cap(ids))
@@ -251,6 +254,14 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 		return nil, errors.New("collections: document generation exhausted")
 	}
 	targetGeneration := state.CommitSeq + 1
+	if input.splitProjection != nil {
+		// Projection-only graph publication must not invent a canonical source
+		// document generation on the ANN owner.
+		if len(specs) != 1 {
+			return nil, ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		targetGeneration = specs[0].baseCoverage
+	}
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: make([]vectorPartitionLiveReplayEntryV1, 0, len(specs))}
 	for _, spec := range specs {
 		candidate, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(spec.definition))

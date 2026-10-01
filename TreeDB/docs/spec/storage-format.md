@@ -3864,3 +3864,17 @@ This completion slice remains a developmental checkpoint until its focused
 normal/race and separate-process recovery gates pass. It does not enable
 lifecycle-bearing replacement or establish growing-shard/foreground performance
 capacity; those P5 obligations remain open.
+
+### Bounded split-source insert checkpoint metadata
+
+The pre-alpha split-source insert checkpoint adds native system records under
+the versioned `vector_partition_split_insert_v1:` prefix. Each fixed
+collection/index/generation/source/target/catalog identity holds one pending
+canonical source intent and at most 64 sorted completed semantic outcomes;
+target records hold graph-only durable receipts and no canonical document
+copy. The record is bounded to 384 KiB and published in the same ordered native
+root transaction as its row or graph change. Command kind 106 / payload format
+15 replays these phases and advances applied WAL coverage atomically. Older
+binaries need not accept this added format; no migration support is promised.
+See [the split insert contract](vector-partition-split-source-insert-v1.md) for
+the fixed lifetime capacity and local-WAL versus consensus trust boundary.

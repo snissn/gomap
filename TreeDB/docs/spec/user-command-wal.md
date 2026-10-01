@@ -1300,3 +1300,13 @@ Concepts to preserve:
 5. What exact public error should be returned for `WAL-rejected` commands?
 6. Which resolver helpers should be first-class convenience APIs versus caller
    responsibility to resolve before invoking declarative update ops?
+
+## Split canonical-source insert checkpoint
+
+Command kind 106 / payload format 15 reuses the collection command-WAL substrate
+for source row+intent, projection-only graph+receipt and source retirement. The
+validated bounded canonical payload contains original semantic commit positions;
+projection/clear payloads omit canonical document bytes. Native root publication
+covers each frame, including idempotent no-op replay, before AppliedLSN advances.
+See [the bounded split insert contract](vector-partition-split-source-insert-v1.md)
+for group authority, replay trust, capacity and unqualified crash limits.
