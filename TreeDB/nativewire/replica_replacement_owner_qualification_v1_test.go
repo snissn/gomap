@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -576,6 +577,160 @@ func TestReplacementPrivateANNResponseValidationV1(t *testing.T) {
 			result, err := client.validateReplacementOwnerQualificationResponseV1(t.Context(), command, client.config.Groups[0], request, &response)
 			if err == nil || !reflect.DeepEqual(result, ReplicaReplacementOwnerQualificationV1{}) {
 				t.Fatalf("malformed private ANN retained hits: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestReplacementPrivateANNServiceRejectsMutableShapeV1(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*VectorPartitionShardSearchRequestV1)
+	}{
+		{"stats_none", func(r *VectorPartitionShardSearchRequestV1) { r.StatsMode = VectorPartitionShardSearchStatsNoneV1 }},
+		{"live_revision", func(r *VectorPartitionShardSearchRequestV1) { r.LiveRevision = 1 }},
+		{"live_coverage", func(r *VectorPartitionShardSearchRequestV1) { r.LiveCoverage = 1 }},
+		{"live_domains", func(r *VectorPartitionShardSearchRequestV1) { r.LiveDomainIDs = []uint32{0} }},
+		{"strict_capability", func(r *VectorPartitionShardSearchRequestV1) {
+			r.StrictCapability = &vectorPartitionStrictSearchCapabilityV1{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+				[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}}, nil)
+			admissions, proofs := 0, 0
+			service.preparedOwnerAdmission = func(context.Context) error { admissions++; return nil }
+			service.privateOwnerReadBarrier = func(context.Context) (raftcluster.ReadIndexProof, raftcluster.AppliedProgress, error) {
+				proofs++
+				return raftcluster.ReadIndexProof{}, raftcluster.AppliedProgress{}, nil
+			}
+			request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+			test.mutate(&request)
+			response, err := service.searchPrivateOwnerV1(t.Context(), request)
+			assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorInvalidRequestV1)
+			if !reflect.DeepEqual(response, VectorPartitionShardSearchResponseV1{}) || admissions != 0 || proofs != 0 || coordinator.callCount() != 0 || source.pins != 0 || source.opens != 0 || source.releases != 0 {
+				t.Fatalf("private shape refusal reached authority or source: response=%+v admissions=%d proofs=%d source=%+v", response, admissions, proofs, source)
+			}
+		})
+	}
+}
+
+// These credentialed direct frames bypass the client. Accepted boundary evidence
+// hands off to a refusal-only callback, without operation authority or ANN success.
+func TestReplacementPrivateANNReceiveValidationV1(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		mutate        func(*VectorPartitionShardSearchRequestV1)
+		accepted      bool
+		frameTooSmall bool
+	}{
+		{name: "stats_none", mutate: func(r *VectorPartitionShardSearchRequestV1) { r.StatsMode = VectorPartitionShardSearchStatsNoneV1 }},
+		{name: "live_revision", mutate: func(r *VectorPartitionShardSearchRequestV1) { r.LiveRevision = 1 }},
+		{name: "live_coverage", mutate: func(r *VectorPartitionShardSearchRequestV1) { r.LiveCoverage = 1 }},
+		{name: "live_domains", mutate: func(r *VectorPartitionShardSearchRequestV1) { r.LiveDomainIDs = []uint32{0} }},
+		{name: "strict_capability", mutate: func(r *VectorPartitionShardSearchRequestV1) {
+			r.StrictCapability = &vectorPartitionStrictSearchCapabilityV1{}
+		}},
+		{name: "ordinary_only_budget"},
+		{name: "below_augmented_budget"},
+		{name: "exact_augmented_budget", accepted: true},
+		{name: "configured_frame_limit", frameTooSmall: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport, config := peerTransportFixtureV1(t)
+			defer transport.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,
+				[]raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}}, nil)
+			var calls atomic.Int64
+			server := VectorPartitionShardSearchTCPServerV1{
+				PeerTransport: transport, PeerGroupID: config.Groups[0].ID, Service: service,
+				preparedOwnerAdmission: func(context.Context) error { return nil },
+				privateOwnerSearch: func(context.Context, []byte, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+					calls.Add(1)
+					return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, Err: raftcluster.ErrAdmissionUnavailable}
+				},
+			}
+			request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+			request.TargetGroupID, request.TargetNodeID = config.Groups[0].ID, config.NodeID
+			if test.mutate != nil {
+				test.mutate(&request)
+			}
+			begin := []byte("receive-boundary-only")
+			ordinaryBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			augmentedBytes := ordinaryBytes + 4 + uint64(len(begin))
+			switch test.name {
+			case "ordinary_only_budget":
+				request.RequestBytesLimit = ordinaryBytes
+			case "below_augmented_budget":
+				request.RequestBytesLimit = augmentedBytes - 1
+			case "exact_augmented_budget", "configured_frame_limit":
+				request.RequestBytesLimit = augmentedBytes
+			}
+			encoded, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{PrivateRequest: &request, PrivateBegin: begin})
+			if err != nil || uint64(len(encoded)) != augmentedBytes {
+				t.Fatalf("private wire bytes=%d augmented budget=%d err=%v", len(encoded), augmentedBytes, err)
+			}
+			if test.frameTooSmall {
+				server.MaxFrame = uint32(augmentedBytes - 1)
+			}
+			done := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err == nil {
+					server.ServeConn(ctx, conn)
+				}
+				done <- err
+			}()
+			conn, err := transport.dialScope(ctx, listener.Addr().String(), config.NodeID, "shard:"+string(config.Groups[0].ID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if deadline, ok := ctx.Deadline(); ok {
+				_ = conn.SetDeadline(deadline)
+			}
+			if err := writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{PrivateRequest: &request, PrivateBegin: begin}, uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes)); err != nil && !test.frameTooSmall {
+				t.Fatal(err)
+			}
+			frame, readErr := readVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+			if test.frameTooSmall {
+				if readErr == nil {
+					t.Fatalf("configured frame limit accepted request: %+v", frame)
+				}
+			} else {
+				want := VectorPartitionShardSearchErrorInvalidRequestV1
+				if test.accepted {
+					want = VectorPartitionShardSearchErrorGroupUnavailableV1
+				}
+				if readErr != nil || frame.Error == nil || frame.Error.Code != want || frame.Response != nil || frame.PrivateResponse != nil {
+					t.Fatalf("direct private frame response=%+v err=%v want=%s", frame, readErr, want)
+				}
+			}
+			_ = conn.Close()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			wantCalls := int64(0)
+			if test.accepted {
+				wantCalls = 1
+			}
+			if calls.Load() != wantCalls || source.pins != 0 || source.opens != 0 || source.releases != 0 || coordinator.callCount() != 0 || transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+				t.Fatalf("direct frame leaked authority/source/resource work: calls=%d want=%d source=%+v resources=%+v", calls.Load(), wantCalls, source, transport.ResourceStatsV1())
 			}
 		})
 	}

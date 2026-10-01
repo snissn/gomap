@@ -630,6 +630,12 @@ func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Conte
 		_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
 		return false
 	}
+	if privateOwner {
+		if _, err := replacementOwnerQualificationRequestBytesV1(*request, len(frame.PrivateBegin), uint64(maxFrame)); err != nil {
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Message: err.Error()}}, maxResponseFrame, time.Now().Add(initialTimeout))
+			return false
+		}
+	}
 	if admission != nil {
 		if request.TargetGroupID != s.PeerGroupID {
 			return false

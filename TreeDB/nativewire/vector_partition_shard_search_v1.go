@@ -447,7 +447,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 // Private qualification shares bounded ANN execution, but never the local-leader
 // proof or ordinary response authority. Only the operation-owned endpoint binds it.
 func (s *VectorPartitionShardSearchServiceV1) searchPrivateOwnerV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
-	if s == nil || s.preparedOwnerAdmission == nil || s.privateOwnerReadBarrier == nil || s.servingSnapshot != nil || request.StrictCapability != nil {
+	if s == nil || s.preparedOwnerAdmission == nil || s.privateOwnerReadBarrier == nil || s.servingSnapshot != nil || !replacementOwnerQualificationRequestSupportedV1(request) {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Err: ErrVectorPartitionShardSearchInvalidRequest}
 	}
 	return s.searchV1(ctx, request, true)

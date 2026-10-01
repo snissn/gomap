@@ -23,25 +23,20 @@ type ReplicaReplacementOwnerQualificationV1 struct {
 func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, request VectorPartitionShardSearchRequestV1) (ReplicaReplacementOwnerQualificationV1, error) {
 	var result ReplicaReplacementOwnerQualificationV1
 	if c == nil || c.config.Vector == nil || c.peerTransport == nil || command.OwnerPreparation == nil ||
-		request.TargetNodeID != command.NewPeer.ID || request.TargetGroupID != command.GroupID || request.StrictCapability != nil ||
-		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 || request.LiveRevision != 0 || request.LiveCoverage != 0 || len(request.LiveDomainIDs) != 0 {
+		request.TargetNodeID != command.NewPeer.ID || request.TargetGroupID != command.GroupID || !replacementOwnerQualificationRequestSupportedV1(request) {
 		return result, raftcluster.ErrUnsupportedFeature
 	}
 	limits := DefaultVectorPartitionShardSearchLimitsV1()
 	if err := (&VectorPartitionShardSearchServiceV1{limits: limits}).validateRequest(request); err != nil {
 		return result, err
 	}
-	requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
-	if err != nil || requestBytes > uint64(limits.MaxRequestBytes) {
-		return result, errors.Join(raftcluster.ErrRouteTargetUnsupported, err)
-	}
 	begin, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
 	if err != nil {
 		return result, err
 	}
-	requestBytes += uint64(4 + len(begin))
-	if requestBytes > uint64(limits.MaxRequestBytes) || requestBytes > request.RequestBytesLimit {
-		return result, ErrVectorPartitionShardSearchInvalidRequest
+	requestBytes, err := replacementOwnerQualificationRequestBytesV1(request, len(begin), limits.MaxRequestBytes)
+	if err != nil {
+		return result, err
 	}
 	configuredBound, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
 	if err != nil {
@@ -97,6 +92,28 @@ func (c *FixedPeerTCPClientV1) QualifyReplicaReplacementOwnerV1(ctx context.Cont
 		return result, ErrVectorPartitionShardSearchRouteMismatch
 	}
 	return c.validateReplacementOwnerQualificationResponseV1(ctx, command, group, request, frame.PrivateResponse)
+}
+
+// Every private entry enforces the immutable/basic-statistics contract; an
+// authenticated caller may bypass the exported qualification client.
+func replacementOwnerQualificationRequestSupportedV1(request VectorPartitionShardSearchRequestV1) bool {
+	return request.StrictCapability == nil && request.StatsMode == VectorPartitionShardSearchStatsBasicV1 &&
+		request.LiveRevision == 0 && request.LiveCoverage == 0 && len(request.LiveDomainIDs) == 0
+}
+
+func replacementOwnerQualificationRequestBytesV1(request VectorPartitionShardSearchRequestV1, beginBytes int, maxRequestBytes uint64) (uint64, error) {
+	if !replacementOwnerQualificationRequestSupportedV1(request) || beginBytes < 1 {
+		return 0, ErrVectorPartitionShardSearchInvalidRequest
+	}
+	ordinaryBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+	if err != nil {
+		return 0, errors.Join(ErrVectorPartitionShardSearchInvalidRequest, err)
+	}
+	requestBytes, ok := addUint64V1(ordinaryBytes, uint64(beginBytes)+4)
+	if !ok || requestBytes > maxRequestBytes || requestBytes > request.RequestBytesLimit {
+		return 0, ErrVectorPartitionShardSearchInvalidRequest
+	}
+	return requestBytes, nil
 }
 
 // Resolve the exact pending operation through the existing authenticated,

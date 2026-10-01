@@ -3109,6 +3109,13 @@ existing deterministic service fixture to prove final admission discards all
 partials and releases its generation pin. `TestReplacementPrivateANNRequestAdmissionV1`
 checks pre-dial byte-exhaustion refusal, request-lease release after dial refusal,
 and canceled admission through the existing shared transport fixture.
+`TestReplacementPrivateANNServiceRejectsMutableShapeV1` rejects non-basic or
+live/strict private requests before authority, proof or generation access.
+`TestReplacementPrivateANNReceiveValidationV1` sends authenticated direct frames
+without the exported client: shape and BEGIN-inclusive caller-budget refusals,
+exact augmented-budget handoff and configured frame bounds leave no result or
+transport lease. Its accepted boundary uses a refusal-only callback and claims
+no operation authority or ANN success.
 `TestReplacementPrivateANNResponseValidationV1` rejects missing or malformed
 partitions, exact fallback, incoherent counters/chunks, invalid neighbors,
 wrong proof identity and exceeded byte/work budgets through the shared coordinator
