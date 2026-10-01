@@ -119,6 +119,20 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
 
 ## Maintenance Expectations
 
+The standalone `BenchmarkAdaptiveMVCCSnapshotCommandWAL` in `TreeDB/caching`
+captures public MVCC writes with a snapshot every 112 writes under relaxed and
+durable command-WAL profiles. Run from the repo root:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkAdaptiveMVCCSnapshotCommandWAL$' -benchtime=2240x -count=5 -benchmem
+```
+
+Use fixed counts of at least 1120 to reach adaptive selection. For a separate
+single-row profiling run, restrict `-bench` to the desired profile/mode and add
+`-cpuprofile cpu.pprof -memprofile allocs.pprof`; inspect with `go tool pprof`.
+The text output reports `B/op`, `allocs/op`, `writes/s`, sampling/selection and
+command-WAL counters. These Go test profiles are not benchprof inputs.
+
 The standalone durable MVCC singleton route comparison is:
 
 ```sh
@@ -160,3 +174,44 @@ policy before collection, and keep profiles in separate runs. Go benchmark text
 and optional Go test profiles are standalone artifacts, not benchprof inputs or
 rows of the matched TreeDB/Badger decision matrix. This harness does not alter
 unified-bench producer filenames or the benchprof parser contract.
+
+## Standalone accepted partition cost profiles
+
+`TestMultiOwnerTCPAcceptedDisjointRetained100KV1` in `TreeDB/nativewire`
+writes ten cumulative sampled allocation profiles when the comparative cost
+opt-in is enabled: `accepted-cost-local-before.pprof`,
+`accepted-cost-local-after.pprof`, and
+`accepted-cost-node-{0,1,2,3}-{before,after}.pprof` (eight daemon files).
+These standalone Go test profiles are **not benchprof inputs** and are not
+`unified-bench -profile-dir` outputs. Retain all ten files with the 516 JSON
+receipts, source/input pins and sampling-rate/boundary metadata.
+
+After harness review/landing, exact-source freeze and runner admission, use
+a reviewed retained-input descriptor and its independently pinned SHA256.
+The descriptor must retain the accepted M3/source/DB provenance; the checksum
+does not replace those guards. Use absolute input/receipt paths, create a fresh
+receipt directory and run once
+inside the admitted 8 GiB, zero-swap scope with the pinned offline toolchain:
+
+```sh
+mkdir -m 700 "$PARTITION_RECEIPTS"
+unset GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1
+GOWORK=off GOMAXPROCS=4 GOFLAGS='-p=2 -mod=readonly' \
+  GOMAP_SELECTED_LIVE_FIXTURE="$PARTITION_INPUT" \
+  GOMAP_SELECTED_LIVE_FIXTURE_SHA256="$PARTITION_INPUT_SHA256" \
+  GOMAP_SELECTED_LIVE_RECEIPTS="$PARTITION_RECEIPTS" \
+  GOMAP_ACCEPTED_COMPARATIVE_COST_V1=1 \
+  go test ./TreeDB/nativewire \
+    -run '^TestMultiOwnerTCPAcceptedDisjointRetained100KV1$' \
+    -count=1 -timeout=750s -v
+```
+
+Inspect each matched pair directly, for example
+`go tool pprof -sample_index=alloc_space -base BEFORE.pprof AFTER.pprof`;
+repeat with `alloc_objects`. Run analysis under runner admission as well.
+Two GCs flush samples outside search timers. Differences include background,
+observer and profile/control work; they are statistical estimates, not exact
+query/navigation/merge costs. Instrumented timings and global allocations are
+not an apples-to-apples comparison with older uninstrumented samples.
+See [the full observation contract](../../docs/benchmarks/treedb_partition_accepted_cost_diagnostic.md)
+for framed-byte/RSS boundaries, validation and retained-collection limits.

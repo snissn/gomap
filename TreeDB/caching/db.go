@@ -12378,7 +12378,10 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
-	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly {
+	// Early rotations may finish byte warmup before a measured decision. Keep
+	// a measured append-only stop even when range deletion resets live counters.
+	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
+		(!db.memtableAdaptiveObserve.Load() || db.memtableAdaptiveDecisionWrites.Load() >= adaptiveMinWrites) {
 		observe = false
 	}
 	db.memtableAdaptiveObserve.Store(observe)
@@ -13171,6 +13174,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.memtableAdaptiveObserve.Store(adaptive)
 	db.updateAdaptiveObservationLocked()
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)

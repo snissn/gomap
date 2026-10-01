@@ -145,6 +145,21 @@ Effects:
 - foreground writes on different keys can proceed concurrently,
 - rotation/flush pipeline tracks per-shard metadata and queue ranges.
 
+Default adaptive mode starts with append-only storage and observation enabled,
+even when the flush threshold does not activate the byte warmup. An early snapshot, iterator,
+checkpoint, or size rotation ends the byte-threshold warmup, but a `low_data`
+decision keeps write/iterator observation enabled until the existing 1,024-write
+minimum is reached. The shared observation guard stops sampling after a
+sufficient-data append-only selection, including later low-data rotations after
+range deletion resets the live counters. Other selected modes retain their existing observation
+policy; explicit modes never sample. Observation retains only atomic counts
+and the previous key, not a growing key sample. Rotation decisions remain
+serialized by `db.mu`; the existing atomic observation gate and key mutex
+protect foreground updates. Snapshot isolation and flush boundaries are
+unchanged. Inspect `treedb.cache.memtable_adaptive.last_{reason,writes,mode}`
+and `treedb.cache.memtable_stats.writes` to distinguish a measured choice from
+the initial append-only fallback.
+
 ### 3.7 Optimistic concurrency + validation (backend batch writes)
 
 Mechanism:

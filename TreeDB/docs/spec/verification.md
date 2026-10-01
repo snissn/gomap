@@ -804,6 +804,18 @@ Coverage:
   - `TestReverseIterator_IncludesCachedWrites_SnapshotIsolated`
 - `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
 - Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`
+- `TreeDB/caching/memtable_adaptive_test.go`:
+  - `TestAdaptiveMemtableMode_EarlyRotationKeepsSampling`: snapshot, iterator,
+    and ordinary rotations retain low-data observation, reach mixed/sequential
+    selection, and stop sampling after a sufficient append-only choice.
+  - `TestAdaptiveMemtableMode_ExplicitModesDoNotObserve`: fixed modes never
+    enable adaptive observation or change mode during rotation.
+  - `TestAdaptiveMemtableMode_StartsSamplingWithoutByteWarmup`: small flush
+    thresholds and adaptive aliases start observation before any decision.
+- `TreeDB/caching/memtable_adaptive_public_bench_test.go`:
+  - `BenchmarkAdaptiveMVCCSnapshotCommandWAL`: public MVCC commits and early
+    snapshots under relaxed/durable command-WAL profiles, with explicit-mode
+    controls, allocation counts, selection proof, and WAL counters.
 
 ## 10.1 Target Conditional Raw KV Revisions And Transactions
 
