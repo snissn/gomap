@@ -83,6 +83,7 @@ func (c *FixedPeerTCPClientV1) CommitReplicaReplacementOwnerQualificationV1(ctx 
 	}
 	logical := request
 	logical.RequestID, logical.CancellationID, logical.DeadlineUnixNano = "", "", 0
+	logical.LiveDomainIDs = nil // Immutable qualification accepts both nil and empty live domains.
 	digest, err := replacementOwnerQualificationDigestV1(logical)
 	if err != nil || state.OwnerQualification.QueryDigest != digest {
 		return zero, raftplacement.ErrCatalogMetaConflict
@@ -97,6 +98,45 @@ func replacementOwnerQualificationDigestV1(value any) (string, error) {
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+// Telemetry is not immutable result identity. Preserve only the validated
+// partition/neighbor order, stable IDs and scores; empty neighbors have one encoding.
+func replacementOwnerQualificationResultDigestV1(partials []VectorPartitionShardSearchPartialV1) (string, error) {
+	results := make([]struct {
+		PartitionID uint32
+		Neighbors   []VectorPartitionShardSearchNeighborV1
+	}, len(partials))
+	for i, partial := range partials {
+		results[i].PartitionID = partial.PartitionID
+		if len(partial.Neighbors) != 0 {
+			results[i].Neighbors = partial.Neighbors
+		}
+	}
+	return replacementOwnerQualificationDigestV1(results)
+}
+
+// ponytail: one catalog producer's receipt gate conservatively serializes all
+// receipt operations. Upgrade to per-operation gates only if measured contention
+// warrants it. Waiters already hold bounded control request/byte leases; no worker
+// or result lives beyond its caller deadline, and ordinary serving never uses it.
+func (r *FixedPeerTCPRuntimeV1) acquireOwnerReceiptV1(ctx context.Context) (func(), error) {
+	if r == nil || r.ownerReceipt == nil {
+		return nil, raftcluster.ErrAdmissionUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case r.ownerReceipt <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-r.ownerReceipt
+			return nil, err
+		}
+		return func() { <-r.ownerReceipt }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Bound result/hash storage by the same actual fanout/top-k frame ceiling as
@@ -143,6 +183,16 @@ func (r *FixedPeerTCPRuntimeV1) commitReplacementOwnerQualificationV1(ctx contex
 	if _, err := replacementOwnerQualificationRequestBytesV1(*request, len(raw), limits.MaxRequestBytes); err != nil {
 		return err
 	}
+	ctx, cancel, err := vectorPartitionShardSearchContextV1(ctx, request.DeadlineUnixNano)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	release, err := r.acquireOwnerReceiptV1(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if _, err := r.replacementReadV1(ctx, command); err != nil {
 		return err
 	}
@@ -163,6 +213,7 @@ func (r *FixedPeerTCPRuntimeV1) commitReplacementOwnerQualificationV1(ctx contex
 	// Correlation/deadline fields are transport lifetime, not logical query identity.
 	logical := *request
 	logical.RequestID, logical.CancellationID, logical.DeadlineUnixNano = "", "", 0
+	logical.LiveDomainIDs = nil // Immutable qualification accepts both nil and empty live domains.
 	queryDigest, err := replacementOwnerQualificationDigestV1(logical)
 	if err != nil {
 		return err
@@ -210,6 +261,13 @@ func (r *FixedPeerTCPRuntimeV1) commitReplacementOwnerQualificationV1(ctx contex
 	if active.ReadySetDigest != qualified.Search.Proof.ReadySetDigest {
 		return ErrFixedPeerVectorProofStaleV1
 	}
+	if current.OwnerQualification != nil {
+		if current.OwnerQualification.QueryDigest != queryDigest {
+			return raftplacement.ErrCatalogMetaConflict
+		}
+		reply.ReplacementState = &current
+		return nil
+	}
 	group, err := r.replacementGroupV1(current, false)
 	if err != nil {
 		return err
@@ -233,7 +291,7 @@ func (r *FixedPeerTCPRuntimeV1) commitReplacementOwnerQualificationV1(ctx contex
 		return raftcluster.ErrReadBarrierNotSatisfied
 	}
 	// Store a digest of immutable neighbors/partials, not transport/proof/timing.
-	resultDigest, err := replacementOwnerQualificationDigestV1(qualified.Search.Partials)
+	resultDigest, err := replacementOwnerQualificationResultDigestV1(qualified.Search.Partials)
 	if err != nil {
 		return err
 	}
@@ -247,12 +305,25 @@ func (r *FixedPeerTCPRuntimeV1) commitReplacementOwnerQualificationV1(ctx contex
 	if err != nil {
 		return err
 	}
-	if err := r.submitCatalogCommandV1(ctx, encoded); err != nil {
+	submitErr := r.submitCatalogCommandV1(ctx, encoded)
+	if submitErr != nil && !errors.Is(submitErr, raftplacement.ErrCatalogMetaConflict) {
+		return submitErr
+	}
+	// Another catalog leader may have committed the same query during this
+	// producer's ANN. Freshly fence that owned receipt rather than publishing
+	// this execution's different proof indexes. Other submission errors survive.
+	if _, err := r.replacementReadV1(ctx, command); err != nil {
 		return err
 	}
 	committed, err := r.authority.ReplicaReplacementStateV1(command.GroupID)
-	if err == nil {
-		reply.ReplacementState = &committed
+	if err != nil {
+		return err
 	}
-	return err
+	actualBegin, err := raftplacement.EncodeReplicaReplacementBeginV1(committed.Begin)
+	if err != nil || !bytes.Equal(actualBegin, raw) || committed.Phase != raftplacement.ReplicaReplacementAddIntentV1 || committed.Seed == nil ||
+		!raftcluster.SameReplacementSnapshotSeedV1(*committed.Seed, *state.Seed) || committed.OwnerQualification == nil || committed.OwnerQualification.QueryDigest != queryDigest {
+		return raftplacement.ErrCatalogMetaConflict
+	}
+	reply.ReplacementState = &committed
+	return nil
 }

@@ -400,8 +400,10 @@ owner_qualification receipt. Existing states omit it and retain their canonical
 bytes. Its dedicated replica-replacement-owner-qualification-v1 command installs
 only this first receipt at the existing marked add-intent phase. The record binds
 query/result/ReadySet SHA-256 digests, original read-proof issuer/term/index,
-independent target Raft applied index and durable semantic-tail identity; no
-query vectors or neighbors are persisted. Snapshot entry accounting reserves
+independent target Raft applied index and durable semantic-tail identity. The
+result digest covers ordered partition IDs and ordered neighbor IDs/scores only;
+operational counters, memory observations and timings are excluded. Empty neighbor
+lists have one canonical encoding. No query vectors or neighbors are persisted. Snapshot entry accounting reserves
 one additional catalog entry, and known successors cannot erase or alter it.
 Cold restore retains historical evidence without creating serving authority;
 trusted backup/raw in-process provenance cannot prove the historical execution.

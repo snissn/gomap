@@ -90,15 +90,73 @@ func assertReplacementOwnerReceiptV1(t *testing.T, ctx context.Context, client *
 	var memoryBefore, memoryAfter runtime.MemStats
 	runtime.ReadMemStats(&memoryBefore)
 	started := time.Now()
-	committed, err := client.CommitReplicaReplacementOwnerQualificationV1(ctx, command, request)
+	// Force both identical commands to reach the existing bounded control
+	// handlers before allowing the single receipt producer to execute ANN.
+	releaseGate, err := catalog.acquireOwnerReceiptV1(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateHeld := true
+	t.Cleanup(func() {
+		if gateHeld {
+			releaseGate()
+		}
+	})
+	type receiptResult struct {
+		state raftplacement.ReplicaReplacementStateV1
+		err   error
+	}
+	results := make(chan receiptResult, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			state, err := client.CommitReplicaReplacementOwnerQualificationV1(ctx, command, request)
+			results <- receiptResult{state, err}
+		}()
+	}
+	fixedPeerWaitV1(t, ctx, func() bool { return len(catalog.requests) >= 2 })
+	// A third waiter cancels under the actual request lifetime while the gate
+	// remains held. Its handler must retire without ANN or retaining capacity.
+	canceled, cancel := context.WithCancel(ctx)
+	defer cancel()
+	canceledResult := make(chan error, 1)
+	go func() {
+		_, err := client.CommitReplicaReplacementOwnerQualificationV1(canceled, command, request)
+		canceledResult <- err
+	}()
+	fixedPeerWaitV1(t, ctx, func() bool { return len(catalog.requests) >= 3 })
+	cancel()
+	if err := <-canceledResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled receipt waiter: %v", err)
+	}
+	fixedPeerWaitV1(t, ctx, func() bool { return len(catalog.requests) == 2 })
+	if source.Stats() != cacheBefore {
+		t.Fatal("blocked receipt waiters executed ANN")
+	}
+	releaseGate()
+	gateHeld = false
+	first, second := <-results, <-results
+	committed, err := first.state, first.err
+	if second.err != nil {
+		t.Fatalf("overlapping identical receipt: %v", second.err)
+	}
+	firstBytes, firstEncodeErr := raftplacement.EncodeReplicaReplacementStateV1(committed)
+	secondBytes, secondEncodeErr := raftplacement.EncodeReplicaReplacementStateV1(second.state)
+	if firstEncodeErr != nil || secondEncodeErr != nil || !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatal("overlapping identical commands returned different owned receipts")
+	}
+	cacheAfter := source.Stats()
+	if cacheAfter.GenerationHits != cacheBefore.GenerationHits+1 || cacheAfter.PartitionHits != cacheBefore.PartitionHits+uint64(len(request.PartitionIDs)) ||
+		cacheAfter.GenerationMisses != cacheBefore.GenerationMisses || cacheAfter.PartitionMisses != cacheBefore.PartitionMisses {
+		t.Fatalf("identical overlap must execute ANN once: before=%+v after=%+v", cacheBefore, cacheAfter)
+	}
 	elapsed := time.Since(started)
 	runtime.ReadMemStats(&memoryAfter)
 	if err != nil || committed.Phase != raftplacement.ReplicaReplacementAddIntentV1 || committed.OwnerQualification == nil {
 		t.Fatalf("first historical receipt: %+v %v", committed, err)
 	}
 	after, _ := catalog.authority.Status()
-	if after.AppliedIndex <= before.AppliedIndex {
-		t.Fatal("receipt did not commit a catalog entry")
+	if after.AppliedIndex != before.AppliedIndex+1 {
+		t.Fatal("overlapping receipt commands must commit exactly one catalog entry")
 	}
 	// The retained result/hash reservation ends after submission, before reply.
 	a.mu.Lock()
@@ -107,12 +165,13 @@ func assertReplacementOwnerReceiptV1(t *testing.T, ctx context.Context, client *
 	if retainedAfter != 0 {
 		t.Fatalf("committed receipt retained result bytes: %d", retainedAfter)
 	}
-	t.Logf("historical_receipt sample=1 scope=caller+five_raft_nodes+background+TLS+private_ANN+fresh_authority+tail+commit ns=%d ops_per_second=%.2f global_bytes=%d global_allocs=%d", elapsed.Nanoseconds(), float64(time.Second)/float64(elapsed), memoryAfter.TotalAlloc-memoryBefore.TotalAlloc, memoryAfter.Mallocs-memoryBefore.Mallocs)
+	t.Logf("historical_receipt sample=1 overlapping_callers=2 canceled_waiters=1 scope=caller+five_raft_nodes+background+TLS+private_ANN+fresh_authority+tail+commit ns=%d ops_per_second=%.2f global_bytes=%d global_allocs=%d", elapsed.Nanoseconds(), float64(time.Second)/float64(elapsed), memoryAfter.TotalAlloc-memoryBefore.TotalAlloc, memoryAfter.Mallocs-memoryBefore.Mallocs)
 	owned, err := raftplacement.EncodeReplicaReplacementStateV1(committed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.RequestID += "-retry"
+	request.LiveDomainIDs = []uint32{} // Semantically empty must match the first nil form.
 	request.DeadlineUnixNano = time.Now().Add(time.Minute).UnixNano()
 	retry, err := client.CommitReplicaReplacementOwnerQualificationV1(ctx, command, request)
 	if err != nil {
@@ -121,7 +180,7 @@ func assertReplacementOwnerReceiptV1(t *testing.T, ctx context.Context, client *
 	retryBytes, err := raftplacement.EncodeReplicaReplacementStateV1(retry)
 	status, _ := catalog.authority.Status()
 	if err != nil || !bytes.Equal(owned, retryBytes) || status.AppliedIndex != after.AppliedIndex {
-		t.Fatalf("exact historical retry changed owned bytes/index: %v", err)
+		t.Fatalf("nil/empty historical retry changed owned bytes/index: %v", err)
 	}
 	changed := request
 	changed.Query = append([]float32(nil), request.Query...)
@@ -166,5 +225,74 @@ func assertReplacementOwnerReceiptV1(t *testing.T, ctx context.Context, client *
 	currentBytes, encodeErr := raftplacement.EncodeReplicaReplacementStateV1(current)
 	if err != nil || encodeErr != nil || final.AppliedIndex != after.AppliedIndex || !bytes.Equal(currentBytes, owned) {
 		t.Fatal("receipt refusals changed catalog authority")
+	}
+}
+
+func TestReplacementOwnerQualificationResultDigestIgnoresTelemetryV1(t *testing.T) {
+	original := []VectorPartitionShardSearchPartialV1{{PartitionID: 4, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "alpha", Score: 0.25}, {ID: "beta", Score: 0.5}}}, {PartitionID: 9}}
+	want, err := replacementOwnerQualificationResultDigestV1(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]VectorPartitionShardSearchPartialV1(nil), original...)
+	changed[0].ScoreCalls, changed[0].Candidates, changed[0].Edges = 100, 50, 20
+	changed[0].SearchRoute = "operational route"
+	changed[0].PackBytes, changed[0].MappedBytes, changed[0].HeapBytes = 1000, 2000, 3000
+	changed[0].RequiredChunks, changed[0].OpenedChunks, changed[0].AccessedChunks, changed[0].OpenNanos = 4, 3, 2, 12345
+	changed[1].Neighbors = []VectorPartitionShardSearchNeighborV1{}
+	got, err := replacementOwnerQualificationResultDigestV1(changed)
+	if err != nil || got != want {
+		t.Fatalf("telemetry/empty representation changed result digest: %s %s %v", want, got, err)
+	}
+	for _, name := range []string{"partition", "id", "score", "order"} {
+		other := append([]VectorPartitionShardSearchPartialV1(nil), original...)
+		other[0].Neighbors = append([]VectorPartitionShardSearchNeighborV1(nil), original[0].Neighbors...)
+		switch name {
+		case "partition":
+			other[0].PartitionID++
+		case "id":
+			other[0].Neighbors[0].ID = "different"
+		case "score":
+			other[0].Neighbors[0].Score += 0.125
+		case "order":
+			other[0].Neighbors[0], other[0].Neighbors[1] = other[0].Neighbors[1], other[0].Neighbors[0]
+		}
+		got, err := replacementOwnerQualificationResultDigestV1(other)
+		if err != nil || got == want {
+			t.Fatalf("%s did not change immutable result digest: %s %v", name, got, err)
+		}
+	}
+}
+
+func TestReplacementOwnerQualificationReceiptGateCancellationV1(t *testing.T) {
+	transport, _ := peerTransportFixtureV1(t)
+	defer transport.Close()
+	r := &FixedPeerTCPRuntimeV1{ownerReceipt: make(chan struct{}, 1)}
+	release, err := r.acquireOwnerReceiptV1(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	work, err := transport.admission.request(ctx, "control-write", 4096, peerRequestIngressV1)
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	cancel()
+	if second, err := r.acquireOwnerReceiptV1(work.ctx); !errors.Is(err, context.Canceled) || second != nil {
+		t.Fatalf("canceled gate wait acquired producer: %v", err)
+	}
+	work.release()
+	if transport.ResourceStatsV1().Current != (peerResourceAmountsV1{}) {
+		t.Fatal("canceled gate waiter retained admission")
+	}
+	release()
+	release, err = r.acquireOwnerReceiptV1(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if release, err := (&FixedPeerTCPRuntimeV1{}).acquireOwnerReceiptV1(t.Context()); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) || release != nil {
+		t.Fatalf("uninitialized gate did not refuse: %v", err)
 	}
 }

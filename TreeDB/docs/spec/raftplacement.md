@@ -403,8 +403,15 @@ leader's verified target semantic tail before the dedicated catalog command.
 The receipt stores bounded query/result/ReadySet digests, the original proof
 issuer/read index, independent target Raft application index and semantic tail;
 it stores no query vectors or neighbors. Query identity omits request/cancellation
-IDs and transport deadline. Exact logical-query retry returns the same owned
-historical bytes without another ANN execution or catalog entry; it is not a
+IDs and transport deadline and canonicalizes the accepted empty live-domain slice.
+Exact logical-query retry returns the same owned
+historical bytes without another ANN execution or catalog entry. A receipt-only
+catalog producer gate serializes concurrent commands under existing bounded control
+admission and the earlier caller/query deadline; queued identical retries re-read
+owned authority before ANN. This is a per-coordinator serialization ceiling, not
+distributed exactly-once execution: a catalog leadership race may duplicate ANN,
+but a fresh same-query committed receipt wins without replacing its proof indexes.
+The immutable result digest excludes operational counters, memory and timing. It is not a
 current readiness observation. A conflicting query or changed receipt refuses
 atomically. Generic advance cannot install receipts, including through raw FSM
 apply, and external catalog-publish rejects the dedicated command.

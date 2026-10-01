@@ -3096,7 +3096,9 @@ or establish a throughput comparison.
 The historical qualification receipt checkpoint maps to
 TestImmutableOwnerReplacementHistoricalQualificationReceiptV1 using the same
 five-node authenticated native-snapshot/nonvoter/private-ANN fixture: genuine
-private execution before the first receipt commit, exact owned-byte retry,
+private execution before the first receipt commit, two overlapping identical
+commands returning the same receipt with one ANN cache hit and one catalog entry,
+cancellation of an actual blocked waiter, nil/empty live-domain owned-byte retry,
 conflicting query, external raw catalog-publish and generic advance refusal,
 permanent nonvoter/unready behavior and cold restart requiring fresh explicit
 preparation/qualification. TestCatalogOwnerQualificationReceiptIsHistoricalAndAtomicV1
@@ -3111,7 +3113,11 @@ TestReplacementOwnerQualificationReceiptRequestAdmissionV1 covers caller
 capacity refusal before catalog work, later discovery refusal and cancellation
 with no request/byte lease leak; it is semantic admission evidence, not ANN
 or quorum evidence.
-The fixture logs one enabled qualification-plus-commit elapsed/ops-per-second
+TestReplacementOwnerQualificationResultDigestIgnoresTelemetryV1 binds only
+ordered partitions and neighbor IDs/scores; counters, timing and memory changes
+leave the digest unchanged. TestReplacementOwnerQualificationReceiptGateCancellationV1
+checks canceled admission cleanup and reuse of the bounded producer gate.
+The fixture logs one enabled overlapping-qualification-plus-commit elapsed/ops-per-second
 and aggregate MemStats sample across the caller, five Raft nodes and background
 work. It is diagnostic, has no before/after throughput claim, and does not measure
 isolated server allocations or retained ANN residency. Existing ordinary
