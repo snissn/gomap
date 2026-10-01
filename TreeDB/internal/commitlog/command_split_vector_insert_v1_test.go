@@ -22,6 +22,14 @@ func TestSplitVectorInsertSemanticEnvelopeV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	frame, err := EncodeCommandFrame(CommandEnvelope{LSN: 11, Kind: CommandKindCollectionSplitVectorInsertV1, Scope: CommandScopeCollection, PayloadFormat: PayloadFormatCollectionSplitVectorInsertV1, Payload: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoldenHex(t, "command_wal_v1_collection_split_vector_insert_v1.hex", frame)
+	if _, err := DecodeCommandFrame(frame); err != nil {
+		t.Fatal(err)
+	}
 	decoded, err := DecodeSplitVectorInsertPayloadV1(source)
 	if err != nil {
 		t.Fatal(err)

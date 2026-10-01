@@ -331,6 +331,8 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Split recovery constructs the retained public typed-column schema.
+	{path: "TreeDB/internal/raftapply/split_vector_insert_recovery_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Owner preparation and paged build/session consume the retained public schema API.
 	// Scoped preparation also reads the existing asset-manager configuration.
 	{path: "TreeDB/collections/vector_partition_lifecycle_public_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},

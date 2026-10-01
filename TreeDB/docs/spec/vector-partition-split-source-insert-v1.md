@@ -1,6 +1,6 @@
 # Split canonical source insert: bounded first checkpoint
 
-This candidate for #4810 supports one JSON column-store canonical source Raft
+This candidate for #4810 supports one JSON typed-column canonical source Raft
 group and one distinct mutable ANN group under an unchanged V1 generation and
 collection placement. Multi-owner ANN, immutable generations, M7/source-format
 2, token/ring placement, update/delete/replace and cross-group batches remain

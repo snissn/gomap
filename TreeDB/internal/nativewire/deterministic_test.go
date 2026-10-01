@@ -1764,6 +1764,15 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			fixture:   "update_bson_set_entry.hex",
 			sections:  updateBSONSetDeterministicSections(),
 		},
+		{
+			name:      "split_vector_insert_v1",
+			commandID: CommandSplitVectorInsertV1,
+			fixture:   "split_vector_insert_v1_entry.hex",
+			sections: deterministicFixtureSections(CommandSplitVectorInsertV1, "operation/source",
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("docs")},
+				Section{ID: SectionSplitVectorInsertV1, Bytes: []byte(`{"Version":1,"Operation":"source","Collection":"docs","Index":"embedding","Generation":1,"SourceGroup":"source","TargetGroup":"ann","CatalogEpoch":1,"CatalogDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ReadySetDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ModelDigest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","PartitionID":0,"Attempt":"b3BlcmF0aW9u","ID":"ZG9jdW1lbnQ=","Vector":[0,1],"Document":"eyJlbWJlZGRpbmciOlswLDFdLCJjYW5vbmljYWwiOiJzb3VyY2Utb25seSJ9","DocumentDigest":"6a6126591616a8ed1571fe96190c2768b0705165ef6006e9387057edc038f47b","SourceTerm":0,"SourceIndex":0,"TargetTerm":0,"TargetIndex":0,"LiveRevision":0}`)},
+			),
+		},
 	}
 }
 

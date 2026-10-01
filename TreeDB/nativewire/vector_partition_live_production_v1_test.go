@@ -324,6 +324,9 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T) {
 	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
 	defer fixture.database.Close()
+	if err := fixture.collection.EnsureVectorPartitionLiveBindingV1(t.Context(), fixture.manifest); err != nil {
+		t.Fatal(err)
+	}
 	services, sources := newVectorPartitionLiveProductionServicesV1(t, fixture)
 	defer func() {
 		for _, source := range sources {
