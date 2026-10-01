@@ -913,13 +913,15 @@ benchmarks must remain unchanged because no current raw API calls this package.
 
 Invariants:
 
-- one `CommitAt` call is one atomic TreeDB batch at one nonzero caller
-  timestamp, with deterministic pre-write duplicate rejection;
+- one `CommitAt` call atomically publishes records at one nonzero caller
+  timestamp, with deterministic pre-write duplicate rejection; a singleton
+  can use `Set`/`SetSync`, while larger publications use one TreeDB batch;
 - puts, empty values, and historical tombstones remain distinguishable;
 - `GetAt` returns the newest retained version at or below the read timestamp by
   a direct bounded seek, without collecting version history;
-- durable commits require durable TreeDB mode and survive a process crash;
-  relaxed commits require a later checkpoint/close boundary for reopen proof;
+- durable commits use the profile's explicit sync opt-up and survive a process
+  crash; relaxed command-WAL ACKs include kernel drain without forced fsync,
+  and checkpoint/safe close establishes the profile's later reopen boundary;
 - storage failures may leave the whole batch present or absent but never leave
   a visible prefix; malformed records fail with `ErrMalformedRecord`, while
   storage errors wrap `ErrStorage` and their underlying cause;
@@ -1015,6 +1017,44 @@ Coverage:
   amplification, and retained physical bytes/versions per operation. Retained
   bytes are physical records still reachable in the pinned prune snapshot, not
   immediate filesystem reclamation.
+
+`BenchmarkVersionIterationExactKey` is the bounded M0 diagnostic for the
+public all-version posting-read path: 128 populated logical keys over eight
+shards, a binary/NUL target, and depths 1/8/64 with non-exact read timestamps.
+Its FrozenQueue and PublishedRoot rows exclude fixture creation and checkpoint;
+Interleaved includes eight singleton replacements (one per populated shard)
+per completed read and holds physical history cardinality constant. All rows
+time and charge iterator open, explicit seek, owned `Entry` consumption,
+validation/accounting and close. Useful versions are consumed once; the current
+physical visited/retained counters include the first version examined at both
+open and seek. The benchmark reports these work counters without asserting
+their values, allowing equivalent optimized reads to reduce work. Observed and
+unobserved rows separately report B/op and allocs/op.
+`TestVersionIterationExactKeyFixture` checks the result oracle and verifies cached
+versus backend-only public routing. Codec maximum-length coverage remains in
+`internal/mvcckey/codec_test.go`; this fixture does not claim every codec-sized
+key fits a published TreeDB page.
+
+`SetIteratorDebug` is disabled by default. `TestAcquireSnapshotDebugAccounting`
+proves direct cached snapshot calls/cuts are separate from DB.Iterator cuts,
+counts all replaced shards plus the newly enqueued frozen records and memtable
+`Size()` byte estimates, and checks disabled accounting. Snapshot iterators reuse
+`iterator.sources_total` and process-lifetime source/queue maxima; these now
+aggregate DB.Iterator and cached Snapshot.Iterator sources. Their separate
+`snapshot.iterator_calls_total` denominator counts successful cached iterator
+construction. A checkpointed public backend-only snapshot bypasses both cached
+entry points, so it correctly records zero cached sources and zero cuts; the
+benchmark separately records one public iterator open per completed read.
+Source-open counts include empty sources, not only winning sources. Debug cuts
+perform O(shards) Len/Size reads of newly frozen tables and atomic additions
+under the existing lock, without payload copies, clock sampling or stack walks.
+Process heap end gauges and sampled process-lifetime maxima include setup and
+unrelated process state; they are not retained-heap deltas or per-operation peaks.
+Flush units, apply batches and entries use distinct denominators and stop before
+cleanup/checkpoint drain, so outstanding debt remains visible in the end queue.
+These diagnostic rows and optional Go profiles cannot establish matched Dgraph
+performance acceptance; M0 consumes the accepted #4862 matrix after exact
+runtime/harness/workload closure checks and publishes lane decisions separately.
 
 Measurement boundary:
 
