@@ -1188,7 +1188,7 @@ func fixedPeerVectorPublicErrorV1(err error) error {
 // configured owner leader. The receiving owner repeats the complete proof
 // validation inside its serialized preflight-to-consensus boundary.
 func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
+	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || r.config.QuiescedANNMoveDestination != nil || request.OwnerGroup == "" {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
 	routeGroup := request.OwnerGroup

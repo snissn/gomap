@@ -66,6 +66,9 @@ func TestQuiescedANNDomainMoveEmptyDestinationPublicRuntimeV1(t *testing.T) {
 	if _, err := client.VectorInsertV1(ctx, splitInsertRequestV1(fixture, 1)); !errors.As(err, &typed) || typed.Code != public.ErrorUnavailableV1 {
 		t.Fatalf("empty destination public insert must refuse unavailable: %v", err)
 	}
+	if _, err := runtime.SubmitVectorPartitionInsertV1(ctx, VectorPartitionRoutedInsertV1{OwnerGroup: "group-b"}); !errors.Is(err, ErrFixedPeerVectorUnavailableV1) {
+		t.Fatalf("dormant exported insert must refuse before route or forward: %v", err)
+	}
 	// Exercise authenticated production HTTP dispatch, including generic
 	// mutation ingress that does not pass through the public vector backend.
 	for _, operation := range []string{
