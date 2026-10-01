@@ -650,3 +650,30 @@ query/navigation/merge costs. Instrumented timings and global allocations are
 not an apples-to-apples comparison with older uninstrumented samples.
 See [the full observation contract](../../docs/benchmarks/treedb_partition_accepted_cost_diagnostic.md)
 for framed-byte/RSS boundaries, validation and retained-collection limits.
+
+### MVCC ownership allocation diagnostic
+
+`BenchmarkMVCCOwnership` compares public GetAt, borrowed inspection and owned
+version collection at widths 8/16/4096/32768 and depths 1/8/64, with ordinary
+and forced-pointer routing. Ordinary large values can use automatic pointers.
+Setup/checkpoint are excluded; completed reads, validation, final owned output
+allocations and Close are charged. Iterator rows include matched clock samples
+and report `first_entry_ns/op` alongside complete-consumption ns/op. Baseline
+source without EntryView uses Entry for inspection, dispatching once per opened
+iterator. Existing Filtered benchmarks remain traversal guards.
+
+```sh
+GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkMVCCOwnership$' -benchmem -benchtime=1x -count=1
+GOWORK=off go test -c -o /tmp/mvcc-ownership.test ./TreeDB/mvcc
+GOMAP_MVCC_RETAINED_OUTPUTS=1 /tmp/mvcc-ownership.test -test.run '^TestMVCCRetainedOwnedOutputs/width=8/pointers=false$' -test.v
+```
+
+The first command is fixture smoke, not retained performance acceptance. Use the
+same fixture source on base/head binaries and predeclare measured rows/repeats
+before collection. Run each retained-output width/routing subtest in a fresh
+process. It validates 4096 outputs after Store/DB closure and two GCs, retains
+them with KeepAlive, and logs raw heap gauges and equal payload bytes. Transferred
+payloads retain the whole envelope backing allocation and its allocator size
+class; slice-capacity reduction cannot reduce that live storage. Lower B/op
+alone does not establish lower retained heap or throughput. These Go test
+artifacts/profiles are standalone diagnostics, not benchprof inputs.

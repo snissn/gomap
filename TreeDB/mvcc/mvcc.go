@@ -58,7 +58,7 @@ const (
 )
 
 // Result is the newest retained version visible at a requested timestamp.
-// Value is a caller-owned copy for Present results.
+// Value is caller-owned for Present results.
 type Result struct {
 	State     ReadState
 	Value     []byte
@@ -98,11 +98,13 @@ type pointSyncWriter interface {
 }
 
 type pointSuccessorDB interface {
+	// Results own their storage, including any internal iterator fallback.
 	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
 }
 
 // Store ownership, rather than physical key shape alone, qualifies this seam.
 type versionRangeSuccessorDB interface {
+	// Results own their storage, including any internal iterator fallback.
 	SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error)
 }
 
@@ -333,7 +335,7 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		if !found {
 			return Result{State: Absent}, nil
 		}
-		return decodePointResult(logical, timestamp, physical, record)
+		return decodePointResult(logical, timestamp, physical, record, true)
 	}
 	it, err := s.db.Iterator(lower, upper)
 	s.mu.RUnlock()
@@ -358,10 +360,12 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	if iterErr := it.Error(); iterErr != nil {
 		return Result{}, storageError("read value", iterErr)
 	}
-	return decodePointResult(logical, timestamp, physical, record)
+	return decodePointResult(logical, timestamp, physical, record, false)
 }
 
-func decodePointResult(logical []byte, timestamp uint64, physical, record []byte) (Result, error) {
+// recordOwned is true only for successor results. Iterator records remain
+// borrowed and must be copied before the deferred iterator Close.
+func decodePointResult(logical []byte, timestamp uint64, physical, record []byte, recordOwned bool) (Result, error) {
 	decoded, version, decodeErr := mvcckey.Decode(physical)
 	if decodeErr != nil || !bytes.Equal(decoded, logical) || version > timestamp {
 		if decodeErr == nil {
@@ -374,9 +378,16 @@ func decodePointResult(logical []byte, timestamp uint64, physical, record []byte
 	}
 	switch record[0] {
 	case recordValueV1:
+		var value []byte
+		if len(record) > 1 {
+			value = record[1:]
+			if !recordOwned {
+				value = append([]byte(nil), value...)
+			}
+		}
 		return Result{
 			State:     Present,
-			Value:     append([]byte(nil), record[1:]...),
+			Value:     value,
 			Timestamp: version,
 		}, nil
 	case recordTombstoneV1:

@@ -34,7 +34,10 @@
 ### Retained external-MVCC versions
 
 `mvcc.Store.IterateVersions` pins one snapshot and returns retained logical
-versions with owned `Entry` bytes and explicit logical tombstones. Set
+versions with owned `Entry` bytes and explicit logical tombstones. `EntryView`
+borrows read-only key/value bytes until the next Next, Seek, or Close; it avoids
+output copies but does not defer pointer payload reads. Use Entry to retain or
+modify output. Set
 `VersionIteratorOptions.ExactKey` to scan one logical key, intersected with
 prefix/bounds and the timestamp ceiling. Nil leaves this filter disabled; use
 `[]byte{}` for the empty logical key. Forward timestamps descend; reverse

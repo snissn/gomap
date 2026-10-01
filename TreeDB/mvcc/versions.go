@@ -27,8 +27,8 @@ type snapshotDB interface {
 	AcquireSnapshot() treedb.Snapshot
 }
 
-// Version describes one retained external-MVCC record. Key and Value are
-// caller-owned copies. Tombstones have State Tombstone and a nil Value.
+// Version describes one retained external-MVCC record. Entry returns owned
+// Key and Value; EntryView borrows them. Tombstones have a nil Value.
 type Version struct {
 	Key       []byte
 	Value     []byte
@@ -168,6 +168,18 @@ func (it *VersionIterator) Entry() Version {
 	}
 }
 
+// EntryView returns the current version without copying its key or payload.
+// Key and Value are read-only borrowed slices, valid only until the next Next,
+// Seek, or Close call. Use Entry when retaining or modifying either slice.
+// Like Entry, EntryView returns a zero Version when the iterator is invalid.
+// Payload reads and their errors still occur when iteration advances, not here.
+func (it *VersionIterator) EntryView() Version {
+	if !it.Valid() {
+		return Version{}
+	}
+	return it.current
+}
+
 func (it *VersionIterator) Next() {
 	if !it.Valid() {
 		return
@@ -217,6 +229,8 @@ func (it *VersionIterator) Close() error {
 		return nil
 	}
 	it.closed = true
+	it.current = Version{}
+	it.keyBuf = nil
 	var rawErr, snapshotErr error
 	if it.raw != nil {
 		rawErr = storageError("close version iterator", it.raw.Close())

@@ -143,8 +143,17 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   ascending then timestamp descending; reverse order is logical key descending
   then timestamp ascending. Prefix, inclusive logical lower bound, exclusive
   logical upper bound, and optional read-timestamp ceiling are combined without
-  full-database materialization. Options are copied at open, returned keys and
-  values are caller-owned, and tombstones remain explicit records. Iterator
+  full-database materialization. Options are copied at open; `Entry` returns
+  caller-owned keys and values, and tombstones remain explicit records. `EntryView`
+  returns read-only borrowed key/payload slices valid until the next `Next`,
+  `Seek`, or `Close`. It reuses the current decoded version without copying or
+  reading the payload again; advancing still materializes pointer values and
+  reports their errors eagerly. Retained or mutable output must use `Entry`.
+  `GetAt` transfers validated successor-owned payloads and copies borrowed
+  iterator-fallback payloads before Close. Empty Present results retain nil Value.
+  Transferred payloads retain their complete record backing allocation, including
+  the envelope byte and allocator rounding; reducing slice capacity cannot
+  reduce this GC retention. Iterator
   accounting reports physical versions visited, filtered/skipped, and returned.
 - `VersionIteratorOptions.ExactKey` intersects the other logical filters with
   one logical key. Nil disables this filter; a nonnil empty slice selects the
