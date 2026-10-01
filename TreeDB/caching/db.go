@@ -2461,7 +2461,7 @@ const (
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
-// CachingDB.Iterator and collecting iterator shape counters in Stats. It is
+// CachingDB.Iterator and collecting iterator/snapshot shape counters in Stats. It is
 // intended for benchmarking/diagnostics and is disabled by default.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
@@ -9345,6 +9345,12 @@ type DB struct {
 	checkpointRuns                                               atomic.Uint64
 	iteratorCallsTotal                                           atomic.Uint64
 	iteratorSnapshotRotationsTotal                               atomic.Uint64
+	snapshotCallsTotal                                           atomic.Uint64
+	snapshotRotationsTotal                                       atomic.Uint64
+	snapshotRotatedShardsTotal                                   atomic.Uint64
+	snapshotEnqueuedRecordsTotal                                 atomic.Uint64
+	snapshotEnqueuedBytesTotal                                   atomic.Uint64
+	snapshotIteratorCallsTotal                                   atomic.Uint64
 	iteratorSourcesTotal                                         atomic.Uint64
 	iteratorSourcesMax                                           atomic.Uint64
 	iteratorQueueLenMax                                          atomic.Uint64
@@ -31635,6 +31641,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.iterator.calls_total"] = fmt.Sprintf("%d", db.iteratorCallsTotal.Load())
 	stats["treedb.cache.iterator.snapshot_rotations_total"] = fmt.Sprintf("%d", db.iteratorSnapshotRotationsTotal.Load())
+	stats["treedb.cache.snapshot.calls_total"] = fmt.Sprintf("%d", db.snapshotCallsTotal.Load())
+	stats["treedb.cache.snapshot.rotations_total"] = fmt.Sprintf("%d", db.snapshotRotationsTotal.Load())
+	stats["treedb.cache.snapshot.rotated_shards_total"] = fmt.Sprintf("%d", db.snapshotRotatedShardsTotal.Load())
+	stats["treedb.cache.snapshot.enqueued_records_total"] = fmt.Sprintf("%d", db.snapshotEnqueuedRecordsTotal.Load())
+	stats["treedb.cache.snapshot.enqueued_bytes_total"] = fmt.Sprintf("%d", db.snapshotEnqueuedBytesTotal.Load())
+	stats["treedb.cache.snapshot.iterator_calls_total"] = fmt.Sprintf("%d", db.snapshotIteratorCallsTotal.Load())
+
+	// Source totals/maxima aggregate DB.Iterator and cached Snapshot.Iterator.
 	stats["treedb.cache.iterator.sources_total"] = fmt.Sprintf("%d", db.iteratorSourcesTotal.Load())
 	stats["treedb.cache.iterator.sources_max"] = fmt.Sprintf("%d", db.iteratorSourcesMax.Load())
 	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())

@@ -1,7 +1,9 @@
 package mvcc
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/cespare/xxhash/v2"
 	"strconv"
 	"testing"
 
@@ -639,4 +641,212 @@ func prepareVersionIterationBench(b *testing.B, keys, depth int) (*treedb.DB, *S
 		}
 	}
 	return db, store
+}
+
+// BenchmarkVersionIterationExactKey covers the public posting-read lifecycle.
+// The interleaved row includes eight singleton commits (one populated shard
+// each) per iterator; history/key cardinality stays fixed by replacing the same
+// physical timestamps. It is a diagnostic, not the matched Dgraph matrix.
+func BenchmarkVersionIterationExactKey(b *testing.B) {
+	for _, depth := range []int{1, 8, 64} {
+		for _, source := range []string{"FrozenQueue", "PublishedRoot", "Interleaved"} {
+			for _, observe := range []bool{false, true} {
+				b.Run(fmt.Sprintf("depth=%d/source=%s/observe=%t", depth, source, observe), func(b *testing.B) {
+					caching.SetIteratorDebug(observe)
+					b.Cleanup(func() { caching.SetIteratorDebug(false) })
+					db, store, shardKeys := prepareExactKeyIteration(b, depth, source)
+					before := db.Stats()
+					target := exactKeyIterationTarget()
+					readTimestamp := uint64((depth/2)*2 + 1)
+					if depth == 1 {
+						readTimestamp = 3
+					}
+					var total VersionIteratorStats
+					var ownedBytes uint64
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if source == "Interleaved" {
+							for _, key := range shardKeys {
+								if err := store.CommitAt(uint64(depth*2), []Mutation{{Key: key, Value: []byte("posting-list-delta")}}, CommitRelaxed); err != nil {
+									b.Fatal(err)
+								}
+							}
+						}
+						stats, copied := consumeExactKeyIteration(b, store, target, readTimestamp, depth)
+						total.Visited += stats.Visited
+						total.Skipped += stats.Skipped
+						ownedBytes += copied
+					}
+					b.StopTimer()
+					after := db.Stats()
+					b.ReportMetric(1, "iterator_opens/read")
+					b.ReportMetric(float64(total.Visited)/float64(b.N), "physical_visits/read")
+					b.ReportMetric(float64(total.Skipped)/float64(b.N), "skipped_versions/read")
+					b.ReportMetric(float64(ownedBytes)/float64(b.N), "owned_output_bytes/read")
+					useful := max(depth/2, 1)
+					b.ReportMetric(float64(useful), "useful_versions/read")
+					b.ReportMetric(float64(b.N*useful)/b.Elapsed().Seconds(), "useful_versions/s")
+					if source == "Interleaved" {
+						b.ReportMetric(8, "singleton_commits/read")
+					}
+					if observe {
+						for name, key := range map[string]string{
+							"cached_snapshot_calls/read": "treedb.cache.snapshot.calls_total",
+							"snapshot_cuts/read":         "treedb.cache.snapshot.rotations_total",
+							"rotated_shards/read":        "treedb.cache.snapshot.rotated_shards_total",
+							"cut_records/read":           "treedb.cache.snapshot.enqueued_records_total",
+							"cut_memtable_bytes/read":    "treedb.cache.snapshot.enqueued_bytes_total",
+							"cached_iterator_opens/read": "treedb.cache.snapshot.iterator_calls_total",
+							"cached_sources_opened/read": "treedb.cache.iterator.sources_total",
+							"flush_entries/read":         "treedb.cache.flush_apply.entries_total",
+							"flush_units/read":           "treedb.cache.flush_apply.units_total",
+							"flush_batches/read":         "treedb.cache.flush_apply.batches_total",
+						} {
+							b.ReportMetric(benchmarkStatDelta(b, before, after, key)/float64(b.N), name)
+						}
+						reportMVCCBenchGauge(b, after, "treedb.cache.iterator.sources_max", "sources_process_max")
+						reportMVCCBenchGauge(b, after, "treedb.cache.iterator.queue_len_max", "queue_process_max")
+					}
+					reportMVCCBenchGauge(b, after, "treedb.cache.queue_len", "queue_at_end")
+					reportMVCCBenchGauge(b, after, "treedb.process.memory.heap_alloc_bytes", "process_heap_at_end")
+					reportMVCCBenchGauge(b, after, "treedb.process.memory.peak_heap_alloc_bytes", "process_heap_sampled_max")
+				})
+			}
+		}
+	}
+}
+
+func exactKeyIterationTarget() []byte { return []byte{'p', 0, 0xff, 'o', 's', 't'} }
+
+func prepareExactKeyIteration(t testing.TB, depth int, source string) (*treedb.DB, *Store, [][]byte) {
+	t.Helper()
+	db, err := treedb.Open(treedb.Options{Dir: t.TempDir(), Durability: treedb.DurabilityWALOffRelaxed,
+		CommandWAL: false, DisableSideStores: true, BackgroundCheckpointInterval: -1,
+		FlushThreshold: 64 << 20, MemtableShards: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	store := New(db)
+	mutations := make([]Mutation, 128)
+	shardKeys := make([][]byte, 8)
+	for i := range mutations {
+		key := []byte(fmt.Sprintf("unrelated-posting-%04d", i))
+		if i == 0 {
+			key = exactKeyIterationTarget()
+		}
+		mutations[i] = Mutation{Key: key, Value: []byte("posting-list-delta")}
+		physical, err := mvcckey.Encode(key, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix, ok := mvcckey.VersionAffinityPrefix(physical)
+		if !ok {
+			t.Fatal("fixture affinity prefix")
+		}
+		shard := xxhash.Sum64(prefix) & 7
+		shardKeys[shard] = key
+	}
+	for _, key := range shardKeys {
+		if key == nil {
+			t.Fatal("fixture did not populate every shard")
+		}
+	}
+	for timestamp := 1; timestamp <= depth; timestamp++ {
+		if err := store.CommitAt(uint64(timestamp*2), mutations, CommitRelaxed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if source == "FrozenQueue" {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("fixture snapshot unavailable")
+		}
+		if err := snap.Close(); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	return db, store, shardKeys
+}
+
+func consumeExactKeyIteration(t testing.TB, store *Store, target []byte, readTimestamp uint64, depth int) (VersionIteratorStats, uint64) {
+	t.Helper()
+	// key+NUL is the immediate logical upper bound, including binary/NUL keys.
+	upper := append(append([]byte(nil), target...), 0)
+	it, err := store.IterateVersions(VersionIteratorOptions{LowerBound: target, UpperBound: upper, ReadTimestamp: readTimestamp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	it.Seek(target, readTimestamp)
+	seen, copied := 0, uint64(0)
+	for it.Valid() {
+		entry := it.Entry()
+		wantTimestamp := uint64(max(depth/2, 1)-seen) * 2
+		if !bytes.Equal(entry.Key, target) || entry.Timestamp != wantTimestamp || entry.State != Present || string(entry.Value) != "posting-list-delta" {
+			t.Fatalf("unexpected exact-key entry: %+v want timestamp=%d", entry, wantTimestamp)
+		}
+		copied += uint64(len(entry.Key) + len(entry.Value))
+		seen++
+		it.Next()
+	}
+	stats := it.Stats()
+	iterErr := it.Error()
+	closeErr := it.Close()
+	useful := uint64(max(depth/2, 1))
+	// Open examined the first retained version; Seek examines it again.
+	if seen != int(useful) || stats.Visited != uint64(depth)+1 || stats.Skipped != uint64(depth)-useful || stats.Retained != useful+1 || iterErr != nil || closeErr != nil {
+		t.Fatalf("seen=%d stats=%+v iterErr=%v closeErr=%v", seen, stats, iterErr, closeErr)
+	}
+	return stats, copied
+}
+
+func TestVersionIterationExactKeyFixture(t *testing.T) {
+	caching.SetIteratorDebug(true)
+	t.Cleanup(func() { caching.SetIteratorDebug(false) })
+	for _, depth := range []int{1, 8, 64} {
+		for _, source := range []string{"FrozenQueue", "PublishedRoot", "Interleaved"} {
+			t.Run(fmt.Sprintf("depth=%d/source=%s", depth, source), func(t *testing.T) {
+				db, store, keys := prepareExactKeyIteration(t, depth, source)
+				before := db.Stats()
+				if source == "Interleaved" {
+					for _, key := range keys {
+						if err := store.CommitAt(uint64(depth*2), []Mutation{{Key: key, Value: []byte("posting-list-delta")}}, CommitRelaxed); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				timestamp := uint64((depth/2)*2 + 1)
+				if depth == 1 {
+					timestamp = 3
+				}
+				consumeExactKeyIteration(t, store, exactKeyIterationTarget(), timestamp, depth)
+				after := db.Stats()
+				for _, key := range []string{"snapshot.calls_total", "snapshot.iterator_calls_total"} {
+					start, err := strconv.ParseUint(before["treedb.cache."+key], 10, 64)
+					if err != nil {
+						t.Fatal(err)
+					}
+					finish, err := strconv.ParseUint(after["treedb.cache."+key], 10, 64)
+					want := uint64(1)
+					if source == "PublishedRoot" {
+						want = 0
+					} // public backend snapshot fast path
+					if err != nil || finish < start || finish-start != want {
+						t.Fatalf("%s delta=%d want=%d err=%v", key, finish-start, want, err)
+					}
+				}
+				if source == "Interleaved" && after["treedb.cache.snapshot.rotated_shards_total"] != "8" {
+					t.Fatalf("direct cut did not rotate populated unrelated shards: %s", after["treedb.cache.snapshot.rotated_shards_total"])
+				}
+			})
+		}
+	}
 }

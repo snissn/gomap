@@ -570,3 +570,26 @@ BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test all -read-workers 4 -format markdown -progress=false
 ```
+
+### Public exact-key MVCC iteration diagnostic
+
+```sh
+GOWORK=off go test ./TreeDB/mvcc -run '^TestVersionIterationExactKeyFixture$' -count=1
+GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkVersionIterationExactKey$' -benchmem -benchtime=1x -count=1
+```
+
+The smoke exercises depths 1/8/64 over 128 logical keys and eight populated
+shards, with non-exact timestamps and full open/seek/owned-consume/close cost.
+FrozenQueue and PublishedRoot exclude setup; Interleaved includes eight
+singleton replacements per completed read. `observe=false/true` isolates the
+existing default-disabled iterator diagnostic switch. Cached cut/source metrics
+exclude the public backend-only snapshot fast path. Heap end and sampled maxima
+are process-wide (including setup); flush counters exclude cleanup/drain. See
+`TreeDB/docs/spec/verification.md` section 10.4 for counter denominators.
+
+For retained timing, select one leaf per fresh process, freeze the source/runtime
+identities, host, toolchain, benchtime/count, matched AB/BA order and exclusion
+policy before collection, and keep profiles in separate runs. Go benchmark text
+and optional Go test profiles are standalone artifacts, not benchprof inputs or
+rows of the matched TreeDB/Badger decision matrix. This harness does not alter
+unified-bench producer filenames or the benchprof parser contract.
