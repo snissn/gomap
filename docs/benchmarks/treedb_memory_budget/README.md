@@ -92,7 +92,18 @@ exit codes and separate stdout/stderr hashes. The run binds exact executable
 argv, explicit child environment, PID, exit code and separate log hashes; the
 Go packet independently reports its argv, PID, environment hash and binary
 hash. Only a credential-free allowlist of ambient variables reaches the child;
-the exact forwarded environment is retained. Failed logs stay on disk.
+the exact forwarded environment is retained. Every new cohort normalizes
+GOMAXPROCS=2, GOMEMLIMIT=2GiB, GOGC=100, empty GODEBUG/GORACE,
+GOTRACEBACK=single and the fixed Go build controls; full freezes missing or
+changing those controls fail before execution. Historical pilots keep their
+original identity.
+
+A retained campaign must also compare complete cohort environments after
+removing only the four TREEDB_MEMORY fixture controls. Require identical
+resolved TMPDIR/GOTMPDIR and path/compiler settings, and independently record
+the actual database filesystem/device before and after collection. A single
+cell freeze proves that cell's launch environment; it does not establish
+cross-cohort equality or stable mounts. Failed logs stay on disk.
 
 The validator rejects changed identities/logs, missing/duplicate packets,
 wrong counts/phases/budgets/placement, uncovered acknowledged LSN, unchecked
