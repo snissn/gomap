@@ -133,8 +133,8 @@ func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns [
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return nil, CollectionInsertStats{}, err
 	}
@@ -143,7 +143,7 @@ func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns [
 		return nil, CollectionInsertStats{}, err
 	}
 	var stats CollectionInsertStats
-	out, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, retained, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true, insertStats: &stats, trustedFloat32Projection: p})
+	out, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, retained, false, nil, nil, insertBatchExecutionOptions{admission: admission, returnResultIDs: true, insertStats: &stats, trustedFloat32Projection: p})
 	if err == nil {
 		err = commitAmbiguousError("typed batch vector maintenance", c.notifyVectorIndexesUpsert(out))
 	}
@@ -234,8 +234,8 @@ func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedCo
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedCo
 	if err != nil {
 		return nil, err
 	}
-	results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent(typedReplacementItems(ids, retained, projection), updateBatchModeAny, nil)
+	results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent(typedReplacementItems(ids, retained, projection), updateBatchModeAny, nil, admission)
 	return results, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 

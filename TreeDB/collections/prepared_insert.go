@@ -594,10 +594,10 @@ func (p *PreparedInsertBatch) Commit() ([][]byte, error) {
 	c := p.collection
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(p.ids, p.documents, false, nil, nil,
-		insertBatchExecutionOptions{returnResultIDs: true, prepared: p})
+		insertBatchExecutionOptions{admission: admission, returnResultIDs: true, prepared: p})
 	if err == nil {
 		err = commitAmbiguousError("PreparedInsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}

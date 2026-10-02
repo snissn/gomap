@@ -314,30 +314,23 @@ func (c *Collection) lockCommandWALPublishCoordinatorWithRawPublishState(rawPubl
 	}
 }
 
+// The caller owns mutation and domain.mu. A nonempty pending interval pins
+// coordinator ownership until this flush atomically publishes its coverage.
+// Waiting for or draining a foreign owner here would invert those owned locks.
 func (c *Collection) lockCommandWALFlushPublishCoordinator(domain *collectionWriteDomain) (func(), error) {
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || domain == nil {
 		return func() {}, nil
 	}
 	coord := domain.commandWALCoordinatorForDomain(c.db)
 	if coord == nil {
-		return func() {}, nil
+		return nil, fmt.Errorf("%w: buffered command WAL has no coordinator", backenddb.ErrCommandWALAppliedLSNNonContig)
 	}
-	for {
-		coord.mu.Lock()
-		owner := coord.owner
-		if owner == nil || owner == domain {
-			return coord.mu.Unlock, nil
-		}
-		if collectionCommandWALDomainStageReserved(owner) {
-			coord.waitForCommandWALStageReservationLocked(owner)
-			coord.mu.Unlock()
-			continue
-		}
+	coord.mu.Lock()
+	if domain.pendingCommandWALFirst == 0 || domain.pendingCommandWALLast < domain.pendingCommandWALFirst || coord.owner != domain {
 		coord.mu.Unlock()
-		if err := flushCollectionWriteDomain(c.db, owner); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("%w: buffered command WAL does not own its pending prefix", backenddb.ErrCommandWALAppliedLSNNonContig)
 	}
+	return coord.mu.Unlock, nil
 }
 
 func (c *Collection) publishCommandWALNoop(intent *backenddb.CommandWALIntent, sync bool) error {
@@ -473,6 +466,45 @@ func (c *Collection) lockCommandWALStagingAfterForeignDrain() (func(), error) {
 			return nil, err
 		}
 	}
+}
+
+// lockMutationForCommandWALStaging never waits for mutation while owning a
+// pre-assignment raw staging guard. On contention it drops both raw and teardown
+// leases, takes mutation in the ordinary order, then reacquires staging with
+// close/poison and coordinator checks. A newly foreign owner requires replanning
+// rather than draining under mutation. The caller must revalidate its plan
+// before append; an assigned intent is never eligible for this handoff.
+func (c *Collection) lockMutationForCommandWALStaging(unlockRaw *func(), intent *backenddb.CommandWALIntent) (collectionMutationUnlock, error) {
+	if unlockRaw == nil || *unlockRaw == nil {
+		return c.lockMutation(), nil
+	}
+	if intent == nil || intent.AssignedLSN() != 0 {
+		return collectionMutationUnlock{}, collectionCommandWALPublicationError(c.db, intent, fmt.Errorf("%w: mutation handoff requires an unassigned staging intent", backenddb.ErrCommandWALContextMissingFrame))
+	}
+	if unlockMutation, ok := c.tryLockMutation(); ok {
+		return unlockMutation, nil
+	}
+	(*unlockRaw)()
+	*unlockRaw = nil
+	unlockMutation := c.lockMutation()
+	*unlockRaw = c.db.LockCommandWALStaging()
+	err := c.ensureWriteDomainOpen()
+	if err == nil {
+		err = c.db.CheckCommandWALPublishReady()
+	}
+	if err == nil {
+		err = c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock()
+		if collectionCommandWALPendingDrain(err) != nil {
+			err = ErrConcurrentMutation
+		}
+	}
+	if err != nil {
+		(*unlockRaw)()
+		*unlockRaw = nil
+		unlockMutation.Unlock()
+		return collectionMutationUnlock{}, err
+	}
+	return unlockMutation, nil
 }
 
 func (m *CollectionManager) withCommandWALPublishCoordinator(fn func() error) error {

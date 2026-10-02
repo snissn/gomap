@@ -60,9 +60,7 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 		return false, false, err
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	defer func() { unlockSchema() }()
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
@@ -70,6 +68,8 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err != nil {
 		return false, false, err
 	}
+	unlockSchema()
+	unlockSchema = func() {}
 	var matched, modified bool
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
@@ -81,9 +81,6 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
 	} else {
 		matched, modified, err = c.updateBSONSetDirect(documentID, spec)
-	}
-	if err == nil && modified {
-		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
 	}
 	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
@@ -146,9 +143,9 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	results, batched, err := c.updateBSONSetBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
+	results, batched, err := c.updateBSONSetBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexChanges, admission)
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
 	}
@@ -197,8 +194,9 @@ func (c *Collection) PrepareBSONSetUpdateBatchCommandWAL(items []BSONSetUpdateBa
 
 // UpdateBSONSetBatchWithCommandWALIntent applies the exact BSON $set
 // replacement documents that were precomputed and encoded into an
-// already-appended collection update command-WAL frame. It is reserved for R3a
-// deterministic apply; ordinary callers should use UpdateBSONSet or
+// already-appended collection update command-WAL frame for startup/replay.
+// Live append owners use WithPreparedCommandWALMutation before Append; ordinary
+// callers use UpdateBSONSet or
 // UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges.
 func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUpdateBatchItem, commandWALDocuments []commitlog.CollectionDocument, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
 	if commandWALIntent == nil {
@@ -215,8 +213,8 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return nil, err
 	}
@@ -241,7 +239,7 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
 		return nil, err
 	}
-	results, batched, err := c.updateBatchOwnedItemsWithCommandWALIntent(ownedItems, updateBatchModeAny, commandWALIntent)
+	results, batched, err := c.updateBatchOwnedItemsWithCommandWALIntent(ownedItems, updateBatchModeAny, commandWALIntent, admission)
 	if err == nil && !batched {
 		err = errors.New("collections: command WAL BSON $set update unexpectedly unbatched")
 	}
@@ -292,7 +290,12 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	return c.updateBSONSetBatchSchemaLocked(items, mode)
 }
 
-func (c *Collection) updateBSONSetBatchSchemaLocked(items []BSONSetUpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+func (c *Collection) updateBSONSetBatchSchemaLocked(items []BSONSetUpdateBatchItem, mode updateBatchMode, admissions ...*collectionCommandWALAdmission) ([]UpdateBatchResult, bool, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		admission = c.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
+	}
 	if c == nil {
 		return nil, false, errCollectionNil
 	}
@@ -313,7 +316,7 @@ func (c *Collection) updateBSONSetBatchSchemaLocked(items []BSONSetUpdateBatchIt
 	if err != nil {
 		return nil, false, err
 	}
-	return c.updateBatchOwnedItems(ownedItems, mode)
+	return c.updateBatchOwnedItems(ownedItems, mode, admission)
 }
 
 func cloneBSONSetUpdateBatchResults(results []UpdateBatchResult) []UpdateBatchResult {

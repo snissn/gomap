@@ -84,18 +84,30 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	return c.replaceSourceDocumentsAtomicSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, nil)
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
+	return c.replaceSourceDocumentsAtomicSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, nil, admission)
 }
 
-func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (int, error) {
-	return c.replaceSourceDocumentsAtomicModeSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, projection, false, nil)
+func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, admissions ...*collectionCommandWALAdmission) (int, error) {
+	return c.replaceSourceDocumentsAtomicModeSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, projection, false, nil, admissions...)
 }
 
-func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool, insertStats *CollectionInsertStats) (int, error) {
+func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool, insertStats *CollectionInsertStats, admissions ...*collectionCommandWALAdmission) (int, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		admission = c.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
+	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
+	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer unbind()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return 0, err
 	}
@@ -122,7 +134,7 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 			insertStats.SourceReplacementPlan += time.Since(planStarted)
 		}
 		if err != nil {
-			if isRetriableCollectionMutationError(err) {
+			if (replay == nil || replay.AssignedLSN() == 0) && isRetriableCollectionMutationError(err) {
 				lastErr = err
 				waitBeforeCollectionMutationRetry(attempt)
 				continue
@@ -138,12 +150,13 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 		if insertStats != nil {
 			publishStarted = time.Now()
 		}
-		publishErr := c.publishSourceReplacementPlan(plan, hooks, insertStats)
+		publishErr := c.publishSourceReplacementPlan(plan, hooks, insertStats, admission)
 		if insertStats != nil {
 			insertStats.Publish += time.Since(publishStarted)
 		}
+		assigned := plan.commandWAL != nil && plan.commandWAL.AssignedLSN() != 0
 		plan.close()
-		if isRetriableCollectionMutationError(publishErr) {
+		if !assigned && isRetriableCollectionMutationError(publishErr) {
 			lastErr = publishErr
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
@@ -626,7 +639,7 @@ func (plan *insertBatchPlan) checkPersistedConflictsReplacing(snap *backenddb.Sn
 	return nil
 }
 
-func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, hooks *sourcePublicationHooks, insertStats *CollectionInsertStats) error {
+func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, hooks *sourcePublicationHooks, insertStats *CollectionInsertStats, admissions ...*collectionCommandWALAdmission) error {
 	if plan == nil {
 		return errors.New("collections: missing source replacement plan")
 	}
@@ -689,7 +702,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		newSystemRoot, rootIDs, err = c.publishRootDeltaBatchGroupWithoutColumn(ordered, preflight, input)
 		return err
 	}
-	if err = c.withCommandWALPublishCoordinatorForIntent(plan.commandWAL, publish); err != nil {
+	if err = c.withCommandWALPublishCoordinatorAdmission(plan.commandWAL, collectionCommandWALAdmissionArgument(admissions), preflight, publish); err != nil {
 		return err
 	}
 	if len(rootIDs) != len(publishRootNames) {

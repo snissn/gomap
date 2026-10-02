@@ -4493,3 +4493,164 @@ func TestCollectionCommandWALStagedInsertDoesNotDeadlockNonpendingUpdate(t *test
 		t.Fatalf("reopened covered prefix applied=%d next=%d, want 2,3", applied, next)
 	}
 }
+
+// A foreign domain can become the command-WAL prefix owner while an ordinary
+// no-native mutation retains shared schema admission. A queued exclusive
+// admission makes the foreign flush's recursive shared acquisition block.
+func TestCollectionCommandWALSameSchemaForeignDrainDoesNotRetainAdmission(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	closeDB := true
+	defer func() {
+		if d == nil {
+			return
+		}
+		if closeDB {
+			_ = d.Close()
+		} else {
+			stacks := make([]byte, 64<<10)
+			n := runtime.Stack(stacks, true)
+			t.Logf("skipping DB.Close after inherited same-schema admission boundary failure:\n%s", stacks[:n])
+		}
+	}()
+	first, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondManager := NewCollectionManager(d)
+	second, err := secondManager.OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.writeDomain == second.writeDomain || first.nativeVectorAdmissionMutex() != second.nativeVectorAdmissionMutex() {
+		t.Fatal("expected distinct mutation domains sharing the same schema admission")
+	}
+	firstDoc := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}})
+	secondDoc := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}})
+	if _, err := first.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{firstDoc}); err != nil {
+		t.Fatal(err)
+	}
+	first.writeDomain.mu.RLock()
+	pending := collectionCommandWALDomainPendingLocked(first.writeDomain)
+	first.writeDomain.mu.RUnlock()
+	coord := first.writeDomain.commandWALCoordinator.Load()
+	if coord == nil {
+		t.Fatal("pending prefix has no coordinator")
+	}
+	coord.mu.Lock()
+	owner := coord.owner
+	coord.mu.Unlock()
+	if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); !pending || owner != first.writeDomain || applied != 0 || next != 2 {
+		t.Fatalf("first pending prefix: pending=%v ownerIsFirst=%v applied=%d next=%d, want true,true,0,2", pending, owner == first.writeDomain, applied, next)
+	}
+
+	secondBeforeRaw := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var observedOnce, releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseSecond) })
+	hook := func(domain *collectionWriteDomain, rawHeld bool) {
+		if domain == second.writeDomain && !rawHeld {
+			observedOnce.Do(func() {
+				close(secondBeforeRaw)
+				<-releaseSecond
+			})
+		}
+	}
+	secondManager.testCommandWALInsertStageMutationHook.Store(&hook)
+	secondDone := make(chan error, 1)
+	closeDB = false
+	go func() {
+		_, err := second.InsertBatchValidatedBSON([][]byte{[]byte("u2")}, [][]byte{secondDoc})
+		secondDone <- err
+	}()
+	waitCollectionCommandWALSignal(t, secondBeforeRaw, "second manager insert before raw staging, after releasing mutation, with shared schema admission")
+	if mutation, ok := second.tryLockMutation(); ok {
+		mutation.Unlock()
+	} else {
+		t.Fatal("second insert retained mutation at its pre-raw observation")
+	}
+	admission := second.nativeVectorAdmissionMutex()
+	if admission.TryLock() {
+		admission.Unlock()
+		t.Fatal("second insert did not retain schema admission before raw staging")
+	}
+	if !admission.TryRLock() {
+		t.Fatal("second insert unexpectedly held exclusive schema admission")
+	}
+	admission.RUnlock()
+	if next := d.CommandWALNextLSN(); next != 2 {
+		t.Fatalf("second insert assigned before foreign drain: next=%d, want 2", next)
+	}
+
+	writerDone := make(chan struct{})
+	go func() {
+		unlock := first.lockNativeVectorAdmissionWrite()
+		unlock()
+		close(writerDone)
+	}()
+	// TryRLock fails once the exclusive writer is queued. Probe only before
+	// resuming the insert; no sleep or timing guess establishes the cycle.
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for admission.TryRLock() {
+		admission.RUnlock()
+		select {
+		case <-writerDone:
+			t.Fatal("exclusive admission passed the insert's retained shared admission")
+		case <-deadline.C:
+			t.Fatal("exclusive schema admission did not queue behind the paused insert")
+		case <-ticker.C:
+		}
+	}
+	releaseOnce.Do(func() { close(releaseSecond) })
+	insertErr := waitCollectionCommandWALErr(t, secondDone, "same-schema foreign drain publication RLock behind exclusive writer, while insert retains shared admission; Close cleanup is skipped on failure")
+	waitCollectionCommandWALSignal(t, writerDone, "exclusive schema admission after foreign-drain handoff")
+	closeDB = true
+	if insertErr != nil {
+		t.Fatalf("second manager InsertBatchValidatedBSON: %v", insertErr)
+	}
+	if err := second.Flush(); err != nil {
+		t.Fatalf("Flush contiguous prefix: %v", err)
+	}
+	if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("covered prefix applied=%d next=%d, want 2,3", applied, next)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 2 || frames[0].LSN != 1 || frames[1].LSN != 2 {
+		t.Fatalf("command frames=%+v, want exactly contiguous LSNs 1,2", frames)
+	}
+	assertDocuments := func(col *Collection) {
+		t.Helper()
+		for id, name := range map[string]string{"u1": "Ada", "u2": "Grace"} {
+			doc, err := col.Get([]byte(id))
+			if err != nil {
+				t.Fatalf("Get(%s): %v", id, err)
+			}
+			if got := bson.Raw(doc).Lookup("name").StringValue(); got != name {
+				t.Fatalf("%s name=%q, want %q", id, got, name)
+			}
+		}
+	}
+	assertDocuments(second)
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = nil
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocuments(reopened)
+	if applied, next := reopen.State().AppliedCommandLSN, reopen.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("reopened covered prefix applied=%d next=%d, want 2,3", applied, next)
+	}
+}
