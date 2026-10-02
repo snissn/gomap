@@ -21,6 +21,33 @@ PHASES = ["load_sync", "checkpoint", "owned_get_sweep", "reused_append_sweep",
 SOURCE_SUFFIXES = {".go", ".s", ".S", ".c", ".h", ".cc", ".cpp", ".syso", ".mod", ".sum", ".py"}
 INPUT_FIELDS = ("GoFiles", "CgoFiles", "CFiles", "CXXFiles", "MFiles", "HFiles",
                 "FFiles", "SFiles", "SysoFiles", "EmbedFiles", "TestGoFiles", "XTestGoFiles")
+# Required integer observations at every boundary; aliases are not summed.
+REQUIRED_STATS = tuple(prefix + suffix for prefix, suffixes in {
+    "treedb.process.memory.": (
+        "heap_alloc_bytes", "heap_inuse_bytes", "total_sys_bytes", "peak_heap_alloc_bytes", "peak_heap_inuse_bytes",
+        "rss_bytes", "rss_hwm_bytes", "peak_rss_bytes", "vlog_mmap_active_bytes", "vlog_mmap_current_bytes",
+        "vlog_mmap_sealed_bytes", "peak_vlog_mmap_active_bytes"),
+    "treedb.process.batch_arena.": (
+        "pool_bytes_estimate", "in_flight_bytes_estimate", "leased_bytes", "retained_bytes_estimate",
+        "alloc_requested_bytes_total", "alloc_class_bytes_total", "used_bytes_total", "tail_waste_bytes_total"),
+    "treedb.process.append_only.": (
+        "entry_pool_retained_bytes_estimate", "value_arena_pool_retained_bytes_estimate", "mem_lease_entry_backing_bytes",
+        "mem_lease_value_arena_active_bytes", "mem_lease_value_arena_retained_bytes", "mutable_entry_backing_bytes",
+        "mutable_value_arena_active_bytes", "mutable_value_arena_retained_bytes"),
+    "treedb.process.append_only_direct_arena.": ("active_bytes", "retained_bytes", "lease_bytes"),
+    "treedb.process.read_path.outer_leaf.": ("loads_total", "point_loads_total", "bytes_total", "checksum.verifications_total", "checksum.skips_total"),
+    "treedb.process.read_path.outer_leaf.cache.": (
+        "capacity", "bytes", "entries", "hits", "misses", "stores", "evictions", "capacity_evictions", "conflict_evictions",
+        "read_miss_admission_candidate_skips", "read_miss_admission_lock_skips", "read_miss_admission_skips", "read_miss_admission_stores",
+        "write_admission_attempts", "write_admission_lock_skips", "write_admission_skips", "write_admission_stores",
+        "record_checksum_verified_stores", "page_checksum_verified_marks", "page_checksum_verified_hits", "page_checksum_unverified_hits"),
+    "treedb.vlog.grouped_frame_cache.": (
+        "budget_bytes", "capacity", "allocated_shards", "allocated_slots", "entries", "retained_bytes", "hits", "misses",
+        "stores", "evictions", "releases", "skipped_budget", "skipped_contention", "skipped_disabled", "skipped_oversize"),
+    "treedb.vlog.decode_scratch.": ("small_pool.retained_bytes", "large_pool.retained_bytes", "file_stash.retained_bytes"),
+    "treedb.negative_lookup_filter.": ("active_bytes",),
+    "treedb.command_wal.": ("applied_lsn", "live_accepted_max_lsn"),
+}.items() for suffix in suffixes)
 
 
 def require(condition, message):
@@ -79,7 +106,8 @@ def compile_inputs(listing, replacements, goroot=None):
         if module.get("GoMod"):
             paths.add(module["GoMod"])
     if goroot:
-        paths.update(str(path) for path in (Path(goroot) / "pkg/tool").rglob("*") if path.is_file())
+        for directory in ("pkg/tool", "pkg/include"):
+            paths.update(str(path) for path in (Path(goroot) / directory).rglob("*") if path.is_file())
     return {path: digest(path) for path in sorted(paths)}
 
 
@@ -182,6 +210,28 @@ def packet_from(stderr):
     return json.loads(lines[0])
 
 
+def check_observations(packet, leaf):
+    boundaries = [packet["initial_stats"], packet["closure_stats"], packet["reopen_stats"]]
+    boundaries += [phase["stats"] for phase in packet["phases"]]
+    boundaries += [phase["before_stats"] for phase in packet["phases"] if phase["operations"]]
+    for stats in boundaries:
+        require(isinstance(stats, dict), "invalid stats boundary")
+        for name in REQUIRED_STATS:
+            value = stats.get(name)
+            require(isinstance(value, str) and value.isascii() and value.isdecimal(), "missing/invalid observation: " + name)
+        require(stats.get("treedb.vlog.read_integrity") == "verify" and int(stats["treedb.negative_lookup_filter.active_bytes"]) == 0, "integrity/filter configuration drift")
+        require(not stats.get("treedb.command_wal.stats_error"), "command-WAL stats unavailable")
+        require(int(stats["treedb.process.read_path.outer_leaf.cache.capacity"]) * 4096 == leaf << 20, "wrong leaf limit")
+        require(int(stats["treedb.vlog.grouped_frame_cache.budget_bytes"]) == (64 - leaf) << 20, "wrong frame limit")
+        if leaf == 64:
+            require(int(stats["treedb.vlog.grouped_frame_cache.capacity"]) == 0, "zero bytes did not disable frames")
+    for files in [packet["closed_files"]] + [phase["logical_file_bytes"] for phase in packet["phases"]]:
+        require(isinstance(files, dict) and type(files.get("maindb/index.db")) is int and files["maindb/index.db"] > 0, "missing/invalid main index storage inventory")
+        for name, size in files.items():
+            require(isinstance(name, str) and name and "\\" not in name and all(part not in ("", ".", "..") for part in name.split("/")), "invalid relative storage filename")
+            require(type(size) is int and size >= 0, "invalid logical file byte count")
+
+
 def check_packet(packet, freeze, process, retained):
     env = freeze["environment"]
     pilot = freeze["pilot"]
@@ -218,22 +268,9 @@ def check_packet(packet, freeze, process, retained):
         if count:
             require(phase["elapsed_ns"] > 0 and phase["before_stats"], "missing timed phase boundary")
             require(phase["allocated_bytes"] >= 0 and phase["allocations"] >= 0, "invalid allocation delta")
-    for stats in [packet["initial_stats"], packet["closure_stats"], packet["reopen_stats"]] + [phase["stats"] for phase in packet["phases"]]:
-        require(stats["treedb.vlog.read_integrity"] == "verify" and int(stats["treedb.negative_lookup_filter.active_bytes"]) == 0, "integrity/filter configuration drift")
-        require(not stats.get("treedb.command_wal.stats_error"), "command-WAL stats unavailable")
-        require(int(stats["treedb.process.read_path.outer_leaf.cache.capacity"]) * 4096 == leaf << 20, "wrong leaf limit")
-        require(int(stats["treedb.vlog.grouped_frame_cache.budget_bytes"]) == (64 - leaf) << 20, "wrong frame limit")
-        if leaf == 64:
-            require(int(stats["treedb.vlog.grouped_frame_cache.capacity"]) == 0, "zero bytes did not disable frames")
-        for name in ("heap_alloc_bytes", "peak_heap_alloc_bytes", "rss_bytes", "rss_hwm_bytes", "vlog_mmap_active_bytes"):
-            require(int(stats["treedb.process.memory." + name]) >= 0, "missing process memory owner")
-        for name in ("treedb.process.batch_arena.retained_bytes_estimate", "treedb.process.append_only.entry_pool_retained_bytes_estimate",
-                     "treedb.process.append_only.mem_lease_entry_backing_bytes", "treedb.process.append_only.mutable_entry_backing_bytes",
-                     "treedb.vlog.grouped_frame_cache.retained_bytes", "treedb.vlog.decode_scratch.small_pool.retained_bytes"):
-            require(int(stats[name]) >= 0, "missing retained owner: " + name)
+    check_observations(packet, leaf)
     closure = packet["closure_stats"]
     require(int(closure["treedb.command_wal.applied_lsn"]) >= int(closure["treedb.command_wal.live_accepted_max_lsn"]) > 0, "uncovered acknowledged LSN")
-    require(packet["closed_files"], "missing closed storage inventory")
     if retained:
         require(packet["goos"] == "linux" and packet["rss_available"], "retained packet requires observed Linux RSS/HWM")
         require(int(closure["treedb.process.memory.rss_hwm_bytes"]) > 0, "missing observed RSS high water")
@@ -283,6 +320,13 @@ def self_check():
         original = compile_inputs(listing, {})
         (root / "input.go").write_text("package changed\n")
         require(original != compile_inputs(listing, {}), "changed source accepted")
+        include = root / "goroot/pkg/include/textflag.h"
+        include.parent.mkdir(parents=True)
+        include.write_text("#define NOSPLIT 4\n")
+        original = compile_inputs(listing, {}, root / "goroot")
+        require(str(include) in original, "assembler include omitted")
+        include.write_text("#define NOSPLIT 8\n")
+        require(original != compile_inputs(listing, {}, root / "goroot"), "changed assembler include accepted")
         for text in ("", "TREEDB_MEMORY_PACKET {}\nTREEDB_MEMORY_PACKET {}"):
             try:
                 packet_from(text)
@@ -291,6 +335,35 @@ def self_check():
             else:
                 raise AssertionError("invalid packet stream accepted")
         require(packet_from('TREEDB_MEMORY_PACKET {"pilot":true}') == {"pilot": True}, "packet parser failed")
+    stats = {name: "0" for name in REQUIRED_STATS}
+    stats.update({"treedb.vlog.read_integrity": "verify", "treedb.vlog.grouped_frame_cache.budget_bytes": str(64 << 20)})
+    packet = {name: copy.deepcopy(stats) for name in ("initial_stats", "closure_stats", "reopen_stats")}
+    packet.update(phases=[{"operations": 1, "stats": copy.deepcopy(stats), "before_stats": copy.deepcopy(stats),
+                           "logical_file_bytes": {"maindb/index.db": 4096}}], closed_files={"maindb/index.db": 4096})
+    check_observations(packet, 0)
+    for boundary, name in (("initial_stats", "treedb.process.read_path.outer_leaf.cache.bytes"),
+                           ("closure_stats", "treedb.vlog.grouped_frame_cache.allocated_slots"),
+                           ("reopen_stats", "treedb.process.append_only.value_arena_pool_retained_bytes_estimate"),
+                           ("stats", "treedb.vlog.grouped_frame_cache.hits"),
+                           ("before_stats", "treedb.process.read_path.outer_leaf.cache.hits")):
+        wrong = copy.deepcopy(packet)
+        del (wrong["phases"][0][boundary] if boundary in ("stats", "before_stats") else wrong[boundary])[name]
+        try:
+            check_observations(wrong, 0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted missing observation at " + boundary)
+    for invalid in ({"anything": 1}, {"maindb/index.db": True}, {"maindb/index.db": 4096, "../escape": 1},
+                    {"maindb/index.db": 4096, "maindb/wal/segment": -1}):
+        wrong = copy.deepcopy(packet)
+        wrong["phases"][0]["logical_file_bytes"] = invalid
+        try:
+            check_observations(wrong, 0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted invalid storage inventory")
     identity = {"runtime_head": "head", "treedb_tree": "tree", "harness_sha256": "harness",
                 "binary_sha256": "binary", "source_files": {"input.go": "sha"}, "overlay_files": {"db.go": "sha"}}
     check_identity(identity, copy.deepcopy(identity))
