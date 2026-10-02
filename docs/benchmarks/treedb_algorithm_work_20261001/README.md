@@ -16,6 +16,58 @@ The controls are inline placement (`PointerThreshold=16384`) versus persistent p
 
 Different checkpoint cadence changes amortization, publication latency, and residency; it is not an engine-only optimization. Widened budgets can spend memory. Comparison requires identical logical bytes, acknowledgement cadence, RNG, generations, host, and toolchain. Existing #2922 and #2771 implementations are reused; their historical 10MM acceptance gates are neither inherited nor waived.
 
+## Public snapshot-rotation supplement (#4916)
+
+`BenchmarkAlgorithmSparseUpdatesSnapshotRotations` shares the primary write body
+and all fixture, oracle, read-sampling, close/reopen, LSN, I/O, allocation and
+retained-heap gates. After each successful 1,000-op `WriteSync` and checked batch
+`Close`, it acquires one public snapshot, calls ordinary owned `Snapshot.Get` on
+the last updated key, validates every value byte at generation 1, and checks
+snapshot `Close` before the scheduled checkpoint. Read/oracle failure also
+closes the snapshot. There is one snapshot at a time, with no delayed release.
+The full fixture has 40 acquisitions and 40 closes (pilot: eight), stride 1,000.
+`Snapshot.Get`'s returned owned 256-byte value and the public snapshot's normal
+rotation/retention allocations are intentional costs; the fixture adds no copy,
+retained value collection or queue injection. Snapshot work stays in the full
+interval and is separately timed as `snapshot_ns`; `ack_ns` still measures only
+`WriteSync`, and `checkpoint_ns` only `Checkpoint`.
+
+Capture selects this workload explicitly with `--family snapshot-rotations` and
+an exact `BenchmarkAlgorithmSparseUpdatesSnapshotRotations` selector, never an
+inherited workload switch. Its packet schema is
+`algorithm-work-snapshot-rotations-v1`, with
+`write_shape=public-snapshot-per-ack-batch`, `snapshot_acquisitions`,
+`snapshot_closes`, `snapshot_stride` and `snapshot_ns`. Strict field types,
+counts, non-overlapping phase durations, eight unique controls, complete oracle
+and closure, actual argv/environment, raw streams and the existing external
+source/dependency/toolchain/binary freeze all remain required. The ordinary
+`writes` family keeps its original packet/schema validator and rejects this
+supplement. The declared `--small-flush` cohort remains separate.
+
+Public snapshot acquisition can rotate populated mutable shards into immutable
+work; 40 calls prove neither simultaneous queue depth nor extra admission.
+Automatic c2 admission, shard/lane topology, real EWMA/backpressure, checksums,
+persistent vlog pointers, generation pins and CommandWAL closure are unchanged.
+Compare only equivalent rotation default/wide cells. Interval counter deltas
+must separate checkpoint-frontier expansion from background admission; cumulative
+maxima and last pressure observations are not interval maxima or distributions.
+A fixture/pilot alone establishes no speedup or broader coalescer rejection and
+cannot close #4893. After review and landing, the coordinator owns a fresh frozen
+eight-cell eligibility capture, followed by three matched fresh-process rounds
+only if actual beyond-baseline admission occurs. If still baseline-covered,
+report the observed gates and a concrete revisit workload/threshold.
+
+The #4916 focused schema-selection test failed on the old capture validator;
+the public snapshot cleanup test failed to compile before its helper existed.
+The replay test retains its original no-rotation case and adds two matched
+1,000-op snapshot boundaries, then a third acknowledged 1,000-op batch without
+rotation before process exit without checkpoint/DB close. Background flush may
+apply the first two batches; the final batch remains in fresh mutable shards
+below the fixed flush threshold, outside the immutable queue. The child checks
+all three acknowledgment LSNs and a strictly outstanding final prefix; reopen
+validates all 3,000 distinct updates over 4,096 keys plus every unaffected value
+and interleaved miss. This proves process-crash replay, not power-loss durability.
+
 ## Measurements and units
 
 Go `ns/op` is one complete fixed-work write interval including stopping/joining the reader after the final checkpoint. `updates/s` and `reads/s` use that same interval. The reader measures ordinary owned `Get`, checks all bytes outside each individual read timer, and samples every 16th completed read across the entire interval. Full read count/max and sample count/stride are retained. Sample overflow fails closed instead of truncating the end. p99/p99.9 are sampled owned-read latencies; disclose sample support and do not claim precise p99.9 from tiny pilots. Full-value validation and reader scheduling influence workflow throughput. A single reader is a bounded workload, not a capacity claim.
@@ -45,11 +97,14 @@ Each process writes exclusively created `stdout.log` and `stderr.log`, then reco
 On the exclusively granted Linux runner, use Go 1.26.3, `GOWORK=off`, persistent build cache, and a dedicated source/tmp/log directory. No other timed run may overlap. Keep raw successful and failed logs. Package test profiles are ordinary Go profiles, not benchprof inputs.
 
 ```sh
-GOWORK=off go test ./TreeDB -run '^TestAlgorithmWork(BatchConsumer|Fixture|AcknowledgedReplay)$' -count=1
+GOWORK=off go test ./TreeDB -run '^TestAlgorithmWork(BatchConsumer|Fixture|SnapshotRotation|AcknowledgedReplay)$' -count=1
 
 # Bounded constructor pilot, only after runner grant and source preflight.
 TREEDB_ALGORITHM_PILOT=1 GOWORK=off go test ./TreeDB -run '^$' -bench '^BenchmarkAlgorithmSparseUpdates$' -benchtime=1x -count=1 -benchmem -v
 TREEDB_ALGORITHM_PILOT=1 GOWORK=off go test ./TreeDB -run '^$' -bench '^BenchmarkAlgorithmGetMany$' -benchtime=1000x -count=1 -benchmem -v
+
+# Unretained rotation constructor, same fixed limits and source preflight.
+TREEDB_ALGORITHM_PILOT=1 GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=2GiB go test ./TreeDB -run '^$' -bench '^BenchmarkAlgorithmSparseUpdatesSnapshotRotations$' -benchtime=1x -count=1 -benchmem -v
 
 # Counter-only pass; use a fresh output directory and bind its manifest.
 python3 scripts/treedb_algorithm_work_overlay.py "$PWD" /tmp/algorithm-overlay
@@ -63,6 +118,7 @@ export GOROOT=/home/mikers/.gvm/gos/go1.26.3
 python3 "$CAPTURE" prepare --source "$PWD" --output /tmp/algorithm-prepared
 # Set NORMAL_FREEZE_SHA to the digest preserved at preparation, not a later rehash.
 python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-writes-r1 --family writes --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-snapshot-rotations-eligibility --family snapshot-rotations --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-many-r1 --family many --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 python3 "$CAPTURE" validate --source "$PWD" --output /tmp/algorithm-writes-r1 --freeze-sha256 "$NORMAL_FREEZE_SHA"
 # Add --pilot for an explicitly unretained 8k qualification;

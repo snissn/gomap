@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -25,6 +26,14 @@ import (
 // process allocations and read validation include harness work; ns/op is the
 // complete write/ack/checkpoint interval, not an isolated engine operation.
 func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
+	benchmarkAlgorithmSparseUpdates(b, false)
+}
+
+func BenchmarkAlgorithmSparseUpdatesSnapshotRotations(b *testing.B) {
+	benchmarkAlgorithmSparseUpdates(b, true)
+}
+
+func benchmarkAlgorithmSparseUpdates(b *testing.B, snapshotRotations bool) {
 	keys, updates := 250000, 40000
 	if os.Getenv("TREEDB_ALGORITHM_PILOT") == "1" {
 		keys, updates = 8192, 8000
@@ -95,7 +104,8 @@ func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
 					b.ResetTimer()
 					start := time.Now()
 					close(release)
-					var ackNS, checkpointNS int64
+					var ackNS, checkpointNS, snapshotNS int64
+					snapshotAcquisitions, snapshotCloses := 0, 0
 					var writeErr error
 					commits, completedCheckpoints := 0, 0
 					for base := 0; base < updates && writeErr == nil && !stop.Load(); base += 1000 {
@@ -110,10 +120,25 @@ func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
 							ackStart := time.Now()
 							writeErr = batch.WriteSync()
 							ackNS += time.Since(ackStart).Nanoseconds()
-							commits++
+							if writeErr == nil {
+								commits++
+							}
 						}
 						if err := batch.Close(); writeErr == nil {
 							writeErr = err
+						}
+						if writeErr == nil && snapshotRotations {
+							snapshotStart := time.Now()
+							snapshot := d.AcquireSnapshot()
+							if snapshot != nil {
+								snapshotAcquisitions++
+							}
+							id := (end - 1) * 7919 % keys
+							writeErr = algorithmSnapshotCheckAndClose(snapshot, updateKeys[end-1], id, 1)
+							if writeErr == nil {
+								snapshotCloses++
+							}
+							snapshotNS += time.Since(snapshotStart).Nanoseconds()
 						}
 						if writeErr == nil && end%(updates/checkpoints) == 0 {
 							cpStart := time.Now()
@@ -133,6 +158,9 @@ func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
 					}
 					if commits != updates/1000 || completedCheckpoints != checkpoints || len(reads.Samples) == 0 {
 						b.Fatal("incomplete operations", commits, completedCheckpoints, reads.Reads)
+					}
+					if snapshotRotations && (snapshotAcquisitions != commits || snapshotCloses != commits) {
+						b.Fatal("incomplete snapshot boundaries", snapshotAcquisitions, snapshotCloses, commits)
 					}
 					after := algorithmStats(d.Stats())
 					disk := algorithmDisk(b, opts.Dir)
@@ -161,6 +189,14 @@ func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
 					}
 					d = nil
 					packet := map[string]any{"schema": "algorithm-work-v1", "provenance": provenance, "keys": keys, "updates": updates, "commits": commits, "ack_batch_ops": 1000, "permutation_multiplier": 7919, "key_bytes": 32, "value_bytes": 256, "allowed_concurrent_generations": []int{0, 1}, "pointer_threshold": opts.ValueLog.PointerThreshold, "flush_threshold": opts.FlushThreshold, "coalescing_wide": wide, "checkpoints": completedCheckpoints, "interval_ns": elapsed.Nanoseconds(), "ack_ns": ackNS, "checkpoint_ns": checkpointNS, "read_count": reads.Reads, "read_samples": len(reads.Samples), "read_sample_stride": 16, "read_p99_ns": algorithmQuantile(reads.Samples, .99), "read_p999_ns": algorithmQuantile(reads.Samples, .999), "read_max_ns": reads.MaxNS, "allocated_bytes": memAfter.TotalAlloc - memBefore.TotalAlloc, "allocations": memAfter.Mallocs - memBefore.Mallocs, "post_reopen_gc_heap_bytes": retained.HeapAlloc, "kernel_process_io_before": ioBefore, "kernel_process_io_after": ioAfter, "file_logical_bytes": disk, "before": before, "after": after, "validated_all_values_and_misses": true, "final_close_checked": true}
+					if snapshotRotations {
+						packet["schema"] = "algorithm-work-snapshot-rotations-v1"
+						packet["write_shape"] = "public-snapshot-per-ack-batch"
+						packet["snapshot_acquisitions"] = snapshotAcquisitions
+						packet["snapshot_closes"] = snapshotCloses
+						packet["snapshot_stride"] = 1000
+						packet["snapshot_ns"] = snapshotNS
+					}
 					encoded, err := json.Marshal(packet)
 					if err != nil {
 						b.Fatal(err)
@@ -170,6 +206,23 @@ func BenchmarkAlgorithmSparseUpdates(b *testing.B) {
 			}
 		}
 	}
+}
+
+// Get returns an owned value; validation needs no additional copy. Always
+// release this one boundary's snapshot, including a read/oracle failure.
+func algorithmSnapshotCheckAndClose(snapshot Snapshot, key []byte, id, generation int) (err error) {
+	if snapshot == nil {
+		return fmt.Errorf("snapshot acquisition failed")
+	}
+	defer func() { err = errors.Join(err, snapshot.Close()) }()
+	value, err := snapshot.Get(key)
+	if err != nil {
+		return err
+	}
+	if !algorithmValid(value, id, generation) {
+		return fmt.Errorf("snapshot id=%d generation=%d invalid value", id, generation)
+	}
+	return nil
 }
 
 type algorithmReadResult struct {
@@ -683,14 +736,12 @@ func TestAlgorithmWorkFixture(t *testing.T) {
 	}
 }
 
-// The child exits after a synchronous acknowledgement without Close or another
-// checkpoint. This is process-crash replay proof, not power-loss simulation.
-func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
-	if dir := os.Getenv("TREEDB_ALGORITHM_CRASH_DIR"); dir != "" {
-		d := algorithmFixture(t, algorithmOptions(dir, true, false), 256)
-		batch := d.NewBatch()
-		for i := 0; i < 64; i++ {
-			id := i * 7919 % 256
+func TestAlgorithmWorkSnapshotRotation(t *testing.T) {
+	d := algorithmFixture(t, algorithmOptions(t.TempDir(), true, false), 2048)
+	for base := 0; base < 2000; base += 1000 {
+		batch := d.NewBatchWithSize(1000)
+		for i := base; i < base+1000; i++ {
+			id := i * 7919 % 2048
 			if err := batch.Set(algorithmKey(id*2), algorithmValue(id, 1)); err != nil {
 				t.Fatal(err)
 			}
@@ -701,34 +752,121 @@ func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
 		if err := batch.Close(); err != nil {
 			t.Fatal(err)
 		}
+		id := (base + 999) * 7919 % 2048
+		snapshot := d.AcquireSnapshot()
+		if err := algorithmSnapshotCheckAndClose(snapshot, algorithmKey(id*2), id, 1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := snapshot.Get(algorithmKey(id * 2)); err == nil {
+			t.Fatal("successful boundary left snapshot open")
+		}
+	}
+	for _, failure := range []string{"wrong_generation", "missing_key"} {
+		t.Run(failure, func(t *testing.T) {
+			snapshot := d.AcquireSnapshot()
+			key := algorithmKey(0)
+			if failure == "missing_key" {
+				key = algorithmKey(1)
+			}
+			if err := algorithmSnapshotCheckAndClose(snapshot, key, 0, 0); err == nil {
+				t.Fatal("invalid snapshot value accepted")
+			}
+			if _, err := snapshot.Get(algorithmKey(0)); err == nil {
+				t.Fatal("failed validation left snapshot open")
+			}
+		})
+	}
+	if err := algorithmSnapshotCheckAndClose(nil, algorithmKey(0), 0, 1); err == nil {
+		t.Fatal("missing snapshot accepted")
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	algorithmVerify(t, d, 2048, 2000)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The child exits after a synchronous acknowledgement without Close or another
+// checkpoint. This is process-crash replay proof, not power-loss simulation.
+func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
+	if dir := os.Getenv("TREEDB_ALGORITHM_CRASH_DIR"); dir != "" {
+		snapshotRotations := os.Getenv("TREEDB_ALGORITHM_CRASH_SNAPSHOTS") == "true"
+		keys, updates, batchOps := 256, 64, 64
+		if snapshotRotations {
+			keys, updates, batchOps = 4096, 3000, 1000
+		}
+		d := algorithmFixture(t, algorithmOptions(dir, true, false), keys)
+		fixtureLSN := algorithmUint(algorithmStats(d.Stats()), "treedb.command_wal.live_accepted_max_lsn")
+		for base := 0; base < updates; base += batchOps {
+			batch := d.NewBatchWithSize(batchOps)
+			for i := base; i < base+batchOps; i++ {
+				id := i * 7919 % keys
+				if err := batch.Set(algorithmKey(id*2), algorithmValue(id, 1)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := batch.WriteSync(); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// The last acknowledgment stays in fresh mutable shards. Snapshot
+			// rotations may flush both earlier batches, but background flush
+			// drains only queued work and cannot cover this unrotated batch.
+			if snapshotRotations && base+batchOps < updates {
+				id := (base + batchOps - 1) * 7919 % keys
+				if err := algorithmSnapshotCheckAndClose(d.AcquireSnapshot(), algorithmKey(id*2), id, 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		stats := algorithmStats(d.Stats())
-		if algorithmUint(stats, "treedb.command_wal.live_accepted_max_lsn") <= algorithmUint(stats, "treedb.command_wal.applied_lsn") {
+		acknowledgedBatches := uint64(1)
+		if snapshotRotations {
+			acknowledgedBatches = 3
+		}
+		acceptedLSN := algorithmUint(stats, "treedb.command_wal.live_accepted_max_lsn")
+		if acceptedLSN != fixtureLSN+acknowledgedBatches {
+			t.Fatalf("replay acknowledgment count: accepted=%d fixture=%d batches=%d", acceptedLSN, fixtureLSN, acknowledgedBatches)
+		}
+		if acceptedLSN <= algorithmUint(stats, "treedb.command_wal.applied_lsn") {
 			t.Fatal("fixture checkpointed acknowledged updates before crash")
 		}
 		os.Exit(0)
 	}
-	dir := t.TempDir()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(executable, "-test.run=^TestAlgorithmWorkAcknowledgedReplay$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "TREEDB_ALGORITHM_CRASH_DIR="+dir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("crash child: %v %s", err, output)
-	}
-	d, err := Open(algorithmOptions(dir, true, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := d.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	algorithmVerify(t, d, 256, 64)
-	stats := algorithmStats(d.Stats())
-	if algorithmUint(stats, "treedb.command_wal.applied_lsn") < algorithmUint(stats, "treedb.command_wal.max_lsn") {
-		t.Fatal("replay incomplete")
+	for _, snapshotRotations := range []bool{false, true} {
+		t.Run(fmt.Sprintf("snapshot_rotations=%v", snapshotRotations), func(t *testing.T) {
+			dir := t.TempDir()
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(executable, "-test.run=^TestAlgorithmWorkAcknowledgedReplay$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "TREEDB_ALGORITHM_CRASH_DIR="+dir, "TREEDB_ALGORITHM_CRASH_SNAPSHOTS="+strconv.FormatBool(snapshotRotations))
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("crash child: %v %s", err, output)
+			}
+			d, err := Open(algorithmOptions(dir, true, false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := d.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			keys, updates := 256, 64
+			if snapshotRotations {
+				keys, updates = 4096, 3000
+			}
+			algorithmVerify(t, d, keys, updates)
+			stats := algorithmStats(d.Stats())
+			if algorithmUint(stats, "treedb.command_wal.applied_lsn") < algorithmUint(stats, "treedb.command_wal.max_lsn") {
+				t.Fatal("replay incomplete")
+			}
+		})
 	}
 }
