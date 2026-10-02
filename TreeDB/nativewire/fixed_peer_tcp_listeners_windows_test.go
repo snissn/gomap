@@ -113,7 +113,7 @@ func fixedPeerWindowsWaitReplyV1(stage *fixedPeerWindowsStageV1, sequence int) (
 	path := fmt.Sprintf("%s.reply-%d", stage.path, sequence)
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := os.ReadFile(path)
+		raw, err := fixedPeerReadWindowsReplyV1(path)
 		if err == nil {
 			var reply fixedPeerWindowsStageReplyV1
 			if err := json.Unmarshal(raw, &reply); err != nil {

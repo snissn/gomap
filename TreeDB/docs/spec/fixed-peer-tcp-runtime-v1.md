@@ -45,13 +45,22 @@ sockets until the existing start helper supplies the finalized configuration;
 serving begins in the original bootstrap order. Restart binds the stored exact
 addresses after the intentional shutdown. Private staged children are bounded
 and killed and reaped if configuration construction fails. Ordinary linker
-checks and hosted Windows runtime tests cover this supported path. Config-only
+checks and hosted Windows runtime tests cover this supported path. The Windows
+reply reader shares delete access so it can read a published reply while the
+rename handle is still open; publication remains a closed temporary file followed
+by rename. Config-only
 probes and intentionally absent standby public roles release their reservations explicitly. Future replacement
 role reservations transfer to the target runtime and are consumed only by its
 existing transport/endpoint creation; they do not grant membership or readiness.
 There is no public listener-injection API, port scheduler, mutation retry, or
-collision suppression. The historical interference owner remains unidentified;
-controlled tests separately prove competing binds and outbound source-port reuse.
+collision suppression. A dormant refusal loop recovers only from errors classified
+by `net.Error.Temporary`, with 5ms doubling backoff capped at 1s and reset on
+success. Takeover and Close interrupt that backoff; closed/permanent errors stop
+the loop. This recovery does not retry binds or mutations. The historical
+interference owner remains unidentified;
+controlled tests prove competing binds on every platform and outbound source-port
+reuse causing a listener collision on Linux. Darwin permits the latter bind, so
+that Linux mechanism is not a portable collision assertion.
 The initial stdout JSON identifies the binary and normalized configuration; it is **not readiness**.
 Use `-mode ready` for fresh quorum/apply evidence, `-mode status` for observational
 Raft state, and `-mode diagnostics` for process/disk/network counters. `-mode inspect`

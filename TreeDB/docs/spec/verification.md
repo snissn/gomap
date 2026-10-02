@@ -2873,9 +2873,11 @@ Listener ownership through bootstrap (#4929):
   control, catalog/data Raft, public-vector and hosted-shard role across the
   shared fixture inventory. Its unchanged witness fails against the released
   allocator and passes with retained reservations.
-- `TestFixedPeerListenerOutboundCollisionControlV1` records the actual outbound
-  local/remote addresses, owning PID and Linux socket inode for the released
+- Linux-only `TestFixedPeerListenerOutboundCollisionControlV1` records the actual
+  outbound local/remote addresses, owning PID and Linux socket inode for the released
   control, then verifies its bind failure and retained-reservation rejection.
+  Darwin permits this source-port/listener pairing; the common all-role competing
+  bind witness remains the portable ownership control.
 - `TestFixedPeerListenerOwnershipFailureCleanupV1` covers invalid configuration,
   persisted manifest refusal, a nil supplied listener, partial bind failure and
   drain refusal. Existing subprocess, restart, replacement, standby, security,
@@ -2885,6 +2887,12 @@ Listener ownership through bootstrap (#4929):
   release/rebind gap between fixture selection and runtime ownership.
   Reserved cold shard sockets do not authenticate or serve until backend
   authority checks succeed; observation still cannot warm the backend or READY.
+- `TestFixedPeerDormantListenerTemporaryAcceptRefusalV1` injects a wrapped
+  temporary Accept error then requires real TCP refusal to recover; its unchanged
+  witness fails against the exited baseline pump with a bound, blackholed socket.
+  `TestFixedPeerDormantListenerInterruptsAcceptBackoffV1` reaches the 1s backoff
+  cap, then checks prompt exact-socket takeover/Close, pump exit and one owned
+  socket close.
 - `TestFixedPeerDormantListenerRefusalTakeoverV1` repeats prompt cold refusal,
   exact-socket takeover, pump termination and cleared-deadline serving.
   `TestFixedPeerDormantListenerFailureCleanupV1` checks close and interrupted
@@ -2898,6 +2906,15 @@ Listener ownership through bootstrap (#4929):
   `TestFixedPeerWindowsStagedProtocolErrorCleanupV1` cover continuous child
   ownership, activation, exact-address restart and cancellation/config failure.
   Cross-compilation alone does not establish Windows runtime coverage.
+
+Windows staged reply sharing (#4929):
+
+- `TestFixedPeerWindowsReplyReadSharesRenameHandleV1` holds a DELETE-access handle
+  on each published allocation/activation reply. It requires the former standard
+  reader to fail with `ERROR_SHARING_VIOLATION` and the actual shared-delete
+  `fixedPeerWindowsWaitReplyV1` reader to decode the same reply while the handle
+  remains held, repeated 20 times. This control requires native Windows execution;
+  a Linux copy of the staging protocol provides protocol coverage only.
 
 Reproduce focused controls with
 `GOWORK=off go test ./TreeDB/nativewire -run '^Test(FixedPeerFixtureRetainsBootstrapListeners|FixedPeerListener.*|FixedPeerDormantListener.*)V1$' -count=3 -v`,

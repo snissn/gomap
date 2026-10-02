@@ -1,10 +1,11 @@
 package nativewire
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"slices"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -77,22 +78,51 @@ func reserveFixedPeerDormantListenersV1(config FixedPeerTCPConfigV1, owned map[s
 // the same TCP listener; serving traffic has no extra goroutine or wrapper.
 type fixedPeerTCPReservationV1 struct {
 	net.Listener
-	stop atomic.Bool
-	done chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
+	done     chan struct{}
 }
 
 func reserveFixedPeerTCPListenerV1(listener net.Listener) net.Listener {
 	if _, ok := listener.(*fixedPeerTCPReservationV1); ok {
 		return listener
 	}
-	r := &fixedPeerTCPReservationV1{Listener: listener, done: make(chan struct{})}
+	r := &fixedPeerTCPReservationV1{Listener: listener, stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(r.done)
-		for !r.stop.Load() {
+		var retryDelay time.Duration
+		for {
+			select {
+			case <-r.stop:
+				return
+			default:
+			}
 			conn, err := listener.Accept()
 			if err != nil {
-				return
+				select {
+				case <-r.stop:
+					return
+				default:
+				}
+				var netErr net.Error
+				if errors.Is(err, net.ErrClosed) || !errors.As(err, &netErr) || !netErr.Temporary() {
+					return
+				}
+				if retryDelay == 0 {
+					retryDelay = 5 * time.Millisecond
+				} else {
+					retryDelay = min(2*retryDelay, time.Second)
+				}
+				timer := time.NewTimer(retryDelay)
+				select {
+				case <-r.stop:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+				continue
 			}
+			retryDelay = 0
 			_ = conn.Close()
 		}
 	}()
@@ -100,7 +130,7 @@ func reserveFixedPeerTCPListenerV1(listener net.Listener) net.Listener {
 }
 
 func (r *fixedPeerTCPReservationV1) takeV1() (net.Listener, error) {
-	r.stop.Store(true)
+	r.stopOnce.Do(func() { close(r.stop) })
 	deadline, ok := r.Listener.(interface{ SetDeadline(time.Time) error })
 	if !ok {
 		_ = r.Close()
@@ -119,7 +149,7 @@ func (r *fixedPeerTCPReservationV1) takeV1() (net.Listener, error) {
 }
 
 func (r *fixedPeerTCPReservationV1) Close() error {
-	r.stop.Store(true)
+	r.stopOnce.Do(func() { close(r.stop) })
 	err := r.Listener.Close()
 	<-r.done
 	return err
