@@ -336,9 +336,13 @@ because they return before a backend batch exists; backend
 `command_wal_barrier` only for backend batches that exist but are explicitly
 fenced by command-WAL publish or checkpoint applied-LSN boundaries.
 
-The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
-entries may share command-envelope payloads, but consensus ordering and local
-recoverability remain separate responsibilities.
+The user-command WAL is a local crash-recovery log. Raft entries share typed
+command-envelope payloads; consensus ordering and local recoverability remain
+separate responsibilities. Raft collection executors establish prepared
+operation ownership before local append and retain it through apply and frame
+finalization or abort. Unassigned pending-drain handoffs release owned leases
+before draining and revalidate before assignment; queued requests never lend
+their leases to a worker. See the [collection command-WAL locking contract](../../../docs/contracts/LOCKING.md#collection-command-wal-ownership).
 
 ## 4. Backend Commit Model
 

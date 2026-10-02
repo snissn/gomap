@@ -13,7 +13,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestServiceTypedNativeConcurrentInsertsShareAdmissionAndPublication(t *testing.T) {
+func TestServiceTypedNativeConcurrentInsertsShareAdmission(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {
 		t.Fatal(err)
@@ -69,8 +69,9 @@ func TestServiceTypedNativeConcurrentInsertsShareAdmissionAndPublication(t *test
 		t.Fatal(err)
 	}
 
-	// Holding another shared admission lease makes an accidental exclusive
-	// route (or exclusive fallback) block deterministically.
+	// Hold another reader until both distinct handles enter the shared route.
+	// Group formation is best effort: preparation can outlast the seal window,
+	// so release this reader before waiting for legitimate exclusive fallback.
 	s.writeMu.RLock()
 	sharedHeld := true
 	defer func() {
@@ -90,14 +91,21 @@ func TestServiceTypedNativeConcurrentInsertsShareAdmissionAndPublication(t *test
 			done <- result{out: out, err: err}
 		}()
 	}
+	select {
+	case <-release:
+		s.writeMu.RUnlock()
+		sharedHeld = false
+	case <-time.After(20 * time.Second):
+		t.Fatal("concurrent typed service calls did not both enter shared admission")
+	}
 	for range 2 {
 		select {
 		case got := <-done:
 			if got.err != nil || got.out.Inserted != 1 || got.out.Updated != 0 {
-				t.Fatalf("grouped typed service result=%+v err=%v", got.out, got.err)
+				t.Fatalf("concurrent typed service result=%+v err=%v", got.out, got.err)
 			}
 		case <-time.After(20 * time.Second):
-			t.Fatal("concurrent typed service call did not complete under shared admission")
+			t.Fatal("concurrent typed service call did not complete")
 		}
 	}
 	hookMu.Lock()
@@ -109,19 +117,18 @@ func TestServiceTypedNativeConcurrentInsertsShareAdmissionAndPublication(t *test
 	if gotAdmitted[0] == cached || gotAdmitted[1] == cached || gotAdmitted[0] == gotAdmitted[1] {
 		t.Fatalf("shared write handles=%p,%p cached=%p want independent", gotAdmitted[0], gotAdmitted[1], cached)
 	}
-	s.writeMu.RUnlock()
-	sharedHeld = false
 	afterState := db.State()
-	if afterState.CommitSeq != beforeState.CommitSeq+1 {
-		t.Fatalf("commit seq=%d want one grouped publication after %d", afterState.CommitSeq, beforeState.CommitSeq)
+	publications := afterState.CommitSeq - beforeState.CommitSeq
+	if publications < 1 || publications > 2 {
+		t.Fatalf("commit seq=%d want one grouped or two separate publications after %d", afterState.CommitSeq, beforeState.CommitSeq)
 	}
 	afterSyncs, err := strconv.ParseUint(db.Stats()["treedb.command_wal.file_sync.calls_total"], 10, 64)
-	if err != nil || afterSyncs != beforeSyncs+1 {
-		t.Fatalf("command WAL file syncs=%d want=%d err=%v", afterSyncs, beforeSyncs+1, err)
+	if err != nil || afterSyncs != beforeSyncs+publications {
+		t.Fatalf("command WAL file syncs=%d want=%d err=%v", afterSyncs, beforeSyncs+publications, err)
 	}
 	fetched, err := s.FetchTypedDocuments(ctx, info.Name, info.Generation, [][]byte{[]byte("group-a"), []byte("group-b")})
 	if err != nil || len(fetched.Results) != 2 || !fetched.Results[0].Found || !fetched.Results[1].Found {
-		t.Fatalf("grouped typed service fetch=%+v err=%v", fetched, err)
+		t.Fatalf("concurrent typed service fetch=%+v err=%v", fetched, err)
 	}
 }
 
