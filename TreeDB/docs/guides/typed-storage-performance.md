@@ -74,6 +74,8 @@ buffer's physical allocation; it exposes its existing backing for reuse.
 Use ordinary `BenchmarkDBValueLogGet/Get` as a separate public-path guardrail.
 Allocation reduction alone is not a claim of faster point reads, and there is
 no on-disk format change. See [decode scratch reuse](../spec/value-log-lifecycle.md#11-decode-scratch-reuse).
+The [#4889 qualification packet](../../../docs/benchmarks/treedb_decode_reuse_20261001/README.md)
+retains matched sources, public caller/ownership audit and physical-capacity caveats.
 
 ### Default typed-column int64 aggregate benchmark
 
