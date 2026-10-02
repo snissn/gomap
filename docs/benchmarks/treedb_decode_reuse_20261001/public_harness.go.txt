@@ -1,0 +1,202 @@
+package treedb
+
+import (
+	"encoding/binary"
+	"fmt"
+	"runtime"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+)
+
+var snapshotReadBenchSink []byte
+
+func openSnapshotValueLogBenchDB(b *testing.B) (*DB, [][]byte) {
+	b.Helper()
+
+	opts := Options{
+		Dir:                              b.TempDir(),
+		KeepRecent:                       10_000,
+		IndexOuterLeavesInValueLog:       true,
+		LeafPrefixCompression:            true,
+		IndexColumnarLeaves:              true,
+		IndexPackedValuePtr:              true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		MaxWALBytes:                      -1,
+		BackgroundIndexVacuumInterval:    -1,
+		DisableBackgroundPrune:           true,
+	}
+	opts.ValueLog.PointerThreshold = 1
+
+	db, err := Open(opts)
+	if err != nil {
+		b.Fatalf("open db: %v", err)
+	}
+
+	const (
+		keyCount  = 32_768
+		batchSize = 512
+		valueSize = 256
+	)
+	keys := make([][]byte, keyCount)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("celestia/snapshot/get/key/%08d", i))
+	}
+	value := make([]byte, valueSize)
+	for i := range value {
+		value[i] = byte(i)
+	}
+
+	for base := 0; base < keyCount; base += batchSize {
+		batch := db.NewBatch()
+		limit := base + batchSize
+		if limit > keyCount {
+			limit = keyCount
+		}
+		for i := base; i < limit; i++ {
+			var seq [8]byte
+			binary.BigEndian.PutUint64(seq[:], uint64(i))
+			copy(value[len(value)-len(seq):], seq[:])
+			if err := batch.Set(keys[i], value); err != nil {
+				_ = batch.Close()
+				_ = db.Close()
+				b.Fatalf("batch.Set(%d): %v", i, err)
+			}
+		}
+		if err := batch.WriteSync(); err != nil {
+			_ = batch.Close()
+			_ = db.Close()
+			b.Fatalf("batch.WriteSync(%d): %v", base, err)
+		}
+		if err := batch.Close(); err != nil {
+			_ = db.Close()
+			b.Fatalf("batch.Close(%d): %v", base, err)
+		}
+	}
+
+	return db, keys
+}
+
+func BenchmarkSnapshotValueLogGet(b *testing.B) {
+	db, keys := openSnapshotValueLogBenchDB(b)
+	defer func() { _ = db.Close() }()
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		b.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	b.Run("Get", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out, err := snap.Get(keys[i%len(keys)])
+			if err != nil {
+				b.Fatalf("Snapshot.Get: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+
+	b.Run("GetAppend", func(b *testing.B) {
+		dst := make([]byte, 0, 512)
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			dst = dst[:0]
+			out, err := snap.GetAppend(keys[i%len(keys)], dst)
+			if err != nil {
+				b.Fatalf("Snapshot.GetAppend: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+
+	b.Run("GetUnsafe", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out, err := snap.GetUnsafe(keys[i%len(keys)])
+			if err != nil {
+				b.Fatalf("Snapshot.GetUnsafe: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+}
+
+func BenchmarkDBValueLogGet(b *testing.B) {
+	db, keys := openSnapshotValueLogBenchDB(b)
+	defer func() { _ = db.Close() }()
+
+	b.Run("Get", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out, err := db.Get(keys[i%len(keys)])
+			if err != nil {
+				b.Fatalf("DB.Get: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+
+	b.Run("GetAppend", func(b *testing.B) {
+		dst := make([]byte, 0, 512)
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			dst = dst[:0]
+			out, err := db.GetAppend(keys[i%len(keys)], dst)
+			if err != nil {
+				b.Fatalf("DB.GetAppend: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+
+	b.Run("GetUnsafe", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out, err := db.GetUnsafe(keys[i%len(keys)])
+			if err != nil {
+				b.Fatalf("DB.GetUnsafe: %v", err)
+			}
+			snapshotReadBenchSink = out
+		}
+	})
+}
+
+// BenchmarkDBValueLogGetCheckpointed exercises ordinary owned point reads after
+// buffered values have published into the backend, including cache-owned decode.
+func BenchmarkDBValueLogGetCheckpointed(b *testing.B) {
+	db, keys := openSnapshotValueLogBenchDB(b)
+	defer func() { _ = db.Close() }()
+	if err := db.Checkpoint(); err != nil {
+		b.Fatal(err)
+	}
+	before := valuelog.DecodeScratchStatsSnapshot()
+	b.ReportAllocs()
+	b.SetBytes(256)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		index := i % len(keys)
+		out, err := db.Get(keys[index])
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(out) != 256 || binary.BigEndian.Uint64(out[len(out)-8:]) != uint64(index) {
+			b.Fatal("owned point-read value differs")
+		}
+		snapshotReadBenchSink = out
+	}
+	b.StopTimer()
+	runtime.GC()
+	runtime.GC()
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	runtime.KeepAlive(db)
+	b.ReportMetric(float64(memory.HeapAlloc), "live_heap_B")
+	after := valuelog.DecodeScratchStatsSnapshot()
+	b.ReportMetric(float64(after.SmallPoolGetsTotal-before.SmallPoolGetsTotal)/float64(b.N), "scratch_gets/op")
+	b.ReportMetric(float64(after.SmallAllocCallsTotal-before.SmallAllocCallsTotal)/float64(b.N), "scratch_allocs/op")
+	b.ReportMetric(float64(after.SmallAllocatedBytesTotal-before.SmallAllocatedBytesTotal)/float64(b.N), "scratch_alloc_B/op")
+	b.ReportMetric(float64(after.SmallPoolRetainedBytes+after.LargePoolRetainedBytes), "pool_retained_B")
+}
