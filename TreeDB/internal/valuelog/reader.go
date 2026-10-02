@@ -754,7 +754,16 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 	return decodeFramePayloadTo(header, payload, dictLookup, rawLen, nil)
 }
 
-func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32, dst []byte) ([]byte, error) {
+func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32, dst []byte) (out []byte, err error) {
+	// Bound decoder output to rawLen, but keep caller-owned backing capacity
+	// after successful reuse so smaller frames do not shrink pooled scratch.
+	backing := dst
+	defer func() {
+		if err == nil && len(out) > 0 && len(out) <= cap(backing) && unsafe.SliceData(out) == unsafe.SliceData(backing) {
+			out = backing[:len(out)]
+		}
+	}()
+
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
@@ -811,7 +820,7 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 			dst = dst[:0:rawLen]
 		}
 	}
-	out, err := dec.DecodeAll(payload, dst)
+	out, err = dec.DecodeAll(payload, dst)
 	if err != nil {
 		return nil, err
 	}

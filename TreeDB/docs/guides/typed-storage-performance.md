@@ -53,6 +53,30 @@ Recommended starting point for new performance work:
 
 ## Benchmark commands
 
+### Persistent value-log decode scratch
+
+Retained document and outer-leaf reads can reach the shared value-log
+compressed-frame decoder. Its output remains bounded to each raw
+frame length while successful same-backing reuse preserves caller capacity.
+Compare alternating 64 KiB/4 KiB frames independently from owned result copies:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkValueLogDecodeFrame(Alloc|MixedReuse)$' \
+  -benchmem -count 5
+```
+
+`MixedReuse` reports `backing_allocs/op` and `scratch_cap_B` alongside runtime,
+throughput, `B/op`, and `allocs/op`; warmed reuse should allocate no replacement
+backing. `scratch_cap_B` is the visible capacity of one retained buffer, not
+process RSS or a cache budget. Preserving capacity does not increase that
+buffer's physical allocation; it exposes its existing backing for reuse.
+Use ordinary `BenchmarkDBValueLogGet/Get` as a separate public-path guardrail.
+Allocation reduction alone is not a claim of faster point reads, and there is
+no on-disk format change. See [decode scratch reuse](../spec/value-log-lifecycle.md#11-decode-scratch-reuse).
+The [#4889 qualification packet](../../../docs/benchmarks/treedb_decode_reuse_20261001/README.md)
+retains matched sources, public caller/ownership audit and physical-capacity caveats.
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:
