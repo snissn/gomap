@@ -97,25 +97,27 @@ def render(packets, analysis):
         table(['Inline/CP1 physical work (each of three pairs)','Default','Wide','Change %'],physical)])
 
 def main():
+    if not __debug__:
+        raise RuntimeError('validation requires Python assertions; run without -O')
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence-root',type=Path,required=True)
     parser.add_argument('--print-tables',action='store_true')
     args=parser.parse_args(); root=args.evidence_root
-    doc=Path(__file__).with_name('SNAPSHOT_DECISION.md'); text=doc.read_text()
+    doc=Path(__file__).with_name('SNAPSHOT_DECISION.md'); text=doc.read_text(encoding='utf-8')
     for name,digest in HASHES.items():
         assert sha(root/name)==digest, name
         row=f'| `{name}` | `{digest}` |'
         assert text.splitlines().count(row)==1, f'artifact row differs or repeats: {name}'
         assert sum(line.startswith(f'| `{name}` |') for line in text.splitlines())==1, f'duplicate artifact: {name}'
-    freeze=json.loads((root/'4916-e3-full-packet/normal-prepared/freeze.json').read_text())
+    freeze=json.loads((root/'4916-e3-full-packet/normal-prepared/freeze.json').read_text(encoding='utf-8'))
     assert freeze['runtime_head']==HEAD and freeze['runtime_tree']==TREE and freeze['complete'] is True
     assert len(freeze['inputs'])==2402 and len(freeze['modules'])==17
-    plans=json.loads((root/'4916-e3-matched-pre-timer-plans.json').read_text())
+    plans=json.loads((root/'4916-e3-matched-pre-timer-plans.json').read_text(encoding='utf-8'))
     assert plans['eligibility_excluded_from_matched_three'] is True and len(plans['plans'])==3
     packets=[]
     for i,phase in enumerate(PHASES):
-        validated=json.loads((root/phase/'validated.json').read_text())
-        execution=json.loads((root/phase/'capture/execution.json').read_text())
+        validated=json.loads((root/phase/'validated.json').read_text(encoding='utf-8'))
+        execution=json.loads((root/phase/'capture/execution.json').read_text(encoding='utf-8'))
         assert validated['execution_sha256']==sha(root/phase/'capture/execution.json')
         assert validated['freeze_sha256']==HASHES['4916-e3-full-packet/normal-prepared/freeze.json']
         assert validated['host_quiet'] is False and validated['native_timing_concurrency']==1
@@ -143,7 +145,7 @@ def main():
             assert delta(p,PREFIX+'admitted_extra_memtables_total')==extra
             assert delta(p,PREFIX+'admitted_extra_ops_total')==extra*250
         packets.append(ps)
-    analysis=json.loads((root/'4916-e3-three-repeat-analysis.json').read_text())
+    analysis=json.loads((root/'4916-e3-three-repeat-analysis.json').read_text(encoding='utf-8'))
     expected=render(packets,analysis)
     if args.print_tables:
         print(expected); return
@@ -152,7 +154,7 @@ def main():
     repo=Path(__file__).resolve().parents[3]
     assert sha(repo/'TreeDB/algorithm_work_bench_test.go')==freeze['harness_sha256']
     assert sha(Path(__file__).with_name('capture.py'))==freeze['capture_sha256']
-    assert '](SNAPSHOT_DECISION.md)' in doc.with_name('README.md').read_text()
+    assert '](SNAPSHOT_DECISION.md)' in doc.with_name('README.md').read_text(encoding='utf-8')
     print('PASS: pinned review/freeze/plans/raw streams; eight eligibility cells; three matched rounds; arithmetic, source identity and decision tables')
 
 if __name__=='__main__':
