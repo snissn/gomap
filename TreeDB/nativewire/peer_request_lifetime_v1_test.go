@@ -162,7 +162,7 @@ func TestPeerSecurityShutdownTimeoutAndForcedCloseV1(t *testing.T) {
 func TestFixedPeerCloseRetiresUnusedAuthenticatedSelfDialV1(t *testing.T) {
 	caller, config := peerTransportFixtureV1(t)
 	defer caller.Close()
-	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	node, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestFixedPeerAuthenticatedControlSocketCleanupOrderV1(t *testing.T) {
 		t.Run(map[bool]string{false: "recipient-first-times-out", true: "caller-first-drains"}[callerFirst], func(t *testing.T) {
 			caller, config := peerTransportFixtureV1(t)
 			defer caller.Close()
-			recipient, err := OpenFixedPeerTCPRuntimeV1(config)
+			recipient, err := fixedPeerOpenTestRuntimeV1(t, config)
 			if err != nil {
 				t.Fatal(err)
 			}

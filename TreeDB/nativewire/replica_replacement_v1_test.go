@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,20 +50,9 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 		}
 	}
 	address := func() string {
-		for {
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := listener.Addr().String()
-			if err := listener.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if !used[result] {
-				used[result] = true
-				return result
-			}
-		}
+		result := fixedPeerReserveTestAddressV1(t, used)
+		used[result] = true
+		return result
 	}
 	group := configs[0].Groups[1]
 	group.Peers = append([]raftcluster.Peer{configs[0].Groups[0].Peers[0]}, group.Peers...)
@@ -107,7 +95,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	}
 	runtimes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	for i, cfg := range configs {
-		runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+		runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,6 +180,8 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixedPeerAdoptTestAddressV1(runtimes[3], operation.NewPeer.Address)
+	reservedTargetRaft := fixedPeerReservedTestListenerV1(runtimes[3], operation.NewPeer.Address)
 	// Catalog election is independent of the data group's election. Snapshot
 	// capture also requires a real applied command, not a config/no-op index.
 	sourceNode := fixedPeerWaitDataLeaderV1(t, ctx, runtimes[:3], group)
@@ -322,6 +312,9 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	if err != nil {
 		t.Fatalf("prepare actual nonvoter: %v", err)
 	}
+	if reservedTargetRaft == nil || fixedPeerRawTestListenerV1(runtimes[3].localDataV1(group.ID).stream.Listener) != reservedTargetRaft {
+		t.Fatal("future Raft reservation did not reach enrolled target transport")
+	}
 	admission := runtimes[3].client.peerTransport.admission
 	admission.mu.Lock()
 	raftScope := admission.scopes["raft:"+string(group.ID)]
@@ -366,7 +359,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	if err := runtimes[3].Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := OpenFixedPeerTCPRuntimeV1(configs[3])
+	restarted, err := fixedPeerOpenTestRuntimeV1(t, configs[3])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +433,7 @@ func fixedPeerRuntimeWithBlockedSnapshotV1(t *testing.T) (*FixedPeerTCPRuntimeV1
 	}
 	c := fixedPeerTestConfigsV1(t)[0]
 	c.Nodes, c.Catalog.Peers, c.Groups = c.Nodes[:1], c.Catalog.Peers[:1], c.Groups[:1]
-	r, err := OpenFixedPeerTCPRuntimeV1(c)
+	r, err := fixedPeerOpenTestRuntimeV1(t, c)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ func TestReplacementNativeWorkerOwnsActualReturnV1(t *testing.T) {
 	cfg := fixedPeerTestConfigsV1(t)[0]
 	cfg.ClusterID = "replacement-worker"
 	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
-	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestReplacementNativeFailureRetainsSeedBudgetV1(t *testing.T) {
 	cfg := fixedPeerTestConfigsV1(t)[0]
 	cfg.ClusterID = "replacement-worker"
 	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
-	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestReplacementInstallWorkerRetriesOnlyProvenPreSendRefusalV1(t *testing.T)
 			cfg := fixedPeerTestConfigsV1(t)[0]
 			cfg.ClusterID = "replacement-install-retry"
 			cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
-			runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+			runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +213,7 @@ func TestReplacementAuthorizedWorkerRejectsStalePublicationV1(t *testing.T) {
 	cfg := fixedPeerTestConfigsV1(t)[0]
 	cfg.ClusterID = "replacement-worker"
 	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
-	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

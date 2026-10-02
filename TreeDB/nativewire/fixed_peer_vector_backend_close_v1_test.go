@@ -81,7 +81,7 @@ func TestMutableVectorBackendLifecycleReadCloseV1(t *testing.T) {
 	})
 	for i, config := range configs {
 		var err error
-		runtimes[i], err = OpenFixedPeerTCPRuntimeV1(config)
+		runtimes[i], err = fixedPeerOpenTestRuntimeV1(t, config)
 		if err != nil {
 			t.Fatal(err)
 		}

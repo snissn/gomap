@@ -10,7 +10,7 @@ func TestPeerSecurityMissingPersistentRootRefusesRebootstrapV1(t *testing.T) {
 		t.Run(lost, func(t *testing.T) {
 			fixture, config := peerTransportFixtureV1(t)
 			fixture.Close()
-			node, err := OpenFixedPeerTCPRuntimeV1(config)
+			node, err := fixedPeerOpenTestRuntimeV1(t, config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -26,7 +26,7 @@ func TestPeerSecurityMissingPersistentRootRefusesRebootstrapV1(t *testing.T) {
 			if err := os.RemoveAll(path); err != nil {
 				t.Fatal(err)
 			}
-			if reopened, err := OpenFixedPeerTCPRuntimeV1(config); err == nil {
+			if reopened, err := fixedPeerOpenTestRuntimeV1(t, config); err == nil {
 				reopened.Close()
 				t.Fatal("missing persistent root was silently recreated/rebootstrapped")
 			}

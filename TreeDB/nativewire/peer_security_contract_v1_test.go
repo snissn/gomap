@@ -29,7 +29,7 @@ func TestPeerSecurityIdentityAndGroupV1(t *testing.T) {
 		return ca.issue(t, cluster, node, now.Add(-time.Hour), now.Add(time.Hour))
 	}
 	config.Credentials = issue(config.ClusterID, string(config.NodeID))
-	runtime, err := OpenFixedPeerTCPRuntimeV1(config)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestPeerSecurityRotationReopenAndDowngradeRefusalV1(t *testing.T) {
 	config.Groups = config.Groups[:1]
 	config.ClusterID = "rotation-reopen"
 	config.Credentials = peerCredentialsFixtureV1(t, config.ClusterID, string(config.NodeID))
-	runtime, err := OpenFixedPeerTCPRuntimeV1(config)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestPeerSecurityRotationReopenAndDowngradeRefusalV1(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runtime, err = OpenFixedPeerTCPRuntimeV1(config)
+	runtime, err = fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestPeerSecurityRotationReopenAndDowngradeRefusalV1(t *testing.T) {
 	}
 	downgraded := config
 	downgraded.Credentials = nil
-	if node, err := OpenFixedPeerTCPRuntimeV1(downgraded); err == nil {
+	if node, err := fixedPeerOpenTestRuntimeV1(t, downgraded); err == nil {
 		node.Close()
 		t.Fatal("secure persisted node silently reopened without TLS")
 	}
@@ -251,7 +251,7 @@ func TestPeerSecurityLocalAdvertisedSANBeforeStoresV1(t *testing.T) {
 				}
 				t.Fatalf("transport SAN mismatch accepted: %v", err)
 			}
-			if node, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+			if node, err := fixedPeerOpenTestRuntimeV1(t, config); !errors.Is(err, errPeerAuthenticationV1) {
 				if node != nil {
 					node.Close()
 				}

@@ -46,7 +46,7 @@ func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
 	}
 	for i := range configs {
 		var err error
-		nodes[i], err = OpenFixedPeerTCPRuntimeV1(configs[i])
+		nodes[i], err = fixedPeerOpenTestRuntimeV1(t, configs[i])
 		if err != nil {
 			t.Fatal(err)
 		}

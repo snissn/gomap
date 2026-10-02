@@ -70,7 +70,7 @@ func TestFixedPeerImmutableVectorNodesOnlyStandbyV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	for attempt := 0; attempt < 2; attempt++ {
-		runtime, err := OpenFixedPeerTCPRuntimeV1(spare)
+		runtime, err := fixedPeerOpenTestRuntimeV1(t, spare)
 		if err != nil {
 			t.Fatalf("standby open %d: %v", attempt, err)
 		}

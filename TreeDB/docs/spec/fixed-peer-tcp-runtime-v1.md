@@ -17,6 +17,50 @@ SIGINT/SIGTERM closes HTTP admission, Raft providers/transports, FSMs, and DBs.
 The TCP stream layer owns accepted and dialed sockets. Close interrupts their
 idle reads and cancels pending dials before releasing connection pools; it does
 not depend on another node shutting down to release local Raft handlers.
+Startup binds the local control and all hosted Raft endpoints, plus applicable
+vector public/shard endpoints, before starting providers that can dial peers.
+The runtime retains each raw socket until its transport or serving backend
+consumes it; a dormant shard reservation promptly closes incoming connections
+without authenticating or serving requests. Takeover interrupts that temporary
+Accept loop, clears its deadline, and returns the same socket after the existing
+lifecycle checks succeed. No reservation goroutine remains on the serving path.
+Bind errors still refuse startup. Failure and shutdown close both consumed and unused sockets. Nodes-only
+immutable standbys retain their existing absence of a public vector endpoint.
+This pool is bounded by local configured roles, independent of remote inventory;
+it adds startup bookkeeping and no lookup to ordinary RPC/query/mutation paths.
+The conservative configured-role ceiling is 1 control, at most 33 hosted Raft,
+1 active public vector and at most 32 hosted shard sockets (67 total). Relative
+to deferred cold shard binding, bootstrap retains at most one earlier socket
+and one temporary refusal goroutine per dormant hosted shard role (at most 32);
+there is no additional descriptor duplication in the refusal wrapper.
+Backend retirement can release and later rebind its endpoint under the existing
+lifecycle checks. Restart rebinds the configured endpoints before starting Raft.
+
+Test fixtures retain OS-selected reservations through this same private opener.
+Subprocess fixtures transfer the actual TCP sockets using inherited descriptors
+on Unix, keeping the parent reservation until the child owns the socket. On
+Windows, the eventual runtime child binds each role socket before reporting its
+selected address to the subprocess fixture builder. It waits with those same
+sockets until the existing start helper supplies the finalized configuration;
+serving begins in the original bootstrap order. Restart binds the stored exact
+addresses after the intentional shutdown. Private staged children are bounded
+and killed and reaped if configuration construction fails. Ordinary linker
+checks and hosted Windows runtime tests cover this supported path. The Windows
+reply reader shares delete access so it can read a published reply while the
+rename handle is still open; publication remains a closed temporary file followed
+by rename. Config-only
+probes and intentionally absent standby public roles release their reservations explicitly. Future replacement
+role reservations transfer to the target runtime and are consumed only by its
+existing transport/endpoint creation; they do not grant membership or readiness.
+There is no public listener-injection API, port scheduler, mutation retry, or
+collision suppression. A dormant refusal loop recovers only from errors classified
+by `net.Error.Temporary`, with 5ms doubling backoff capped at 1s and reset on
+success. Takeover and Close interrupt that backoff; closed/permanent errors stop
+the loop. This recovery does not retry binds or mutations. The historical
+interference owner remains unidentified;
+controlled tests prove competing binds on every platform and outbound source-port
+reuse causing a listener collision on Linux. Darwin permits the latter bind, so
+that Linux mechanism is not a portable collision assertion.
 The initial stdout JSON identifies the binary and normalized configuration; it is **not readiness**.
 Use `-mode ready` for fresh quorum/apply evidence, `-mode status` for observational
 Raft state, and `-mode diagnostics` for process/disk/network counters. `-mode inspect`

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -61,6 +62,17 @@ func sparseCatalogReadProcessMetricsV1(sequence uint64) sparseCatalogProcessMetr
 	return metrics
 }
 
+// The copied base/head measurement harness keeps standalone setup defaults.
+// The candidate's socket-ownership helper installs its private transfer path.
+var sparseCatalogBenchmarkOpenV1 = OpenFixedPeerTCPRuntimeV1
+var sparseCatalogBenchmarkStartV1 = func(t testing.TB, command *exec.Cmd, input io.WriteCloser, log *os.File, _ FixedPeerTCPConfigV1) *fixedPeerTestProcessV1 {
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return &fixedPeerTestProcessV1{command: command, input: input, log: log}
+}
+var sparseCatalogBenchmarkConfigsSetupV1 = sparseCatalogBenchmarkConfigsV1
+
 func TestSparseCatalogBenchmarkProcessV1(t *testing.T) {
 	raw := os.Getenv("GOMAP_SPARSE_CATALOG_BENCH_CONFIG")
 	if raw == "" {
@@ -70,7 +82,7 @@ func TestSparseCatalogBenchmarkProcessV1(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &config); err != nil {
 		t.Fatal(err)
 	}
-	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	node, err := sparseCatalogBenchmarkOpenV1(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +123,7 @@ func sparseCatalogBenchmarkProcessV1(t testing.TB, config FixedPeerTCPConfigV1) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	process := &fixedPeerTestProcessV1{command: command, input: input, log: log}
+	process := sparseCatalogBenchmarkStartV1(t, command, input, log, config)
 	t.Cleanup(func() { process.stop(t) })
 	return process
 }
@@ -152,7 +161,10 @@ func sparseCatalogBenchmarkMetricsV1(t testing.TB, process *fixedPeerTestProcess
 
 func sparseCatalogBenchmarkConfigsV1(t testing.TB, sparse bool, inventory int) []FixedPeerTCPConfigV1 {
 	t.Helper()
-	configs := fixedPeerTestConfigsV1(t)
+	return sparseCatalogBenchmarkConfigsFromV1(t, sparse, inventory, fixedPeerTestConfigsV1(t), nil)
+}
+
+func sparseCatalogBenchmarkConfigsFromV1(t testing.TB, sparse bool, inventory int, configs []FixedPeerTCPConfigV1, allocate func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	used := make(map[string]bool)
 	for _, config := range configs {
 		used[config.ListenAddress] = true
@@ -161,6 +173,9 @@ func sparseCatalogBenchmarkConfigsV1(t testing.TB, sparse bool, inventory int) [
 		}
 	}
 	address := func() string {
+		if allocate != nil {
+			return allocate("bench-ingress")
+		}
 		for attempt := 0; attempt < 32; attempt++ {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -216,7 +231,7 @@ func benchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B, configure func(test
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			configs := sparseCatalogBenchmarkConfigsV1(b, variant.sparse, variant.inventory)
+			configs := sparseCatalogBenchmarkConfigsSetupV1(b, variant.sparse, variant.inventory)
 			publisherIndex := 3
 			if configure != nil {
 				publisherIndex = configure(b, configs)

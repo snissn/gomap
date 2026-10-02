@@ -11,7 +11,7 @@ func TestPeerSecurityNodeConnectionsCrossProtocolsV1(t *testing.T) {
 	fixture, config := peerTransportFixtureV1(t)
 	fixture.Close()
 	config.ResourceLimits = &PeerNodeLimitsV1{Connections: 24, GroupConnections: 8}
-	runtime, err := OpenFixedPeerTCPRuntimeV1(config)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
