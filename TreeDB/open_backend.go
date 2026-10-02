@@ -5,10 +5,11 @@ import (
 )
 
 // OpenBackend opens the TreeDB backend directly (no caching layer) while wiring
-// side-store lookups (dictdb/templatedb) when present.
+// side-store lookups (dictdb/templatedb) and stable dictionary authority when present.
 //
 // This is intended for maintenance tooling (e.g. treemap vlog-gc) that must
-// avoid cached-layer side effects but still needs value-log decode plumbing.
+// avoid cached-layer side effects but still needs value-log decode/publication
+// plumbing. Cleanup closes the main backend before its side-store owners.
 func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, nil, err
@@ -37,7 +38,7 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	}
 
 	var closers []func() error
-	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
+	sideCleanup, dictionaryResources, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,6 +52,8 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 		}
 		return nil, nil, err
 	}
+	// Lookup bytes and their durable authority must share the maintenance lifetime.
+	backend.SetStableDictionaryResourceProvider(dictionaryResources)
 	closers = append(closers, backend.Close)
 
 	cleanup := func() error {

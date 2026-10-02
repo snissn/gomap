@@ -762,6 +762,20 @@ Coverage:
 - `TreeDB/compact_storage_test.go`
   - `TestCompactStorageFullPacksLeafGenerationDebtOffline`
   - `TestCompactStorageCachedDeletesZeroByteValueLogFiles`
+- `TreeDB/compact_storage_persistence_test.go`
+  - `TestCompactStorageExhaustiveCommandWALRandom4KOffline`: dependency-free
+    public durable command-WAL fixture with 32-byte keys, random 4-KiB values,
+    synced spread updates, cached-owner close/reopen, and exclusive backend
+    Exhaustive compaction with synced phases. Both the 20,000-key characterization
+    and original 100,000-key size run two maintenance/GC passes and verify every
+    final value plus 10,000 missing keys through independent read-only opens.
+    The smaller case also checks partial-phase failure, cleanup, and retry when
+    packed dictionary authority is unavailable. `-short` skips the original size.
+- `TreeDB/side_store_lookups_test.go`
+  - read-only dictionary owners expose stable resource capture without writes
+- `TreeDB/db/leaf_generation_pack_authority_test.go`
+  - dictionary closure lifetime, rollback after partial install, and post-install
+    failure cleanup
 - `TreeDB/compact_storage_cached_internal_test.go`
   - `TestCompactStorageCachedAdvancesWritersPastBackendSegments`
 
