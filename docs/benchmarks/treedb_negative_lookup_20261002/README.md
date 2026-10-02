@@ -11,7 +11,11 @@ entropy across 64 updates while retaining an old snapshot. Production filter
 defaults remain off. The test rejects a same-length corrupted final value and a
 present supposed miss, then checks coverage through checkpoint and public GC.
 
-The frozen scripts run 36 fresh Go processes, with alternating paired order:
+Preparation compiles four frozen test binaries once: candidate TreeDB, tree and
+db packages, plus reference TreeDB. It records every compile argv, exit status,
+source identity and binary SHA256 under Go 1.26.3, GOMAXPROCS=2 and
+GOMEMLIMIT=2GiB. Collection runs these same binaries in 36 fresh processes, with
+alternating paired order:
 
 | Family | Processes | Samples |
 | --- | ---: | ---: |
@@ -30,9 +34,20 @@ measured capture duration. Counter timings never support throughput claims.
 
 Only the coordinator may grant exclusive timing. After its preflight, prepare
 separate exact candidate/reference archives and their frozen visible Go/module
-source manifests, then run (replace arguments with the approved identities):
+source manifests. Compile without collecting benchmarks, then let the
+coordinator audit preparation before its timing grant (replace arguments with
+the approved identities):
 
 ```sh
+python3 capture_qualification.py \
+  --prepare \
+  --source /mnt/fast4tb/gomap-issue-342-negative/source \
+  --reference /mnt/fast4tb/gomap-issue-342-negative/reference \
+  --output /mnt/fast4tb/gomap-issue-342-negative/preparation-FROZEN_HEAD \
+  --candidate-head FROZEN_HEAD \
+  --reference-head a68a84c7195e0c5d8c339343a385b40acf818d03 \
+  --candidate-manifest /path/to/candidate.sha256 \
+  --reference-manifest /path/to/reference.sha256
 python3 capture_qualification.py \
   --source /mnt/fast4tb/gomap-issue-342-negative/source \
   --reference /mnt/fast4tb/gomap-issue-342-negative/reference \
@@ -41,18 +56,20 @@ python3 capture_qualification.py \
   --reference-head a68a84c7195e0c5d8c339343a385b40acf818d03 \
   --candidate-manifest /path/to/candidate.sha256 \
   --reference-manifest /path/to/reference.sha256 \
+  --prepared-directory /mnt/fast4tb/gomap-issue-342-negative/preparation-FROZEN_HEAD \
   --grant COORDINATOR_GRANT_ID
 python3 parse_qualification.py /path/to/completed-packet > parsed.json
 ```
 
 The scripts pin Go 1.26.3, GOWORK=off, GOMAXPROCS=4 and GOMEMLIMIT=1GiB.
-Every process retains command, source selection, timestamps, exit status and raw
-log digest. Source inventories are verified before and after capture. The parser
+Every process retains its bound binary digest, command, source selection,
+timestamps, exit status and raw log digest. Source, executable script and binary
+identities are verified before and after preparation and capture. The parser
 requires every exact case once in each expected process, successful completion,
 finite timing/allocation metrics, actual enabled storage, key counts, checkpoint
 publication counts, fixed-memory probes and separate diagnostic counters. It
-rejects partial captures, altered logs, duplicate cases, wrong commands and
-source changes. Parsing verifies evidence completeness; it does not accept a
+rejects partial captures, altered logs or binaries, duplicate cases, wrong
+commands and source/script changes. Parsing verifies evidence completeness; it does not accept a
 performance regression or substitute theoretical false positives for measured
 speed. Interpret medians, spread, allocations, enabled hit/update costs, seed
 variation and shared-host limits before readiness handoff.

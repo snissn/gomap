@@ -10,6 +10,10 @@ import re
 
 PAYLOADS = ("compressible256", "random4096")
 ROUTES = ("Get", "GetAppend", "GetMany64", "GetManyView64", "OldSnapshot")
+BINARY_SPECS = (('candidate-treedb', 'candidate', './TreeDB'),
+                ('candidate-tree', 'candidate', './TreeDB/tree'),
+                ('candidate-db', 'candidate', './TreeDB/db'),
+                ('reference-treedb', 'reference', './TreeDB'))
 
 
 def public_names(modes):
@@ -63,10 +67,52 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def script_identity():
+    return {name: digest(Path(__file__).with_name(name)) for name in (
+        'capture_qualification.py', 'parse_qualification.py', 'test_parser.py')}
+
+
+def binary_id(job):
+    return job['revision'] + '-' + {'./TreeDB': 'treedb', './TreeDB/tree': 'tree', './TreeDB/db': 'db'}[job['package']]
+
+
+def execution_command(job, binary):
+    return [binary['path'], '-test.run=^$', '-test.bench=' + job['pattern'],
+            '-test.benchmem', '-test.benchtime=' + job['duration'],
+            '-test.count=1', '-test.timeout=20m']
+
+
+def validate_preparation(directory):
+    directory = Path(directory)
+    prepared = json.loads((directory / 'prepare.json').read_text())
+    if prepared.get('complete') is not True or prepared.get('source_before') != prepared.get('source_after'):
+        raise ValueError('incomplete/source-changed binary preparation')
+    if prepared.get('scripts_before') != prepared.get('scripts_after') or prepared.get('scripts_before') != script_identity():
+        raise ValueError('scripts changed since binary preparation')
+    env = prepared.get('environment', {})
+    if any(env.get(k) != v for k, v in {'GOWORK': 'off', 'GOMAXPROCS': '2', 'GOMEMLIMIT': '2GiB'}.items()):
+        raise ValueError('wrong compilation environment')
+    records = prepared.get('compiles', [])
+    if len(records) != len(BINARY_SPECS):
+        raise ValueError('missing binary compilations')
+    expected_ids = {spec[0] for spec in BINARY_SPECS}
+    if set(prepared.get('binaries_before', {})) != expected_ids or prepared.get('binaries_before') != prepared.get('binaries_after'):
+        raise ValueError('missing/changed prepared binaries')
+    for (identifier, revision, package), record in zip(BINARY_SPECS, records):
+        binary = prepared['binaries_before'][identifier]
+        command = [env.get('GOROOT', '') + '/bin/go', 'test', '-c', '-o', binary['path'], package]
+        if (record.get('id') != identifier or record.get('returncode') != 0 or record.get('command') != command
+                or record.get('cwd') != prepared['roots'][revision]
+                or record.get('source_manifest_sha256') != prepared['source_before'][revision]
+                or digest(binary['path']) != binary.get('sha256')
+                or digest(directory / (identifier + '.compile.log')) != record.get('log_sha256')):
+            raise ValueError(f'unbound/changed compilation {identifier}')
+    return prepared
+
+
 def parse_log(text, job):
-    if not re.search(r"^PASS$", text, re.M) or not re.search(
-            r"^ok\s+github\.com/snissn/gomap/TreeDB(?:/(?:tree|db))?\s", text, re.M):
-        raise ValueError(f"{job['id']}: missing successful Go completion")
+    if not re.search(r"^PASS$", text, re.M):
+        raise ValueError(f"{job['id']}: missing successful test-binary completion")
     if re.search(r"^(?:FAIL|panic:|fatal error:)", text, re.M):
         raise ValueError(f"{job['id']}: failure in log")
     rows = {}
@@ -140,14 +186,24 @@ def validate(directory):
     env = manifest.get('environment', {})
     if any(env.get(k) != v for k, v in {'GOWORK': 'off', 'GOMAXPROCS': '4', 'GOMEMLIMIT': '1GiB'}.items()):
         raise ValueError('wrong timing environment')
+    prepared = validate_preparation(manifest['preparation_directory'])
+    if digest(Path(manifest['preparation_directory']) / 'prepare.json') != manifest.get('preparation_sha256'):
+        raise ValueError('changed preparation packet')
+    if any(manifest.get(k) != prepared.get(k) for k in ('candidate_head', 'reference_head', 'source_before')):
+        raise ValueError('capture differs from prepared source')
+    if (manifest.get('binaries_before') != prepared['binaries_after']
+            or manifest.get('binaries_before') != manifest.get('binaries_after')
+            or manifest.get('scripts_before') != prepared['scripts_after']
+            or manifest.get('scripts_before') != manifest.get('scripts_after')):
+        raise ValueError('binary/script identities changed during capture')
     parsed = []
     for job, record in zip(jobs, manifest['runs']):
         if record.get('job') != job or record.get('returncode') != 0:
             raise ValueError(f"wrong/failed execution {job['id']}")
-        expected_command = [env.get('GOROOT', '') + '/bin/go', 'test', job['package'],
-                            '-run', '^$', '-bench', job['pattern'], '-benchmem',
-                            '-benchtime=' + job['duration'], '-count=1', '-timeout=20m']
-        if record.get('command') != expected_command:
+        binary = manifest['binaries_before'][binary_id(job)]
+        if (record.get('command') != execution_command(job, binary)
+                or record.get('binary_sha256') != binary['sha256']
+                or record.get('cwd') != prepared['roots'][job['revision']]):
             raise ValueError(f"wrong command {job['id']}")
         log = directory / (job['id'] + '.log')
         if digest(log) != record.get('log_sha256'):

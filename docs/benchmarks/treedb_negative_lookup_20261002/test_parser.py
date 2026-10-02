@@ -31,7 +31,7 @@ def synthetic_log(job):
             if enabled:
                 metrics += ' 64 token-bytes'
         lines.append(f'{name}-4 10 {metrics}')
-    return '\n'.join(lines) + '\nPASS\nok  github.com/snissn/gomap/' + job['package'][2:] + ' 1s\n'
+    return '\n'.join(lines) + '\nPASS\n'
 
 
 class ParserTests(unittest.TestCase):
@@ -58,17 +58,42 @@ class ParserTests(unittest.TestCase):
             manifest = dict(complete=True, source_before=dict(candidate='a'*64, reference='b'*64),
                             source_after=dict(candidate='a'*64, reference='b'*64), grant='test-only',
                             candidate_head='c'*40, reference_head='d'*40, environment=env, runs=[])
+            preparation = root / 'preparation'
+            preparation.mkdir()
+            prepared = dict(complete=True, candidate_head=manifest['candidate_head'], reference_head=manifest['reference_head'],
+                            source_before=manifest['source_before'], source_after=manifest['source_after'],
+                            roots=dict(candidate='/synthetic/candidate', reference='/synthetic/reference'),
+                            scripts_before=parser.script_identity(), scripts_after=parser.script_identity(),
+                            environment=dict(GOROOT='/go', GOWORK='off', GOMAXPROCS='2', GOMEMLIMIT='2GiB'),
+                            compiles=[], binaries_before={})
+            for identifier, revision, package in parser.BINARY_SPECS:
+                binary = preparation / (identifier + '.test')
+                binary.write_bytes(b'synthetic binary identity; not executable')
+                log = preparation / (identifier + '.compile.log')
+                log.write_text('synthetic compile record; no Go invoked\n')
+                prepared['binaries_before'][identifier] = dict(path=str(binary), sha256=parser.digest(binary))
+                prepared['compiles'].append(dict(id=identifier, returncode=0, cwd=prepared['roots'][revision],
+                                                 command=['/go/bin/go', 'test', '-c', '-o', str(binary), package],
+                                                 source_manifest_sha256=prepared['source_before'][revision],
+                                                 log_sha256=parser.digest(log)))
+            prepared['binaries_after'] = copy.deepcopy(prepared['binaries_before'])
+            preparation_file = preparation / 'prepare.json'
+            preparation_file.write_text(json.dumps(prepared))
+            manifest.update(preparation_directory=str(preparation), preparation_sha256=parser.digest(preparation_file),
+                            binaries_before=prepared['binaries_before'], binaries_after=prepared['binaries_after'],
+                            scripts_before=prepared['scripts_before'], scripts_after=prepared['scripts_after'])
             for job in parser.plan():
                 log = root / (job['id'] + '.log')
                 log.write_text(synthetic_log(job))
-                command = ['/go/bin/go', 'test', job['package'], '-run', '^$', '-bench', job['pattern'],
-                           '-benchmem', '-benchtime=' + job['duration'], '-count=1', '-timeout=20m']
-                manifest['runs'].append(dict(job=job, returncode=0, command=command, log_sha256=parser.digest(log)))
+                binary = prepared['binaries_before'][parser.binary_id(job)]
+                manifest['runs'].append(dict(job=job, returncode=0, command=parser.execution_command(job, binary),
+                                            cwd=prepared['roots'][job['revision']], binary_sha256=binary['sha256'],
+                                            log_sha256=parser.digest(log)))
             path = root / 'capture.json'
             path.write_text(json.dumps(manifest))
             parsed = parser.validate(root)
             self.assertEqual((parsed['processes'], parsed['performance_samples'], parsed['diagnostic_rows']), (36, 930, 160))
-            for mutation in ('partial', 'source', 'failed', 'command', 'environment', 'log'):
+            for mutation in ('partial', 'source', 'failed', 'command', 'environment', 'log', 'binary', 'script', 'binding'):
                 broken = copy.deepcopy(manifest)
                 if mutation == 'partial':
                     broken['runs'].pop()
@@ -77,14 +102,26 @@ class ParserTests(unittest.TestCase):
                 elif mutation == 'failed':
                     broken['runs'][0]['returncode'] = 1
                 elif mutation == 'command':
-                    broken['runs'][0]['command'][-3] = '-benchtime=1x'
+                    broken['runs'][0]['command'][-3] = '-test.benchtime=1x'
                 elif mutation == 'environment':
                     broken['environment']['GOMAXPROCS'] = '2'
+                elif mutation == 'binary':
+                    broken['binaries_after']['candidate-treedb']['sha256'] = 'e'*64
+                elif mutation == 'script':
+                    broken['scripts_after']['capture_qualification.py'] = 'e'*64
+                elif mutation == 'binding':
+                    broken['runs'][0]['binary_sha256'] = 'e'*64
                 else:
                     broken['runs'][0]['log_sha256'] = 'f'*64
                 path.write_text(json.dumps(broken))
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     parser.validate(root)
+            manifest_file = root / 'capture.json'
+            manifest_file.write_text(json.dumps(manifest))
+            binary = Path(prepared['binaries_before']['candidate-treedb']['path'])
+            binary.write_bytes(b'changed binary')
+            with self.assertRaises(ValueError):
+                parser.validate(root)
 
     def test_rows_fail_closed(self):
         job = next(j for j in parser.plan() if j['id'] == 'public-1-true')
