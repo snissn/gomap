@@ -142,7 +142,8 @@ func validateFixedPeerVectorInitializationV1(config *FixedPeerTCPConfigV1, addre
 			return invalid
 		}
 		for _, peer := range group.Peers {
-			if !checkAddress(intent.ShardAddresses[group.ID][peer.ID]) {
+			address := intent.ShardAddresses[group.ID][peer.ID]
+			if !peerPrivateEndpointV1(address) || !addressOK(address) {
 				return invalid
 			}
 		}
