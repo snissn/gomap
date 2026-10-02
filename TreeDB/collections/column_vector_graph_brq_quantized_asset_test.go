@@ -180,6 +180,9 @@ func TestVectorIndexSearcherBRQQuantizedSearchWithBuffer2481(t *testing.T) {
 	if collectionsRaceEnabled {
 		t.Skip("exact allocation counts are unstable under race instrumentation")
 	}
+	if !enterIsolatedVectorAllocationGate(t, "brq-quantized-search-with-buffer") {
+		return
+	}
 	for i := 0; i < 8; i++ {
 		if _, err := searcher.SearchWithBuffer(quantizedOnlyOpts, &buffer); err != nil {
 			t.Fatalf("warm brq quantized_only iteration %d: %v", i, err)

@@ -878,12 +878,17 @@ func TestDenseNormalizedV4SurvivesServerRestart(t *testing.T) {
 		{Index: info.Name, Query: []float32{3, 4}, TopK: 2, EfSearch: 8, ExpectedGeneration: info.Generation, VectorRepresentation: collections.VectorIndexRepresentationCosineNormalizedF32V1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.v1", QuantizedRerankCandidates: 2},
 	}
 	want := make([][]denseNormalizedV4Decision, len(requests))
+	wantIdentity := make([]documentservice.DenseSearchRouteIdentity, len(requests))
 	for i, request := range requests {
 		response, err := client.DenseVectorSearch(ctx, request)
 		if err != nil {
 			t.Fatal(err)
 		}
 		want[i] = snapshotDenseNormalizedV4Decisions(response)
+		if response.RouteIdentity == nil {
+			t.Fatalf("initial response %d omitted route identity", i)
+		}
+		wantIdentity[i] = *response.RouteIdentity
 	}
 	if err := cleanup(); err != nil {
 		t.Fatal(err)
@@ -907,7 +912,7 @@ func TestDenseNormalizedV4SurvivesServerRestart(t *testing.T) {
 	}()
 	// Serving admission is intentionally process-local. A restarted service
 	// re-applies the same bounded policy; it does not rebuild persistent assets.
-	if _, err := service.OptimizeIndex(ctx, info.Name, documentservice.OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
+	if _, err := service.OptimizeIndex(ctx, info.Name, documentservice.OptimizeIndexRequest{ColumnGraphAction: "ensure", ColumnGraphServing: &options}); err != nil {
 		t.Fatalf("re-admit serving after restart: %v", err)
 	}
 	for i, request := range requests {
@@ -918,6 +923,11 @@ func TestDenseNormalizedV4SurvivesServerRestart(t *testing.T) {
 		assertDenseNormalizedV4SameDecisions(t, want[i], response)
 		if response.RouteIdentity == nil || response.DenseWork.Version != 0 || response.ScorePlane != nil {
 			t.Fatalf("restarted response %d=%+v", i, response)
+		}
+		// Manifest generations/checksums bind the persisted base and its assets;
+		// unchanged results alone would also pass after an accidental rebuild.
+		if *response.RouteIdentity != wantIdentity[i] {
+			t.Fatalf("restarted route identity %d=%+v want=%+v", i, *response.RouteIdentity, wantIdentity[i])
 		}
 	}
 }
