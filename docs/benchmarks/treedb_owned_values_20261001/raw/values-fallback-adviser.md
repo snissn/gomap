@@ -1,0 +1,13 @@
+# Value-read failed-guardrail mechanism advice
+
+Independent read-only /root/values_fallback_adviser, requested gpt-6.1-sol/high, fresh context. Frozen candidate933a1d4ec57f6715f2fb746fdc57136a7ddc89a6 versus mergeda217ee3b2ee68918905bc5357faa0e57775c22a6. Root/TreeDB policy and ownership/lifecycle contracts inspected. No edits, tests, timings or CI polling. This is construction advice, not final PR/performance acceptance.
+
+First retained qualification: forced512B fallback nil1097->1231ns (+12.2percent), reused1040->1153ns (+10.9percent), five separated paired ranges. Root preserves original100cells/30RSS/fixture hashes as failed candidate evidence.
+
+Adviser independently traced initial ReadAppend mapped miss (manager1001) through ensureMmapRangeReadable and tryRefreshMmapRange to the existing dead-cap guard (reader_mmap477). New lazy retry at1005 enters the shared helper mapped branch263, repeats manager budget lock/remap, returns true because unchanged stale mapping is nonempty, and retries an unreadable range. Source proves unnecessary work, not its measured fraction.
+
+Recommendation adopted by root: fresh `data != nil && deadMappingsCapExhausted(count,len(data))` early false in tryEnableSealedLazyMmap after nil/closed/current-write checks and before persistent-map/manager-budget branches. All repository callers (ReadUnsafe635, ReadUnsafeTo699, ReadAppend1005) are after a mapped miss; no direct tests/other callers found. Ordinary mapped hits return before the helper. Raced mapping growth may choose a conservative correct file fallback. Do not add sticky deny state or alter manager-denial counters; dynamic raised/disabled/adaptive cap remains evaluated each call. Keep low-level remap guard for safe/batch/direct routes and all old mappings pinned until Close.
+
+Required red checks: all3siblingroutes correct bytes, one out-of-range miss/one fallback, unchanged remap/dead counts and manager denial, owned nil/reusable-prefix, initial mapped hit atcap. Sequentially raise/disable cap and verify read mapping recovery; nil current mapping must not be denied solely by saturated old count. Package globals change only outside concurrent readers. Focus existing mmap safety/concurrent remap, demoted current mapping, sealed out-of-range refresh, manager budget-recovery and effective-cap bounds; fresh affected paired512Bqualification required before acceptance.
+
+Source blobs: candidate reader9d3d4f2fbe19d4e01a9012191a506010f934fa90, manager1a613731464df0c8a8ef3d0036fb71232ca141ac; base readera60ebf7cca0a60cf3f54bd13b02ed1e297745c9d, manager693f1779bc777b8e8e20727de5f1362693742e08. Final full adviser message retained in conversation; root writes this durable checkpoint from that result.

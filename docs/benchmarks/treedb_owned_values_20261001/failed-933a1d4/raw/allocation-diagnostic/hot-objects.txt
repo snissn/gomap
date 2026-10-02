@@ -1,0 +1,43 @@
+File: treedb-diagnostic.test
+Build ID: 7e542e9b18717b8b08c4f1beac5eec98844046ee
+Type: alloc_objects
+Time: 2026-10-01 18:26:16 HST
+Showing nodes accounting for 324654, 100% of 324815 total
+Dropped 83 nodes (cum <= 1624)
+      flat  flat%   sum%        cum   cum%
+    100000 30.79% 30.79%     100000 30.79%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+    100000 30.79% 61.57%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo
+     93283 28.72% 90.29%      93283 28.72%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+     21280  6.55% 96.84%      21280  6.55%  runtime/pprof.allFrames
+      6096  1.88% 98.72%      31503  9.70%  runtime/pprof.writeHeapProto
+      3987  1.23% 99.95%       4020  1.24%  runtime/pprof.(*profileBuilder).emitLocation
+         6 0.0018% 99.95%      25314  7.79%  runtime/pprof.(*profileBuilder).appendLocsForStack
+         1 0.00031%   100%      31508  9.70%  github.com/snissn/gomap/TreeDB.BenchmarkDBOwnedValueLogRoute.func2
+         1 0.00031%   100%      31504  9.70%  runtime/pprof.writeHeapInternal
+         0     0%   100%     293283 90.29%  github.com/snissn/gomap/TreeDB.(*DB).Get
+         0     0%   100%     324791   100%  github.com/snissn/gomap/TreeDB.BenchmarkDBOwnedValueLogRoute
+         0     0%   100%     293283 90.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0%   100%     293283 90.29%  github.com/snissn/gomap/TreeDB/db.(*DB).Get
+         0     0%   100%     293283 90.29%  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotOrErr
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld
+         0     0%   100%     193283 59.51%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeAppend (inline)
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadAppend
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapAppend
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend
+         0     0%   100%      93283 28.72%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+         0     0%   100%      93283 28.72%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafEntryViewColumnarPrefixV2
+         0     0%   100%      93283 28.72%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyAt (inline)
+         0     0%   100%      93283 28.72%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+         0     0%   100%     193283 59.51%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+         0     0%   100%     193283 59.51%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend
+         0     0%   100%     100000 30.79%  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey
+         0     0%   100%      93283 28.72%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+         0     0%   100%      31504  9.70%  runtime/pprof.(*Profile).WriteTo
+         0     0%   100%      31504  9.70%  runtime/pprof.writeAlloc
+         0     0%   100%     324791   100%  testing.(*B).launch
+         0     0%   100%     324791   100%  testing.(*B).runN

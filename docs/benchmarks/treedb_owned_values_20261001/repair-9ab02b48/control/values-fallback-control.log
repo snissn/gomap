@@ -1,0 +1,11 @@
+previous-1 PASS
+candidate-1 PASS
+candidate-2 PASS
+previous-2 PASS
+previous-3 PASS
+candidate-3 PASS
+candidate-4 PASS
+previous-4 PASS
+previous-5 PASS
+candidate-5 PASS
+{"nil_dst": {"candidate_change_percent": 0.2680965147453085, "medians": {"candidate": 1122.0, "previous": 1119.0}, "samples": {"candidate": [1118.0, 1122.0, 1138.0, 1124.0, 1119.0], "previous": [1119.0, 1114.0, 1119.0, 1154.0, 1117.0]}}, "reused_dst": {"candidate_change_percent": 1.5355086372360827, "medians": {"candidate": 1058.0, "previous": 1042.0}, "samples": {"candidate": [1059.0, 1112.0, 1044.0, 1058.0, 1053.0], "previous": [1043.0, 1042.0, 1038.0, 1038.0, 1051.0]}}}

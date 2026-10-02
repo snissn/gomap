@@ -1,0 +1,9 @@
+=== RUN   TestOwnedMmapQualificationInternalRoutes
+=== RUN   TestOwnedMmapQualificationInternalRoutes/warm_decode
+=== RUN   TestOwnedMmapQualificationInternalRoutes/cold_first_map
+=== RUN   TestOwnedMmapQualificationInternalRoutes/dead_cap512
+--- PASS: TestOwnedMmapQualificationInternalRoutes (0.02s)
+    --- PASS: TestOwnedMmapQualificationInternalRoutes/warm_decode (0.01s)
+    --- PASS: TestOwnedMmapQualificationInternalRoutes/cold_first_map (0.01s)
+    --- PASS: TestOwnedMmapQualificationInternalRoutes/dead_cap512 (0.01s)
+PASS

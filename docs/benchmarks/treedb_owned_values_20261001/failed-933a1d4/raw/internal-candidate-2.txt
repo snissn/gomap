@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4      	  893806	      1227 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4   	 1000000	      1148 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFileReadAppendOwned/fallback-4                  	   18696	     64365 ns/op	 509.09 MB/s	         0 cache_hits/op	         1.000 crc_checks/op	         1.000 fallbacks/op	         0 retained_raw_B	   32771 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/mmap_decode-4               	   18954	     63434 ns/op	 516.56 MB/s	         0 cache_hits/op	         1.000 crc_checks/op	         0 fallbacks/op	         0 retained_raw_B	   32768 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/mmap_cache-4                	  381939	      3203 ns/op	10231.01 MB/s	         1.000 cache_hits/op	         1.000 crc_checks/op	         0 fallbacks/op	    262144 retained_raw_B	   32768 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/cold_open_map-4             	   13460	     88803 ns/op	         1.000 cache_stores/op	         0 fallbacks/op	         1.000 mmap_hits/op	  299321 B/op	      15 allocs/op
+BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4   	12022030	        97.14 ns/op	       0 B/op	       0 allocs/op
+PASS

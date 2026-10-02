@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBOwnedValueLogRoute
+    value_log_owned_bench_test.go:170: clone full-value validation passed; pointer=1 inline=0 transport=map[cache_hits/op:1 crc_checks/op:1 fallbacks/op:0 mmap_hits/op:1] retained=9389893 budget=67108864
+    value_log_owned_bench_test.go:171: fixture clone and route verified; probe untimed
+--- SKIP: BenchmarkDBOwnedValueLogRoute
+PASS

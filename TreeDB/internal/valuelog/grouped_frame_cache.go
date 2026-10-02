@@ -325,6 +325,10 @@ func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
 }
 
 func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
+	return c.readAppendTo(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen, subIndex, dst[:0], false, f)
+}
+
+func (c *groupedFrameCache) readAppendTo(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, appendDst bool, f *File) (out []byte, usedDst bool, err error, hit bool) {
 	if c == nil || c.capacity <= 0 || len(c.shards) == 0 {
 		return nil, false, nil, false
 	}
@@ -364,7 +368,12 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 			encoded := append([]byte(nil), val...)
 			slot.mu.RUnlock()
 			c.hits.Add(1)
-			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+			if !appendDst {
+				// ReadTo's existing template result is independently owned and
+				// reports usedDst=false; append callers may reuse their full dst.
+				dst = nil
+			}
+			decoded, decErr := templ.DecodePayloadAppend(dst, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if decErr != nil {
@@ -372,15 +381,19 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 			}
 			return decoded, false, nil, true
 		}
-		if dst != nil && cap(dst) >= len(val) {
-			out := dst[:len(val)]
-			copy(out, val)
+		oldLen := len(dst)
+		if dst != nil && cap(dst)-oldLen >= len(val) {
+			out := dst[:oldLen+len(val)]
+			copy(out[oldLen:], val)
 			slot.mu.RUnlock()
 			c.hits.Add(1)
 			return out, true, nil, true
 		}
-		out := make([]byte, len(val))
-		copy(out, val)
+		// Materialize directly into the final owned append result while the
+		// cache still owns raw. No borrowed bytes escape the slot lock.
+		out := make([]byte, oldLen+len(val))
+		copy(out, dst)
+		copy(out[oldLen:], val)
 		slot.mu.RUnlock()
 		c.hits.Add(1)
 		return out, false, nil, true

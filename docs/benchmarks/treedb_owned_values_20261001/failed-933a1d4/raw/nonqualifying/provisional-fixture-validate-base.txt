@@ -1,0 +1,11 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBOwnedValueLogRoute
+    value_log_owned_bench_test.go:48: treedb: no recoverable durable meta: slot 0: dependency metadata: stable resource conflict: value-log file 2147483649 identity or digest differs from manifest; slot 1: dependency metadata: stable resource conflict: value-log file 2147483649 identity or digest differs from manifest
+--- FAIL: BenchmarkDBOwnedValueLogRoute
+FAIL
+exit status 1
+FAIL	github.com/snissn/gomap/TreeDB	0.013s
+FAIL

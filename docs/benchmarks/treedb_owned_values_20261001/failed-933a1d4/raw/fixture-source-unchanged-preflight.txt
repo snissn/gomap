@@ -1,0 +1,1 @@
+All17 source fixture hashes/size unchanged after base/candidate private clone/rebind/full-value/untimed-route validation.

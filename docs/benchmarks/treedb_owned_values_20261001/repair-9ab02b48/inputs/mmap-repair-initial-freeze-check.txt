@@ -1,0 +1,6 @@
+UNTIMED preparation metadata check only. No official timing was started.
+Initial compile-finished freeze b98b4d88cca5639e23d8c149baeeb5765297a1eaf3484ba08f38d5eb961aedf2 was rejected by the complete input hash check:
+Traceback (most recent call last):
+  File "<stdin>", line 7, in <module>
+AssertionError: mmap-repair-qualification-plan.md
+Cause: non-runtime plan/proposal files were finalized while the preparation helper was producing its input table. No runtime/overlay/source-archive/binary input changed. Corrected by sequential finalization after the helper exited, restricting changed inputs to parser/plan/proposal, and rechecking all input/source/fixture hashes. Original rejected manifest retained as repair-source-freeze-parser-initial.json; final manifest records actual before/after input hashes. No recompilation or constructor rerun was needed.
