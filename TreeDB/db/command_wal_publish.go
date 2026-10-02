@@ -152,8 +152,9 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 	}
 	defer releaseDurablePublish()
 	var (
-		baseSeq        uint64
-		rootsUnchanged bool
+		baseSeq          uint64
+		rootsUnchanged   bool
+		negativeCoverage *negativeRootCoverage
 	)
 	if !currentRoots {
 		db.mu.RLock()
@@ -177,6 +178,9 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		sysRootID = db.meta.SystemRootPageID
 		db.mu.RUnlock()
 		rootsUnchanged = true
+		// This path binds the existing user root, rather than accepting a
+		// constructed candidate. Transfer only coverage of this exact base.
+		negativeCoverage = db.prepareNegativeCoverage(db.idx.Load(), baseSeq, newRootID, newRootID, nil)
 	}
 	var vlogRefDelta *valueLogRefDelta
 	if rootsUnchanged {
@@ -193,6 +197,7 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 	defer publishPrepareGuard.Release()
 
 	finalizeOpts := finalizeCommitOptions{
+		negativeCoverage:         negativeCoverage,
 		commandWALPublish:        true,
 		appliedCommandLSN:        appliedLSN,
 		appliedRanges:            covered,

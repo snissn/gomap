@@ -245,6 +245,64 @@ func TestNegativeFilterBootstrapIncludesTombstones(t *testing.T) {
 	}
 }
 
+// Both operations explicitly bind the current user root under the durable gate.
+// Advancing metadata must carry existing coverage without reviving an uncovered base.
+func TestNegativeFilterCurrentRootMetadataCoverage(t *testing.T) {
+	for _, uncovered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("uncovered=%v", uncovered), func(t *testing.T) {
+			d := openNegativeTestDB(t, Options{CommandWAL: true, NegativeLookupFilterBytes: 1024})
+			if err := d.SetSync([]byte("key"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			old := d.AcquireSnapshot()
+			defer old.Close()
+			original := d.snapshotViewRO.Load()
+			if original.negativeFilter == nil {
+				t.Fatal("fixture lacks initial coverage")
+			}
+			if uncovered {
+				// Model a prior unknown-lineage publication with the same visible state.
+				d.clearSnapshotView()
+				d.publishSnapshotView(original.idx, original.state, original.vlogManager)
+			}
+			for _, publish := range []func() error{
+				d.RefreshCommandWALCheckpointFallback,
+				func() error { return d.PublishCommandWALAppliedLSN(d.State().AppliedCommandLSN, nil, true) },
+			} {
+				before := d.snapshotViewRO.Load()
+				if err := publish(); err != nil {
+					t.Fatal(err)
+				}
+				after := d.snapshotViewRO.Load()
+				if after.idx != before.idx || after.state.RootPageID != before.state.RootPageID || after.state.SystemRootPageID != before.state.SystemRootPageID || after.state.CommitSeq <= before.state.CommitSeq {
+					t.Fatal("fixture did not perform current-root metadata publication", before.state, after.state)
+				}
+				if after.negativeFilter != before.negativeFilter {
+					t.Fatal("current-root metadata lost coverage or revived an uncovered base")
+				}
+			}
+			// Supplied candidates do not gain the current-roots capability merely
+			// because their numeric root IDs happen to equal the visible roots.
+			state := d.State()
+			if err := d.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, state.AppliedCommandLSN, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			if d.snapshotViewRO.Load().negativeFilter != nil {
+				t.Fatal("supplied-root publication retained coverage")
+			}
+			if err := d.PublishCommandWALAppliedLSN(state.AppliedCommandLSN, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			if d.snapshotViewRO.Load().negativeFilter != nil {
+				t.Fatal("metadata revived unknown-lineage coverage")
+			}
+			if got, err := old.Get([]byte("key")); err != nil || string(got) != "value" {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}
+
 func TestNegativeFilterUnknownPublicationAndBudgetStayExact(t *testing.T) {
 	d := openNegativeTestDB(t, Options{NegativeLookupFilterBytes: 128})
 	if e := d.SetSync([]byte("a"), []byte("A")); e != nil {

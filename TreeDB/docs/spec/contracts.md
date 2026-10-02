@@ -277,7 +277,11 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 - Unknown root/index replacement removes coverage from the new view and its
   descendants. Later point deltas cannot restore it; reopening may bootstrap
   complete coverage again. Metadata-only publication may preserve coverage when
-  main-root identity and commit sequence are unchanged.
+  main-root identity and commit sequence are unchanged. Explicit command-WAL
+  current-root metadata publication (including checkpoint fallback refresh) may
+  advance the sequence while carrying the existing exact base/candidate token
+  under the durable publication gate. Supplied root candidates remain uncovered,
+  even when their numeric IDs happen to match the current roots.
 - Saturation safely degrades to exact lookups. Ordinary missing-value, empty
   value, callback ownership and revision contracts remain unchanged.
 

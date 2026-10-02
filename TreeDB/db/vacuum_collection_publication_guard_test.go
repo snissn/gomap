@@ -144,7 +144,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 	}
 
 	// The same publication inventory classifies membership coverage. Only
-	// bootstrap and normalized point-apply candidates may carry new coverage;
+	// bootstrap, normalized point applies, and explicitly bound current-root
+	// metadata publications may carry coverage;
 	// metadata callers preserve exact unchanged coordinates, replacements drop it.
 	wantPublishCoverage := map[string]bool{
 		publicationGuardDBMethodID("bootstrapNegativeFilter"):                   true,

@@ -2,6 +2,8 @@ package treedb
 
 import (
 	"bytes"
+	"context"
+	"reflect"
 	"testing"
 )
 
@@ -114,20 +116,47 @@ func TestNegativeLookupQualificationFixture(t *testing.T) {
 	for _, payload := range []string{"compressible256", "random4096"} {
 		for _, enabled := range []bool{false, true} {
 			d, keys, misses := openNegativeLookupBench(t, payload, enabled)
+			t.Cleanup(func() {
+				if err := d.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			t.Logf("payload=%s enabled=%v", payload, enabled)
+			logNegativeLookupStage(t, d, "initialLoadCheckpoint")
 			old := d.AcquireSnapshot()
-			update := d.NewBatch()
-			if err := update.Set(keys[0], []byte("updated")); err != nil {
-				t.Fatal(err)
+			oldFilter := negativeLookupBenchSnapshotFilter(t, old)
+			if (oldFilter != 0) != enabled {
+				t.Fatal("retained snapshot coverage mismatch")
 			}
-			if err := update.WriteSync(); err != nil {
-				t.Fatal(err)
+			t.Cleanup(func() {
+				if err := old.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			original := make([][]byte, 64)
+			for i, key := range keys[:64] {
+				var err error
+				original[i], err = d.Get(key)
+				if err != nil || len(original[i]) == 0 {
+					t.Fatal("missing original fixture", i, err)
+				}
 			}
-			update.Close()
-			if err := d.Checkpoint(); err != nil {
-				t.Fatal(err)
+			updateNegativeLookupBenchFixture(t, d, keys[:64], enabled)
+			logNegativeLookupStage(t, d, "afterUpdateCheckpoint")
+			gc, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+			if err != nil || gc.SegmentsTotal == 0 {
+				t.Fatal("fixture GC did not scan persistent segments", gc, err)
 			}
-			if value, err := old.Get(keys[0]); err != nil || len(value) < 256 {
-				t.Fatal("retained snapshot lost original payload", value, err)
+			logNegativeLookupStage(t, d, "afterPublicGC")
+			negativeLookupBenchActiveBytes(t, d, enabled)
+			for i, key := range keys[:64] {
+				if value, err := old.Get(key); err != nil || !bytes.Equal(value, original[i]) {
+					t.Fatal("retained snapshot lost original payload", i, err)
+				}
+				original[i][0] ^= 1
+				if value, err := d.Get(key); err != nil || !bytes.Equal(value, original[i]) {
+					t.Fatal("updated fixture changed payload", i, err)
+				}
 			}
 			batchKeys := append(append([][]byte{}, keys[:32]...), misses[:32]...)
 			values, err := d.GetMany(batchKeys)
@@ -135,14 +164,14 @@ func TestNegativeLookupQualificationFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i, value := range values {
-				if (value != nil) != (i < 32) {
+				if (value != nil) != (i < 32) || (i < 32 && !bytes.Equal(value, original[i])) {
 					t.Fatal("fixture hit/miss mismatch", i, value)
 				}
 			}
 			calls := 0
 			if err := d.GetManyView(batchKeys, func(i int, _, value []byte, found bool) error {
 				calls++
-				if found != (i < 32) || (value != nil) != (i < 32) {
+				if found != (i < 32) || (value != nil) != (i < 32) || (i < 32 && !bytes.Equal(value, original[i])) {
 					t.Fatal("fixture callback mismatch", i, found, value)
 				}
 				return nil
@@ -152,10 +181,24 @@ func TestNegativeLookupQualificationFixture(t *testing.T) {
 			if calls != 64 {
 				t.Fatal("callback count", calls)
 			}
-			old.Close()
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
 			if err := d.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+// Stage evidence distinguishes point updates from enclosing metadata publication.
+func logNegativeLookupStage(tb testing.TB, d *DB, stage string) {
+	tb.Helper()
+	snap := d.backend.AcquireSnapshot()
+	state := snap.State()
+	v := reflect.ValueOf(snap).Elem()
+	tb.Logf("stage=%s idx=%#x seq=%d userRoot=%d systemRoot=%d filter=%#x activeBytes=%s", stage, v.FieldByName("idx").Pointer(), state.CommitSeq, state.RootPageID, state.SystemRootPageID, v.FieldByName("tree").FieldByName("negativeFilter").Pointer(), d.backend.Stats()["treedb.negative_lookup_filter.active_bytes"])
+	if err := snap.Close(); err != nil {
+		tb.Fatal(err)
 	}
 }

@@ -11,11 +11,17 @@ using 8192 persisted keys with misses interleaved inside the key range. Payloads
 are compressible 256-byte values and deterministic random 4096-byte values.
 Uniform and Zipf schedules each cover 0/50/90/99% misses. Routes include owned
 `Get`, caller-buffer `GetAppend`, 64-key `GetMany`, callback `GetManyView` and a
-snapshot retained across later updates. Benchmark setup, checkpoint and warming
-are outside timing. Default checksum verification stays enabled.
+snapshot retained across later updates of the same payload size and entropy.
+Setup verifies actual coverage on the captured backend trees after checkpoint
+and updates; an enabled fixture that silently falls back to exact fails before
+timing. Reported filter bytes come from active storage, not the configured
+budget. Benchmark setup, checkpoint and warming are outside timing. Default checksum verification stays enabled.
 
-`BenchmarkNegativeLookupUpdate` includes ordinary cached 64-key batch `WriteSync`
-selection and acknowledgement. `BenchmarkNegativeLookupBootstrap` includes
+`BenchmarkNegativeLookupUpdate` measures ordinary cached 64-key batch `WriteSync`
+selection and acknowledgement separately from `WriteSyncCheckpoint`, which also
+flushes and publishes each batch. It reports actual backend publications/op; a
+cached acknowledgement can defer membership hashing until a later flush.
+`BenchmarkNegativeLookupBootstrap` includes
 backend open/close and bootstrap; compare enabled versus disabled results as
 whole-operation costs, not isolated hashing. Durable synchronization may mask
 small publication costs. A separate preparation benchmark isolates hashing and

@@ -348,7 +348,10 @@ before candidate installation. Logical grouped apply contributes keys from
 every intermediate batch to the final candidate. Queued visible activation
 carries only prepared coverage and existing index/base/candidate coordinates;
 hashing stays outside its bounded, non-fallible in-memory publication swap.
-Command-WAL combiners inherit these batch paths.
+Command-WAL combiners inherit these batch paths. Explicit current-root
+command-WAL metadata publications bind the unchanged user root under the same
+durable gate and carry an exact base/candidate coverage token with no mutation
+keys. Arbitrary supplied-root candidates remain uncovered.
 
 Coverage does not authorize durability, weaken dependencies, or change command
 acknowledgement semantics. Failed/abandoned output may set extra bits safely.

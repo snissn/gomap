@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
+	"strconv"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -21,23 +24,23 @@ func BenchmarkNegativeLookup(b *testing.B) {
 			for _, enabled := range []bool{false, true} {
 				b.Run(fmt.Sprintf("enabled=%v", enabled), func(b *testing.B) {
 					d, keys, misses := openNegativeLookupBench(b, payload, enabled)
-					defer d.Close()
+					defer func() {
+						if err := d.Close(); err != nil {
+							b.Error(err)
+						}
+					}()
 					old := d.AcquireSnapshot()
-					defer old.Close()
+					defer func() {
+						if err := old.Close(); err != nil {
+							b.Error(err)
+						}
+					}()
+					oldFilter := negativeLookupBenchSnapshotFilter(b, old)
 					// Keep a genuinely older physical root while all public routes use the updated
 					// view. Updating existing keys leaves membership density unchanged.
-					update := d.NewBatch()
-					for _, key := range keys[:64] {
-						if err := update.Set(key, []byte("updated")); err != nil {
-							b.Fatal(err)
-						}
-					}
-					if err := update.WriteSync(); err != nil {
-						b.Fatal(err)
-					}
-					update.Close()
-					if err := d.Checkpoint(); err != nil {
-						b.Fatal(err)
+					updateNegativeLookupBenchFixture(b, d, keys[:64], enabled)
+					if enabled && oldFilter == 0 {
+						b.Fatal("old snapshot lacks active coverage")
 					}
 					for _, distribution := range []string{"uniform", "zipf"} {
 						b.Run(distribution, func(b *testing.B) {
@@ -62,6 +65,7 @@ func BenchmarkNegativeLookup(b *testing.B) {
 											dst := make([]byte, 0, 4096)
 											batchKeys := make([][]byte, 64)
 											consume := func(_ int, _, v []byte, _ bool) error { negativeLookupBenchSink = v; return nil }
+											activeBytes := negativeLookupBenchActiveBytes(b, d, enabled)
 											before := tree.ReadPathStatsSnapshot()
 											b.ReportAllocs()
 											b.ResetTimer()
@@ -111,7 +115,7 @@ func BenchmarkNegativeLookup(b *testing.B) {
 											}
 											b.ReportMetric(float64(reads)/float64(b.N), "keys/op")
 											if enabled {
-												b.ReportMetric(float64(len(keys)*10/8), "filter-bytes")
+												b.ReportMetric(float64(activeBytes), "filter-bytes")
 											}
 										})
 									}
@@ -160,14 +164,14 @@ func openNegativeLookupBench(b testing.TB, payload string, enabled bool) (*DB, [
 		if e := batch.WriteSync(); e != nil {
 			b.Fatal(e)
 		}
-		batch.Close()
+		if e := batch.Close(); e != nil {
+			b.Fatal(e)
+		}
 	}
 	if e := d.Checkpoint(); e != nil {
 		b.Fatal(e)
 	}
-	if enabled && d.backend.Stats()["treedb.negative_lookup_filter.active_bytes"] != "10240" {
-		b.Fatal("public fixture lost filter coverage", d.backend.Stats()["treedb.negative_lookup_filter.active_bytes"])
-	}
+	negativeLookupBenchActiveBytes(b, d, enabled)
 	for _, key := range keys {
 		if v, e := d.Get(key); e != nil || len(v) == 0 {
 			b.Fatal(e)
@@ -176,30 +180,115 @@ func openNegativeLookupBench(b testing.TB, payload string, enabled bool) (*DB, [
 	return d, keys, misses
 }
 
-// WriteSync exercises cached batch selection, hashing, publication and durable
-// acknowledgement together. Setup and final close are outside the timed region.
+func negativeLookupBenchSnapshotFilter(tb testing.TB, snapshot Snapshot) uintptr {
+	tb.Helper()
+	snap, ok := snapshot.(*backenddb.Snapshot)
+	if !ok || snap == nil {
+		tb.Fatal("checkpointed fixture did not select captured backend snapshot")
+	}
+	return reflect.ValueOf(snap).Elem().FieldByName("tree").FieldByName("negativeFilter").Pointer()
+}
+
+func negativeLookupBenchActiveBytes(tb testing.TB, d *DB, enabled bool) int {
+	tb.Helper()
+	active, err := strconv.Atoi(d.backend.Stats()["treedb.negative_lookup_filter.active_bytes"])
+	expected := 0
+	if enabled {
+		expected = 10240
+	}
+	snap := d.backend.AcquireSnapshot()
+	filter := negativeLookupBenchSnapshotFilter(tb, snap)
+	if err := snap.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	if err != nil || active != expected || (filter != 0) != enabled {
+		tb.Fatal("fixture active coverage mismatch", active, expected, filter, err)
+	}
+	return active
+}
+
+// Preserve payload size and entropy when producing the newer physical root.
+func updateNegativeLookupBenchFixture(tb testing.TB, d *DB, keys [][]byte, enabled bool) []byte {
+	tb.Helper()
+	first, err := d.Get(keys[0])
+	if err != nil || len(first) == 0 {
+		tb.Fatal("missing update fixture", err)
+	}
+	update := d.NewBatch()
+	for _, key := range keys {
+		value, err := d.Get(key)
+		if err != nil || len(value) == 0 {
+			tb.Fatal("missing update fixture", err)
+		}
+		value[0] ^= 1 // Get owns its output; the old captured root stays untouched.
+		if err := update.Set(key, value); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	if err := update.WriteSync(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := update.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		tb.Fatal(err)
+	}
+	negativeLookupBenchActiveBytes(tb, d, enabled)
+	return first
+}
+
+// The two public update boundaries separate cached durable acknowledgement from
+// checkpointed backend publication. Neither is an isolated hash microbenchmark.
 func BenchmarkNegativeLookupUpdate(b *testing.B) {
 	for _, enabled := range []bool{false, true} {
 		b.Run(fmt.Sprintf("enabled=%v", enabled), func(b *testing.B) {
-			d, keys, _ := openNegativeLookupBench(b, "compressible256", enabled)
-			defer d.Close()
-			value := make([]byte, 256)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				batch := d.NewBatch()
-				for j := 0; j < 64; j++ {
-					if err := batch.Set(keys[(i*64+j)%len(keys)], value); err != nil {
-						b.Fatal(err)
+			for _, checkpoint := range []bool{false, true} {
+				name := "WriteSync"
+				if checkpoint {
+					name = "WriteSyncCheckpoint"
+				}
+				b.Run(name, func(b *testing.B) {
+					d, keys, _ := openNegativeLookupBench(b, "compressible256", enabled)
+					defer func() {
+						if err := d.Close(); err != nil {
+							b.Error(err)
+						}
+					}()
+					value := make([]byte, 256)
+					negativeLookupBenchActiveBytes(b, d, enabled)
+					before := d.backend.State().CommitSeq
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						batch := d.NewBatch()
+						for j := 0; j < 64; j++ {
+							if err := batch.Set(keys[(i*64+j)%len(keys)], value); err != nil {
+								b.Fatal(err)
+							}
+						}
+						if err := batch.WriteSync(); err != nil {
+							b.Fatal(err)
+						}
+						if err := batch.Close(); err != nil {
+							b.Fatal(err)
+						}
+						if checkpoint {
+							if err := d.Checkpoint(); err != nil {
+								b.Fatal(err)
+							}
+						}
 					}
-				}
-				if err := batch.WriteSync(); err != nil {
-					b.Fatal(err)
-				}
-				batch.Close()
+					b.StopTimer()
+					negativeLookupBenchActiveBytes(b, d, enabled)
+					publications := d.backend.State().CommitSeq - before
+					if checkpoint && publications < uint64(b.N) {
+						b.Fatal("checkpoint update did not publish every batch", publications, b.N)
+					}
+					b.ReportMetric(float64(publications)/float64(b.N), "publications/op")
+					b.ReportMetric(64, "keys/op")
+				})
 			}
-			b.StopTimer()
-			b.ReportMetric(64, "keys/op")
 		})
 	}
 }
@@ -224,8 +313,13 @@ func BenchmarkNegativeLookupBootstrap(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if enabled && backend.Stats()["treedb.negative_lookup_filter.active_bytes"] == "0" {
-					b.Fatal("bootstrap unavailable")
+				active := backend.Stats()["treedb.negative_lookup_filter.active_bytes"]
+				expected := "0"
+				if enabled {
+					expected = "10240"
+				}
+				if active != expected {
+					b.Fatal("bootstrap active coverage mismatch", active, expected)
 				}
 				if err := cleanup(); err != nil {
 					b.Fatal(err)
