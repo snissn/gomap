@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -267,8 +268,25 @@ func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	}
 
 	writeDataset(t, db, keys, values, false)
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint: %v", err)
+	t.Cleanup(memtable.DropAppendOnlyEntryPools)
+	for _, phase := range []string{"dirty", "clean"} {
+		memtable.DropAppendOnlyEntryPools()
+		spares := make([]*memtable.AppendOnly, 4)
+		for i := range spares {
+			spares[i] = memtable.NewAppendOnlyWithEntryCapacity(1 << 17)
+		}
+		for _, mt := range spares {
+			mt.Release()
+		}
+		if got := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got <= 32<<20 {
+			t.Fatalf("%s seeded free bins=%d want >32 MiB", phase, got)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("%s checkpoint: %v", phase, err)
+		}
+		if got := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got > 32<<20 {
+			t.Fatalf("%s public checkpoint free bins=%d want <=32 MiB", phase, got)
+		}
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)

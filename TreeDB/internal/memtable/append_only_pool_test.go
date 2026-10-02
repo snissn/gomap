@@ -222,6 +222,106 @@ func TestAppendOnlyEntryPoolRetainsBackingAcrossGC(t *testing.T) {
 	putAppendOnlyEntries(reused[:0])
 }
 
+func TestTrimAppendOnlyEntryPoolsToTargetBytes(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+	live := NewAppendOnlyWithEntryCapacity(appendOnlyMinInitialEntries)
+	live.Set([]byte("held-key"), []byte("held-value"))
+	it := live.NewIterator(nil, nil)
+	t.Cleanup(func() { _ = it.Close(); live.ReleaseDropEntries() })
+	heldKey, heldValue := it.Key(), it.Value()
+	liveBacking := &live.entries[0]
+
+	small := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
+	large := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries*4)
+	newest := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries*3)
+	putAppendOnlyEntries(small)
+	putAppendOnlyEntries(large)
+	putAppendOnlyEntries(newest) // Same large class; LIFO eviction is deterministic.
+	before := AppendOnlyEntryPoolStatsSnapshot()
+	target := appendOnlyEntryPoolBytes(cap(small) + cap(large) + 1)
+	wantDropped := appendOnlyEntryPoolBytes(cap(newest))
+	if dropped := TrimAppendOnlyEntryPoolsToTargetBytes(target); dropped != wantDropped {
+		t.Fatalf("dropped bytes=%d want %d", dropped, wantDropped)
+	}
+	after := AppendOnlyEntryPoolStatsSnapshot()
+	if after.RetainedBytesEstimate != before.RetainedBytesEstimate-wantDropped || after.RetainedBytesEstimate > target {
+		t.Fatalf("retained bytes=%d target=%d before=%d dropped=%d", after.RetainedBytesEstimate, target, before.RetainedBytesEstimate, wantDropped)
+	}
+	if after.DropBytesTotal != before.DropBytesTotal+wantDropped || after.DropsTotal != before.DropsTotal+1 || after.GetsTotal != before.GetsTotal || after.PutsTotal != before.PutsTotal || after.AdmissionDropsTotal != before.AdmissionDropsTotal {
+		t.Fatalf("trim accounting before=%+v after=%+v", before, after)
+	}
+	for _, noOpTarget := range []uint64{target, after.RetainedBytesEstimate, ^uint64(0)} {
+		if dropped := TrimAppendOnlyEntryPoolsToTargetBytes(noOpTarget); dropped != 0 || AppendOnlyEntryPoolStatsSnapshot() != after {
+			t.Fatalf("no-op target %d changed stats", noOpTarget)
+		}
+	}
+	if &live.entries[0] != liveBacking || !bytes.Equal(heldKey, []byte("held-key")) || !bytes.Equal(heldValue, []byte("held-value")) || !it.Valid() {
+		t.Fatal("trim changed acquired backing or held iterator bytes")
+	}
+	reusedLarge := getAppendOnlyEntries(cap(large))
+	reusedSmall := getAppendOnlyEntries(cap(small))
+	if &reusedLarge[0] != &large[:cap(large)][0] || &reusedSmall[0] != &small[:cap(small)][0] {
+		t.Fatal("trim discarded useful retained buffers")
+	}
+	if got := AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained after reuse=%d want 0", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	live.Release()
+	if got := getAppendOnlyEntries(appendOnlyMinInitialEntries); &got[0] != liveBacking {
+		t.Fatal("released live buffer was not reusable")
+	}
+	putAppendOnlyEntries(reusedLarge)
+	putAppendOnlyEntries(reusedSmall)
+	beforeEmpty := AppendOnlyEntryPoolStatsSnapshot()
+	if dropped := TrimAppendOnlyEntryPoolsToTargetBytes(0); dropped != beforeEmpty.RetainedBytesEstimate {
+		t.Fatalf("zero target dropped=%d want %d", dropped, beforeEmpty.RetainedBytesEstimate)
+	}
+	if got := AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got != 0 {
+		t.Fatalf("zero target retained=%d", got)
+	}
+	if dropped := TrimAppendOnlyEntryPoolsToTargetBytes(0); dropped != 0 {
+		t.Fatalf("empty trim dropped=%d", dropped)
+	}
+}
+
+func TestTrimAppendOnlyEntryPoolsConcurrentReuse(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Go(func() {
+			for i := 0; i < 100; i++ {
+				entries := getAppendOnlyEntries(appendOnlyMinInitialEntries << (i % 3))
+				entries[0].value = []byte("owned")
+				TrimAppendOnlyEntryPoolsToTargetBytes(appendOnlyEntryPoolBytes(appendOnlyMinInitialEntries))
+				if string(entries[0].value) != "owned" {
+					t.Error("trim changed acquired entries")
+				}
+				putAppendOnlyEntries(entries)
+				if i%10 == 0 {
+					DropAppendOnlyEntryPools()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	appendOnlyEntryPoolMu.Lock()
+	defer appendOnlyEntryPoolMu.Unlock()
+	var charged uint64
+	for _, bin := range appendOnlyEntryPoolBins {
+		for _, entries := range bin {
+			charged += appendOnlyEntryPoolBytes(cap(entries))
+		}
+	}
+	if got := appendOnlyEntryPoolRetainedBytes.Load(); got != charged {
+		t.Fatalf("retained charge=%d actual bin backing=%d", got, charged)
+	}
+}
+
 func TestPutAppendOnlyEntriesDropsOversizedRetainedSlice(t *testing.T) {
 	DropAppendOnlyEntryPools()
 	t.Cleanup(DropAppendOnlyEntryPools)

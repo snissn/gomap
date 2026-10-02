@@ -1,10 +1,119 @@
 package caching
 
 import (
+	"bytes"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func seedAppendOnlyFreeBinsForCheckpointTest(t *testing.T) uint64 {
+	t.Helper()
+	memtable.DropAppendOnlyEntryPools()
+	t.Cleanup(memtable.DropAppendOnlyEntryPools)
+	// Allocate before releasing so the producers cannot reuse each other's bins.
+	spares := make([]*memtable.AppendOnly, 4)
+	for i := range spares {
+		spares[i] = memtable.NewAppendOnlyWithEntryCapacity(1 << 17)
+	}
+	for _, mt := range spares {
+		mt.Release()
+	}
+	retained := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate
+	if retained <= uint64(postCheckpointEntrySliceTargetBytes) {
+		t.Fatalf("seed retained bytes=%d want above checkpoint target", retained)
+	}
+	return retained
+}
+
+func TestTrimRetainedArenasAfterFlush_CheckpointBoundsFreeBinsPreservesOwners(t *testing.T) {
+	forceNormalPoolPressureForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+	resetBatchArenaPoolsForTest()
+	db := &DB{mutableShards: make([]memShard, 1)}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+
+	idle := memtable.NewAppendOnlyWithEntryCapacity(128)
+	idle.ResetWithCapacityHard(128*64, 64)
+	db.appendOnlyMemLeases = append(db.appendOnlyMemLeases, idle)
+	idleBytes := idle.EntryBackingBytes()
+	busy := memtable.NewAppendOnlyWithEntryCapacity(128)
+	direct := []byte("direct-owned-value")
+	batch := []byte("batch-owned-value")
+	busy.SetEntryBorrowValue([]byte("direct"), direct, page.ValuePtr{}, 0)
+	busy.SetEntryBorrowValue([]byte("batch"), batch, page.ValuePtr{}, 0)
+	db.retainAppendOnlyDirectArenaChunksForMemtable(0, busy, [][]byte{direct})
+	db.retainBatchArenaChunksForMemtables([][]byte{batch}, []memtable.Table{busy})
+	defer db.recycleMemtables([]memtable.Table{busy})
+	defer idle.ReleaseDropEntries()
+	it := busy.NewIterator(nil, nil)
+	defer it.Close()
+	busyBytes := busy.EntryBackingBytes()
+	batchBytes := db.batchArenaLeaseBytes.Load()
+	directLease := db.appendOnlyDirectArenaLeasesByMem[busy]
+	before := seedAppendOnlyFreeBinsForCheckpointTest(t)
+	db.trimRetainedArenasAfterFlush(false)
+	if got := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got != before {
+		t.Fatalf("ordinary flush changed free bins: got %d want %d", got, before)
+	}
+	db.trimRetainedArenasAfterFlush(true)
+	if got := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got > uint64(postCheckpointEntrySliceTargetBytes) {
+		t.Fatalf("checkpoint free bins=%d want <= %d", got, postCheckpointEntrySliceTargetBytes)
+	}
+	if len(db.appendOnlyMemLeases) != 1 || db.appendOnlyMemLeases[0] != idle || idle.EntryBackingBytes() != idleBytes {
+		t.Fatal("checkpoint changed reset idle memtable lease")
+	}
+	if busy.EntryBackingBytes() != busyBytes || db.batchArenaLeaseBytes.Load() != batchBytes || db.appendOnlyDirectArenaLeasesByMem[busy] != directLease {
+		t.Fatal("checkpoint changed busy entry/direct/batch ownership")
+	}
+	for _, want := range []struct {
+		key   string
+		value []byte
+	}{{"batch", batch}, {"direct", direct}} {
+		if !it.Valid() || string(it.Key()) != want.key || !bytes.Equal(it.Value(), want.value) {
+			t.Fatalf("held iterator lost %s=%q", want.key, want.value)
+		}
+		it.Next()
+	}
+}
+
+func TestCheckpointBoundsAppendOnlyFreeBins(t *testing.T) {
+	forceNormalPoolPressureForTest(t)
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{AllowUnsafe: true, DisableWAL: true, MemtableMode: "append_only", MemtableShards: 1, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	if err := db.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"dirty", "clean", "clean-external-wal"} {
+		t.Run(phase, func(t *testing.T) {
+			if phase == "clean-external-wal" {
+				db.externalCommandWAL = true
+				db.SetCommandWALCheckpointPublishHook(func(bool) (uint64, []backenddb.CommandWALLSNRange, error) { return 0, nil, nil })
+			}
+			seedAppendOnlyFreeBinsForCheckpointTest(t)
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if got := memtable.AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got > uint64(postCheckpointEntrySliceTargetBytes) {
+				t.Fatalf("checkpoint free bins=%d want <= %d", got, postCheckpointEntrySliceTargetBytes)
+			}
+			got, err := db.Get([]byte("key"))
+			if err != nil || string(got) != "value" {
+				t.Fatalf("Get after checkpoint=(%q,%v)", got, err)
+			}
+		})
+	}
+}
 
 func TestTrimRetainedArenasAfterFlush_CheckpointPathTrimsAppendOnlyCaches(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)

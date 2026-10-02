@@ -11771,6 +11771,9 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	db.trimEmptyAppendOnlyMutableShards(idleMutableRetainCapacity)
 	db.trimSparseAppendOnlyMutableShards(idleMutableRetainCapacity)
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
+	if checkpoint {
+		memtable.TrimAppendOnlyEntryPoolsToTargetBytes(uint64(postCheckpointEntrySliceTargetBytes))
+	}
 }
 
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {

@@ -365,6 +365,39 @@ func DropAppendOnlyEntryPools() {
 	dropAppendOnlyEntryPoolsLocked()
 }
 
+// TrimAppendOnlyEntryPoolsToTargetBytes abandons only free entry backing,
+// largest classes first and newest buffers first within a class. Whole-buffer
+// removal can undershoot the target; the return value is the actual bytes
+// dropped. Acquired buffers, including live tables and DB leases, are untouched.
+// Concurrent puts may grow the bins again after this maintenance boundary.
+func TrimAppendOnlyEntryPoolsToTargetBytes(target uint64) uint64 {
+	appendOnlyEntryPoolMu.Lock()
+	defer appendOnlyEntryPoolMu.Unlock()
+	retained := appendOnlyEntryPoolRetainedBytes.Load()
+	var dropped uint64
+	for class := len(appendOnlyEntryPoolBins) - 1; class >= 0 && retained > target; class-- {
+		bin := appendOnlyEntryPoolBins[class]
+		for len(bin) > 0 && retained > target {
+			last := len(bin) - 1
+			bytes := appendOnlyEntryPoolBytes(cap(bin[last]))
+			bin[last] = nil
+			bin = bin[:last]
+			retained -= bytes
+			dropped += bytes
+		}
+		if len(bin) == 0 {
+			bin = nil
+		}
+		appendOnlyEntryPoolBins[class] = bin
+	}
+	if dropped > 0 {
+		subtractAppendOnlyEntryPoolRetainedBytes(dropped)
+		appendOnlyEntryPoolDropBytesTotal.Add(dropped)
+		appendOnlyEntryPoolDropTotal.Add(1)
+	}
+	return dropped
+}
+
 func AppendOnlyEntryPoolDropTotal() uint64 {
 	return appendOnlyEntryPoolDropTotal.Load()
 }

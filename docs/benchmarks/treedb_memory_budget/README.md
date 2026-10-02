@@ -5,6 +5,43 @@ or a trim decision. Review and land this harness after the #4891/#342
 predecessors, then freeze that landed source before full collection. No runtime
 controller, public knob, default, on-disk format or storage lifecycle changes.
 
+## Checkpoint free-bin candidate (#4914; qualification pending)
+
+The candidate trims only free global append-only entry buffers at the end of
+checkpoint maintenance, using the existing 32 MiB checkpoint entry target.
+Largest size classes are drained first, newest buffers first within each class,
+until charged backing is at most the target. Whole-buffer removal can overshoot
+the required reduction: retain the exact before/after/drop bytes, rather than
+assuming an exact 32 MiB result. Empty bin metadata is abandoned too; nonempty
+bin metadata is separate from the entry-backing charge. The trim allocates no
+replacement buffers or result storage.
+
+Live tables, held iterator bytes, reset DB memtable leases, busy direct/batch
+leases and scratch remain separately owned. Non-checkpoint flushes, pressure
+control and the 256 MiB free-bin admission cap keep their current behavior.
+Concurrent producers may return backing after the checkpoint trim boundary.
+The bound is not a whole-process budget or proof of heap/RSS reclamation.
+
+Freeze reviewed baseline and candidate preparations before paired runs. Start
+with three balanced repeats of inline256/threshold1024 at leaf0/32/64 MiB and
+pointer256/threshold1 plus random4096 controls at leaf16/64 MiB (seven cells).
+Use identical compiler, host, filesystem, environment, harness and durability
+controls. Compare phase total allocated bytes/objects and normalized per-op
+costs; pool get/put/drop bytes; reserve growth; mutable/idle DB lease owners;
+direct pre-Stats post-GC heap; separately sampled RSS/HWM; load/update/checkpoint
+and read times; persisted WAL/value-log/index lengths; and the full byte/miss,
+checked close, acknowledged-LSN and reopen oracles. Preserve failed/noisy runs.
+
+Targeted acceptance requires repeatable direct post-GC heap reduction of at
+least 16 MiB in the inline cells where at least 18 MiB of free backing is
+removed, without material unexplained warm-write allocation/time, checkpoint,
+read, peak-memory or durability regression. Removing free buffers can cost
+warm write reuse; the paired update phase must measure that tradeoff. RSS is
+observational, and timing dispersion cannot establish a fine speed threshold.
+These are qualification gates, not results. The coordinator must accept the
+paired evidence before promotion; full twenty-cohort qualification is required
+before broader claims. A nominal capacity bound alone does not close #4914.
+
 `BenchmarkMemoryBudgetWorkflow` runs exactly once in each fresh process. Full
 mode loads 250,000 even hit keys (32 bytes, 24-byte shared prefix), in 1,000-key
 public `Batch.WriteSync` batches. Values are either compressible 256-byte data

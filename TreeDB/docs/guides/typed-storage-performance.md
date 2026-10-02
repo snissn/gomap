@@ -144,6 +144,23 @@ GC is diagnostic and does not authorize storage reclamation or prove a useful
 production trim. Activate a narrow trim only after retained owner evidence
 shows unnecessary idle backing without required live leases.
 
+The #4914 candidate bounds global free append-only entry bins at checkpoint
+maintenance to the existing 32 MiB entry target. It removes whole buffers from
+largest classes first (newest first within each class), so retained capacity
+can fall below the target. The final maintenance call follows mutable/lease
+recycling; acquired live buffers, iterators and retained DB memtable leases
+remain separately owned. Ordinary flushes keep the existing policy, and the
+256 MiB admission cap still applies between checkpoints. Concurrent returns
+can increase free-bin capacity after the trim boundary.
+
+This is a proposed capacity policy pending paired qualification, not a measured
+heap or RSS improvement. Smaller bins retain warm reuse; removing larger bins
+may increase subsequent write allocations. Compare entry get/put/drop and
+reserve-growth deltas, DB lease backing, direct post-GC heap, observed RSS/HWM,
+phase allocations/times and checked durability using the runbook. The initial
+seven-cell qualification supports only those cells; broader claims require
+the full twenty-cohort campaign.
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:
