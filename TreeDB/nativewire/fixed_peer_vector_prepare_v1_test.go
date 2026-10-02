@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -300,6 +301,60 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			}
 			if _, err := c.Get([]byte("base-minus-y")); err != nil {
 				t.Fatal(err)
+			}
+		}
+		return
+	}
+	// Immutable partition publication is currently proved only on Linux. The
+	// real public workflow must refuse before its first rebuild/prepare append,
+	// rather than panic later while applying an already committed command.
+	if runtime.GOOS != "linux" {
+		before := make([]FixedPeerTCPStatusV1, len(nodes))
+		beforeRoots := make([]backenddb.StateToken, len(nodes))
+		beforeWAL := make([]uint64, len(nodes))
+		for i, node := range nodes {
+			before[i], err = node.Status(ctx)
+			if err != nil || len(before[i].Groups) != 1 {
+				t.Fatalf("unsupported publication baseline status: %+v %v", before[i], err)
+			}
+			_, db, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID}, "docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ok bool
+			beforeRoots[i], ok = db.StateToken()
+			if !ok {
+				t.Fatal("unsupported publication baseline has no root")
+			}
+			beforeWAL[i] = db.CommandWALNextLSN()
+			if _, err := os.Lstat(filepath.Join(db.Dir(), "vector_partitions")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected partition namespace before refusal: %v", err)
+			}
+		}
+		if _, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "reject-unsupported-publication-before-append"); err == nil || !strings.Contains(err.Error(), collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1.Error()) {
+			t.Fatalf("unsupported partition publication refusal=%v", err)
+		}
+		for i, node := range nodes {
+			after, err := node.Status(ctx)
+			if err != nil || len(after.Groups) != 1 {
+				t.Fatalf("unsupported publication refusal status: %+v %v", after, err)
+			}
+			if before[i].Groups[0].LastIndex != after.Groups[0].LastIndex || before[i].Groups[0].Applied != after.Groups[0].Applied || before[i].Groups[0].CatalogVersion != after.Groups[0].CatalogVersion || !reflect.DeepEqual(before[i].Catalog, after.Catalog) || after.VectorPhase != FixedPeerVectorPhaseInitializingV1 {
+				t.Fatalf("refused prepare changed Raft/catalog/phase: before=%+v after=%+v", before[i], after)
+			}
+			c, db, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID}, "docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots, ok := db.StateToken()
+			if !ok || roots != beforeRoots[i] || db.CommandWALNextLSN() != beforeWAL[i] {
+				t.Fatalf("refused prepare changed roots/WAL: before=%+v/%d after=%+v/%d", beforeRoots[i], beforeWAL[i], roots, db.CommandWALNextLSN())
+			}
+			if _, err := os.Lstat(filepath.Join(db.Dir(), "vector_partitions")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("refused prepare created partition namespace: %v", err)
+			}
+			if _, err := c.Get([]byte("base-minus-y")); err != nil {
+				t.Fatalf("refused prepare lost committed source: %v", err)
 			}
 		}
 		return

@@ -102,6 +102,11 @@ func (owner *CommandWALAdmittedCollection) preflightVectorPrepareV1(v commitlog.
 	if !VectorPartitionLiveDocumentProofSupportedV1(c.meta) {
 		return errors.New("collections: vector prepare requires the supported physical typed source")
 	}
+	// Reject before consensus admission can append a command whose committed
+	// apply would require unsupported durable partition namespace publication.
+	if !vpmNamespacePersistenceSupported() {
+		return fmt.Errorf("%w: vector prepare requires durable partition namespace publication", ErrVectorPartitionNamespacePersistenceUnsupportedV1)
+	}
 	// Count the authoritative primary rows before any build allocation. Admission
 	// and mutation are held; the prepare source must include every primary row.
 	count, err := owner.vectorPrepareDocumentCountV1(v.MaxSourceRows)

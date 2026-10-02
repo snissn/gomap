@@ -389,6 +389,8 @@ func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
 		return "CommandTypedMetadataUpdate"
 	case iwire.CommandSplitVectorInsertV1:
 		return "CommandSplitVectorInsertV1"
+	case iwire.CommandVectorPrepareV1:
+		return "CommandVectorPrepareV1"
 	case iwire.CommandDeleteBatch:
 		return "CommandDeleteBatch"
 	case iwire.CommandFlushCollection:
