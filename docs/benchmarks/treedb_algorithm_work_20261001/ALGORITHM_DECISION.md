@@ -5,22 +5,26 @@ shared-traversal product after its full uniform guard failure and unsuccessful
 final bounded screen. The eligible public snapshot workload supports a
 checkpoint-only work reduction with wider limits, but its sampled read-tail
 guard remains unresolved. Persistent deltas have not been implemented or tested;
-the proposed bounded decision is **do not activate a storage-format change for
+root's accepted bounded decision is **do not activate a storage-format change for
 this measured workload yet**. This is an activation decision, not proof that
 deltas are uneconomic or that the unmeasured capacity requirement has passed.
 
-[#4893](https://github.com/snissn/gomap/issues/4893) remains open. Its activated
-pointer callback child [#4920](https://github.com/snissn/gomap/issues/4920) is
-pending fresh full qualification of selected candidate `75fe577ecc6ab81237df2cff58454bbeb205cc71` from actual
-main `bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`. That candidate is not a merged or
-accepted product. Its full gate remains >=50% pointer callback B/op and
-allocations reduction and >=25% repeatable sorted/clustered pointer callback
-latency improvement, with directional agreement in all three pairs and all twelve cells plus
-uniform/owned/inline/retention/peak/safety guards retained. This draft records no
-pointer improvement or final A acceptance. Freeze of the final decision also waits for the reviewed snapshot
-decision PR [#4931](https://github.com/snissn/gomap/pull/4931) to land and for root
-to accept the bounded persistent-delta disposition. Parent #4888, integration
-#4894 and representative/maintenance/capacity #4895 gates remain active.
+[#4893](https://github.com/snissn/gomap/issues/4893) remains open. This provisional
+integration carries T/A decision components in [H #4913](https://github.com/snissn/gomap/pull/4913)
+under root's published graph reassessment. **ACTUAL POINTER MERGE PENDING**:
+selected candidate `75fe577ecc6ab81237df2cff58454bbeb205cc71` is measured against
+control `bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`, but is not a merged or finally
+accepted product. Its five-pair objective/guard evidence is recorded below;
+root's final noise disposition, independent actual-evidence review, current-head
+CI and actual #4921 merge remain required. No candidate hash is a shipped identity.
+
+Snapshot decision [#4931](https://github.com/snissn/gomap/pull/4931) actually merged
+at `f9152b5b64dd0e38f5bd5a46bdfbe36e1db10775`; defaults remain selected. Root
+[accepted bounded persistent-delta nonactivation](https://github.com/snissn/gomap/issues/4893#issuecomment-5956567233)
+for this workload. That decision does not establish delta efficacy, economics or
+unmeasured capacity. Parent #4888, final A/union review, final-head H #4894 CI,
+and representative/maintenance/capacity #4895 gates remain active. Original
+artifact PRs #4930/#4932 remain open until actual integrated merge is verified.
 
 ## Evidence identity and interpretation
 
@@ -141,7 +145,8 @@ mechanism; retain defaults, as root and independent review conclude.
 The separately reviewed `SNAPSHOT_DECISION.md` and its existing
 `check_snapshot_decision.py` own the complete eight-cell, 48-cost-row and
 six-physical-row arithmetic. This draft does not duplicate or edit those files.
-Its pending landing is a final gate. Background benefit additionally requires
+It is landed at the actual merge above; its canonical checker remains an integrated
+validation gate. Background benefit additionally requires
 positive `admitted_runs − checkpoint.admitted_runs` under unchanged age/pressure
 policy; checkpoint-frontier expansion cannot establish that claim.
 
@@ -249,11 +254,53 @@ Optimized Python fails before document/evidence I/O; all text is explicit UTF-8.
 The raw packets, freezes, pre-timer order, normal/counter separation and profile
 exclusion remain the authoritative provenance contract.
 
-Final acceptance requires root's selected #4920 qualification/disposition,
-actual merged product identity if selected, #4931 landing, root acceptance of the bounded persistent-delta decision, independent
-fresh-context Sol review, current-head CI/review inventory and unchanged parent
-capacity/maintenance/representative obligations. No pending metric is supplied,
-no rejected runtime is shipped, and no closure keyword is used by this draft.
+Final acceptance requires root's selected #4920 qualification/noise disposition,
+actual #4921 merged product identity, independent fresh-context final A and
+whole-union review, final integrated-head CI/review inventory and unchanged parent
+capacity/maintenance/representative obligations. Snapshot landing and bounded
+delta nonactivation are recorded above; no pending acceptance is supplied.
+
+## Selected pointer callback: five-pair evidence, merge pending
+
+The selected actual-main candidate uses existing verified append readers and the
+bounded callback destination/frame cache; no rejected shared traversal ships here.
+Ten normal full-family captures retain all120 cells plus two separate counter
+captures (24 cells). Original rounds1–3 and predeclared complete rounds4/5 are
+retained, not replaced or filtered. Sorted/clustered pointer callback median
+latency changes are −60.357/−57.175%; every one of five paired changes exceeds the
+25% improvement target. Median B/op is 271,574/263,490→776 and allocs/op175→7,
+exceeding the50% allocation target. Uniform pointer callback median latency is
+−45.923%, with912B/op. Actual traversal counts stay unchanged; this is frame
+reuse/allocation evidence, not a shared-tree traversal win.
+
+The full twelve-cell table below retains every pair, spread and flag, including
+inline uniform owned +1.285% median with mixed directions. Shared-host latency
+spreads around10–21% remain visible. These observations support no stable exact
+latency, quiet-host/cold-cache guarantee, or owned/inline performance-win claim.
+Independent full actual-evidence review and root's final noise disposition remain
+pending; the raw gate is >=50% callback bytes/count reduction, >=25% sorted/clustered
+callback latency improvement with directional agreement, plus all public safety,
+uniform/owned/inline and retention/peak guards. Actual merged identity is pending.
+
+Separate three-pair forced-GC residency diagnostics used two distinct binaries,
+not primary timing executables. Root and independent review accepted zero material
+paired HeapAlloc/approximate phase-end VmHWM increases, using max(4MiB,15% of
+matched control) per pair. All288 cache observations stay within64MiB, maximum
+63,917,824B. The table retains all12 cells, each with three matched pairs.
+One explicit pre/post GC site keeps DB/batches live, full-byte/duplicate/miss and
+callback verification, enabled CRC, checked Close and Linux reset-phase VmHWM.
+This is an approximate observed phase guard; it is not exact peak, global capacity,
+RSS ceiling, object-cause attribution or primary latency evidence. The analysis's
+historical pending-acceptance label is retained unchanged; later independent
+review and root disposition in the artifact rows are the acceptance authorities.
+
+The checker rehashes all four actual normal/counter selected executables and both
+separate diagnostic executables against their original freezes, reparses the
+120normal/24counter cells with existing canonical validation, and reconstructs
+selected tables with the same retained reducer. It hash-binds every separate
+residency raw stream/sidecar, reuses only the existing recorder's pure packet
+validator through AST selection (no native entry point), and recalculates every
+paired heap/HWM guard. The original primary/shared/singleton contracts are retained.
 
 ## Canonical retained tables
 
@@ -324,6 +371,45 @@ no rejected runtime is shipped, and no closure keyword is used by this draft.
 | pointer=true/sorted/view=true | -0.8844 | +10.56/-0.65/-4.20/-0.88/+0.01 | 10.78/11.81 | +31.857/-0.104/+0.019/+0.097/-0.149 | 175→175 |
 | pointer=true/uniform/view=false | +0.1852 | +4.00/+0.19/-3.66/+1.50/+0.66 | 5.33/2.91 | +0.016/-0.052/+0.000/+0.000/+0.000 | 11→11 |
 | pointer=true/uniform/view=true | -0.9264 | +11.08/-5.04/-0.93/-0.17/-2.11 | 14.92/12.39 | +29.810/-0.189/+0.018/+0.000/+0.000 | 175→175 |
+
+| Actual retained executable | Measured source HEAD (not final merge) | Frozen TreeDB tree | Harness SHA256 | Actual executable SHA256 |
+| --- | --- | --- | --- | --- |
+| control/normal | bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc | a21018011ea94cc40f55ee38f2f38c296c052f40 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | f4559a0125776a47df3ceebac35eeacbd605b3a399d9fca09be3b28baa1f5c99 |
+| control/counter | bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc | a21018011ea94cc40f55ee38f2f38c296c052f40 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | b372484c49583c33685879a7a95a278dfdf8afe81f8341640204c7b0c111e14a |
+| candidate/normal | 75fe577ecc6ab81237df2cff58454bbeb205cc71 | 0a180e7e7b4f415117334e2e60da29cffd781314 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | 519cec8a30c6cd365ef2e64426faf8a7bf6bf55f8e743e540b08b9f3a94e211a |
+| candidate/counter | 75fe577ecc6ab81237df2cff58454bbeb205cc71 | 0a180e7e7b4f415117334e2e60da29cffd781314 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | 6b4a7e9f357619edc4037d546ef8f77dce741cf8b5db8ac915a60b220f968075 |
+| control/separate-residency | bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc | a21018011ea94cc40f55ee38f2f38c296c052f40 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | c21bade8d841b283709c7a87c07f4a2f453e337a1d5a451d6dbd19cdd27e58fc |
+| candidate/separate-residency | 75fe577ecc6ab81237df2cff58454bbeb205cc71 | 0a180e7e7b4f415117334e2e60da29cffd781314 | b7128ff9520d802fa99713187cd6ad0a4a34c9e34aa42bf862f3642c668dd7d9 | 6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c |
+
+| Selected75f cell | Median latency % | Paired r1–r5 % | Latency spread control/candidate % | B/op medians | allocs/op medians | Retained guard flags |
+| --- | --- | --- | --- | --- | --- | --- |
+| pointer=false/clustered/view=false | -5.827 | +0.99/-10.68/+1.64/-19.02/+2.95 | 18.28/12.44 | 35944→35944 | 9→9 | control_latency_spread_above10pct; candidate_latency_spread_above10pct |
+| pointer=false/clustered/view=true | -2.482 | +4.16/+1.57/-6.78/-13.31/-2.24 | 14.28/4.70 | 776→776 | 7→7 | control_latency_spread_above10pct |
+| pointer=false/sorted/view=false | -0.318 | -0.42/-7.36/+1.22/-18.47/+0.26 | 21.21/2.57 | 35944→35944 | 9→9 | control_latency_spread_above10pct |
+| pointer=false/sorted/view=true | -0.669 | -1.33/-0.21/-2.99/-11.48/+7.72 | 10.83/10.25 | 776→776 | 7→7 | control_latency_spread_above10pct; candidate_latency_spread_above10pct |
+| pointer=false/uniform/view=false | +1.285 | +2.71/+1.50/-0.04/-11.30/+0.15 | 14.41/3.45 | 35950→35950 | 9→9 | control_latency_spread_above10pct; ns/op_positive_median_requires_root_disposition |
+| pointer=false/uniform/view=true | -0.249 | +1.89/-0.99/+0.19/+3.82/+2.07 | 13.43/17.15 | 776→776 | 7→7 | control_latency_spread_above10pct; candidate_latency_spread_above10pct |
+| pointer=true/clustered/view=false | +1.931 | +0.17/+0.98/+4.57/+3.17/-4.03 | 11.09/3.95 | 36456→36456 | 11→11 | control_latency_spread_above10pct; ns/op_positive_median_requires_root_disposition |
+| pointer=true/clustered/view=true | -57.175 | -58.23/-56.66/-57.18/-56.89/-57.89 | 13.37/12.24 | 263490→776 | 175→7 | control_latency_spread_above10pct; candidate_latency_spread_above10pct |
+| pointer=true/sorted/view=false | +0.460 | -5.47/+3.28/+2.28/+0.43/-13.39 | 18.08/4.49 | 36469→36456 | 11→11 | control_latency_spread_above10pct; ns/op_positive_median_requires_root_disposition |
+| pointer=true/sorted/view=true | -60.357 | -60.79/-56.50/-60.36/-58.02/-61.98 | 11.84/3.69 | 271574→776 | 175→7 | control_latency_spread_above10pct |
+| pointer=true/uniform/view=false | +2.371 | +7.93/-1.06/+2.74/+2.37/+3.34 | 6.68/3.14 | 36462→36562 | 11→11 | ns/op_positive_median_requires_root_disposition; B/op_positive_median_requires_root_disposition |
+| pointer=true/uniform/view=true | -45.923 | -39.34/-46.75/-49.01/-46.14/-45.03 | 2.20/16.74 | 270630→912 | 175→7 | candidate_latency_spread_above10pct |
+
+| Separate residency cell | Post-GC HeapAlloc MiB medians | Approx phase-end VmHWM MiB medians | Material paired heap/HWM flags |
+| --- | --- | --- | --- |
+| inline/clustered/owned | 143.820→143.825 | 326.559→322.766 | none |
+| inline/clustered/view | 143.931→143.900 | 321.992→319.145 | none |
+| inline/sorted/owned | 143.814→143.814 | 359.383→361.203 | none |
+| inline/sorted/view | 143.816→143.817 | 327.875→324.812 | none |
+| inline/uniform/owned | 143.933→143.902 | 311.414→316.680 | none |
+| inline/uniform/view | 143.936→143.905 | 296.625→296.785 | none |
+| pointer/clustered/owned | 281.812→277.666 | 394.664→359.824 | none |
+| pointer/clustered/view | 282.118→277.681 | 538.520→353.871 | none |
+| pointer/sorted/owned | 281.744→277.619 | 408.945→376.789 | none |
+| pointer/sorted/view | 281.982→277.613 | 499.348→353.457 | none |
+| pointer/uniform/owned | 282.133→277.928 | 393.324→361.328 | none |
+| pointer/uniform/view | 282.131→277.936 | 538.758→355.691 | none |
 <!-- canonical-tables:end -->
 
 ## Retained artifacts
@@ -402,3 +488,26 @@ bytes, not just the occurrence of a digest anywhere in this document.
 | `4919-singleton-screen-packet/control-normal-pilot-prepared/algorithm-work.test` | `20e69fac0ad85bebc6dc00e13d1360dd841b2076050a8c8845298fe2abff88c7` |
 | `4919-singleton-screen-packet/candidate-normal-pilot-prepared/freeze.json` | `31294d1e297c8452f11328f2635b9ea336e828457a567b285a8fa029332d7108` |
 | `4919-singleton-screen-packet/candidate-normal-pilot-prepared/algorithm-work.test` | `210fb4d93677a46729d1c6bba55cf11326ad7ed4fa58ee97c68f9b4dfdc8c156` |
+
+| `4921-selected-main-five-pair-analysis.json` | `33329d7db4892f758d8092a0f3aa4444623d1f3811f0a88322dd24427baceba9` |
+| `4921-75f-independent-selected-main-source-review.md` | `6ef184a02367e66d7fb3daee3e36a49eaf8a8a773b13b655c5dbcf9b17947e8c` |
+| `4921-selected-main-full-paired-plan.json` | `aedd1ed66362201ed5cc7269e0352a65aaced903c20bb1ae7f797864b893ebe4` |
+| `4921-selected-main-full-extension-plan.json` | `a1e194b192cf2bd339f65136589df62ffc7d8f4d3511f2f66a3b40059bcb0188` |
+| `4921-full-selected-main-packet/all4-preparation-anchor.json` | `4bf1548ebf7bd1c29d8441c671a6fbc5c84e2b9b7bac08d88df9e5314a7f059e` |
+| `4920-selected-main-three-pair-residency-analysis.json` | `7908f7ecf6c2cab50ed93985c07c6a32bebe2308c7c4778a0bf6b19e144ff99d` |
+| `4920-selected-main-residency-independent-evidence-review.md` | `cb008a67c3b32c623bd405f9da237757c62435a1f50bc5fb45efd018eadcd4a2` |
+| `4920-root-selected-main-residency-disposition.md` | `896a2c23190d22e3100eef95ddd96f53bdcfe879236373cdfae6ee9cfd9479ff` |
+| `4920-residency-recorder.py` | `0171eefeae1b80599b6cf1c91bcbf022671a75c01749cd6963a9150a198cab58` |
+| `persistent-delta-root-activation-disposition.md` | `e25edc6aab176d28195c5a9c5e85378f05b289bb433d067bb3c77ae3286dac83` |
+| `4921-full-selected-main-packet/control/normal-prepared/freeze.json` | `fea5745454ddb43206a637a23e4b7317296f101a40aa0b7feb1bfb20879d4349` |
+| `4921-full-selected-main-packet/control/normal-prepared/algorithm-work.test` | `f4559a0125776a47df3ceebac35eeacbd605b3a399d9fca09be3b28baa1f5c99` |
+| `4921-full-selected-main-packet/control/counter-prepared/freeze.json` | `8f8aed0810c4b9baf075b376390efa2d0bcbccc8c008453b5bb3d52ca8e12d6f` |
+| `4921-full-selected-main-packet/control/counter-prepared/algorithm-work.test` | `b372484c49583c33685879a7a95a278dfdf8afe81f8341640204c7b0c111e14a` |
+| `4920-residency-selected-main-packet/control/prepared/freeze.json` | `9d9d714c98e18ee2fbcd249d2322e69a54f58293123ba3a901385745a0cf0e1b` |
+| `4920-residency-selected-main-packet/control/prepared/algorithm-work.test` | `c21bade8d841b283709c7a87c07f4a2f453e337a1d5a451d6dbd19cdd27e58fc` |
+| `4921-full-selected-main-packet/candidate/normal-prepared/freeze.json` | `16b796bb06fbc25593dacf3c96de7cb917e7067afb7d93215e10248af86f658b` |
+| `4921-full-selected-main-packet/candidate/normal-prepared/algorithm-work.test` | `519cec8a30c6cd365ef2e64426faf8a7bf6bf55f8e743e540b08b9f3a94e211a` |
+| `4921-full-selected-main-packet/candidate/counter-prepared/freeze.json` | `845c94a226131c8fdcb4687b662d6393d5aacbb91a311bf834f4a3ead36be97f` |
+| `4921-full-selected-main-packet/candidate/counter-prepared/algorithm-work.test` | `6b4a7e9f357619edc4037d546ef8f77dce741cf8b5db8ac915a60b220f968075` |
+| `4920-residency-selected-main-packet/candidate/prepared/freeze.json` | `ed4740e53791ed2d04e0ce4d8ef5468fe4d0f4f99e4a0e384ee287152ed59f39` |
+| `4920-residency-selected-main-packet/candidate/prepared/algorithm-work.test` | `6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c` |
