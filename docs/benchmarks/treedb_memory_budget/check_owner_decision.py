@@ -69,18 +69,20 @@ def render(original, paired):
         table(['Paired70 cohort','Metric','Control median','Trial median','Change %','Spread C/T %','Positive paired changes'],guard_rows)])
 
 def main():
+    if not __debug__:
+        raise RuntimeError('validation requires Python assertions; run without -O')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence-root', required=True, type=Path)
     parser.add_argument('--print-tables', action='store_true', help='print expected tables for editorial use')
     args = parser.parse_args()
     doc = Path(__file__).with_name('OWNER_DECISION.md')
-    text = doc.read_text()
+    text = doc.read_text(encoding='utf-8')
     for name, expected in HASHES.items():
         assert hashlib.sha256((args.evidence_root/name).read_bytes()).hexdigest() == expected, name
         assert [line for line in text.splitlines() if line.startswith(f'| `{name}` |')] == [f'| `{name}` | `{expected}` |'], f'wrong documented artifact row: {name}'
-    original = json.loads((args.evidence_root/'memory-full-analysis-output.json').read_text())
-    paired = json.loads((args.evidence_root/'checkpoint-paired-4915-five-repeat-compact-summary.json').read_text())
-    full = json.loads((args.evidence_root/'checkpoint-paired-4915-analysis-v2-output.json').read_text())
+    original = json.loads((args.evidence_root/'memory-full-analysis-output.json').read_text(encoding='utf-8'))
+    paired = json.loads((args.evidence_root/'checkpoint-paired-4915-five-repeat-compact-summary.json').read_text(encoding='utf-8'))
+    full = json.loads((args.evidence_root/'checkpoint-paired-4915-analysis-v2-output.json').read_text(encoding='utf-8'))
     assert len(full['runs']) == 70
     for cohort, metrics in paired['cohorts'].items():
         for key, stat in metrics.items():
@@ -100,11 +102,11 @@ def main():
         ('docs/benchmarks/treedb_memory_budget/README.md', ['OWNER_DECISION.md'])]:
         page = repo/relative
         for target in targets:
-            assert ']('+target+')' in page.read_text() and (page.parent/target).resolve().exists(), target
+            assert ']('+target+')' in page.read_text(encoding='utf-8') and (page.parent/target).resolve().exists(), target
     assert hashlib.sha256((repo/'TreeDB/memory_budget_bench_test.go').read_bytes()).hexdigest() == \
         '03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462'
-    pool = (repo/'TreeDB/internal/memtable/append_only.go').read_text()
-    caching = (repo/'TreeDB/caching/db.go').read_text()
+    pool = (repo/'TreeDB/internal/memtable/append_only.go').read_text(encoding='utf-8')
+    caching = (repo/'TreeDB/caching/db.go').read_text(encoding='utf-8')
     assert 'appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)' in pool
     assert 'TrimAppendOnlyEntryPoolsToTargetBytes' not in pool
     for name, value in [('postCheckpointBatchArenaTargetBytes','int64(32 << 20)'),
