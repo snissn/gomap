@@ -320,7 +320,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string,
 	}
 	flush := func() error { return c.flushBufferedWritesWithRawPublishState(publicHandoff || heldRaw) }
 	if owner != nil {
-		flush = func() error { return c.flushBufferedWritesWithRawPublishStateAndCoverage(heldRaw, true, true) }
+		flush = func() error { return c.flushBufferedWritesWithRawPublishStateAndCoverage(heldRaw, true, true, false) }
 	}
 	if err := flush(); err != nil {
 		return VectorIndexStatus{}, err

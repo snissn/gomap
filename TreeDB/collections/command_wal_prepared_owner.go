@@ -63,7 +63,7 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 		if err := c.db.ValidateCommandWALReplayOperationV1(replay); err != nil {
 			return err
 		}
-		err = c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true)
+		err = c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true, false)
 	} else if coveragePersistence {
 		err = c.flushBufferedWritesWithCoverageLocked()
 	} else {
