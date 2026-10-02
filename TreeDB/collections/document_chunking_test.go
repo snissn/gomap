@@ -688,7 +688,7 @@ func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
 	writerDone := make(chan error, 1)
 	go func() {
 		unlockSchema := col.lockCollectionSchemaRead()
-		unlockCoverage := col.lockVectorIndexCoverageMutation()
+		admission := col.lockCollectionCommandWALAdmission()
 		close(writerEntered)
 		<-releaseWriter
 		_, err := col.insertBatchSchemaLocked(
@@ -696,8 +696,9 @@ func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
 			[][]byte{[]byte(`{"body":"ordinary write"}`)},
 			false,
 			nil,
+			&admission,
 		)
-		unlockCoverage()
+		admission.unlock()
 		unlockSchema()
 		writerDone <- err
 	}()

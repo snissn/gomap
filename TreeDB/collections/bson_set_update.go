@@ -89,7 +89,7 @@ func (c *Collection) validateBSONSetDocumentFormat() error {
 	if c == nil {
 		return errCollectionNil
 	}
-	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+	if normalizedDocumentFormat(c.metadataForIngress().Options.DocumentFormat) != DocumentFormatBSON {
 		return errBSONSetRequiresBSONFormat
 	}
 	return nil

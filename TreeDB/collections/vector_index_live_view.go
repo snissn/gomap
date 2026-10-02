@@ -91,7 +91,7 @@ func (idx *VectorIndex) publishSearchView() {
 }
 
 func (idx *VectorIndex) acknowledgeSearchViewStateLocked() {
-	if !idx.sourceDocumentRootsValid {
+	if !idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0 {
 		idx.searchViewAcknowledged = false
 		return
 	}
@@ -186,7 +186,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.deltaMaxLevel = deltaMaxLevel
 	next.liveDocs = len(idx.currentNode) + deltaLiveDocs
 	next.deltaLiveDocs = deltaLiveDocs
-	next.sourceDocumentRootsValid = idx.sourceDocumentRootsValid
+	next.sourceDocumentRootsValid = idx.sourceDocumentRootsValid && len(idx.unnotifiedDocumentIDs) == 0
 	next.rebuildDeletedRatio = idx.rebuildDeletedRatio
 	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
 	next.fullRebuilds = idx.liveANNFullRebuilds
@@ -290,7 +290,7 @@ func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
 			idx.mu.Unlock()
 			break
 		}
-		if !idx.sourceDocumentRootsValid || !idx.searchViewAcknowledged {
+		if !idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0 || !idx.searchViewAcknowledged {
 			view := idx.searchView.Load()
 			if view == nil {
 				idx.mu.Unlock()
@@ -389,7 +389,7 @@ func (idx *VectorIndex) nativeSearchStateCoversCurrentDocuments(state vectorInde
 		return false
 	}
 	idx.mu.RLock()
-	covers := idx.sourceDocumentRootsValid && idx.mutationSeq == state.mutationSeq &&
+	covers := idx.sourceDocumentRootsValid && len(idx.unnotifiedDocumentIDs) == 0 && idx.mutationSeq == state.mutationSeq &&
 		idx.sourceDocumentGeneration == state.sourceDocumentGeneration
 	idx.mu.RUnlock()
 	return covers

@@ -1356,26 +1356,27 @@ type indexedFlushUnit struct {
 }
 
 type indexedFlushPublishWork struct {
-	pin                *backenddb.Snapshot
-	meta               CollectionMeta
-	catalog            *collectionCatalog
-	baseSystemRoot     uint64
-	baseCommitSeq      uint64
-	units              []indexedFlushUnit
-	flushUnit          indexedFlushUnit
-	rootNames          []string
-	rootBaseIDs        map[string]uint64
-	rootOverlays       map[string][]uint64
-	rootOverlayFilters map[string]collectionRootOverlayFilter
-	docCount           int
-	byteCount          int64
-	rootRunCount       int
-	rootCount          int
-	rootDeltaStats     collectionRootDeltaPlanStats
-	commandWALFirst    uint64
-	commandWALLast     uint64
-	pointerizeElapsed  time.Duration
-	commandWALApplied  uint64
+	nativeVectorPublication *bufferedVectorPublication
+	pin                     *backenddb.Snapshot
+	meta                    CollectionMeta
+	catalog                 *collectionCatalog
+	baseSystemRoot          uint64
+	baseCommitSeq           uint64
+	units                   []indexedFlushUnit
+	flushUnit               indexedFlushUnit
+	rootNames               []string
+	rootBaseIDs             map[string]uint64
+	rootOverlays            map[string][]uint64
+	rootOverlayFilters      map[string]collectionRootOverlayFilter
+	docCount                int
+	byteCount               int64
+	rootRunCount            int
+	rootCount               int
+	rootDeltaStats          collectionRootDeltaPlanStats
+	commandWALFirst         uint64
+	commandWALLast          uint64
+	pointerizeElapsed       time.Duration
+	commandWALApplied       uint64
 }
 
 type preparedIndexedCommandWALPublish struct {
@@ -1502,59 +1503,63 @@ type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu               sync.Mutex
-	mu                       sync.RWMutex
-	indexedAsyncMu           sync.Mutex
-	indexedAsyncCond         *sync.Cond
-	indexedAsyncRun          bool
-	indexedAsyncErr          error
-	indexedPrepareCond       *sync.Cond
-	indexedPrepareFreezes    int
-	updateCombineMu          sync.Mutex
-	updateCombiner           *collectionUpdateCombiner
-	updateDraining           *collectionUpdateCombiner
-	updateCombineDone        bool
-	updateCombineTTL         time.Duration
-	updateCombineShards      int
-	updateCombineLaneWorkers bool
-	closingWrites            atomic.Bool
-	loaded                   bool
-	meta                     CollectionMeta
-	catalog                  *collectionCatalog
-	baseCommitSeq            uint64
-	baseSystemRoot           uint64
-	primaryRoot              uint64
-	storagePolicy            backenddb.OrderedRootStoragePolicy
-	commandWALCoordinator    atomic.Pointer[collectionCommandWALCoordinator]
-	schemaCoordinator        *collectionSchemaCoordinator
-	table                    memtable.Table
-	indexedPublishingUnits   []indexedFlushUnit
-	indexedFlushUnits        []indexedFlushUnit
-	rootRuns                 map[string][]memtable.Table
-	rootMutableRuns          map[string]memtable.Table
-	rootPolicies             map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs              map[string]uint64
-	rootValueArenas          [][]byte
-	primaryOverlay           *bufferedPrimaryOverlay
-	fullDocumentOverlay      *bufferedPrimaryOverlay
-	primaryCache             *bufferedPrimaryOverlay
-	primaryCacheSystemRoot   uint64
-	primaryCacheCollection   string
-	primaryCacheDirty        bool
-	primaryIDIndex           *bufferedUniqueValueIndex
-	nativeVectorIndexLoadMu  sync.Mutex
-	nativeVectorMutationMu   sync.Mutex
+	mutationMu       sync.Mutex
+	mu               sync.RWMutex
+	indexedAsyncMu   sync.Mutex
+	indexedAsyncCond *sync.Cond
+	indexedAsyncRun  bool
+	// Protected by mu: queued work starts only as its admission owner exits.
+	indexedAsyncFlushDeferred bool
+	indexedAsyncErr           error
+	indexedPrepareCond        *sync.Cond
+	indexedPrepareFreezes     int
+	updateCombineMu           sync.Mutex
+	updateCombiner            *collectionUpdateCombiner
+	updateDraining            *collectionUpdateCombiner
+	updateCombineDone         bool
+	updateCombineTTL          time.Duration
+	updateCombineShards       int
+	updateCombineLaneWorkers  bool
+	closingWrites             atomic.Bool
+	loaded                    bool
+	meta                      CollectionMeta
+	catalog                   *collectionCatalog
+	baseCommitSeq             uint64
+	baseSystemRoot            uint64
+	primaryRoot               uint64
+	storagePolicy             backenddb.OrderedRootStoragePolicy
+	commandWALCoordinator     atomic.Pointer[collectionCommandWALCoordinator]
+	schemaCoordinator         *collectionSchemaCoordinator
+	table                     memtable.Table
+	indexedPublishingUnits    []indexedFlushUnit
+	indexedFlushUnits         []indexedFlushUnit
+	rootRuns                  map[string][]memtable.Table
+	rootMutableRuns           map[string]memtable.Table
+	rootPolicies              map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs               map[string]uint64
+	rootValueArenas           [][]byte
+	primaryOverlay            *bufferedPrimaryOverlay
+	fullDocumentOverlay       *bufferedPrimaryOverlay
+	primaryCache              *bufferedPrimaryOverlay
+	primaryCacheSystemRoot    uint64
+	primaryCacheCollection    string
+	primaryCacheDirty         bool
+	primaryIDIndex            *bufferedUniqueValueIndex
+	nativeVectorIndexLoadMu   sync.Mutex
+	nativeVectorMutationMu    sync.Mutex
 	// ponytail: share non-vector admission but serialize vector writes so every
 	// acknowledgment is published; use cohorts only if vector writes prove limiting.
-	nativeVectorAdmissionMu  sync.RWMutex
-	nativeVectorCoverageMu   sync.RWMutex
-	nativeVectorActiveMu     sync.Mutex
-	nativeVectorActive       int
-	nativeVectorReconciled   bool
-	nativeVectorSearchActive atomic.Bool
-	nativeVectorIndexesMu    sync.RWMutex
-	nativeVectorIndexes      map[string]*VectorIndex
-	nativeVectorPublishMu    sync.RWMutex
+	nativeVectorAdmissionMu sync.RWMutex
+	nativeVectorCoverageMu  sync.RWMutex
+	nativeVectorActiveMu    sync.Mutex
+	nativeVectorActive      int
+	// Protected by nativeVectorActiveMu; true only for actual exclusive coverage admission.
+	nativeVectorAsyncAdmissionHeld bool
+	nativeVectorReconciled         map[*VectorIndex]struct{}
+	nativeVectorSearchActive       atomic.Bool
+	nativeVectorIndexesMu          sync.RWMutex
+	nativeVectorIndexes            map[string]*VectorIndex
+	nativeVectorPublishMu          sync.RWMutex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
 	primaryRunIndex        *bufferedPrimaryRunIndex
@@ -3377,7 +3382,7 @@ func flushCollectionWriteDomainWithTypedReconcile(db *backenddb.DB, domain *coll
 	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation.Unlock()
-	return collection.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, true)
+	return collection.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, true, false)
 }
 
 func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDomain) error {
@@ -3409,6 +3414,15 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 	if c == nil || c.db == nil || domain == nil {
 		return false
 	}
+	// Threshold callers hold domain.mu. Starting a publisher beneath an
+	// exclusive coverage owner would make any owner-local flush wait on itself.
+	domain.nativeVectorActiveMu.Lock()
+	admissionHeld := domain.nativeVectorAsyncAdmissionHeld
+	domain.nativeVectorActiveMu.Unlock()
+	if admissionHeld {
+		domain.indexedAsyncFlushDeferred = true
+		return true
+	}
 	if !domain.beginIndexedAsyncFlush() {
 		return false
 	}
@@ -3422,6 +3436,21 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 		domain.finishIndexedAsyncFlush(err)
 	}()
 	return true
+}
+
+// Called before the exiting owner unlocks admission. Mark the run while that
+// lease still excludes the next owner, which must observe it before admission.
+func (c *Collection) startDeferredIndexedAsyncFlush() {
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if !domain.indexedAsyncFlushDeferred {
+		return
+	}
+	domain.indexedAsyncFlushDeferred = false
+	if len(domain.indexedFlushUnits) != 0 && hasBufferedIndexedPendingWrites(domain) {
+		c.scheduleIndexedAsyncFlush(domain)
+	}
 }
 
 func (c *Collection) lockMutation() collectionMutationUnlock {
@@ -4049,6 +4078,22 @@ func (c *Collection) Name() string {
 	return c.meta.Name
 }
 
+// metadataForIngress reads immutable schema metadata before execution admission.
+// Manager-opened handles always have a catalog; synthetic handles retain their
+// existing metadata fallback and acquire execution ownership before mutation.
+func (c *Collection) metadataForIngress() CollectionMeta {
+	if c == nil {
+		return CollectionMeta{}
+	}
+	c.catalogMu.RLock()
+	catalog := c.catalog
+	c.catalogMu.RUnlock()
+	if catalog != nil {
+		return catalog.meta
+	}
+	return c.meta
+}
+
 func (c *Collection) Meta() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
@@ -4601,17 +4646,18 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+	meta := c.metadataForIngress()
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err
 	}
-	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationInsert); err != nil {
+	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationInsert); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && len(c.meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
-		unlockCoverage := c.lockVectorIndexCoverageMutation()
-		defer unlockCoverage()
+	if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
+		admission := c.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
 		if c.registeredAdHocVectorIndexCount() > 0 {
-			return c.insertOneViaBatchWithCoverageLocked(id, document)
+			return c.insertOneViaBatchWithCoverageLocked(id, document, &admission)
 		}
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
@@ -4620,7 +4666,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 				return nil, err
 			}
 		}
-		return c.insertOneNoIndexBuffered(id, document)
+		return c.insertOneNoIndexBuffered(id, document, &admission)
 	}
 	return c.insertOneViaBatchSchemaLocked(id, document)
 }
@@ -4774,7 +4820,7 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (collectionR
 	return result, nil
 }
 
-func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, error) {
+func (c *Collection) insertOneNoIndexBuffered(id, document []byte, admission *collectionCommandWALAdmission) ([]byte, error) {
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
@@ -4810,7 +4856,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	if indexed || len(catalog.meta.VectorIndexes) > 0 || len(catalog.meta.TextIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
-		return c.insertOneViaBatchWithCoverageLocked(id, document)
+		return c.insertOneViaBatchWithCoverageLocked(id, document, admission)
 	}
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
@@ -5293,12 +5339,17 @@ func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool
 			admissionLocked = true
 			continue
 		}
-		err := c.flushBufferedNoIndexLocked(domain, false)
-		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-		if err == nil && publishedPrimary {
-			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+		proof, err := c.captureBufferedVectorPublicationLocked(domain, nil)
+		if err != nil {
+			domain.mu.Unlock()
+			return err
 		}
+		err = c.flushBufferedNoIndexLocked(domain, false)
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		domain.mu.Unlock()
+		if err == nil && publishedPrimary {
+			err = c.reconcileBufferedVectorPublication(proof)
+		}
 		if err == nil && publishedPrimary {
 			c.invalidateOtherVectorIndexDocumentCoverage()
 		}
@@ -5307,22 +5358,27 @@ func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool
 }
 
 func (c *Collection) flushBufferedWrites() error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, false)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, false, false)
 }
 
 func (c *Collection) flushBufferedWritesWithRawPublishState(rawPublishLocked bool) error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, false)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, false, false)
 }
 
 func (c *Collection) flushBufferedWritesWithCoverageLocked() error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, true, true)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, true, true, false)
 }
 
 func (c *Collection) flushBufferedWritesWithVectorAdmissionLocked() error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, true)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, true, false)
 }
 
-func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked bool) error {
+// The native loader owns admission and the native graph mutation mutex.
+func (c *Collection) flushBufferedWritesWithVectorMutationLocked() error {
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, true, true)
+}
+
+func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked, vectorMutationLocked bool) error {
 	domain := c.writeDomain
 	if domain == nil {
 		return nil
@@ -5357,16 +5413,17 @@ func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublis
 			admissionLocked = true
 			continue
 		}
-		err := c.flushBufferedWritesLockedWithRawPublishState(domain, rawPublishLocked)
-		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-		if err == nil && publishedPrimary {
-			if coverageLocked {
-				err = c.recordReconciledVectorIndexCoverageWithWriteDomainLocked(c.registeredVectorIndexes())
-			} else {
-				err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
-			}
+		proof, err := c.captureBufferedVectorPublicationLocked(domain, nil)
+		if err != nil {
+			domain.mu.Unlock()
+			return err
 		}
+		err = c.flushBufferedWritesLockedWithRawPublishState(domain, rawPublishLocked)
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		domain.mu.Unlock()
+		if err == nil && publishedPrimary {
+			err = c.reconcileBufferedVectorPublicationWithMutationState(proof, vectorMutationLocked)
+		}
 		if err == nil && publishedPrimary {
 			c.invalidateOtherVectorIndexDocumentCoverage()
 		}
@@ -9904,6 +9961,12 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		// mutation can own admission while waiting for raw publication.
 		unlockAdmission := c.lockVectorIndexPublicationAdmission()
 		defer unlockAdmission()
+		c.writeDomain.mu.Lock()
+		work.nativeVectorPublication, err = c.captureBufferedVectorPublicationLocked(c.writeDomain, &work.flushUnit)
+		c.writeDomain.mu.Unlock()
+		if err != nil {
+			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
+		}
 		lease, leaseErr := c.tryLockPreparedIndexedCommandWALPublish(work)
 		if leaseErr != nil {
 			return c.completePreparedIndexedFlush(work, 0, nil, leaseErr, materializeElapsed, materializeElapsed, 0)
@@ -9956,6 +10019,12 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	// mutation can own admission while waiting for raw publication.
 	unlockAdmission := c.lockVectorIndexPublicationAdmission()
 	defer unlockAdmission()
+	c.writeDomain.mu.Lock()
+	work.nativeVectorPublication, err = c.captureBufferedVectorPublicationLocked(c.writeDomain, &work.flushUnit)
+	c.writeDomain.mu.Unlock()
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
+	}
 	lease, leaseErr := c.tryLockPreparedIndexedCommandWALPublish(work)
 	if leaseErr != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, leaseErr, materializeElapsed, materializeElapsed, 0)
@@ -10375,7 +10444,12 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	}
 	domain := c.writeDomain
 	domain.mu.Lock()
-	defer domain.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			domain.mu.Unlock()
+		}
+	}()
 	defer domain.indexedFlushPointerizeTotalNs.Add(durationToAtomicNs(work.pointerizeElapsed))
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
@@ -10442,8 +10516,10 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	}
 	domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
 	domain.observeRootDeltaPlan(work.rootDeltaStats)
+	domain.mu.Unlock()
+	locked = false
 	if slices.Contains(work.rootNames, collectionPrimaryRootName(work.meta.Name)) {
-		return c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+		return c.reconcileBufferedVectorPublication(work.nativeVectorPublication)
 	}
 	return nil
 }
@@ -11611,7 +11687,7 @@ func (c *Collection) preflightReplaceBatchConflictsLocked(ownedItems []updateBat
 }
 
 // InsertBatchWithCommandWALIntent applies an already-appended collection insert
-// command-WAL frame through the normal insert executor for startup/replay.
+// command-WAL frame through the normal insert executor for startup recovery.
 // Live append owners use WithPreparedCommandWALMutation before Append; ordinary callers use InsertBatch or
 // InsertBatchValidatedBSON so the collection owns command-WAL creation.
 func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
@@ -11694,7 +11770,9 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	return c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
 }
 
-func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
+func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
+	defer func() { resultErr = c.invalidateVectorIndexCoverageOnAcceptedMutation(resultErr) }()
+
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -11705,12 +11783,30 @@ func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents 
 		return nil, err
 	}
 
-	if commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0 {
-		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
+	execute := func() ([][]byte, error) {
+		if len(documents) == 0 {
+			return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
+		}
+		proof, err := c.captureUnnotifiedVectorMutation()
+		if err != nil {
+			return nil, err
+		}
+		result, err := c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
+		if err == nil {
+			affectedIDs := result
+			if !execOpts.returnResultIDs {
+				affectedIDs = ids
+			}
+			if len(affectedIDs) != 0 {
+				c.markVectorIndexDocumentsUnnotified(affectedIDs, proof)
+			}
+		}
+		return result, err
 	}
-	return retryInsertBatchMutation(func() ([][]byte, error) {
-		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
-	})
+	if commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0 {
+		return execute()
+	}
+	return retryInsertBatchMutation(execute)
 }
 
 func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
@@ -13712,7 +13808,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 }
 
 // DeleteBatchWithCommandWALIntent applies an already-appended collection delete
-// command-WAL frame through the normal delete executor for startup/replay.
+// command-WAL frame through the normal delete executor for startup recovery.
 // Live append owners use WithPreparedCommandWALMutation before Append; ordinary
 // callers use DeleteBatch.
 func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
@@ -14430,10 +14526,11 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer func() { unlockSchema() }()
-	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+	meta := c.metadataForIngress()
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return false, false, err
 	}
-	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationUpdate); err != nil {
 		return false, false, err
 	}
 	if c.commandWALActive(nil) {
@@ -14635,7 +14732,7 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBa
 
 // ReplaceBatchWithCommandWALIntent applies existing-only full-document
 // replacements with an already-appended collection update command-WAL frame. It
-// is a startup/replay seam. Live append owners use WithPreparedCommandWALMutation
+// is a startup recovery seam. Live append owners use WithPreparedCommandWALMutation
 // before Append; ordinary callers use Update or UpdateBatch.
 func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, int, error) {
 	if commandWALIntent == nil {
@@ -24420,6 +24517,10 @@ func (c *Collection) ScanDocumentsAfterFunc(afterID []byte, maxDocuments int, fn
 }
 
 func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
+	return c.scanDocumentsFuncWithVectorMutationState(afterID, maxDocuments, fn, admissionLocked, false)
+}
+
+func (c *Collection) scanDocumentsFuncWithVectorMutationState(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked, vectorMutationLocked bool) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -24435,7 +24536,9 @@ func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func
 	var scanStats CollectionDocumentScanStats
 	defer func() { c.setLastDocumentScanStats(scanStats) }()
 	var err error
-	if admissionLocked {
+	if vectorMutationLocked {
+		err = c.flushBufferedWritesWithVectorMutationLocked()
+	} else if admissionLocked {
 		err = c.flushBufferedWritesWithVectorAdmissionLocked()
 	} else {
 		err = c.flushBufferedWrites()

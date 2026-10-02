@@ -10,6 +10,27 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
+func TestBSONSetDocumentFormatUsesPublishedCatalogDuringMetadataRefresh(t *testing.T) {
+	// Native publication refreshes the handle metadata while ingress can run
+	// before admission. The catalog is the immutable schema authority.
+	meta := CollectionMeta{Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}
+	col := &Collection{meta: meta, catalog: &collectionCatalog{meta: meta}}
+	refresh := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		<-refresh
+		col.meta = col.catalog.meta
+		close(finished)
+	}()
+	// Both accesses follow refresh; neither orders the other. Joining after
+	// validation makes this a focused race check of the BSON ingress reader.
+	close(refresh)
+	defer func() { <-finished }()
+	if err := col.validateBSONSetDocumentFormat(); err != nil {
+		t.Fatalf("BSON ingress during metadata refresh: %v", err)
+	}
+}
+
 func TestBSONSetUpdateBatchCommandWALPrepareAndIntent(t *testing.T) {
 	baseDoc := mustBSONCollectionDocument(t, bson.D{
 		{Key: "_id", Value: "u1"},
