@@ -743,3 +743,14 @@ durable pending intent for retry rather than reporting an unproved success.
 This fixed identity accepts one pending and at most 64 completed operations,
 with no completed-outcome eviction. This is a bounded checkpoint, not general
 indefinite write capacity. See [the split insert contract](vector-partition-split-source-insert-v1.md).
+
+
+### Dormant ANN move destination checkpoint
+
+The explicit authenticated destination role admits one empty local single-voter
+data group for a fixed mutable schema6 disjoint domain. Public status returns
+NOTREADY with reason `dormant_destination`; searches, document writes, catalog
+publication, generation lifecycle changes and replica replacement submissions
+refuse. Catalog consensus replication remains allowed. Admission creates no
+canonical collection, ANN carrier or serving authority. Transfer, fencing and
+cutover remain unfinished; see [the bounded destination contract](vector-partition-quiesced-domain-move-v1.md).

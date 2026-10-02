@@ -119,6 +119,16 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
+### Dormant ANN move destination startup
+
+An explicit authenticated quiesced ANN move destination validates its exact
+node-local admission against the paired persistent-root identity on every
+open. Before any listener starts, normal DB recovery must yield empty user
+and system roots with zero `AppliedCommandLSN`. Reopening the same admission
+rechecks emptiness; a changed admission fails the persistent identity check.
+Ordinary canonical-source and ANN-owner opens retain their required collection
+checks. See [the bounded destination contract](vector-partition-quiesced-domain-move-v1.md).
+
 ## 2. Backend Index Recovery
 
 ### 2.1 New DB bootstrap

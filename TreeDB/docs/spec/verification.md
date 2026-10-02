@@ -3356,3 +3356,22 @@ preserves a complete source intent before an incomplete next frame and refuses
 a corrupt applied durable prefix. These checks do not establish power-loss
 safety, independent quorum-loss qualification, or indefinite writes. Target
 and clear crash cuts remain apply-boundary/reopen controls.
+
+
+## Dormant ANN move destination checkpoint
+
+`TestQuiescedANNDomainMoveEmptyDestinationPublicRuntimeV1` covers public
+NOTREADY, search/write refusal, authenticated peer-control refusal, exact empty
+reopen and changed persisted admission refusal.
+`TestQuiescedANNDomainMoveOrdinaryOwnerStartupStillStrictV1` retains strict
+canonical/ANN owner startup.
+`TestQuiescedANNDomainMoveAdmissionRejectsInvalidScopeV1` covers unsupported
+identity, scope, credentials and destination membership.
+`TestQuiescedANNDomainMoveNonemptyStorageRefusesBeforeListenersV1` requires
+storage refusal before listeners for unmarked, user and collection state.
+
+These are admission and startup controls; full
+`TestDomainMoveCrashAtEveryCutoverBoundaryHasOneOwnerV1`, transfer/install,
+fencing and cutover remain unfinished. The bounded startup benchmark measures
+Open/Close allocations, not movement cost. See
+[the bounded destination contract](vector-partition-quiesced-domain-move-v1.md).

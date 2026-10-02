@@ -2,7 +2,11 @@
 """Contract checks for complete, bounded, weighted TreeDB CI sharding."""
 
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -123,7 +127,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             (
                 "treedb_race_weighted_shards.tsv",
                 3,
-                {"package", "root", "caching", "db"},
+                {"package", "root", "caching", "db", "nativewire"},
             ),
             ("treedb_unix_weighted_shards.tsv", 3, {"package"}),
         )
@@ -147,7 +151,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         race = read_weights(
             "treedb_race_weighted_shards.tsv",
             3,
-            {"package", "root", "caching", "db"},
+            {"package", "root", "caching", "db", "nativewire"},
         )
         rag_benchmark = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
         self.assertEqual(windows[("package", rag_benchmark)], (5, True))
@@ -333,7 +337,7 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             "go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$'",
             race_job,
         )
-        for kind in ("package", "root", "caching", "db"):
+        for kind in ("package", "root", "caching", "db", "nativewire"):
             self.assertIn(f'weighted_shard_file {kind} "$shard_index"', race_job)
 
         outer_match = re.search(r"^    timeout-minutes: (?P<timeout>\d+)$", race_job, re.MULTILINE)
@@ -345,10 +349,50 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             'go test -json -race -p 1 -timeout 12m . -run "$root_regex"',
             'go test -json -race -p 1 -timeout 12m ./caching -run "$caching_regex"',
             'go test -json -race -p 1 -timeout 12m ./db -run "$db_regex"',
+            'go test -json -race -p 1 -timeout 12m ./nativewire -run "$nativewire_regex"',
         ):
             with self.subTest(command=command):
                 self.assertIn(command, race_job)
         self.assertLess(12, outer_minutes)
+
+        self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/nativewire$'", race_job)
+        self.assertIn(
+            "go test ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)'",
+            race_job,
+        )
+
+    def test_actual_race_selector_covers_nativewire_tests_and_new_seed_cases_once(self) -> None:
+        race_job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "race")
+        selector = re.search(
+            r"(?ms)^          weighted_shard_file\(\) \{\n.*?^          \}\n",
+            race_job,
+        )
+        self.assertIsNotNone(selector)
+        names = [
+            name
+            for path in sorted((REPO_ROOT / "TreeDB" / "nativewire").glob("*_test.go"))
+            for name in re.findall(r"(?m)^func ((?:Test|Example|Fuzz)\w*)\(", path.read_text())
+            if name != "TestMain"
+        ] + ["TestNewFallback", "ExampleNewFallback", "FuzzNewFallback"]
+        self.assertEqual(len(names), len(set(names)))
+        weights = CI_DIR / "treedb_race_weighted_shards.tsv"
+        with tempfile.TemporaryDirectory() as directory:
+            all_file = Path(directory) / "all"
+            all_file.write_text("\n".join(names) + "\n")
+            shards = []
+            for index in range(3):
+                output = Path(directory) / str(index)
+                subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-ceu", textwrap.dedent(selector.group()) +
+                     'weighted_shard_file nativewire "$1" 3 "$2" "$3" "$4"',
+                     "selector", str(index), str(weights), str(all_file), str(output)],
+                    check=True,
+                    env={key: value for key, value in os.environ.items() if key != "BASH_ENV"},
+                )
+                shards.append(output.read_text().splitlines())
+        self.assertEqual(sorted(name for shard in shards for name in shard), sorted(names))
+        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[0])
+        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[2])
 
 
 if __name__ == "__main__":

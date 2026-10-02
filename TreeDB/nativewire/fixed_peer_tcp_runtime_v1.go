@@ -79,6 +79,8 @@ type FixedPeerTCPConfigV1 struct {
 	Groups                            []FixedPeerTCPGroupV1
 	RequestTimeout, RaftTimeout       time.Duration
 	Vector                            *FixedPeerTCPVectorConfigV1
+	// Local trusted role, bound by the persisted local identity, never a serving grant.
+	QuiescedANNMoveDestination *FixedPeerQuiescedANNMoveDestinationV1 `json:",omitempty"`
 }
 
 type FixedPeerTCPStatusV1 struct {
@@ -191,6 +193,10 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	}
 	c.RaftListen = maps.Clone(c.RaftListen)
 	c.Vector = cloneFixedPeerVectorConfigV1(c.Vector)
+	if c.QuiescedANNMoveDestination != nil {
+		admission := *c.QuiescedANNMoveDestination
+		c.QuiescedANNMoveDestination = &admission
+	}
 	c.Catalog = cloneFixedPeerGroupV1(c.Catalog)
 	c.Groups = slices.Clone(c.Groups)
 	for i := range c.Groups {
@@ -310,6 +316,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	if err := validateFixedPeerVectorConfigV1(c, localGroups); err != nil {
 		return invalid(err.Error())
 	}
+	if err := validateQuiescedANNMoveDestinationV1(c, localGroups); err != nil {
+		return invalid(err.Error())
+	}
 	if c.Vector != nil {
 		for _, address := range c.Vector.PublicAddresses {
 			if !addressOK(address) {
@@ -336,6 +345,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	shared.ListenAddress = ""
 	shared.RaftListen = nil
 	shared.ResourceLimits = nil
+	shared.QuiescedANNMoveDestination = nil
 	if shared.Credentials != nil {
 		// Bind authenticated mode in the shared identity, but never equate
 		// different nodes' local credential filenames or private keys.
@@ -472,6 +482,9 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	// Sync the name as well as its contents before any identity-dependent store
 	// is opened. Repeat on reopen so a previous failed directory sync is retried.
 	if err := syncFixedPeerDirectoryV1(r.config.RaftRoot); err != nil {
+		return fail(err)
+	}
+	if err := r.openEmptyQuiescedANNMoveDestinationV1(); err != nil {
 		return fail(err)
 	}
 	var localEntries, routedEntries []raftcluster.GroupSubmitterV1
@@ -958,6 +971,16 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 				// Defer only this pure read until its marked BEGIN can bind caller.
 				ownerTailCaller = true
 			}
+		}
+	}
+	if r.config.QuiescedANNMoveDestination != nil {
+		// Dormant admission opens observation only. Future transfer commands need
+		// their own reviewed authority; generic control must not publish anything.
+		switch request.URL.Path {
+		case "/v1/status", "/v1/diagnostics", "/v1/readiness", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+		default:
+			err = ErrFixedPeerVectorUnavailableV1
+			return
 		}
 	}
 	// Vector control forwards have no authenticated continuation token in the

@@ -65,6 +65,16 @@ by `IgnoreFormatConfig`. Internal side-store and low-level test manifests may
 remain unbound version 2/3 files; they cannot open a version-4 main DB without an
 explicit matching profile.
 
+## Dormant ANN move destination local identity
+
+The optional `FixedPeerTCPConfigV1.QuiescedANNMoveDestination` admission is
+persisted in the exact local configuration and paired-root identity. It binds
+the full lifecycle identity, source/current ANN/destination groups and move ID.
+It is excluded from the shared peer configuration digest, so the local role
+does not change peer routing identity. This checkpoint adds no native-wire or
+command-WAL schema, command ID, transfer record or serving authority.
+See [the bounded destination contract](vector-partition-quiesced-domain-move-v1.md).
+
 ## 1. Top-Level Storage Objects
 
 A TreeDB deployment uses:
