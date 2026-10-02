@@ -191,9 +191,19 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	owner := runtimes[1].localDataV1("group-b")
 	// Single-member owner hints can appear before their current-term prefix.
 	// Retry only quorum-fenced reads before the one-shot BUILD/stage/ACTIVE.
-	for _, config := range configs[:len(configs)-1] {
-		if leader := fixedPeerWaitDataLeaderV1(t, ctx, runtimes[:len(configs)-1], config.Groups[0]); leader != config.NodeID {
-			t.Fatalf("owner fixture group %s leader=%s want %s", config.Groups[0].ID, leader, config.NodeID)
+	for _, runtime := range runtimes[:len(configs)-1] {
+		hosted := 0
+		for _, group := range runtime.config.Groups {
+			if runtime.localDataV1(group.ID) == nil {
+				continue
+			}
+			hosted++
+			if leader := fixedPeerWaitDataLeaderV1(t, ctx, []*FixedPeerTCPRuntimeV1{runtime}, group); leader != runtime.config.NodeID {
+				t.Fatalf("owner fixture group %s leader=%s want %s", group.ID, leader, runtime.config.NodeID)
+			}
+		}
+		if hosted != 1 {
+			t.Fatalf("owner fixture %s hosts %d groups, want 1", runtime.config.NodeID, hosted)
 		}
 	}
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
