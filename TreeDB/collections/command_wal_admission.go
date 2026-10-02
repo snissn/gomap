@@ -144,6 +144,11 @@ func (c *Collection) withCommandWALPublishCoordinatorAdmission(intent *backenddb
 		if err == nil {
 			defer unlockRaw()
 			defer unlock()
+			if revalidate != nil {
+				if err := revalidate(); err != nil {
+					return err
+				}
+			}
 			return publish()
 		}
 		unlockRaw()
