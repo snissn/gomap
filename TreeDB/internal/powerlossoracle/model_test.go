@@ -1091,3 +1091,69 @@ func TestUseObservedTraceDoesNotChangeModeledBytes(t *testing.T) {
 		t.Fatalf("changed ranges=%v err=%v want=%v", got, err, rangesBefore)
 	}
 }
+
+func TestDependencyStableRequiresExactPrefixAndNamespace(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "segment")
+	if err := os.WriteFile(path, []byte("required"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := model.stable["segment"]
+	entry := rootpublication.DependencyManifestEntryV1{
+		DiagnosticPath: "segment", Identity: model.inodes[id].stableIdentity,
+		Frontier: rootpublication.DurableFrontier{Bytes: uint64(len("required"))},
+		Namespace: &rootpublication.DependencyManifestNamespaceV1{
+			ParentIdentity: model.stableDirs["."], NewName: "segment", DiagnosticPath: ".",
+		},
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*Model, *rootpublication.DependencyManifestEntryV1)
+		stable bool
+	}{
+		{"unrelated-volatile-suffix", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) {
+			m.inodes[id].volatile = []byte("required-unrelated")
+		}, true},
+		{"required-prefix-not-synced", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) { m.inodes[id].volatile[0] ^= 1 }, false},
+		{"required-prefix-corrupt", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) { m.inodes[id].stable[0] ^= 1 }, false},
+		{"required-prefix-short", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) {
+			m.inodes[id].stable = m.inodes[id].stable[:1]
+		}, false},
+		{"required-name-missing", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) { delete(m.stable, "segment") }, false},
+		{"required-parent-missing", func(m *Model, _ *rootpublication.DependencyManifestEntryV1) { delete(m.stableDirs, ".") }, false},
+		{"wrong-physical-file", func(_ *Model, e *rootpublication.DependencyManifestEntryV1) { e.Identity.ObjectID[0] ^= 1 }, false},
+		{"wrong-parent-identity", func(_ *Model, e *rootpublication.DependencyManifestEntryV1) {
+			e.Namespace.ParentIdentity.ObjectID[0] ^= 1
+		}, false},
+		{"wrong-namespace-name", func(_ *Model, e *rootpublication.DependencyManifestEntryV1) { e.Namespace.NewName = "other" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := model.Clone()
+			required := entry
+			namespace := *entry.Namespace
+			required.Namespace = &namespace
+			tc.change(candidate, &required)
+			got, err := candidate.DependencyStable(".", required)
+			if err != nil || got != tc.stable {
+				t.Fatalf("stable=%v err=%v, want %v", got, err, tc.stable)
+			}
+			if tc.stable {
+				whole, err := candidate.PathStable(root, path)
+				if err != nil || whole {
+					t.Fatalf("old whole-file witness stable=%v err=%v, want false", whole, err)
+				}
+			}
+		})
+	}
+	for _, frontier := range []rootpublication.DurableFrontier{{Bytes: 8, MaxLSN: 1}, rootpublication.NewRIDFrontier([]uint64{1})} {
+		required := entry
+		required.Frontier = frontier
+		if stable, err := model.DependencyStable(".", required); err == nil || stable {
+			t.Fatalf("unsupported frontier stable=%v err=%v", stable, err)
+		}
+	}
+}
