@@ -146,7 +146,7 @@ shows unnecessary idle backing without required live leases.
 
 The #4914 candidate bounds global free append-only entry bins at checkpoint
 maintenance to the existing 32 MiB entry target. It removes whole buffers from
-largest classes first (newest first within each class), so retained capacity
+largest classes first (last bin slot first within each class), so retained capacity
 can fall below the target. The final maintenance call follows mutable/lease
 recycling; acquired live buffers, iterators and retained DB memtable leases
 remain separately owned. Ordinary flushes keep the existing policy, and the

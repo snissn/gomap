@@ -234,13 +234,13 @@ func TestTrimAppendOnlyEntryPoolsToTargetBytes(t *testing.T) {
 
 	small := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
 	large := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries*4)
-	newest := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries*3)
+	lastSlot := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries*3)
 	putAppendOnlyEntries(small)
 	putAppendOnlyEntries(large)
-	putAppendOnlyEntries(newest) // Same large class; LIFO eviction is deterministic.
+	putAppendOnlyEntries(lastSlot) // Same large class; eviction uses the last bin slot first.
 	before := AppendOnlyEntryPoolStatsSnapshot()
 	target := appendOnlyEntryPoolBytes(cap(small) + cap(large) + 1)
-	wantDropped := appendOnlyEntryPoolBytes(cap(newest))
+	wantDropped := appendOnlyEntryPoolBytes(cap(lastSlot))
 	if dropped := TrimAppendOnlyEntryPoolsToTargetBytes(target); dropped != wantDropped {
 		t.Fatalf("dropped bytes=%d want %d", dropped, wantDropped)
 	}

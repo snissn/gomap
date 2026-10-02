@@ -9,7 +9,7 @@ controller, public knob, default, on-disk format or storage lifecycle changes.
 
 The candidate trims only free global append-only entry buffers at the end of
 checkpoint maintenance, using the existing 32 MiB checkpoint entry target.
-Largest size classes are drained first, newest buffers first within each class,
+Largest size classes are drained first, last bin slot first within each class,
 until charged backing is at most the target. Whole-buffer removal can overshoot
 the required reduction: retain the exact before/after/drop bytes, rather than
 assuming an exact 32 MiB result. Empty bin metadata is abandoned too; nonempty

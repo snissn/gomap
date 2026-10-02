@@ -366,7 +366,7 @@ func DropAppendOnlyEntryPools() {
 }
 
 // TrimAppendOnlyEntryPoolsToTargetBytes abandons only free entry backing,
-// largest classes first and newest buffers first within a class. Whole-buffer
+// largest classes first and the last bin slot first within a class. Whole-buffer
 // removal can undershoot the target; the return value is the actual bytes
 // dropped. Acquired buffers, including live tables and DB leases, are untouched.
 // Concurrent puts may grow the bins again after this maintenance boundary.
