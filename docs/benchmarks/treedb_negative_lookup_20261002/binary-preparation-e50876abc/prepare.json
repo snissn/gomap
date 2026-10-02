@@ -1,0 +1,148 @@
+{
+  "binaries_after": {
+    "candidate-db": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-db.test",
+      "sha256": "4a10727211241f6087d890f92a9b31bdefec6163e14ce373a1b67b6aee028eee"
+    },
+    "candidate-tree": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-tree.test",
+      "sha256": "80ff74f0c8f287805e3a373df8bb35928ec8cd5359402eff91aa7d9fefd07a38"
+    },
+    "candidate-treedb": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-treedb.test",
+      "sha256": "a1a28b67b20f7212fd8598793a3eb6650d6cb1425834603a836c405e2ebce5a0"
+    },
+    "reference-treedb": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/reference-treedb.test",
+      "sha256": "1e6c8d6c0976aea4f8fdc040f17cf38506230d35ce65099e666165b2f732aa45"
+    }
+  },
+  "binaries_before": {
+    "candidate-db": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-db.test",
+      "sha256": "4a10727211241f6087d890f92a9b31bdefec6163e14ce373a1b67b6aee028eee"
+    },
+    "candidate-tree": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-tree.test",
+      "sha256": "80ff74f0c8f287805e3a373df8bb35928ec8cd5359402eff91aa7d9fefd07a38"
+    },
+    "candidate-treedb": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-treedb.test",
+      "sha256": "a1a28b67b20f7212fd8598793a3eb6650d6cb1425834603a836c405e2ebce5a0"
+    },
+    "reference-treedb": {
+      "path": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/reference-treedb.test",
+      "sha256": "1e6c8d6c0976aea4f8fdc040f17cf38506230d35ce65099e666165b2f732aa45"
+    }
+  },
+  "candidate_head": "e50876abc70e9be6d776f9b042e4a2a139395a4c",
+  "compiles": [
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-treedb.test",
+        "./TreeDB"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-issue-342-negative/source",
+      "ended_unix": 1790918628.8028004,
+      "id": "candidate-treedb",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0,
+      "source_manifest_sha256": "b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6",
+      "started_unix": 1790918627.6706603
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-tree.test",
+        "./TreeDB/tree"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-issue-342-negative/source",
+      "ended_unix": 1790918629.9053586,
+      "id": "candidate-tree",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0,
+      "source_manifest_sha256": "b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6",
+      "started_unix": 1790918628.8986356
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/candidate-db.test",
+        "./TreeDB/db"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-issue-342-negative/source",
+      "ended_unix": 1790918657.8379228,
+      "id": "candidate-db",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0,
+      "source_manifest_sha256": "b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6",
+      "started_unix": 1790918629.9229026
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/reference-treedb.test",
+        "./TreeDB"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-issue-342-negative/reference-a68",
+      "ended_unix": 1790918686.4673574,
+      "id": "reference-treedb",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0,
+      "source_manifest_sha256": "1c7b8879978a2c6457123c750044b4ceb108f67ea78f50cb630b3e10fcbfe34f",
+      "started_unix": 1790918657.937464
+    }
+  ],
+  "complete": true,
+  "environment": {
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "2GiB",
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "GOTMPDIR": "/mnt/fast4tb/gomap-issue-342-negative/preparation-e50876abc/go-tmp",
+    "GOWORK": "off"
+  },
+  "host": {
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           39 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  12\nOn-line CPU(s) list:                     0-11\nVendor ID:                               GenuineIntel\nModel name:                              11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz\nCPU family:                              6\nModel:                                   167\nThread(s) per core:                      2\nCore(s) per socket:                      6\nSocket(s):                               1\nStepping:                                1\nCPU max MHz:                             4400.0000\nCPU min MHz:                             800.0000\nBogoMIPS:                                5184.00\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid mpx avx512f avx512dq rdseed adx smap avx512ifma clflushopt intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm md_clear flush_l1d arch_capabilities\nVirtualization:                          VT-x\nL1d cache:                               288 KiB (6 instances)\nL1i cache:                               192 KiB (6 instances)\nL2 cache:                                3 MiB (6 instances)\nL3 cache:                                12 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-11\nVulnerability Gather data sampling:      Mitigation; Microcode\nVulnerability Indirect target selection: Mitigation; Aligned branch/return thunks\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; Enhanced IBRS\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
+    "disk": "Filesystem         1B-blocks          Used     Available Use% Mounted on\n/dev/nvme0n1p1 3936818806784 1388878315520 2347884462080  38% /mnt/fast4tb",
+    "go": "go version go1.26.3 linux/amd64",
+    "kernel": "Linux mikers-B560-DS3H-AC-Y1 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux",
+    "load": "2.04 1.42 1.42 2/2415 2558597",
+    "memory": "MemTotal:       32727596 kB\nMemFree:         1069076 kB\nMemAvailable:   24233876 kB\nBuffers:         1590464 kB\nCached:          9509316 kB\nSwapCached:      1762696 kB\nActive:          6918400 kB\nInactive:        8980260 kB\nActive(anon):    4982800 kB\nInactive(anon):   360584 kB\nActive(file):    1935600 kB\nInactive(file):  8619676 kB\nUnevictable:      582420 kB\nMlocked:          582420 kB\nSwapTotal:      169869300 kB\nSwapFree:       161157336 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             94928 kB\nWriteback:             0 kB\nAnonPages:       5356904 kB\nMapped:          1210664 kB\nShmem:            106788 kB\nKReclaimable:   13082840 kB\nSlab:           14290592 kB\nSReclaimable:   13082840 kB\nSUnreclaim:      1207752 kB\nKernelStack:       38952 kB\nPageTables:       124272 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    186233096 kB\nCommitted_AS:   24647044 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      191180 kB\nVmallocChunk:          0 kB\nPercpu:            31776 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:     20480 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nUnaccepted:            0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:     1435412 kB\nDirectMap2M:    23592960 kB\nDirectMap1G:    10485760 kB"
+  },
+  "reference_head": "a68a84c7195e0c5d8c339343a385b40acf818d03",
+  "roots": {
+    "candidate": "/mnt/fast4tb/gomap-issue-342-negative/source",
+    "reference": "/mnt/fast4tb/gomap-issue-342-negative/reference-a68"
+  },
+  "scripts_after": {
+    "capture_qualification.py": "3459977266757ad58a1ad5d4d5afd7721a05dc5634cb84cae497ea7c4a59113a",
+    "parse_qualification.py": "5bc26f53f3abaa0edad0f95c96e310470b5ec33a2b5a1d4604efa477c82258ee",
+    "test_parser.py": "92af2ab712c5a6ac55a9ef0f8d0d0f1a3852ace31f8e7eb1aa7bc65e428d3e00"
+  },
+  "scripts_before": {
+    "capture_qualification.py": "3459977266757ad58a1ad5d4d5afd7721a05dc5634cb84cae497ea7c4a59113a",
+    "parse_qualification.py": "5bc26f53f3abaa0edad0f95c96e310470b5ec33a2b5a1d4604efa477c82258ee",
+    "test_parser.py": "92af2ab712c5a6ac55a9ef0f8d0d0f1a3852ace31f8e7eb1aa7bc65e428d3e00"
+  },
+  "source_after": {
+    "candidate": "b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6",
+    "reference": "1c7b8879978a2c6457123c750044b4ceb108f67ea78f50cb630b3e10fcbfe34f"
+  },
+  "source_before": {
+    "candidate": "b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6",
+    "reference": "1c7b8879978a2c6457123c750044b4ceb108f67ea78f50cb630b3e10fcbfe34f"
+  }
+}

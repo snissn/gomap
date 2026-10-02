@@ -1,0 +1,49 @@
+2026-10-02T05:38:17Z public-1-false starting
+public-1-false complete (58.8s elapsed)
+2026-10-02T05:39:15Z public-1-true starting
+public-1-true complete (115.6s elapsed)
+2026-10-02T05:40:12Z public-2-true starting
+public-2-true complete (175.1s elapsed)
+2026-10-02T05:41:12Z public-2-false starting
+public-2-false complete (232.3s elapsed)
+2026-10-02T05:42:09Z public-3-false starting
+public-3-false complete (289.6s elapsed)
+2026-10-02T05:43:06Z public-3-true starting
+public-3-true complete (347.1s elapsed)
+2026-10-02T05:44:04Z public-4-true starting
+public-4-true complete (403.7s elapsed)
+2026-10-02T05:45:00Z public-4-false starting
+public-4-false complete (463.6s elapsed)
+2026-10-02T05:46:00Z public-5-false starting
+public-5-false complete (521.9s elapsed)
+2026-10-02T05:46:58Z public-5-true starting
+public-5-true complete (579.9s elapsed)
+2026-10-02T05:47:56Z canonical-1-reference starting
+canonical-1-reference complete (586.2s elapsed)
+2026-10-02T05:48:03Z canonical-1-candidate starting
+canonical-1-candidate complete (592.6s elapsed)
+2026-10-02T05:48:09Z canonical-2-candidate starting
+canonical-2-candidate complete (599.2s elapsed)
+2026-10-02T05:48:16Z canonical-2-reference starting
+canonical-2-reference complete (605.8s elapsed)
+2026-10-02T05:48:22Z canonical-3-reference starting
+canonical-3-reference complete (612.1s elapsed)
+2026-10-02T05:48:29Z canonical-3-candidate starting
+canonical-3-candidate complete (618.4s elapsed)
+2026-10-02T05:48:35Z canonical-4-candidate starting
+canonical-4-candidate complete (624.8s elapsed)
+2026-10-02T05:48:41Z canonical-4-reference starting
+canonical-4-reference complete (631.3s elapsed)
+2026-10-02T05:48:48Z canonical-5-reference starting
+canonical-5-reference complete (637.6s elapsed)
+2026-10-02T05:48:54Z canonical-5-candidate starting
+canonical-5-candidate complete (644.3s elapsed)
+2026-10-02T05:49:01Z updates-1 starting
+Traceback (most recent call last):
+  File "/mnt/fast4tb/gomap-issue-342-negative/source/docs/benchmarks/treedb_negative_lookup_20261002/capture_qualification.py", line 145, in <module>
+    main()
+  File "/mnt/fast4tb/gomap-issue-342-negative/source/docs/benchmarks/treedb_negative_lookup_20261002/capture_qualification.py", line 130, in main
+    parse_log(log.read_text(), job)
+  File "/mnt/fast4tb/gomap-issue-342-negative/source/docs/benchmarks/treedb_negative_lookup_20261002/parse_qualification.py", line 167, in parse_log
+    raise ValueError(f"{job['id']}: expected {len(job['names'])}, got {len(rows)}; missing {sorted(set(job['names'])-rows.keys())}")
+ValueError: updates-1: expected 6, got 0; missing ['BenchmarkNegativeLookupBootstrap/enabled=false', 'BenchmarkNegativeLookupBootstrap/enabled=true', 'BenchmarkNegativeLookupUpdate/enabled=false/WriteSync', 'BenchmarkNegativeLookupUpdate/enabled=false/WriteSyncCheckpoint', 'BenchmarkNegativeLookupUpdate/enabled=true/WriteSync', 'BenchmarkNegativeLookupUpdate/enabled=true/WriteSyncCheckpoint']
