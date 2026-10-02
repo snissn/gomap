@@ -3,11 +3,14 @@ package treedb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -17,20 +20,56 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 	if os.Getenv("TREEDB_HOT_PATH_STATS") == "" {
 		b.Fatal("TREEDB_HOT_PATH_STATS=1 is required to verify pointer placement")
 	}
-	db, keys := openSnapshotValueLogBenchDB(b)
-	dir := db.dir
-	if err := db.Checkpoint(); err != nil {
-		b.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		b.Fatal(err)
-	}
+	var db *DB
+	var keys [][]byte
 	var err error
-	db, err = Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if fixture := os.Getenv("TREEDB_OWNED_VLOG_FIXTURE"); fixture != "" {
+		// Each process owns a byte-identical clone; the frozen source fixture
+		// is never opened by the measured process.
+		dir := b.TempDir()
+		if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
+			b.Fatal(err)
+		}
+		// Reuse the production snapshot-restore ordering. Physical identities
+		// change on copy; value bytes, pointers and logical roots do not.
+		for _, name := range []string{"dictdb", "templatedb"} {
+			side := filepath.Join(dir, name)
+			if _, err := os.Stat(filepath.Join(side, "index.db")); os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				b.Fatal(err)
+			}
+			if err := backenddb.RebindDurableRootSnapshotLayoutV1(side, ""); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := backenddb.RebindDurableRootSnapshotLayoutV1(filepath.Join(dir, "maindb"), dir); err != nil {
+			b.Fatal(err)
+		}
+		db, err = Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+		keys = make([][]byte, 32_768)
+		for i := range keys {
+			keys[i] = []byte(fmt.Sprintf("celestia/snapshot/get/key/%08d", i))
+		}
+	} else {
+		db, keys = openSnapshotValueLogBenchDB(b)
+		dir := db.dir
+		if err := db.Checkpoint(); err != nil {
+			b.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
+		db, err = Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	}
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}()
 	runtime.GC()
 	var cold, warm runtime.MemStats
 	runtime.ReadMemStats(&cold)
@@ -44,6 +83,23 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 		if err != nil || !bytes.Equal(out, want) {
 			b.Fatalf("fixture value %d: length=%d err=%v", i, len(out), err)
 		}
+	}
+	if export := os.Getenv("TREEDB_OWNED_VLOG_FIXTURE_EXPORT"); export != "" {
+		if os.Getenv("TREEDB_OWNED_VLOG_FIXTURE") != "" {
+			b.Fatal("fixture export must use the canonical constructor")
+		}
+		dir := db.dir
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
+		db = nil
+		if err := os.CopyFS(export, os.DirFS(dir)); err != nil {
+			b.Fatal(err)
+		}
+		b.Skip("closed verified canonical fixture exported; no timed reads")
+	}
+	if os.Getenv("TREEDB_OWNED_VLOG_VALIDATE_ONLY") != "" {
+		b.Skip("fixture clone verified; no timed reads")
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&warm)

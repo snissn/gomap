@@ -86,7 +86,15 @@ costs. Each result still owns its output bytes. The cache reports its
 retained raw bytes separately from per-read output allocations; mapping and
 cache admission retain their existing limits. Use reopened public `Get` route
 counters to prove the selected path rather than comparing inline values against
-pointer values. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
+pointer values. For paired retained capture, export one fully verified closed
+canonical fixture with `TREEDB_OWNED_VLOG_FIXTURE_EXPORT=/new/fixture/path`
+(the benchmark skips timed reads), freeze its file hashes, then pass
+`TREEDB_OWNED_VLOG_FIXTURE=/frozen/fixture/path` to both revisions. Each process
+clones the fixture before opening it. Existing snapshot restore helpers rebind
+only physical dependency identities in the copied indexes; value-log and
+dictionary bytes, pointers and logical roots stay identical. Copy, identity
+rebind, full-value verification and warmup are outside timing. Normal constructors remain separate guardrails because
+asynchronous dictionary training can change their stored layout. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
 
 ```sh
 GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
