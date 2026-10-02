@@ -125,20 +125,44 @@ def identity(root, go, env, overlay=None):
 
 
 def benchmark_names(family):
-    if family == 'writes':
-        return {f'BenchmarkAlgorithmSparseUpdates/pointer={p}/checkpoints={c}/wide={w}'
+    if family in ('writes', 'snapshot-rotations'):
+        benchmark = 'BenchmarkAlgorithmSparseUpdates' + ('SnapshotRotations' if family == 'snapshot-rotations' else '')
+        return {f'{benchmark}/pointer={p}/checkpoints={c}/wide={w}'
                 for p, c, w in itertools.product(('false', 'true'), (4, 1), ('false', 'true'))}
+    if family != 'many':
+        raise ValueError('unknown benchmark family')
     return {f'BenchmarkAlgorithmGetMany/pointer={p}/{s}/view={v}'
             for p, s, v in itertools.product(('false', 'true'), ('sorted', 'clustered', 'uniform'), ('false', 'true'))}
 
 
-def validate_packet(packet, pilot, small):
+def validate_packet(packet, pilot, small, family='writes'):
     keys, updates = (8192, 8000) if pilot else (250000, 40000)
     expected = dict(schema='algorithm-work-v1', keys=keys, updates=updates,
                     commits=updates // 1000, ack_batch_ops=1000, permutation_multiplier=7919,
                     key_bytes=32, value_bytes=256, allowed_concurrent_generations=[0, 1],
                     flush_threshold=(1 if small else 64) << 20,
                     read_sample_stride=16, validated_all_values_and_misses=True, final_close_checked=True)
+    if family == 'snapshot-rotations':
+        expected.update(schema='algorithm-work-snapshot-rotations-v1',
+                        write_shape='public-snapshot-per-ack-batch',
+                        snapshot_acquisitions=updates // 1000, snapshot_closes=updates // 1000,
+                        snapshot_stride=1000)
+        # JSON bools/floats must not pass integer counts or checked-close flags.
+        integer_fields = tuple(k for k, v in expected.items() if type(v) is int) + (
+            'checkpoints', 'pointer_threshold', 'read_count', 'read_samples', 'interval_ns',
+            'ack_ns', 'checkpoint_ns', 'snapshot_ns', 'read_p99_ns', 'read_p999_ns',
+            'read_max_ns', 'allocated_bytes', 'allocations', 'post_reopen_gc_heap_bytes')
+        if (any(type(packet.get(k)) is not int for k in integer_fields)
+                or any(type(packet.get(k)) is not bool for k in (
+                    'validated_all_values_and_misses', 'final_close_checked', 'coalescing_wide'))
+                or type(packet.get('allowed_concurrent_generations')) is not list
+                or any(type(v) is not int for v in packet['allowed_concurrent_generations'])):
+            raise ValueError('wrong snapshot fixture field types')
+        if (packet['snapshot_ns'] <= 0
+                or packet['ack_ns'] + packet['checkpoint_ns'] + packet['snapshot_ns'] > packet['interval_ns']):
+            raise ValueError('invalid snapshot phase interval')
+    elif family != 'writes':
+        raise ValueError('write packet in wrong family')
     if any(packet.get(k) != v for k, v in expected.items()):
         raise ValueError('wrong fixture/operation/closure counts')
     reads, samples = packet['read_count'], packet['read_samples']
@@ -192,7 +216,7 @@ def validate_log(text, family, freeze, pilot, small):
                 raise ValueError('invalid benchmark units/values')
             if not {'ns/op', 'B/op', 'allocs/op'} <= metrics.keys() or metrics['ns/op'] <= 0:
                 raise ValueError('missing timing/allocation metrics')
-            if (family == 'writes' and int(iterations) != 1) or (family == 'many' and (int(iterations) != 1000 or metrics.get('keys/op') != 64)):
+            if (family in ('writes', 'snapshot-rotations') and int(iterations) != 1) or (family == 'many' and (int(iterations) != 1000 or metrics.get('keys/op') != 64)):
                 raise ValueError('wrong operation count')
             rows[name] = dict(iterations=int(iterations), metrics=metrics)
         # Go testing logs JSON on its own stdout line. Never repair a split line
@@ -200,15 +224,17 @@ def validate_log(text, family, freeze, pilot, small):
         marker = line.find('{"ack_batch_ops":')
         if marker >= 0:
             packet = json.loads(line[marker:])
-            validate_packet(packet, pilot, small)
+            validate_packet(packet, pilot, small, family)
             provenance = packet['provenance']
+            if family == 'snapshot-rotations' and type(provenance.get('pilot')) is not bool:
+                raise ValueError('wrong snapshot provenance mode type')
             if provenance.get('pilot') != pilot or (not pilot and any(provenance.get(k) != freeze[k] for k in (
                     'runtime_head', 'runtime_tree', 'harness_sha256', 'binary_sha256'))):
                 raise ValueError('wrong runtime/harness/binary provenance')
             packets.append(packet)
     if set(rows) != benchmark_names(family):
         raise ValueError('missing/unexpected benchmark cells')
-    if family == 'writes':
+    if family in ('writes', 'snapshot-rotations'):
         controls = {(p['pointer_threshold'], p['checkpoints'], p['coalescing_wide']) for p in packets}
         if len(packets) != 8 or controls != set(itertools.product((1, 16384), (1, 4), (False, True))):
             raise ValueError('missing/duplicate write packets')
@@ -218,8 +244,10 @@ def validate_log(text, family, freeze, pilot, small):
 def execution_command(family, binary):
     if family == 'internal':
         return [str(binary), '-test.run=^TestAlgorithmWorkInternalVisits$', '-test.count=1', '-test.v', '-test.timeout=30m']
-    benchmark = 'SparseUpdates' if family == 'writes' else 'GetMany'
-    return [str(binary), '-test.run=^$', '-test.bench=^BenchmarkAlgorithm' + benchmark + '$', '-test.benchtime=' + ('1x' if family == 'writes' else '1000x'), '-test.count=1', '-test.benchmem', '-test.v', '-test.timeout=30m']
+    if family not in ('writes', 'snapshot-rotations', 'many'):
+        raise ValueError('unknown benchmark family')
+    benchmark = {'writes': 'SparseUpdates', 'many': 'GetMany', 'snapshot-rotations': 'SparseUpdatesSnapshotRotations'}[family]
+    return [str(binary), '-test.run=^$', '-test.bench=^BenchmarkAlgorithm' + benchmark + '$', '-test.benchtime=' + ('1000x' if family == 'many' else '1x'), '-test.count=1', '-test.benchmem', '-test.v', '-test.timeout=30m']
 
 
 def validate_capture(output, expected):
@@ -254,7 +282,7 @@ def main():
     parser.add_argument('--prepared')
     parser.add_argument('--freeze-sha256', help='preparation SHA preserved independently before capture; required for full runs')
     parser.add_argument('--grant')
-    parser.add_argument('--family', choices=('writes', 'many', 'internal'), default='writes')
+    parser.add_argument('--family', choices=('writes', 'snapshot-rotations', 'many', 'internal'), default='writes')
     parser.add_argument('--overlay', help='counter-only overlay.json; separate prepared diagnostic binary')
     parser.add_argument('--pilot', action='store_true', help='explicitly unretained constructor qualification')
     parser.add_argument('--small-flush', action='store_true')
