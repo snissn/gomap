@@ -1,0 +1,11 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkNegativeCoveragePrepare/enabled=false/keys=1-4         	313915522	         1.927 ns/op	         1.000 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeCoveragePrepare/enabled=false/keys=64-4        	314187543	         2.064 ns/op	        64.00 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeCoveragePrepare/enabled=false/keys=256-4       	294714712	         1.923 ns/op	       256.0 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeCoveragePrepare/enabled=true/keys=1-4          	 9637558	        61.25 ns/op	         1.000 keys/op	        56.00 token-bytes	      64 B/op	       1 allocs/op
+BenchmarkNegativeCoveragePrepare/enabled=true/keys=64-4         	  240206	      2502 ns/op	        64.00 keys/op	        56.00 token-bytes	      64 B/op	       1 allocs/op
+BenchmarkNegativeCoveragePrepare/enabled=true/keys=256-4        	   60764	      9938 ns/op	       256.0 keys/op	        56.00 token-bytes	      64 B/op	       1 allocs/op
+PASS

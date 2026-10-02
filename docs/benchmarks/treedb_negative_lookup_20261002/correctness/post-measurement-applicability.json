@@ -1,0 +1,26 @@
+{
+  "benchmark_applicability": "All benchmark fixtures/read routes and DB capture/publication use New/Reset, never SetRoot. Main reliability changes concern raft snapshot/nativewire source and tests, with no tree/DB/benchmark overlap. Measured source identity remains original37fb; no new-head binary/timing claim.",
+  "changes_since_measured": [
+    "TreeDB/docs/spec/fixed-peer-tcp-runtime-v1.md",
+    "TreeDB/docs/spec/verification.md",
+    "TreeDB/internal/raftfsm/raft_snapshot.go",
+    "TreeDB/internal/raftfsm/raft_snapshot_capture_v1_test.go",
+    "TreeDB/internal/raftfsm/snapshot_capture_files_v1.go",
+    "TreeDB/internal/raftfsm/snapshot_interference_v1_test.go",
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go",
+    "TreeDB/nativewire/peer_request_lifetime_v1_test.go",
+    "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go",
+    "TreeDB/nativewire/vector_partition_split_source_insert_authenticated_v1_test.go",
+    "TreeDB/tree/negative_filter_test.go",
+    "TreeDB/tree/tree.go"
+  ],
+  "current_main": "c9a00bb631d34b62669ec1d3f4437e1c8c5df845",
+  "current_sync_head": "55373647954609fde5203e6e22bcecb6b18b9010",
+  "local_risk_check": "Go1.26.0 darwin/arm64 GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=2GiB three requested raw filter tests PASS0.340s; new test red on37fb0.447s",
+  "measured_head": "37fb160c1ebfd21710cbce68da53d883c1e18eff",
+  "offline_evidence_check": "all72 original raw stdout/stderr log hashes verified and1090rows reparsed identically to original parsed.json",
+  "production_root_repair": "one statement t.negativeFilter=nil in SetRoot; no existing repository caller",
+  "root_ci_review_readiness_pending": true,
+  "root_mutators": "rootPageID only written by New, Reset (coverage cleared), and SetRoot (now cleared)",
+  "root_repair": "a30d4de44cbc3bf5fe28054421d2cefcf8a1683d"
+}

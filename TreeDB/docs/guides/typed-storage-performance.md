@@ -115,6 +115,35 @@ TREEDB_HOT_PATH_STATS=1 GOWORK=off go test ./TreeDB -run '^$' \
   -bench '^BenchmarkDBOwnedValueLogRoute$' -benchmem -count 5
 ```
 
+### Main-cache residency and static value placement
+
+Use the [#4892 instrumentation runbook](../../../docs/benchmarks/treedb_memory_budget/README.md)
+when comparing read residency. `BenchmarkMemoryBudgetWorkflow` captures a full
+public load/checkpoint/Get/GetAppend/GC/update/reopen workflow with original
+source, overlay, compiled-input and binary identities. Land and freeze the
+reviewed harness before collecting full 250,000-key retained cells. Bounded
+8,192-key pilots verify construction only and cannot establish a memory win.
+
+Existing leaf-cache entries and grouped-frame byte/admission limits govern the
+backend main caches. The five leaf/frame splits share 64 MiB of configured
+limits; lazy slot allocation, spare backing, metadata, mmap, cache-layer
+readers and side stores mean physical memory can differ. Valid leaf/frame byte
+counters are not all backing capacity. Frame max-bytes zero removes its byte
+limit; disabling entries is also required to turn it off. No new public knob
+or runtime controller is introduced for the experiment.
+
+Report GC1/GC2 heap and each owner alongside sampled heap peaks and observed
+Linux RSS/HWM. Preserve mmap bytes separately; do not sum them with RSS or sum
+aliases of the same owner. Per-phase elapsed/allocation deltas include fixture
+generation or full consumer validation, and need normalization by actual
+operations. Thresholds 1/1024 contrast 256-byte values; random 4 KB values use
+persistent value-log pointers in both. Persisted entry flags prove placement.
+Keep WAL bytes separate from persistent value/leaf logs, indexes and side
+stores; file lengths are logical storage, not allocated blocks or RAM. Forced
+GC is diagnostic and does not authorize storage reclamation or prove a useful
+production trim. Activate a narrow trim only after retained owner evidence
+shows unnecessary idle backing without required live leases.
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:

@@ -1,0 +1,15 @@
+2026/10/01 19:48:16 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 19:48:16 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkSnapshotValueLogGet/Get-4     	  297996	      2168 ns/op	     278 B/op	       1 allocs/op
+BenchmarkSnapshotValueLogGet/GetAppend-4         	  329875	      1954 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshotValueLogGet/GetUnsafe-4         	  143480	      4565 ns/op	    4552 B/op	       3 allocs/op
+2026/10/01 19:48:19 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 19:48:19 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+BenchmarkDBCheckpointedValueLogGet/Get-4         	  182550	      3501 ns/op	     315 B/op	       1 allocs/op
+BenchmarkDBCheckpointedValueLogGet/GetAppend-4   	  180032	      3369 ns/op	      59 B/op	       0 allocs/op
+BenchmarkDBCheckpointedValueLogGet/GetUnsafe-4   	  184449	      3506 ns/op	     315 B/op	       1 allocs/op
+PASS

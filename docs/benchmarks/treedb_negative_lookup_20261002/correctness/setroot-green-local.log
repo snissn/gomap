@@ -1,0 +1,8 @@
+=== RUN   TestNegativeFilterPointEntrancesNeverDescend
+--- PASS: TestNegativeFilterPointEntrancesNeverDescend (0.00s)
+=== RUN   TestNegativeFilterSetRootDropsCoverage
+--- PASS: TestNegativeFilterSetRootDropsCoverage (0.00s)
+=== RUN   TestNegativeFilterMonotonicConcurrentAndBounded
+--- PASS: TestNegativeFilterMonotonicConcurrentAndBounded (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.340s
