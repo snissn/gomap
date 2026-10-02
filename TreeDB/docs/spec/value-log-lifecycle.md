@@ -433,6 +433,21 @@ all completion flags false. `PolicyFullyCompacted` means selected planner debt
 converged; `ByteMinimized` additionally requires every Exhaustive byte phase to
 complete.
 
+For exclusive offline maintenance, close the public cached owner before
+`OpenBackend`. The maintenance open retains dictionary byte lookups and their
+stable resource provider from the same side-store owner until backend cleanup
+finishes. Packed dictionary dependencies require that authority; lookup bytes
+alone are insufficient and unresolved dependencies fail closed. Newly created
+leaf segments are registered before each root publication captures their
+identity, and their pending registration inventory is consumed before later
+pack/GC phases can retire them.
+
+A successful phase sequence can still leave resources retained by an older
+durable slot or another recoverable root. Report that remaining debt and the
+completion flags from the final audit; a successful call alone does not establish
+`ByteMinimized`. Repeating compaction/GC must preserve all recovery-selectable
+resources until the same reachability rules permit their retirement.
+
 Each cold debt audit performs at most one page-granular reachability walk over a
 coherent snapshot of the user, system, collection, and protected roots. The
 snapshot basis includes the commit and root IDs, leaf-generation state version,

@@ -2772,7 +2772,7 @@ func VacuumIndexOffline(opts Options) error {
 		}
 	}
 
-	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
+	sideCleanup, _, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return err
 	}
