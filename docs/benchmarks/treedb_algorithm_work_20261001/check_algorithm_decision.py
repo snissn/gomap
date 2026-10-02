@@ -108,6 +108,11 @@ HASHES.update({
  "4920-residency-selected-main-packet/candidate/prepared/freeze.json": "ed4740e53791ed2d04e0ce4d8ef5468fe4d0f4f99e4a0e384ee287152ed59f39",
  "4920-residency-selected-main-packet/candidate/prepared/algorithm-work.test": "6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c"
 })
+HASHES.update({
+ "4921-selected-main-five-pair-independent-evidence-review.md": "2a26940f8380e712ed4a76ddd6343a277521510a61191dde4a93f524ed7d89f6",
+ "4921-root-selected-main-five-pair-disposition.md": "8683a46ad73c21b6f6a79660ec26ff3788b1b3e5e2c21f630deb7e6fcdfd9d9c",
+ "4921-final-source-base-audit.json": "69330f8d435d1ca993d9d7252cd59438d940a43ba1112cf9d30b035f1fde6c9b"
+})
 HERE = Path(__file__).resolve().parent
 
 def sha(path):

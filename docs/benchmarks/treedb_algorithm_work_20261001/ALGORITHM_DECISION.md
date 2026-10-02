@@ -13,10 +13,9 @@ deltas are uneconomic or that the unmeasured capacity requirement has passed.
 integration carries T/A decision components in [H #4913](https://github.com/snissn/gomap/pull/4913)
 under root's published graph reassessment. **ACTUAL POINTER MERGE PENDING**:
 selected candidate `75fe577ecc6ab81237df2cff58454bbeb205cc71` is measured against
-control `bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`, but is not a merged or finally
-accepted product. Its five-pair objective/guard evidence is recorded below;
-root's final noise disposition, independent actual-evidence review, current-head
-CI and actual #4921 merge remain required. No candidate hash is a shipped identity.
+control `bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`, and is qualified for the bounded objective, but remains unmerged. Its accepted
+five-pair objective/noise/owned-tradeoff disposition is recorded below; final-base
+current-head CI, review inventory and actual #4921 merge remain required. No candidate hash is a shipped identity.
 
 Snapshot decision [#4931](https://github.com/snissn/gomap/pull/4931) actually merged
 at `f9152b5b64dd0e38f5bd5a46bdfbe36e1db10775`; defaults remain selected. Root
@@ -254,8 +253,7 @@ Optimized Python fails before document/evidence I/O; all text is explicit UTF-8.
 The raw packets, freezes, pre-timer order, normal/counter separation and profile
 exclusion remain the authoritative provenance contract.
 
-Final acceptance requires root's selected #4920 qualification/noise disposition,
-actual #4921 merged product identity, independent fresh-context final A and
+Final integration acceptance still requires actual #4921 merged product identity, independent fresh-context final A and
 whole-union review, final integrated-head CI/review inventory and unchanged parent
 capacity/maintenance/representative obligations. Snapshot landing and bounded
 delta nonactivation are recorded above; no pending acceptance is supplied.
@@ -277,10 +275,33 @@ The full twelve-cell table below retains every pair, spread and flag, including
 inline uniform owned +1.285% median with mixed directions. Shared-host latency
 spreads around10–21% remain visible. These observations support no stable exact
 latency, quiet-host/cold-cache guarantee, or owned/inline performance-win claim.
-Independent full actual-evidence review and root's final noise disposition remain
-pending; the raw gate is >=50% callback bytes/count reduction, >=25% sorted/clustered
+Independent full actual-evidence review and root's bounded objective/noise/owned
+tradeoff disposition are accepted; the retained raw gate is >=50% callback bytes/count reduction, >=25% sorted/clustered
 callback latency improvement with directional agreement, plus all public safety,
 uniform/owned/inline and retention/peak guards. Actual merged identity is pending.
+
+[Root's accepted disposition](https://github.com/snissn/gomap/issues/4920#issuecomment-5957915606)
+retains the small owned-read tradeoffs explicitly: pointer uniform owned median
+latency +2.371%, four of five pairs higher, worst +7.93%; median bytes +100B/batch
+(+0.274%), paired +32/−17/+100/+60/+126B and11 allocations unchanged. Inline uniform
+owned median +1.285%, four of five pairs higher, worst +2.71%, median bytes/count
+unchanged. Pointer clustered/sorted owned medians are +1.931/+0.460%. Root accepts
+these bounded observations alongside the all-five targeted gain and separate
+residency guard; they are not erased, called causal, or labelled no regression.
+The predeclared >10% spread rule was met by retaining all original three rounds
+and extending the complete family to five. All20 flags remain. Slowest candidate
+versus fastest control is still sorted −56.50%, clustered −52.15%; these are
+observations, not confidence bounds or replacement thresholds. No precise stable
+inline/owned, cold-cache/SLO or capacity claim is accepted.
+
+Independent accepted full-evidence review rechecks all129 original files, all12
+raw captures, four actual ELF binaries/freezes, all36 summaries and20 flags.
+The root source/base audit records mature candidate
+`c6609e48a02535fa34e4062be9b42673a1781ead` on actual maincba, with exact measured75f
+production/tests and canonical harness/capture bytes preserved. This is not an
+actual merge identity. The retained measurements and executables stay at75f/bc;
+no runtime from the provisional pointer branch is imported into H before merge.
+
 
 Separate three-pair forced-GC residency diagnostics used two distinct binaries,
 not primary timing executables. Root and independent review accepted zero material
@@ -511,3 +532,7 @@ bytes, not just the occurrence of a digest anywhere in this document.
 | `4921-full-selected-main-packet/candidate/counter-prepared/algorithm-work.test` | `6b4a7e9f357619edc4037d546ef8f77dce741cf8b5db8ac915a60b220f968075` |
 | `4920-residency-selected-main-packet/candidate/prepared/freeze.json` | `ed4740e53791ed2d04e0ce4d8ef5468fe4d0f4f99e4a0e384ee287152ed59f39` |
 | `4920-residency-selected-main-packet/candidate/prepared/algorithm-work.test` | `6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c` |
+
+| `4921-selected-main-five-pair-independent-evidence-review.md` | `2a26940f8380e712ed4a76ddd6343a277521510a61191dde4a93f524ed7d89f6` |
+| `4921-root-selected-main-five-pair-disposition.md` | `8683a46ad73c21b6f6a79660ec26ff3788b1b3e5e2c21f630deb7e6fcdfd9d9c` |
+| `4921-final-source-base-audit.json` | `69330f8d435d1ca993d9d7252cd59438d940a43ba1112cf9d30b035f1fde6c9b` |
