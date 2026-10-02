@@ -914,6 +914,7 @@ func openResolved(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.PhysicalSnapshotSideStoreCapture = nil
+		dictOpts.NegativeLookupFilterBytes = 0
 		dictOpts.Dir = dictdbDir
 		dictOpts.ResolvedProfile = ""
 		dictOpts.DeprecatedProfileAlias = ""
@@ -968,6 +969,7 @@ func openResolved(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.PhysicalSnapshotSideStoreCapture = nil
+		templateOpts.NegativeLookupFilterBytes = 0
 		templateOpts.Dir = templatedbDir
 		templateOpts.ResolvedProfile = ""
 		templateOpts.DeprecatedProfileAlias = ""

@@ -272,7 +272,7 @@ func (c *snapshotCapturedFilesV1) captureLifecycle(ctx context.Context, prefix s
 
 func (e snapshotCapturedFileV1) writeTo(ctx context.Context, dst io.Writer) error {
 	if raftSnapshotBeforeCopyForTest != nil {
-		raftSnapshotBeforeCopyForTest()
+		raftSnapshotBeforeCopyForTest(ctx)
 	}
 	if e.index != nil {
 		return e.index.WriteToContext(ctx, dst)

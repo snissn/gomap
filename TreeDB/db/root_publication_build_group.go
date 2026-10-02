@@ -20,7 +20,8 @@ import (
 // This is an internal cross-package bridge for caching; callers outside TreeDB
 // internals must not depend on it as a stable API.
 type RootPublicationBuildGroup struct {
-	mu sync.Mutex
+	negativeCoverage *negativeRootCoverage
+	mu               sync.Mutex
 
 	db          *DB
 	coordinator *rootpublication.Coordinator
@@ -131,6 +132,7 @@ func (db *DB) BeginRootPublicationBuildGroup() (_ *RootPublicationBuildGroup, re
 	group.baseSeq = db.meta.CommitSeq
 	group.registryID = idx.registry.Register(group.baseSeq)
 	group.registered = true
+	group.negativeCoverage = db.prepareNegativeCoverage(idx, group.baseSeq, group.baseRoot, group.baseRoot, nil)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
 	return group, nil
@@ -248,6 +250,12 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 	}
 
 	entries, ranges := b.batch.ApplyPlan()
+	if c := group.negativeCoverage; c != nil {
+		for i := range entries {
+			c.filter.Add(entries[i].Key)
+		}
+		c.nextRoot = newRoot
+	}
 	delta, err := db.buildValueLogRefDelta(
 		group.idx.pager, rootID, group.baseSeq, entries, ranges,
 		&result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected,
@@ -324,6 +332,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		}
 	}
 	opts := finalizeCommitOptions{
+		negativeCoverage:            group.negativeCoverage,
 		skipPrePublishFlush:         true,
 		skipConditionalRootConflict: true,
 		maxEntryRevision:            group.maxEntryRevision,
@@ -351,6 +360,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.releaseRootSerialization = opts.releaseRootSerialization
 		commandOpts.recordVacuumMutation = opts.recordVacuumMutation
 		commandOpts.durableIndex = opts.durableIndex
+		commandOpts.negativeCoverage = opts.negativeCoverage
 		opts = commandOpts
 	}
 	post, err := db.finalizeCommitLockedWithOptions(

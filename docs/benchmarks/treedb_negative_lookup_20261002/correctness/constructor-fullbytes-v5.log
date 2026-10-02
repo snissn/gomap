@@ -1,0 +1,24 @@
+=== RUN   TestNegativeLookupQualificationFixture
+2026/10/01 19:03:01 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=3956 ratio=0.030
+2026/10/01 19:03:01 treedb: value-log dict published class=single_value dict_id=3352450148154684535 k=32 payload_ratio=0.028 total_ratio=0.031
+    negative_lookup_test.go:154: payload=compressible256 enabled=false
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0x2585618e5c70 seq=3 userRoot=48 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0x2585618e5c70 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0x2585618e5c70 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+2026/10/01 19:03:02 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=3956 ratio=0.030
+2026/10/01 19:03:02 treedb: value-log dict published class=single_value dict_id=3352450148154684535 k=32 payload_ratio=0.028 total_ratio=0.031
+    negative_lookup_test.go:154: payload=compressible256 enabled=true
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0x25856564ee70 seq=3 userRoot=48 systemRoot=3 filter=0x258566cbc120 activeBytes=10240
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0x25856564ee70 seq=4 userRoot=8 systemRoot=3 filter=0x258566cbc120 activeBytes=10240
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0x25856564ee70 seq=5 userRoot=8 systemRoot=3 filter=0x258566cbc120 activeBytes=10240
+    negative_lookup_test.go:154: payload=random4096 enabled=false
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0x2585618e5570 seq=3 userRoot=48 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0x2585618e5570 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0x2585618e5570 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:154: payload=random4096 enabled=true
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0x25856186ee70 seq=3 userRoot=48 systemRoot=3 filter=0x2585618612c0 activeBytes=10240
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0x25856186ee70 seq=4 userRoot=8 systemRoot=3 filter=0x2585618612c0 activeBytes=10240
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0x25856186ee70 seq=5 userRoot=8 systemRoot=3 filter=0x2585618612c0 activeBytes=10240
+--- PASS: TestNegativeLookupQualificationFixture (3.72s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	3.731s

@@ -78,67 +78,19 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	meta.Options.ColumnStore = &column
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
 	fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
-	excluded := map[string]bool{}
-	for _, config := range configs {
-		excluded[config.ListenAddress] = true
-		for _, value := range config.RaftListen {
-			excluded[value] = true
-		}
-		for _, node := range config.Nodes {
-			excluded[node.Address] = true
-		}
-		for _, peer := range config.Catalog.Peers {
-			excluded[peer.Address] = true
-		}
-		for _, group := range config.Groups {
-			for _, peer := range group.Peers {
-				excluded[peer.Address] = true
-			}
-		}
-		for _, value := range config.Vector.PublicAddresses {
-			excluded[value] = true
-		}
-		for _, addresses := range config.Vector.ShardAddresses {
-			for _, value := range addresses {
-				excluded[value] = true
-			}
-		}
+	count := 3
+	if endpoint {
+		count++
 	}
-	reserved := []net.Listener{}
-	t.Cleanup(func() {
-		for _, listener := range reserved {
-			_ = listener.Close()
-		}
-	})
-	address := func() string {
-		for {
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			value := listener.Addr().String()
-			// Hold colliding sockets too, so allocation must move past them.
-			reserved = append(reserved, listener)
-			if !excluded[value] {
-				excluded[value] = true
-				return value
-			}
-		}
-	}
+	addresses := fixedPeerFixtureUnusedAddressesV1(t, configs, count)
 	const target raftcluster.NodeID = "replacement"
-	targetAddress, targetRaft := address(), address()
+	targetAddress, targetRaft := addresses[0], addresses[1]
 	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), FixedPeerTCPNodeV1{ID: target, Address: targetAddress})
 	vector := cloneFixedPeerVectorConfigV1(configs[0].Vector)
-	vector.PublicAddresses[target] = address()
+	vector.PublicAddresses[target] = addresses[2]
 	if endpoint {
-		vector.ShardAddresses["group-b"][target] = address()
+		vector.ShardAddresses["group-b"][target] = addresses[3]
 	}
-	for _, listener := range reserved {
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	reserved = nil
 	for i := range configs {
 		configs[i].Nodes, configs[i].Vector = nodes, vector
 	}
@@ -220,10 +172,9 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 		t.Fatal(err)
 	}
 	t.Cleanup(client.Close)
-	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := client.Status(ctx, "source-holder")
-		return err == nil && status.CatalogRaft.State == "Leader" && len(status.Groups) == 1 && status.Groups[0].LeaderID == "source-holder"
-	})
+	if leader := fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes[:len(configs)-1]); configs[leader].NodeID != "source-holder" {
+		t.Fatal("owner fixture changed catalog leader")
+	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, vector.Catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -238,15 +189,23 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	// Trusted bootstrap has no semantic result receipt. Commit a real command
 	// before BUILD, using the generic native replacement fixture's producer.
 	owner := runtimes[1].localDataV1("group-b")
-	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, config := range configs[:len(configs)-1] {
-			status, err := client.Status(ctx, config.NodeID)
-			if err != nil || len(status.Groups) != 1 || status.Groups[0].LeaderID != config.NodeID {
-				return false
+	// Single-member owner hints can appear before their current-term prefix.
+	// Retry only quorum-fenced reads before the one-shot BUILD/stage/ACTIVE.
+	for _, runtime := range runtimes[:len(configs)-1] {
+		hosted := 0
+		for _, group := range runtime.config.Groups {
+			if runtime.localDataV1(group.ID) == nil {
+				continue
+			}
+			hosted++
+			if leader := fixedPeerWaitDataLeaderV1(t, ctx, []*FixedPeerTCPRuntimeV1{runtime}, group); leader != runtime.config.NodeID {
+				t.Fatalf("owner fixture group %s leader=%s want %s", group.ID, leader, runtime.config.NodeID)
 			}
 		}
-		return true
-	})
+		if hosted != 1 {
+			t.Fatalf("owner fixture %s hosts %d groups, want 1", runtime.config.NodeID, hosted)
+		}
+	}
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
 		t.Fatal(err)

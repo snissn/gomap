@@ -716,3 +716,83 @@ allocation reduction alone does not prove faster reads. These are Go test
 outputs, not unified-bench profile-dir artifacts or benchprof inputs. No
 profile parser or on-disk format changes are required. See the
 [typed-storage performance guide](../../TreeDB/docs/guides/typed-storage-performance.md#persistent-value-log-decode-scratch).
+
+### Owned persistent value-log reads
+
+The standalone `BenchmarkFileReadAppendOwned` and
+`BenchmarkDBOwnedValueLogRoute` compare cache copies, decode, OS-cache-warm
+open/map/read/close, and ordinary public owned Get. The capture also runs landed
+`BenchmarkFileReadAppendCompressedFallback`,
+`BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo`, and
+`BenchmarkDBValueLogGet/Get` and `/GetAppend` guardrails.
+
+Prepare the source/binaries/fixture described in the
+[retained packet](../../docs/benchmarks/treedb_owned_values_20261001/README.md), then run:
+
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/qualify.sh FROZEN_CAPTURE_DIR
+```
+
+It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
+and source/fixture hash inventories. These are standalone artifacts, not
+unified-bench profile-dir output or benchprof inputs.
+
+The final shared mmap publication repair has a separate
+[95-cell qualification and 20-cell repair control](../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md).
+It adds `BenchmarkOwnedMmapBudgetDenied512` and
+`BenchmarkOwnedMmapConcurrentFirstAdmission` in an identical test-only overlay.
+Retained stdout, stderr and time-v RSS are separate streams; source/binary/fixture
+hashes and successful process statuses are checked. Prepare a new reviewed
+freeze following that packet, then run:
+
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/inputs/qualify-mmap-repair.sh NEW_FROZEN_CAPTURE_DIR
+```
+
+Ordinary pointer Get improves in that bounded comparison; capped nil fallback
+and OS-warm first-map lifecycle costs increase and remain explicitly disclosed.
+The earlier packet retains its original source identities.
+
+### Main-cache memory/placement workflow
+
+`BenchmarkMemoryBudgetWorkflow` is a fixed public load/checkpoint/read/GC/update/
+reopen workflow. Its dedicated capture freezes existing main leaf/frame cache
+limits in five 64 MiB combined configured-budget splits, with two value sizes
+and pointer thresholds. It records phase allocations, full Stats owners,
+heap/RSS/mapping observations and filename-level logical storage bytes.
+
+```sh
+GOWORK=off go test ./TreeDB -run '^TestMemoryBudgetFixture$' -count=1
+python3 scripts/treedb_memory_budget_capture.py self-check
+```
+
+Use the [memory-budget runbook](../../docs/benchmarks/treedb_memory_budget/README.md)
+for the prepare/run/validate commands and external source/overlay/binary freeze.
+An 8,192-key pilot is unretained; full cells use 250,000 keys in fresh processes
+and wait for the reviewed harness to land. Configured cache bytes are not equal
+physical RAM. These standalone package benchmark packets/logs are not
+unified-bench profile-dir artifacts or benchprof inputs.
+
+## TreeDB algorithm-work package harness
+
+The standalone `BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany`
+use public TreeDB APIs without unified-bench adapters. Their fixed-work boundary,
+counter-only overlay, artifact units, and reproduction commands are documented in
+[`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
+These package-test profiles are not benchprof inputs.
+Its `capture.py prepare|capture|validate` flow retains an external source/dependency/
+toolchain/binary freeze and separately hashed `stdout.log`/`stderr.log`; internal
+visit diagnostics use a separate overlay binary and cannot enter timed captures.
+
+`BenchmarkAlgorithmSparseUpdatesSnapshotRotations` adds one checked public
+snapshot/read/close per acknowledged batch. It emits
+`algorithm-work-snapshot-rotations-v1` packets with snapshot counts and
+`snapshot_ns`, using the same freeze and raw artifact format. After review,
+landing, preparation and coordinator runner grant, select it explicitly:
+
+```sh
+python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
+  --source "$PWD" --prepared /tmp/algorithm-prepared \
+  --output /tmp/algorithm-snapshot-rotations-eligibility --family snapshot-rotations \
+  --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+```

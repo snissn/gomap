@@ -227,84 +227,13 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	if f.currentWritable.Load() && !f.currentWritablePersistentMmapEnabled() {
 		return false
 	}
-	if f.usesPersistentMmap() {
-		f.remapToFileSize()
-		data, _ := f.mmapData.Load().([]byte)
-		return len(data) > 0
-	}
-	m := f.manager
-	if m == nil {
+	// Callers already missed the current mapping. If retained unsafe views
+	// prevent growth, retrying that mapping cannot make this read succeed.
+	// Use the live cap so a configuration increase still permits recovery.
+	if data, _ := f.mmapData.Load().([]byte); data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		return false
 	}
-	if f.sealedLazyMmapDenied.Load() {
-		deniedCountCapWant, deniedBytesCapWant := f.sealedLazyMmapBudgetSnapshot()
-		deniedCountCap := int(f.sealedLazyMmapDeniedCountCap.Load())
-		deniedBytesCap := f.sealedLazyMmapDeniedBytesCap.Load()
-		// Preserve the cheap deny fast-path while budgets stay unchanged.
-		if int64(deniedCountCap) == deniedCountCapWant && deniedBytesCap == deniedBytesCapWant {
-			return false
-		}
-		// Budgets changed; re-check once to allow in-process recovery.
-		targetSize := f.sealedLazyMmapTargetSize()
-		m.mu.Lock()
-		allow, _ := m.allowSealedLazyMmapLocked(f, targetSize)
-		m.mu.Unlock()
-		if !allow {
-			f.storeSealedLazyMmapBudgetSnapshot()
-			return false
-		}
-		f.sealedLazyMmapDenied.Store(false)
-		f.sealedLazyMmapDeniedCountCap.Store(0)
-		f.sealedLazyMmapDeniedBytesCap.Store(0)
-	}
-	// Already mapped sealed segments may still be stale if they were current
-	// writable before sealing. Re-check budget gates before growth remap so
-	// disabled/capped sealed mappings are still respected.
-	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
-		targetSize := f.sealedLazyMmapTargetSize()
-		m.mu.Lock()
-		allow, denyReason := m.allowSealedLazyMmapLocked(f, targetSize)
-		m.mu.Unlock()
-		if !allow {
-			f.sealedLazyMmapDenied.Store(true)
-			f.storeSealedLazyMmapBudgetSnapshot()
-			switch denyReason {
-			case sealedLazyMmapDenyCountCap:
-				f.sealedMapDeniedByCount.Add(1)
-			case sealedLazyMmapDenyBytesCap:
-				f.sealedMapDeniedByBytes.Add(1)
-			default:
-				f.sealedMapDeniedByCount.Add(1)
-			}
-			return false
-		}
-		f.remapToFileSize()
-		data, _ = f.mmapData.Load().([]byte)
-		return len(data) > 0
-	}
-	targetSize := f.sealedLazyMmapTargetSize()
-	m.mu.Lock()
-	allow, denyReason := m.allowSealedLazyMmapLocked(f, targetSize)
-	m.mu.Unlock()
-	if !allow {
-		f.sealedLazyMmapDenied.Store(true)
-		f.storeSealedLazyMmapBudgetSnapshot()
-		switch denyReason {
-		case sealedLazyMmapDenyCountCap:
-			f.sealedMapDeniedByCount.Add(1)
-		case sealedLazyMmapDenyBytesCap:
-			f.sealedMapDeniedByBytes.Add(1)
-		default:
-			f.sealedMapDeniedByCount.Add(1)
-		}
-		return false
-	}
-	f.sealedLazyMmapDenied.Store(false)
-	f.sealedLazyMmapDeniedCountCap.Store(0)
-	f.sealedLazyMmapDeniedBytesCap.Store(0)
-	f.remapToFileSize()
-	data, _ := f.mmapData.Load().([]byte)
-	return len(data) > 0
+	return f.remapToFileSize()
 }
 
 func (f *File) sealedLazyMmapBudgetSnapshot() (countCap int64, bytesCap int64) {
@@ -318,22 +247,6 @@ func (f *File) storeSealedLazyMmapBudgetSnapshot() {
 	countCap, bytesCap := f.sealedLazyMmapBudgetSnapshot()
 	f.sealedLazyMmapDeniedCountCap.Store(countCap)
 	f.sealedLazyMmapDeniedBytesCap.Store(bytesCap)
-}
-
-func (f *File) sealedLazyMmapTargetSize() int64 {
-	if f == nil || f.File == nil {
-		return 0
-	}
-	targetSize := f.fileSize.Load()
-	if targetSize <= 0 {
-		if info, err := f.File.Stat(); err == nil {
-			if sz := info.Size(); sz > 0 {
-				targetSize = sz
-				f.noteVerifiedFileSize(sz)
-			}
-		}
-	}
-	return targetSize
 }
 
 func currentWritableMmapTargetSize(currentSize int64) int64 {
@@ -449,75 +362,121 @@ func (f *File) ensureMmapRangeReadable(data []byte, start, end int64) ([]byte, b
 	return data, true
 }
 
-func (f *File) remapToFileSizePersistentOnly() {
-	f.remapToFileSizeWithPolicy(true)
+func (f *File) remapToFileSizePersistentOnly() bool {
+	return f.remapToFileSizeWithPolicy(true)
 }
 
-func (f *File) remapToFileSize() {
-	f.remapToFileSizeWithPolicy(false)
+func (f *File) remapToFileSize() bool {
+	return f.remapToFileSizeWithPolicy(false)
 }
 
-func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
+func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 	if f == nil || f.closed.Load() || f.File == nil {
-		return
+		return false
 	}
-
+	// Cheap conservative bailouts precede the manager lock. Authoritative
+	// policy, cap and budget checks below serialize admission with publication.
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		return false
+	}
+	if !f.currentWritable.Load() && f.sealedLazyMmapDenied.Load() {
+		countCap, bytesCap := f.sealedLazyMmapBudgetSnapshot()
+		if f.sealedLazyMmapDeniedCountCap.Load() == countCap && f.sealedLazyMmapDeniedBytesCap.Load() == bytesCap {
+			return false
+		}
+	}
+	m := f.manager
+	if m != nil {
+		// Match demotion and Manager.Close lock order. Current files also
+		// take this lock because they may become sealed while awaiting remap.
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.files[f.ID] != f {
+			return false
+		}
+	}
 	f.remapMu.Lock()
 	defer f.remapMu.Unlock()
 	if f.closed.Load() || f.File == nil {
-		return
+		return false
 	}
 	if requirePersistent && !f.usesPersistentMmap() {
-		return
+		return false
 	}
-	// If we have already hit the dead-mapping cap, we cannot remap again without
-	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
-	// per-call Stat allocation when reads keep missing the current mapping.
-	data, _ := f.mmapData.Load().([]byte)
+	if f.currentWritable.Load() && !f.currentWritablePersistentMmapEnabled() {
+		return false
+	}
+	data, _ = f.mmapData.Load().([]byte)
 	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
-		return
+		return false
+	}
+	if !f.currentWritable.Load() && f.sealedLazyMmapDenied.Load() {
+		countCap, bytesCap := f.sealedLazyMmapBudgetSnapshot()
+		if f.sealedLazyMmapDeniedCountCap.Load() == countCap && f.sealedLazyMmapDeniedBytesCap.Load() == bytesCap {
+			return false
+		}
 	}
 
 	info, err := f.File.Stat()
 	if err != nil {
-		return
+		return false
 	}
 	currentSize := info.Size()
 	if currentSize > 0 {
 		f.noteVerifiedFileSize(currentSize)
 	}
 	if currentSize <= 0 || currentSize > int64(int(currentSize)) {
-		return
+		return false
 	}
 	if runtime.GOARCH == "386" && currentSize > int64(^uint32(0)) {
-		return
+		return false
 	}
-
 	mapSize := currentSize
 	if f.currentWritablePersistentMmapEnabled() {
 		mapSize = currentWritableMmapTargetSize(currentSize)
 	}
 	if mapSize <= 0 || mapSize > int64(int(mapSize)) {
-		return
+		return false
 	}
 	if runtime.GOARCH == "386" && mapSize > int64(^uint32(0)) {
-		return
+		return false
 	}
 	if data != nil && int64(len(data)) >= mapSize {
-		return
+		return true
 	}
+	if m != nil && !f.currentWritable.Load() {
+		allow, reason := m.allowSealedLazyMmapLocked(f, mapSize)
+		if !allow {
+			wasDenied := f.sealedLazyMmapDenied.Load()
+			f.storeSealedLazyMmapBudgetSnapshot()
+			f.sealedLazyMmapDenied.Store(true)
+			if !wasDenied {
+				if reason == sealedLazyMmapDenyBytesCap {
+					f.sealedMapDeniedByBytes.Add(1)
+				} else {
+					f.sealedMapDeniedByCount.Add(1)
+				}
+			}
+			return false
+		}
+		f.sealedLazyMmapDenied.Store(false)
+		f.sealedLazyMmapDeniedCountCap.Store(0)
+		f.sealedLazyMmapDeniedBytesCap.Store(0)
+	}
+	b, err := mmapReadOnly(f.File, int(mapSize))
+	if err != nil {
+		return false
+	}
+	// Keep the old live mapping and unsafe views unchanged on mmap failure.
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
 		f.deadMappingsCount.Add(1)
 		f.deadMappedBytes.Add(uint64(len(data)))
 	}
-
-	b, err := mmapReadOnly(f.File, int(mapSize))
-	if err != nil {
-		return
-	}
 	f.mmapData.Store(b)
 	f.remapCount.Add(1)
+	return true
 }
 
 func (f *File) readViaMmap(ptr page.ValuePtr, verifyCRC bool) ([]byte, error, bool) {
@@ -1286,19 +1245,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst[len(dst):len(dst)]); hit {
+	if cachedDst, _, err, hit := f.groupedFrameCacheReadAppend(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
 		if err != nil {
 			return nil, err, true
 		}
 		oldLen := len(dst)
-		if usedDst {
-			dst = dst[:oldLen+len(cachedVal)]
-		} else {
-			dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
-			}
-		}
+		dst = cachedDst
 		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
@@ -1347,9 +1299,8 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return dst, nil, true
 	}
-	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
-	// grouped frames there to limit memory overhead in random-read-heavy paths.
-	cacheableRaw := dst != nil && f.groupedFrameCacheAllowsRaw(int(rawLen))
+	// Owned point gets share the existing entry, raw-size and byte-budget limits.
+	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
 	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)

@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkFileReadAppendOwned/cold_open_map-4         	   13039	     89039 ns/op	         1.000 cache_stores/op	         0 fallbacks/op	         1.000 mmap_hits/op	  299319 B/op	      15 allocs/op
+PASS

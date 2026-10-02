@@ -344,6 +344,25 @@ finalization or abort. Unassigned pending-drain handoffs release owned leases
 before draining and revalidate before assignment; queued requests never lend
 their leases to a worker. See the [collection command-WAL locking contract](../../../docs/contracts/LOCKING.md#collection-command-wal-ownership).
 
+### 3.3 Optional negative lookup publication coverage
+
+With `NegativeLookupFilterBytes` enabled, optimistic and serialized backend
+point apply reuse normalized `ApplyPlan` keys to set monotonic membership bits
+before candidate installation. Logical grouped apply contributes keys from
+every intermediate batch to the final candidate. Queued visible activation
+carries only prepared coverage and existing index/base/candidate coordinates;
+hashing stays outside its bounded, non-fallible in-memory publication swap.
+Command-WAL combiners inherit these batch paths. Explicit current-root
+command-WAL metadata publications bind the unchanged user root under the same
+durable gate and carry an exact base/candidate coverage token with no mutation
+keys. Arbitrary supplied-root candidates remain uncovered.
+
+Coverage does not authorize durability, weaken dependencies, or change command
+acknowledgement semantics. Failed/abandoned output may set extra bits safely.
+Unknown root/index replacement publishes an uncovered view; descendants remain
+exact until a complete reopen bootstrap. See the
+[negative point lookup contract](contracts.md#251-optional-negative-point-lookup-coverage).
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
