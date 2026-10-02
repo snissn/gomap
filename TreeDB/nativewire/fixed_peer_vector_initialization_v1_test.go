@@ -231,6 +231,54 @@ func TestFixedPeerVectorInitializationCloneDigestAndValidationV1(t *testing.T) {
 	}
 }
 
+func TestFixedPeerVectorInitializationAuthenticatedShardAddressesV1(t *testing.T) {
+	base := initializationTestConfigsV1(t)[0]
+	cases := []struct {
+		name          string
+		shardAddress  string
+		publicAddress string
+		wantValid     bool
+	}{
+		{name: "private-ipv4", shardAddress: "192.168.0.185:20102", wantValid: true},
+		{name: "private-ula", shardAddress: "[fd00::185]:20102", wantValid: true},
+		{name: "loopback-ipv4", shardAddress: "127.0.0.2:20102", wantValid: true},
+		{name: "loopback-ipv6", shardAddress: "[::1]:20102", wantValid: true},
+		{name: "public-ipv4", shardAddress: "8.8.8.8:20102"},
+		{name: "public-ipv6", shardAddress: "[2001:4860:4860::8888]:20102"},
+		{name: "unspecified-ipv4", shardAddress: "0.0.0.0:20102"},
+		{name: "unspecified-ipv6", shardAddress: "[::]:20102"},
+		{name: "mapped-private", shardAddress: "[::ffff:192.168.0.185]:20102"},
+		{name: "mapped-loopback", shardAddress: "[::ffff:127.0.0.1]:20102"},
+		{name: "zero-port", shardAddress: "192.168.0.185:0"},
+		{name: "noncanonical-ula", shardAddress: "[FD00::185]:20102"},
+		{name: "duplicate-control", shardAddress: base.ListenAddress},
+		{name: "duplicate-public", shardAddress: base.VectorInitialization.PublicAddresses[base.NodeID]},
+		{name: "private-public-ipv4", shardAddress: "192.168.0.185:20102", publicAddress: "192.168.0.185:20101"},
+		{name: "private-public-ula", shardAddress: "[fd00::185]:20102", publicAddress: "[fd00::185]:20101"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := base
+			config.VectorInitialization = cloneFixedPeerVectorInitializationV1(base.VectorInitialization)
+			config.VectorInitialization.ShardAddresses[config.VectorInitialization.SourceGroupID][config.NodeID] = tc.shardAddress
+			if tc.publicAddress != "" {
+				config.VectorInitialization.PublicAddresses[config.NodeID] = tc.publicAddress
+			}
+			normalized, _, err := validateFixedPeerConfigV1(config)
+			if tc.wantValid {
+				if err != nil {
+					t.Fatalf("authenticated private or loopback shard refused: %v", err)
+				}
+				if got := normalized.VectorInitialization.ShardAddresses[config.VectorInitialization.SourceGroupID][config.NodeID]; got != tc.shardAddress {
+					t.Fatalf("shard address changed: got %q want %q", got, tc.shardAddress)
+				}
+			} else if err == nil {
+				t.Fatal("invalid shard or nonloopback public address admitted")
+			}
+		})
+	}
+}
+
 func TestFixedPeerVectorInitializationRootIdentityV1(t *testing.T) {
 	configs := initializationTestConfigsV1(t)
 	config, _, err := validateFixedPeerConfigV1(configs[0])
