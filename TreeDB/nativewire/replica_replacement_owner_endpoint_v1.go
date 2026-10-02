@@ -158,7 +158,7 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementOwnerEndpointV1(ctx context.Co
 	if slot.ownerEndpoint != nil {
 		return nil
 	}
-	listener, err := net.Listen("tcp", address)
+	listener, err := r.takeListenerV1(address)
 	if err != nil {
 		return err
 	}

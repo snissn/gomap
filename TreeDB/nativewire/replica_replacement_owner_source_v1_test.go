@@ -35,6 +35,13 @@ func testImmutableOwnerReplacementPrivateQualificationV1(t *testing.T, endpoint,
 func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, endpoint, qualification, receipt, recoverOrdinary bool) {
 	t.Helper()
 	ctx, client, runtimes, configs, command := immutableOwnerReplacementEndpointFixtureV1(t, endpoint)
+	initialTarget := runtimes[len(runtimes)-1]
+	reservedTargetRaft := fixedPeerReservedTestListenerV1(initialTarget, command.NewPeer.Address)
+	var reservedTargetShard net.Listener
+	if endpoint {
+		reservedTargetShard = fixedPeerReservedTestListenerV1(initialTarget, configs[len(configs)-1].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID])
+	}
+	verifyInitialShard := endpoint
 	var ordinaryOracle VectorPartitionShardSearchResponseV1
 	identity := configs[0].Vector.Identity
 	command.OwnerPreparation = &identity
@@ -53,6 +60,9 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	targetIndex := len(runtimes) - 1
 	target := runtimes[targetIndex]
 	local := target.localDataV1(command.GroupID)
+	if reservedTargetRaft == nil || fixedPeerRawTestListenerV1(local.stream.Listener) != reservedTargetRaft {
+		t.Fatal("future owner Raft reservation did not reach target transport")
+	}
 	source := func() *CollectionVectorPartitionGenerationSourceV1 {
 		t.Helper()
 		local.replacementWork.mu.Lock()
@@ -107,6 +117,10 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 			if preparedEndpoint == nil {
 				t.Fatal("explicit preparation did not retain endpoint")
 			}
+			if verifyInitialShard && (reservedTargetShard == nil || fixedPeerRawTestListenerV1(preparedEndpoint.listener) != reservedTargetShard) {
+				t.Fatal("future owner shard reservation did not reach private endpoint")
+			}
+			verifyInitialShard = false
 			assertReplacementOwnerEndpointSearchV1(t, ctx, client, target, runtimes[1], command)
 			if qualification {
 				ordinaryOracle = assertReplacementOwnerQualificationParityV1(t, ctx, client, target, runtimes[1], command, ordinaryOracle)
@@ -286,7 +300,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 		if err == nil || len(result.Search.Partials) != 0 {
 			t.Fatalf("lost leader quorum returned private hits: %+v %v", result, err)
 		}
-		runtimes[1], err = OpenFixedPeerTCPRuntimeV1(configs[1])
+		runtimes[1], err = fixedPeerOpenTestRuntimeV1(t, configs[1])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -416,7 +430,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	if _, err := retained.PinVectorPartitionGenerationV1(ctx, identity.Index.IndexName, identity.Generation); err == nil {
 		t.Fatal("runtime close retained live source")
 	}
-	target, err = OpenFixedPeerTCPRuntimeV1(configs[targetIndex])
+	target, err = fixedPeerOpenTestRuntimeV1(t, configs[targetIndex])
 	if err != nil {
 		t.Fatal(err)
 	}
