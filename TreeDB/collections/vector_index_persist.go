@@ -500,7 +500,7 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALInt
 	flush := c.flushBufferedWritesWithCoverageLocked
 	if owner != nil {
 		flush = func() error {
-			return c.flushBufferedWritesWithRawPublishStateAndCoverage(c.commandWALRawPublishLocked || replay.StagedForPublish(), true, true)
+			return c.flushBufferedWritesWithRawPublishStateAndCoverage(c.commandWALRawPublishLocked || replay.StagedForPublish(), true, true, false)
 		}
 	}
 	if err := flush(); err != nil {
