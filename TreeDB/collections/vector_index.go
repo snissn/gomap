@@ -1773,17 +1773,20 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 		if rebuildCurrentDocuments {
 			coord := c.collectionSchemaCoordinator()
 			unlockPublication := c.lockNativeVectorIndexPublicationRead()
-			currentGeneration, err := c.currentVectorIndexDocumentGeneration()
-			if err != nil {
-				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
-				unlockPublication()
-				return err
-			}
-			for _, index := range c.registeredVectorIndexes() {
-				if coord != nil && coord.partitionLiveCarrier(index.name) == index && index.coversSourceDocumentGeneration(currentGeneration) {
-					continue
+			indexes := c.registeredVectorIndexes()
+			if len(indexes) != 0 {
+				currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+					unlockPublication()
+					return err
 				}
-				index.invalidateSourceDocumentRoots()
+				for _, index := range indexes {
+					if coord != nil && coord.partitionLiveCarrier(index.name) == index && index.coversSourceDocumentGeneration(currentGeneration) {
+						continue
+					}
+					index.invalidateSourceDocumentRoots()
+				}
 			}
 			unlockPublication()
 		}
