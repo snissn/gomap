@@ -33,6 +33,14 @@ func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
 func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, completion ...bool) {
 	complete := len(completion) != 0 && completion[0]
 	configs := fixedPeerTestConfigsV1(t)
+	if complete {
+		// HashiCorp bounds leadership transfer by ElectionTimeout, independently
+		// of the request context. Retirement tests correctness on loaded/race
+		// runners, not a 300ms election/transfer latency target.
+		for i := range configs {
+			configs[i].RaftTimeout = time.Second
+		}
+	}
 	used := map[string]bool{}
 	for _, node := range configs[0].Nodes {
 		used[node.Address] = true
@@ -554,7 +562,18 @@ func fixedPeerWaitCatalogLeaderV1(t testing.TB, ctx context.Context, runtimes []
 			if status.State != "Leader" || status.LeaderID != runtime.config.NodeID {
 				continue
 			}
-			if _, err := runtime.meta.LinearizableCatalogMetaReadProofV1(ctx); err == nil {
+			if _, err := runtime.meta.LinearizableCatalogMetaReadProofV1(ctx); err != nil {
+				continue
+			}
+			// Peer preparation also discovers this leader from each live voter's
+			// hint. Wait for those observations after election/restart, too.
+			agree := true
+			for _, peer := range runtimes {
+				if peer.meta != nil && !peer.closed.Load() && peer.meta.RuntimeStatusV1().LeaderID != runtime.config.NodeID {
+					agree = false
+				}
+			}
+			if agree {
 				leader = i
 				return true
 			}
