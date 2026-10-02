@@ -1,5 +1,9 @@
 # Canonical public TreeDB workflow
 
+For the original-product and maintenance-control comparison, use the
+[reviewed baseline-only construction](baseline/README.md) and its separate
+absent-filter schema. Its Mac preparation is construction evidence only.
+
 `BenchmarkQuicksilverWorkflow` is the dependency-free TreeDB workflow for the
 Quicksilver investigation. It qualifies local engine behavior; it does not
 reproduce Cloudflare's replication protocol or demonstrate a replacement for
