@@ -84,7 +84,30 @@ HASHES = {'algorithm-full-primary-inspection.json': 'db4dc6bc746201b7512c4d13c9a
  '4919-singleton-screen-packet/control-normal-pilot-prepared/algorithm-work.test': '20e69fac0ad85bebc6dc00e13d1360dd841b2076050a8c8845298fe2abff88c7',
  '4919-singleton-screen-packet/candidate-normal-pilot-prepared/freeze.json': '31294d1e297c8452f11328f2635b9ea336e828457a567b285a8fa029332d7108',
  '4919-singleton-screen-packet/candidate-normal-pilot-prepared/algorithm-work.test': '210fb4d93677a46729d1c6bba55cf11326ad7ed4fa58ee97c68f9b4dfdc8c156'}
-HASHES.update({'4921-selected-main-five-pair-analysis.json': '33329d7db4892f758d8092a0f3aa4444623d1f3811f0a88322dd24427baceba9', '4921-75f-independent-selected-main-source-review.md': '6ef184a02367e66d7fb3daee3e36a49eaf8a8a773b13b655c5dbcf9b17947e8c', '4921-selected-main-full-paired-plan.json': 'aedd1ed66362201ed5cc7269e0352a65aaced903c20bb1ae7f797864b893ebe4', '4921-selected-main-full-extension-plan.json': 'a1e194b192cf2bd339f65136589df62ffc7d8f4d3511f2f66a3b40059bcb0188', '4921-full-selected-main-packet/all4-preparation-anchor.json': '4bf1548ebf7bd1c29d8441c671a6fbc5c84e2b9b7bac08d88df9e5314a7f059e', '4920-selected-main-three-pair-residency-analysis.json': '7908f7ecf6c2cab50ed93985c07c6a32bebe2308c7c4778a0bf6b19e144ff99d', '4920-selected-main-residency-independent-evidence-review.md': 'cb008a67c3b32c623bd405f9da237757c62435a1f50bc5fb45efd018eadcd4a2', '4920-root-selected-main-residency-disposition.md': '896a2c23190d22e3100eef95ddd96f53bdcfe879236373cdfae6ee9cfd9479ff', '4920-residency-recorder.py': '0171eefeae1b80599b6cf1c91bcbf022671a75c01749cd6963a9150a198cab58', 'persistent-delta-root-activation-disposition.md': 'e25edc6aab176d28195c5a9c5e85378f05b289bb433d067bb3c77ae3286dac83', '4921-full-selected-main-packet/control/normal-prepared/freeze.json': 'fea5745454ddb43206a637a23e4b7317296f101a40aa0b7feb1bfb20879d4349', '4921-full-selected-main-packet/control/normal-prepared/algorithm-work.test': 'f4559a0125776a47df3ceebac35eeacbd605b3a399d9fca09be3b28baa1f5c99', '4921-full-selected-main-packet/control/counter-prepared/freeze.json': '8f8aed0810c4b9baf075b376390efa2d0bcbccc8c008453b5bb3d52ca8e12d6f', '4921-full-selected-main-packet/control/counter-prepared/algorithm-work.test': 'b372484c49583c33685879a7a95a278dfdf8afe81f8341640204c7b0c111e14a', '4920-residency-selected-main-packet/control/prepared/freeze.json': '9d9d714c98e18ee2fbcd249d2322e69a54f58293123ba3a901385745a0cf0e1b', '4920-residency-selected-main-packet/control/prepared/algorithm-work.test': 'c21bade8d841b283709c7a87c07f4a2f453e337a1d5a451d6dbd19cdd27e58fc', '4921-full-selected-main-packet/candidate/normal-prepared/freeze.json': '16b796bb06fbc25593dacf3c96de7cb917e7067afb7d93215e10248af86f658b', '4921-full-selected-main-packet/candidate/normal-prepared/algorithm-work.test': '519cec8a30c6cd365ef2e64426faf8a7bf6bf55f8e743e540b08b9f3a94e211a', '4921-full-selected-main-packet/candidate/counter-prepared/freeze.json': '845c94a226131c8fdcb4687b662d6393d5aacbb91a311bf834f4a3ead36be97f', '4921-full-selected-main-packet/candidate/counter-prepared/algorithm-work.test': '6b4a7e9f357619edc4037d546ef8f77dce741cf8b5db8ac915a60b220f968075', '4920-residency-selected-main-packet/candidate/prepared/freeze.json': 'ed4740e53791ed2d04e0ce4d8ef5468fe4d0f4f99e4a0e384ee287152ed59f39', '4920-residency-selected-main-packet/candidate/prepared/algorithm-work.test': '6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c'})
+HASHES.update({
+ "4921-selected-main-five-pair-analysis.json": "33329d7db4892f758d8092a0f3aa4444623d1f3811f0a88322dd24427baceba9",
+ "4921-75f-independent-selected-main-source-review.md": "6ef184a02367e66d7fb3daee3e36a49eaf8a8a773b13b655c5dbcf9b17947e8c",
+ "4921-selected-main-full-paired-plan.json": "aedd1ed66362201ed5cc7269e0352a65aaced903c20bb1ae7f797864b893ebe4",
+ "4921-selected-main-full-extension-plan.json": "a1e194b192cf2bd339f65136589df62ffc7d8f4d3511f2f66a3b40059bcb0188",
+ "4921-full-selected-main-packet/all4-preparation-anchor.json": "4bf1548ebf7bd1c29d8441c671a6fbc5c84e2b9b7bac08d88df9e5314a7f059e",
+ "4920-selected-main-three-pair-residency-analysis.json": "7908f7ecf6c2cab50ed93985c07c6a32bebe2308c7c4778a0bf6b19e144ff99d",
+ "4920-selected-main-residency-independent-evidence-review.md": "cb008a67c3b32c623bd405f9da237757c62435a1f50bc5fb45efd018eadcd4a2",
+ "4920-root-selected-main-residency-disposition.md": "896a2c23190d22e3100eef95ddd96f53bdcfe879236373cdfae6ee9cfd9479ff",
+ "4920-residency-recorder.py": "0171eefeae1b80599b6cf1c91bcbf022671a75c01749cd6963a9150a198cab58",
+ "persistent-delta-root-activation-disposition.md": "e25edc6aab176d28195c5a9c5e85378f05b289bb433d067bb3c77ae3286dac83",
+ "4921-full-selected-main-packet/control/normal-prepared/freeze.json": "fea5745454ddb43206a637a23e4b7317296f101a40aa0b7feb1bfb20879d4349",
+ "4921-full-selected-main-packet/control/normal-prepared/algorithm-work.test": "f4559a0125776a47df3ceebac35eeacbd605b3a399d9fca09be3b28baa1f5c99",
+ "4921-full-selected-main-packet/control/counter-prepared/freeze.json": "8f8aed0810c4b9baf075b376390efa2d0bcbccc8c008453b5bb3d52ca8e12d6f",
+ "4921-full-selected-main-packet/control/counter-prepared/algorithm-work.test": "b372484c49583c33685879a7a95a278dfdf8afe81f8341640204c7b0c111e14a",
+ "4920-residency-selected-main-packet/control/prepared/freeze.json": "9d9d714c98e18ee2fbcd249d2322e69a54f58293123ba3a901385745a0cf0e1b",
+ "4920-residency-selected-main-packet/control/prepared/algorithm-work.test": "c21bade8d841b283709c7a87c07f4a2f453e337a1d5a451d6dbd19cdd27e58fc",
+ "4921-full-selected-main-packet/candidate/normal-prepared/freeze.json": "16b796bb06fbc25593dacf3c96de7cb917e7067afb7d93215e10248af86f658b",
+ "4921-full-selected-main-packet/candidate/normal-prepared/algorithm-work.test": "519cec8a30c6cd365ef2e64426faf8a7bf6bf55f8e743e540b08b9f3a94e211a",
+ "4921-full-selected-main-packet/candidate/counter-prepared/freeze.json": "845c94a226131c8fdcb4687b662d6393d5aacbb91a311bf834f4a3ead36be97f",
+ "4921-full-selected-main-packet/candidate/counter-prepared/algorithm-work.test": "6b4a7e9f357619edc4037d546ef8f77dce741cf8b5db8ac915a60b220f968075",
+ "4920-residency-selected-main-packet/candidate/prepared/freeze.json": "ed4740e53791ed2d04e0ce4d8ef5468fe4d0f4f99e4a0e384ee287152ed59f39",
+ "4920-residency-selected-main-packet/candidate/prepared/algorithm-work.test": "6f63ba9ee94cf11f0e7491a502644ab169183b90f9791d8212f8f170f120e74c"
+})
 HERE = Path(__file__).resolve().parent
 
 def sha(path):
@@ -137,7 +160,9 @@ def pointer_tables(root, cap, compare, require):
         assert e['pilot'] is False and e['small_flush'] is False
         assert e['source_before']==e['source_after']
         assert all(e['source_before'][k]==f[k] for k in cap.IDENTITY_KEYS)
-        assert e['binary_sha256']==f['binary_sha256'] and e['freeze_sha256']==sha(root/f'4921-full-selected-main-packet/{product}/{"counter" if family=="internal" else "normal"}-prepared/freeze.json')
+        mode='counter' if family=='internal' else 'normal'
+        frozen_path=root/f'4921-full-selected-main-packet/{product}/{mode}-prepared/freeze.json'
+        assert e['binary_sha256']==f['binary_sha256'] and e['freeze_sha256']==sha(frozen_path)
         for stream in ('stdout','stderr'): assert e[stream+'_sha256']==sha(directory/f'{stream}.log')
         parsed=cap.validate_log((directory/'stdout.log').read_text(encoding='utf-8'),family,f,False,False)
         assert parsed==read(directory/'parsed.json')
