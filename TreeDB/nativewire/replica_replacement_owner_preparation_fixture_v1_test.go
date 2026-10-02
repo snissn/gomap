@@ -172,10 +172,9 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 		t.Fatal(err)
 	}
 	t.Cleanup(client.Close)
-	fixedPeerWaitV1(t, ctx, func() bool {
-		status, err := client.Status(ctx, "source-holder")
-		return err == nil && status.CatalogRaft.State == "Leader" && len(status.Groups) == 1 && status.Groups[0].LeaderID == "source-holder"
-	})
+	if leader := fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes[:len(configs)-1]); configs[leader].NodeID != "source-holder" {
+		t.Fatal("owner fixture changed catalog leader")
+	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, vector.Catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -190,15 +189,13 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	// Trusted bootstrap has no semantic result receipt. Commit a real command
 	// before BUILD, using the generic native replacement fixture's producer.
 	owner := runtimes[1].localDataV1("group-b")
-	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, config := range configs[:len(configs)-1] {
-			status, err := client.Status(ctx, config.NodeID)
-			if err != nil || len(status.Groups) != 1 || status.Groups[0].LeaderID != config.NodeID {
-				return false
-			}
+	// Single-member owner hints can appear before their current-term prefix.
+	// Retry only quorum-fenced reads before the one-shot BUILD/stage/ACTIVE.
+	for _, config := range configs[:len(configs)-1] {
+		if leader := fixedPeerWaitDataLeaderV1(t, ctx, runtimes[:len(configs)-1], config.Groups[0]); leader != config.NodeID {
+			t.Fatalf("owner fixture group %s leader=%s want %s", config.Groups[0].ID, leader, config.NodeID)
 		}
-		return true
-	})
+	}
 	version, known, err := owner.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
 		t.Fatal(err)

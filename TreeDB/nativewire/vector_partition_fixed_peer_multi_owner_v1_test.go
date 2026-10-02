@@ -67,8 +67,6 @@ func TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1(t *testing.T) {
 
 func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, queryCount, topK, efSearch, mergeEntries int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
 	definition := collections.VectorIndexDefinition{
 		Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine,
 		Dimensions: 768, M: 16, EfConstruction: 128, EfSearch: 128,
@@ -93,6 +91,10 @@ func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, que
 	}
 	seed := newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, nil, [2]string{"group-b", "group-c"}, true, true, definition)
 	t.Cleanup(func() { _ = seed.database.Close() })
+	// Seed construction is synchronous setup, not part of the TCP correctness
+	// deadline. Keep the real graph geometry and the same bounded operation budget.
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
 	persisted := seed.collection.MetaView()
 	expectedDigest := collections.VectorIndexDefinitionDigestV1(definition)
 	if len(persisted.VectorIndexes) != 1 || persisted.VectorIndexes[0].SchemaGeneration != 1 ||
