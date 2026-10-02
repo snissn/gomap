@@ -23,6 +23,24 @@ Errors and newly allocated output do not restore capacity from the caller's
 buffer. This is an in-memory reuse contract; it changes no on-disk format,
 pointer lifetime, checksum requirement, or cache/scratch retention limit.
 
+### 1.2 Owned append reads
+
+Ordinary owned `Get` resolves published pointers through `ReadAppend`. After an
+unmapped miss, this path uses the same sealed lazy-mmap eligibility and mapping
+budgets as view reads. Current writable segments without persistent mapping,
+mapping denials, unsupported platforms and unavailable mapped ranges retain the
+existing file-read fallback. Mapped hits do not re-enter lazy-map admission.
+
+Compressed grouped owned reads may admit decoded frames under the existing
+entry, raw-size and manager-wide byte limits. A hit copies the selected bytes
+directly into the final owned destination while holding the cache slot read
+lock, including when an append prefix requires a larger destination. Encoded
+templates first copy their encoded input, then release that lock before template
+lookup and decode. Returned owned bytes never borrow cache or mapping storage.
+Record CRC verification precedes a mapped cache hit; cache identity includes the
+verification mode and frame shape. Physical identity pins, segment reachability,
+eviction and close retain their existing lifetime rules.
+
 ## 2. Segment States
 
 Conceptually, a value-log segment can be:

@@ -77,6 +77,24 @@ no on-disk format change. See [decode scratch reuse](../spec/value-log-lifecycle
 The [#4889 qualification packet](../../../docs/benchmarks/treedb_decode_reuse_20261001/README.md)
 retains matched sources, public caller/ownership audit and physical-capacity caveats.
 
+For owned value-log routing, `BenchmarkFileReadAppendOwned` compares equal
+compressed pointer records through file fallback, mapped decode and warmed
+mapped cache. The cache row pre-admits the same raw frame through a reusable
+destination on both revisions, isolating the final owned-copy cost. The
+`cold_open_map` row includes OS-cache-warm open, map, read, admission and close
+costs. Each result still owns its output bytes. The cache reports its
+retained raw bytes separately from per-read output allocations; mapping and
+cache admission retain their existing limits. Use reopened public `Get` route
+counters to prove the selected path rather than comparing inline values against
+pointer values. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkFileReadAppendOwned$' -benchmem -count 5
+TREEDB_HOT_PATH_STATS=1 GOWORK=off go test ./TreeDB -run '^$' \
+  -bench '^BenchmarkDBOwnedValueLogRoute$' -benchmem -count 5
+```
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:

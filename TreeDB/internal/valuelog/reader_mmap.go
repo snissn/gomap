@@ -1286,19 +1286,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst[len(dst):len(dst)]); hit {
+	if cachedDst, _, err, hit := f.groupedFrameCacheReadAppend(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
 		if err != nil {
 			return nil, err, true
 		}
 		oldLen := len(dst)
-		if usedDst {
-			dst = dst[:oldLen+len(cachedVal)]
-		} else {
-			dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
-			}
-		}
+		dst = cachedDst
 		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
@@ -1347,9 +1340,8 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return dst, nil, true
 	}
-	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
-	// grouped frames there to limit memory overhead in random-read-heavy paths.
-	cacheableRaw := dst != nil && f.groupedFrameCacheAllowsRaw(int(rawLen))
+	// Owned point gets share the existing entry, raw-size and byte-budget limits.
+	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
 	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)
