@@ -341,3 +341,12 @@ An 8,192-key pilot is unretained; full cells use 250,000 keys in fresh processes
 and wait for the reviewed harness to land. Configured cache bytes are not equal
 physical RAM. These standalone package benchmark packets/logs are not
 unified-bench profile-dir artifacts or benchprof inputs.
+
+## TreeDB algorithm-work package harness
+
+`BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany` emit ordinary
+Go benchmark output and JSON diagnostic packets, as documented in
+[`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
+Their package-test profiles and counter-only overlays are not benchprof inputs.
+The dedicated `capture.py prepare|capture|validate` flow emits `freeze.json`,
+`execution.json`, `parsed.json`, and separately hashed stdout/stderr logs.
