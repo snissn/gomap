@@ -3,7 +3,9 @@ package collections
 import (
 	"context"
 	"errors"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -18,6 +20,7 @@ type CommandWALAdmittedCollection struct {
 	partitionSourcePin   *backenddb.Snapshot
 	partitionCapture     *backenddb.StableResourceCaptureLease
 	replayOperation      *backenddb.CommandWALIntent
+	staging              *commandwalapply.StagingGuard
 }
 
 // WithPreparedCommandWALMutation owns schema, vector coverage/admission and
@@ -72,14 +75,20 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 	if err != nil {
 		return err
 	}
-	if !fromReplay {
-		unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, nil)
+	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
+	if !fromReplay && c.db.CommandWALEnabled() {
+		actualGuard, err := c.lockCommandWALStagingGuardWithAdmission(admission)
 		if err != nil {
 			return err
 		}
-		unlockRaw()
+		staging, err := commandwalapply.NewStagingGuard(c.db, actualGuard)
+		if err != nil {
+			actualGuard.Release()
+			return err
+		}
+		defer staging.Release()
+		owner.staging = staging
 	}
-	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
 	return apply(owner)
 }
 
@@ -93,6 +102,19 @@ func (owner *CommandWALAdmittedCollection) validate() error {
 		}
 	}
 	return owner.collection.ensureWriteDomainOpen()
+}
+
+// CommandWALAppendOptions transfers this callback's already-drained staging
+// lease to the local append handle. Callers must pass these options to Append;
+// ordinary Append would recursively acquire the non-reentrant staging mutex.
+func (owner *CommandWALAdmittedCollection) CommandWALAppendOptions(sync bool) (commandwalapply.Options, error) {
+	if err := owner.validate(); err != nil {
+		return commandwalapply.Options{}, err
+	}
+	if owner.staging == nil {
+		return commandwalapply.Options{}, errors.New("collections: prepared command WAL staging guard is missing")
+	}
+	return commandwalapply.Options{Sync: sync, Staging: owner.staging}, nil
 }
 
 func (owner *CommandWALAdmittedCollection) Meta() CollectionMeta { return owner.collection.Meta() }

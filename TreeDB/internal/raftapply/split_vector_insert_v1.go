@@ -35,7 +35,11 @@ func (h *Harness) applySplitVectorInsertV1(entry raftentry.CommandEntryV1, meta 
 				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: split WAL payload: %v", err)
 			}
 			frame := commandwalapply.LoweredFrame{Class: commandwalapply.LoweredFrameClassCollectionSplitVectorInsertV1, Kind: commitlog.CommandKindCollectionSplitVectorInsertV1, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionSplitVectorInsertV1, Payload: payload}
-			handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
+			appendOptions, err := owner.CommandWALAppendOptions(meta.SyncLocalCommandWAL)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 			if err != nil {
 				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 			}
