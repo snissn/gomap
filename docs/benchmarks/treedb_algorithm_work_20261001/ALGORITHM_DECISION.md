@@ -11,11 +11,15 @@ deltas are uneconomic or that the unmeasured capacity requirement has passed.
 
 [#4893](https://github.com/snissn/gomap/issues/4893) remains open. This provisional
 integration carries T/A decision components in [H #4913](https://github.com/snissn/gomap/pull/4913)
-under root's published graph reassessment. **ACTUAL POINTER MERGE PENDING**:
-selected candidate `75fe577ecc6ab81237df2cff58454bbeb205cc71` is measured against
-control `bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`, and is qualified for the bounded objective, but remains unmerged. Its accepted
-five-pair objective/noise/owned-tradeoff disposition is recorded below; final-base
-current-head CI, review inventory and actual #4921 merge remain required. No candidate hash is a shipped identity.
+under root's published graph reassessment. [Selected pointer #4921](https://github.com/snissn/gomap/pull/4921)
+actually merged at `af2d4003dc54eb491725d44383ab68264b4f4639`, from reviewed head
+`dacff6cde293e995e13a5b63fad9b266dd9a79b0` on main
+`c6b95440058d7f46bfc094da35cf293749c8b5bd`; all49 current checks passed with no
+unresolved threads or formal change requests. The measurements retain candidate
+`75fe577ecc6ab81237df2cff58454bbeb205cc71` against control
+`bc9764ab92a9ceeeb4ae15706c920653e5dd8bbc`. Its accepted five-pair
+objective/noise/owned-tradeoff disposition is recorded below; the measured
+executables are not relabeled as merged binaries.
 
 Snapshot decision [#4931](https://github.com/snissn/gomap/pull/4931) actually merged
 at `f9152b5b64dd0e38f5bd5a46bdfbe36e1db10775`; defaults remain selected. Root
@@ -253,12 +257,13 @@ Optimized Python fails before document/evidence I/O; all text is explicit UTF-8.
 The raw packets, freezes, pre-timer order, normal/counter separation and profile
 exclusion remain the authoritative provenance contract.
 
-Final integration acceptance still requires actual #4921 merged product identity, independent fresh-context final A and
-whole-union review, final integrated-head CI/review inventory and unchanged parent
+Final integration imports the verified actual #4921 merge. The provisional A and
+whole-union source review is accepted; final-field/base applicability, integrated-head
+CI/review inventory and unchanged parent
 capacity/maintenance/representative obligations. Snapshot landing and bounded
 delta nonactivation are recorded above; no pending acceptance is supplied.
 
-## Selected pointer callback: five-pair evidence, merge pending
+## Selected pointer callback: five-pair evidence and actual landing
 
 The selected actual-main candidate uses existing verified append readers and the
 bounded callback destination/frame cache; no rejected shared traversal ships here.
@@ -278,7 +283,7 @@ latency, quiet-host/cold-cache guarantee, or owned/inline performance-win claim.
 Independent full actual-evidence review and root's bounded objective/noise/owned
 tradeoff disposition are accepted; the retained raw gate is >=50% callback bytes/count reduction, >=25% sorted/clustered
 callback latency improvement with directional agreement, plus all public safety,
-uniform/owned/inline and retention/peak guards. Actual merged identity is pending.
+uniform/owned/inline and retention/peak guards. Actual merged identity is recorded above.
 
 [Root's accepted disposition](https://github.com/snissn/gomap/issues/4920#issuecomment-5957915606)
 retains the small owned-read tradeoffs explicitly: pointer uniform owned median
@@ -296,11 +301,14 @@ inline/owned, cold-cache/SLO or capacity claim is accepted.
 
 Independent accepted full-evidence review rechecks all129 original files, all12
 raw captures, four actual ELF binaries/freezes, all36 summaries and20 flags.
-The root source/base audit records mature candidate
-`c6609e48a02535fa34e4062be9b42673a1781ead` on actual maincba, with exact measured75f
-production/tests and canonical harness/capture bytes preserved. This is not an
-actual merge identity. The retained measurements and executables stay at75f/bc;
-no runtime from the provisional pointer branch is imported into H before merge.
+The historical root source/base audit records mature candidate
+`c6609e48a02535fa34e4062be9b42673a1781ead` on actual maincba. The final audit and
+independent applicability review bind `dacff6cde293e995e13a5b63fad9b266dd9a79b0`
+on actual mainc6b, preserving exact measured75f production/tests and canonical
+harness/capture bytes; unrelated main changes affect only power-loss-oracle tests.
+The actual merge receipt binds landed `af2d4003dc54eb491725d44383ab68264b4f4639`.
+H imports that landed runtime by merging main. The retained measurements and
+executables stay at75f/bc; source applicability is not fresh final-binary measurement.
 
 
 Separate three-pair forced-GC residency diagnostics used two distinct binaries,
@@ -536,3 +544,6 @@ bytes, not just the occurrence of a digest anywhere in this document.
 | `4921-selected-main-five-pair-independent-evidence-review.md` | `2a26940f8380e712ed4a76ddd6343a277521510a61191dde4a93f524ed7d89f6` |
 | `4921-root-selected-main-five-pair-disposition.md` | `8683a46ad73c21b6f6a79660ec26ff3788b1b3e5e2c21f630deb7e6fcdfd9d9c` |
 | `4921-final-source-base-audit.json` | `69330f8d435d1ca993d9d7252cd59438d940a43ba1112cf9d30b035f1fde6c9b` |
+| `4921-c6b-final-source-applicability.json` | `3f153e5ff653bd563ed65e680e2f2c4cf1a284acea03c9521744b1f6af83eabf` |
+| `4921-dacff-final-base-evidence-applicability-review.md` | `aa8266317a5c5c0ec66cd8047dabfac207cdb037860fa3034a2991aadb719d56` |
+| `4921-actual-merge.json` | `42bae8b8d9741790cbb0397dd1ad8296b31e70c36a33d3905bb4d95db9ae7c0c` |
