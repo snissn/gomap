@@ -772,7 +772,9 @@ Coverage:
     The smaller case also checks partial-phase failure, cleanup, and retry when
     packed dictionary authority is unavailable. `-short` skips the original size.
 - `TreeDB/side_store_lookups_test.go`
-  - read-only dictionary owners expose stable resource capture without writes
+  - read-only dictionary owners retain lookups without writes; stable capture
+    succeeds on supported owners and returns typed namespace refusal without
+    authority on reopened read-only Windows owners
 - `TreeDB/db/leaf_generation_pack_authority_test.go`
   - dictionary closure lifetime, rollback after partial install, and post-install
     failure cleanup

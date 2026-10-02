@@ -2,7 +2,9 @@ package treedb
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -36,15 +38,25 @@ func TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites(t *testing.T) {
 		t.Fatal("dictionary owner did not expose stable authority")
 	}
 	resources, err := provider.CaptureDictionaryResources(context.Background(), dictID)
-	if err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		// Reopened read-only owners cannot supply create-only namespace evidence.
+		if !errors.Is(err, ErrNamespacePersistenceUnsupported) || resources != nil {
+			t.Fatalf("read-only dictionary capture: resources=%v err=%v, want nil authority and typed namespace refusal", resources, err)
+		}
+	} else {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resources == nil || resources.Len() == 0 {
+			t.Fatal("empty dictionary authority")
+		}
+		resources.Release()
 	}
-	if resources == nil || resources.Len() == 0 {
-		t.Fatal("empty dictionary authority")
-	}
-	resources.Release()
 	if opts.ValueLog.DictLookup == nil {
 		t.Fatal("expected DictLookup to be wired")
+	}
+	if got, err := opts.ValueLog.DictLookup(dictID); err != nil || string(got) != "maintenance dictionary" {
+		t.Fatalf("read-only dictionary lookup: got=%q err=%v", got, err)
 	}
 	if opts.ValueLog.DictCurrentForClass == nil {
 		t.Fatal("expected DictCurrentForClass to be wired")
