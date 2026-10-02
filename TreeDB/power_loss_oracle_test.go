@@ -355,7 +355,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	latestSealedSequence := baseSequence
 	baseAppliedLSN := publicAppliedCommandLSN(t, db)
 	sealWriteObserved := false
-	var dependencyPaths []string
+	var pendingRecord rootpublication.DurableRootRecordV1
 	var commandFrames []observedPowerLossCommandFrame
 	generations := []powerlossoracle.Generation{{
 		Sequence:    baseSequence,
@@ -371,9 +371,6 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 		defer observerMu.Unlock()
 		if err := model.Observe(dir, event); err != nil {
 			return err
-		}
-		if event.Point == durabilitycut.AfterDependencyAppend && (event.Resource == durabilitycut.ResourceValueLog || event.Resource == durabilitycut.ResourceOuterLeaf) {
-			dependencyPaths = appendUniquePaths(dependencyPaths, event.Path, event.Paths...)
 		}
 		if event.Point == durabilitycut.AfterDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
 			if event.Path == "" {
@@ -392,9 +389,6 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 				expectedByAppliedLSN[event.LSN] = cloneExpectedPowerLossState(durableState)
 			}
 		}
-		if event.Point == durabilitycut.AfterDependencyFileSync {
-			dependencyPaths = appendUniquePaths(dependencyPaths, event.Path, event.Paths...)
-		}
 		if event.Point == durabilitycut.BeforePublicationSealWrite {
 			sealWriteObserved = false
 		}
@@ -406,6 +400,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			pendingRecord = record
 			pendingPublication = powerlossoracle.Generation{Sequence: record.CommitSeq, AppliedLSN: record.AppliedCommandLSN, Recoverable: true}
 			t.Logf("publication phase=%s meta-offset=%d commit=%d durable=%d parent=%d applied-lsn=%d", phase, event.Offset, record.CommitSeq, record.DurableSeq, record.ParentCommitSeq, record.AppliedCommandLSN)
 		}
@@ -416,7 +411,11 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 			if _, known := expectedByAppliedLSN[pendingPublication.AppliedLSN]; !known {
 				return fmt.Errorf("meta sync generation=%d has unmodeled applied LSN=%d", pendingPublication.Sequence, pendingPublication.AppliedLSN)
 			}
-			resources, err := observedPowerLossClosure(model, dir, event.Path, dependencyPaths, sealWriteObserved, pendingPublication.AppliedLSN, true)
+			entries, err := readPowerLossDependencies(event.Path, pendingRecord)
+			if err != nil {
+				return err
+			}
+			resources, err := observedPowerLossClosure(model, dir, event.Path, entries, sealWriteObserved, pendingPublication.AppliedLSN, true)
 			if err != nil {
 				return err
 			}
@@ -1577,13 +1576,41 @@ func TestObservedPowerLossClosureRequiresAppendedDependencySync(t *testing.T) {
 	if err := model.Observe(root, durabilitycut.Event{Resource: durabilitycut.ResourceValueLog, Namespace: durabilitycut.NamespaceCreate, NewPath: valuePath}); err != nil {
 		t.Fatal(err)
 	}
-	resources, err := observedPowerLossClosure(model, root, indexPath, []string{valuePath}, true, 0, false)
+	file, err := os.Open(valuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []rootpublication.DependencyManifestEntryV1{{Kind: rootpublication.ResourceValueLog, DiagnosticPath: "value_vlog/value-l0-000001.log", Identity: identity, Frontier: rootpublication.DurableFrontier{Bytes: uint64(len("volatile-value"))}}}
+	resources, err := observedPowerLossClosure(model, root, indexPath, entries, true, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, resource := range resources {
 		if resource.Kind == powerlossoracle.ResourceValueLog && resource.Stable {
 			t.Fatal("unsynced appended value-log dependency was reported stable")
+		}
+	}
+	if err := model.SyncFile(entries[0].DiagnosticPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("value_vlog"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	resources, err = observedPowerLossClosure(model, root, indexPath, entries, true, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range resources {
+		if resource.Kind == powerlossoracle.ResourceValueLog && !resource.Stable {
+			t.Fatal("synced exact dependency was reported unstable")
 		}
 	}
 }
@@ -1651,6 +1678,9 @@ func readPowerLossPublication(event durabilitycut.Event) (rootpublication.Durabl
 	image := make([]byte, page.PageSize)
 	if _, err := file.ReadAt(image, event.Offset); err != nil {
 		return rootpublication.DurableRootRecordV1{}, err
+	}
+	if !page.VerifyChecksumNonMutating(image) || page.DecodeHeader(image).PageID != uint64(event.Offset/page.PageSize) {
+		return rootpublication.DurableRootRecordV1{}, errors.New("invalid checksummed meta publication")
 	}
 	meta, err := page.DecodeDurableMetaV1(image[page.PageHeaderSize:])
 	if err != nil {
@@ -1784,24 +1814,6 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 	if validationErr := scenario.Validate(); validationErr != nil {
 		t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t scenario: %v", powerLossOracleSeed, cut, occurrence, readOnly, validationErr)
 	}
-}
-
-func appendUniquePaths(paths []string, path string, more ...string) []string {
-	seen := make(map[string]struct{}, len(paths)+len(more)+1)
-	for _, existing := range paths {
-		seen[existing] = struct{}{}
-	}
-	for _, candidate := range append([]string{path}, more...) {
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		paths = append(paths, candidate)
-	}
-	return paths
 }
 
 func appendPowerLossCommandFrame(frames []observedPowerLossCommandFrame, candidate observedPowerLossCommandFrame) ([]observedPowerLossCommandFrame, error) {
@@ -2308,7 +2320,31 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 	}
 }
 
-func observedPowerLossClosure(model *powerlossoracle.Model, root, indexPath string, dependencyPaths []string, sealWriteObserved bool, appliedLSN uint64, commandWALRequired bool) ([]powerlossoracle.Resource, error) {
+type powerLossPageSource struct{ file *os.File }
+
+func (source powerLossPageSource) ReadPage(id uint64) ([]byte, error) {
+	image := make([]byte, page.PageSize)
+	_, err := source.file.ReadAt(image, int64(id)*page.PageSize)
+	return image, err
+}
+
+func readPowerLossDependencies(indexPath string, record rootpublication.DurableRootRecordV1) ([]rootpublication.DependencyManifestEntryV1, error) {
+	if record.Directory.RootPageID != 0 {
+		return nil, errors.New("actual-cut fixture requires a V1 dependency manifest")
+	}
+	file, err := os.Open(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	manifest, err := rootpublication.LoadDependencyManifestV1(powerLossPageSource{file}, record.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	return manifest.Entries(), nil
+}
+
+func observedPowerLossClosure(model *powerlossoracle.Model, root, indexPath string, entries []rootpublication.DependencyManifestEntryV1, sealWriteObserved bool, appliedLSN uint64, commandWALRequired bool) ([]powerlossoracle.Resource, error) {
 	indexStable, err := model.PathStable(root, indexPath)
 	if err != nil {
 		return nil, err
@@ -2323,16 +2359,19 @@ func observedPowerLossClosure(model *powerlossoracle.Model, root, indexPath stri
 		powerlossoracle.ResourceSeal:       indexStable && sealWriteObserved,
 		powerlossoracle.ResourceCommandWAL: !commandWALRequired || indexStable && appliedLSN > 0,
 	}
-	for _, path := range dependencyPaths {
-		stable, err := model.PathStable(root, path)
+	dependencyRoot, err := filepath.Rel(root, filepath.Dir(indexPath))
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		stable, err := model.DependencyStable(dependencyRoot, entry)
 		if err != nil {
 			return nil, err
 		}
-		slashed := filepath.ToSlash(path)
-		switch {
-		case strings.Contains(slashed, "/value_vlog/"):
+		switch entry.Kind {
+		case rootpublication.ResourceValueLog:
 			kindStable[powerlossoracle.ResourceValueLog] = kindStable[powerlossoracle.ResourceValueLog] && stable
-		case strings.Contains(slashed, "/leaf_vlog/"):
+		case rootpublication.ResourceOuterLeafLog:
 			kindStable[powerlossoracle.ResourceOuterLeaf] = kindStable[powerlossoracle.ResourceOuterLeaf] && stable
 		default:
 			kindStable[powerlossoracle.ResourceAuxiliary] = kindStable[powerlossoracle.ResourceAuxiliary] && stable

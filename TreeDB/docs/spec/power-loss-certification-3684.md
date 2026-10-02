@@ -205,3 +205,19 @@ preflight and executes from a clean exact `origin/main` SHA. The resulting
 bundle, hashes, retry history, performance report, and claim boundary must then
 be published as the certification evidence. Helper-only or clean/process tests
 must not be relabeled as modeled crash evidence.
+
+## Actual-cut root closure
+
+The command-WAL actual-cut enumerator records each emitted checksummed meta and
+root record. At its completed meta sync it loads that root's checksummed V1
+DependencyManifest and checks the model's exact physical identities, required
+stable namespace and bytes through each recorded byte frontier. An unrelated
+later volatile append does not invalidate an already complete root. Missing,
+short, changed required prefixes or rebound names/parent identities do.
+
+This fixture supports the V1 byte-frontier dependency family. It refuses V2
+dependency directories and LSN/RID manifest frontiers rather than treating them
+as byte prefixes; command-WAL LSN, frame checksum and external-RID replay checks
+remain separately enforced by the existing command-frame oracle and public
+reopen. Full-file equality still applies where the model asks about an entire
+file. These fixture/model checks do not certify current main or physical media.
