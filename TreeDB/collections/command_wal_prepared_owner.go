@@ -60,24 +60,24 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return err
 	}
-	var err error
+	flushBuffered := c.flushBufferedWritesWithVectorAdmissionLocked
+	if coveragePersistence {
+		flushBuffered = c.flushBufferedWritesWithCoverageLocked
+	}
 	_, fromReplay := replay.ReplayAssignedLSN()
 	if fromReplay {
 		if err := c.db.ValidateCommandWALReplayOperationV1(replay); err != nil {
 			return err
 		}
-		err = c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true, false)
-	} else if coveragePersistence {
-		err = c.flushBufferedWritesWithCoverageLocked()
-	} else {
-		err = c.flushBufferedWritesWithVectorAdmissionLocked()
-	}
-	if err != nil {
+		if err := c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true, false); err != nil {
+			return err
+		}
+	} else if err := flushBuffered(); err != nil {
 		return err
 	}
 	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
 	if !fromReplay && c.db.CommandWALEnabled() {
-		actualGuard, err := c.lockCommandWALStagingGuardWithAdmission(admission)
+		actualGuard, err := c.lockCommandWALStagingGuardWithAdmission(admission, flushBuffered)
 		if err != nil {
 			return err
 		}
