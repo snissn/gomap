@@ -1,0 +1,11 @@
+original_sha256=9109aa4bbfb486b48de56cae61618489502914fb091d95aa3f5f4b24c20376cc
+mutated_sha256=ad3a74c0d6ed6b33f272b0719135e06a691b346a24bd9a1fad38981ca4e9afc3
+--- FAIL: TestNegativeFilterPointEntrancesNeverDescend (0.00s)
+    negative_filter_test.go:18: missing pager
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/tree	0.001s
+--- FAIL: TestNegativeFilterPublicRoutesNeverDescend (0.04s)
+    negative_filter_test.go:94: missing pager
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.046s
+FAIL

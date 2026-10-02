@@ -91,6 +91,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 			}
 			dictOpts := *opts
 			dictOpts.PhysicalSnapshotSideStoreCapture = nil
+			dictOpts.NegativeLookupFilterBytes = 0
 			dictOpts.Dir = dictDir
 			dictOpts.ReadOnly = opts.ReadOnly
 			dictOpts.ChunkSize = dictChunk
@@ -180,6 +181,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 			}
 			templateOpts := *opts
 			templateOpts.PhysicalSnapshotSideStoreCapture = nil
+			templateOpts.NegativeLookupFilterBytes = 0
 			templateOpts.Dir = templateDir
 			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff
 			templateOpts.ReadOnly = templateReadOnly
