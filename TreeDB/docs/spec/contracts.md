@@ -417,6 +417,19 @@ When the cached layer is enabled:
 
 ## 5. Snapshot Contracts
 
+- Exported snapshot handles are single-use and MUST NOT be recycled: a closed
+  alias stays closed after any later snapshot acquisition.
+- Backend `DB.Get`, `GetAppend`, `GetVersioned`, and `GetVersionedAppend` use a
+  private pooled one-shot guard. It runs the same coherent capture and release
+  as an exported snapshot: publication/root-reuse locking, acquisition epochs,
+  commit-sequence registration, value-log set and leaf-generation pins, and
+  close/poison rejection all apply. Retry-on-missing-file reads release the first
+  capture before refresh and recapture. Its pointer MUST NOT reach callers,
+  callbacks, root readers, or iterators; only owned results or caller-buffer
+  appends may escape. Release clears captured state, reader interfaces, and the
+  tree pager before reuse. Public snapshots, batched callback reads, and
+  iterators continue to acquire fresh exported handles.
+
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
 - `Snapshot.Iterator` and `Snapshot.ReverseIterator` bind iterators to that
   snapshot's pinned view. Closing the snapshot immediately invalidates every

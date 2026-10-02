@@ -125,12 +125,34 @@ func BenchmarkDBValueLogGet(b *testing.B) {
 	db, keys := openSnapshotValueLogBenchDB(b)
 	defer func() { _ = db.Close() }()
 
+	benchmarkDBValueLogGet(b, db, keys)
+}
+
+// BenchmarkDBCheckpointedValueLogGet exercises owned reads through the ordinary
+// public/cached API after checkpointing, so each read reaches backend capture.
+func BenchmarkDBCheckpointedValueLogGet(b *testing.B) {
+	db, keys := openSnapshotValueLogBenchDB(b)
+	defer func() { _ = db.Close() }()
+	if err := db.Checkpoint(); err != nil {
+		b.Fatal(err)
+	}
+	// Warm every key before timing, including the backend leaf/value read path.
+	for i, key := range keys {
+		out, err := db.Get(key)
+		if err != nil || len(out) != 256 || binary.BigEndian.Uint64(out[len(out)-8:]) != uint64(i) {
+			b.Fatalf("warm Get(%d): len=%d err=%v", i, len(out), err)
+		}
+	}
+	benchmarkDBValueLogGet(b, db, keys)
+}
+
+func benchmarkDBValueLogGet(b *testing.B, db *DB, keys [][]byte) {
 	b.Run("Get", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			out, err := db.Get(keys[i%len(keys)])
-			if err != nil {
-				b.Fatalf("DB.Get: %v", err)
+			if err != nil || len(out) != 256 || binary.BigEndian.Uint64(out[len(out)-8:]) != uint64(i%len(keys)) {
+				b.Fatalf("DB.Get: len=%d err=%v", len(out), err)
 			}
 			snapshotReadBenchSink = out
 		}
@@ -142,8 +164,8 @@ func BenchmarkDBValueLogGet(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			dst = dst[:0]
 			out, err := db.GetAppend(keys[i%len(keys)], dst)
-			if err != nil {
-				b.Fatalf("DB.GetAppend: %v", err)
+			if err != nil || len(out) != 256 || binary.BigEndian.Uint64(out[len(out)-8:]) != uint64(i%len(keys)) {
+				b.Fatalf("DB.GetAppend: len=%d err=%v", len(out), err)
 			}
 			snapshotReadBenchSink = out
 		}
@@ -153,8 +175,8 @@ func BenchmarkDBValueLogGet(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			out, err := db.GetUnsafe(keys[i%len(keys)])
-			if err != nil {
-				b.Fatalf("DB.GetUnsafe: %v", err)
+			if err != nil || len(out) != 256 || binary.BigEndian.Uint64(out[len(out)-8:]) != uint64(i%len(keys)) {
+				b.Fatalf("DB.GetUnsafe: len=%d err=%v", len(out), err)
 			}
 			snapshotReadBenchSink = out
 		}
