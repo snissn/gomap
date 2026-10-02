@@ -263,3 +263,25 @@ payloads retain the whole envelope backing allocation and its allocator size
 class; slice-capacity reduction cannot reduce that live storage. Lower B/op
 alone does not establish lower retained heap or throughput. These Go test
 artifacts/profiles are standalone diagnostics, not benchprof inputs.
+
+### Value-log mixed-frame decode reuse
+
+This standalone package benchmark alternates compressed 64 KiB/4 KiB frames
+through the shared bounded decoder, warming codecs before the timer. It reports
+Go benchmark text with ns/op, MB/s, B/op, allocs/op, `backing_allocs/op`, and
+`scratch_cap_B` (one buffer's apparent capacity, not process RSS).
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkValueLogDecodeFrame(Alloc|MixedReuse)$' \
+  -benchmem -count 5
+GOWORK=off go test ./TreeDB -run '^$' \
+  -bench '^BenchmarkDBValueLogGet$/^Get$' -benchmem -count 5
+```
+
+Keep the same benchmark source on baseline and candidate and serialize timed
+captures. The public owned-Get benchmark is a separate guardrail; scratch
+allocation reduction alone does not prove faster reads. These are Go test
+outputs, not unified-bench profile-dir artifacts or benchprof inputs. No
+profile parser or on-disk format changes are required. See the
+[typed-storage performance guide](../../TreeDB/docs/guides/typed-storage-performance.md#persistent-value-log-decode-scratch).
