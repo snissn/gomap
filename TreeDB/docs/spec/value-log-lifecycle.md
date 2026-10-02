@@ -13,6 +13,16 @@ TreeDB value-log pointers are durable storage references.
 A pointer remains valid while its segment is reachable from any live index state.
 Segments must not be deleted based only on age.
 
+### 1.1 Decode scratch reuse
+
+The shared compressed-frame decoder limits output to the admitted raw frame
+length, even when the caller supplies a larger scratch buffer. After a
+successful decode into the same starting backing allocation, its returned
+slice preserves the caller's capacity for subsequent mixed-size frames.
+Errors and newly allocated output do not restore capacity from the caller's
+buffer. This is an in-memory reuse contract; it changes no on-disk format,
+pointer lifetime, checksum requirement, or cache/scratch retention limit.
+
 ## 2. Segment States
 
 Conceptually, a value-log segment can be:
