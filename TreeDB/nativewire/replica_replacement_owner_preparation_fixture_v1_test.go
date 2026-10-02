@@ -161,11 +161,17 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 		}
 	})
 	for i, config := range configs {
-		opened, err := OpenFixedPeerTCPRuntimeV1(config)
+		opened, err := fixedPeerOpenTestRuntimeV1(t, config)
 		if err != nil {
 			t.Fatal(err)
 		}
 		runtimes[i] = opened
+		if config.NodeID == target {
+			fixedPeerAdoptTestAddressV1(opened, targetRaft)
+			if endpoint {
+				fixedPeerAdoptTestAddressV1(opened, vector.ShardAddresses["group-b"][target])
+			}
+		}
 	}
 	client, err := NewFixedPeerTCPClientV1(configs[0])
 	if err != nil {

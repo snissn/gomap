@@ -34,7 +34,7 @@ import (
 
 func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]FixedPeerTCPConfigV1, []*fixedPeerTestProcessV1, *FixedPeerTCPClientV1) {
 	t.Helper()
-	configs := fixedPeerTestConfigsV1(t)
+	configs := fixedPeerTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))
 	processes := make([]*fixedPeerTestProcessV1, len(configs))
 	for i := range configs {
 		processes[i] = fixedPeerStartTestProcessV1(t, configs[i])
@@ -110,7 +110,7 @@ func TestFixedPeerTCPAdmissionSaturationPreservesNestedRPCsV1(t *testing.T) {
 	c.Groups = c.Groups[:1]
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	r, err := OpenFixedPeerTCPRuntimeV1(c)
+	r, err := fixedPeerOpenTestRuntimeV1(t, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	open := func() *FixedPeerTCPRuntimeV1 {
-		r, err := OpenFixedPeerTCPRuntimeV1(c)
+		r, err := fixedPeerOpenTestRuntimeV1(t, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -590,7 +590,7 @@ func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
 		})
 	}
 	c := fixedPeerTestConfigsV1(t)[0]
-	r, err := OpenFixedPeerTCPRuntimeV1(c)
+	r, err := fixedPeerOpenTestRuntimeV1(t, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,14 +599,14 @@ func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
 	}
 	changed := c
 	changed.RequestTimeout += time.Millisecond
-	if other, err := OpenFixedPeerTCPRuntimeV1(changed); err == nil {
+	if other, err := fixedPeerOpenTestRuntimeV1(t, changed); err == nil {
 		other.Close()
 		t.Fatal("reopened with changed identity")
 	}
 	if err := os.WriteFile(filepath.Join(c.RaftRoot, "fixed-peer-v1.json"), []byte("corrupt"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if other, err := OpenFixedPeerTCPRuntimeV1(c); err == nil {
+	if other, err := fixedPeerOpenTestRuntimeV1(t, c); err == nil {
 		other.Close()
 		t.Fatal("reopened corrupt configuration")
 	}
@@ -657,6 +657,9 @@ func TestFixedPeerTCPPostSendCancellationIsCommitAmbiguousV1(t *testing.T) {
 
 func TestFixedPeerTCPConnectionRefusedIsNotCommitAmbiguousV1(t *testing.T) {
 	c := fixedPeerTestConfigsV1(t)[0] // No process is listening on these ports.
+	for _, address := range fixedPeerTCPListenAddressesV1(c) {
+		fixedPeerReleaseTestAddressV1(address)
+	}
 	client, err := NewFixedPeerTCPClientV1(c)
 	if err != nil {
 		t.Fatal(err)
@@ -864,11 +867,21 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 	if path == "" {
 		return
 	}
-	config, err := fixedPeerReadTestConfigV1(path)
+	listeners, err := fixedPeerChildListenersV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := OpenFixedPeerTCPRuntimeV1(config)
+	config, err := fixedPeerReadTestConfigV1(path)
+	if err != nil {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+		t.Fatal(err)
+	}
+	for address, listener := range listeners {
+		t.Logf("listener ownership node=%s address=%s owner_pid=%d actual=%s", config.NodeID, address, os.Getpid(), listener.Addr())
+	}
+	runtime, err := openFixedPeerTCPRuntimeV1(config, listeners)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -944,6 +957,9 @@ type fixedPeerTestProcessV1 struct {
 
 func fixedPeerStartTestProcessV1(t testing.TB, config FixedPeerTCPConfigV1) *fixedPeerTestProcessV1 {
 	t.Helper()
+	if process := fixedPeerClaimStagedTestProcessV1(t, config); process != nil {
+		return process
+	}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
@@ -960,6 +976,7 @@ func fixedPeerStartTestProcessV1(t testing.TB, config FixedPeerTCPConfigV1) *fix
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = log.Close() })
 	command := exec.Command(os.Args[0], "-test.run=^TestFixedPeerTCPRuntimeProcessV1$", "-test.v")
 	command.Env = append(os.Environ(), "GOMAP_FIXED_PEER_TEST_CONFIG_FILE="+configPath)
 	command.Stdout, command.Stderr = log, log
@@ -967,7 +984,18 @@ func fixedPeerStartTestProcessV1(t testing.TB, config FixedPeerTCPConfigV1) *fix
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = input.Close() })
+	release, err := fixedPeerPassTestListenersV1(t, command, input, config)
+	defer release()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixedPeerFinishTestListenerTransferV1(t, command, input); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
 		t.Fatal(err)
 	}
 	p := &fixedPeerTestProcessV1{command: command, input: input, log: log}
@@ -990,6 +1018,12 @@ func (p *fixedPeerTestProcessV1) stop(t testing.TB) {
 			raw, _ := os.ReadFile(p.log.Name())
 			t.Errorf("child: %v\n%s", err, raw)
 		}
+		raw, _ := os.ReadFile(p.log.Name())
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.Contains(line, "listener ownership") {
+				t.Log(line)
+			}
+		}
 		t.Logf("child resources user=%s system=%s usage=%+v", p.command.ProcessState.UserTime(), p.command.ProcessState.SystemTime(), p.command.ProcessState.SysUsage())
 	case <-time.After(8 * time.Second):
 		p.command.Process.Kill()
@@ -999,22 +1033,9 @@ func (p *fixedPeerTestProcessV1) stop(t testing.TB) {
 	p.log.Close()
 }
 
-func fixedPeerTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
+func fixedPeerTestConfigsV1(t testing.TB, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	t.Helper()
-	var listeners []net.Listener
-	defer func() {
-		for _, l := range listeners {
-			_ = l.Close()
-		}
-	}()
-	address := func() string {
-		l, e := net.Listen("tcp", "127.0.0.1:0")
-		if e != nil {
-			t.Fatal(e)
-		}
-		listeners = append(listeners, l)
-		return l.Addr().String()
-	}
+	address := fixedPeerTestAllocatorV1(t, allocate)
 	features := raftcluster.DefaultFeatureSet()
 	features.Required = append(features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.Version{Major: 1}})
 	nodes := []FixedPeerTCPNodeV1{}
@@ -1022,9 +1043,9 @@ func fixedPeerTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
 	a := FixedPeerTCPGroupV1{ID: "group-a", BootstrapNode: "ingress"}
 	b := FixedPeerTCPGroupV1{ID: "group-b", BootstrapNode: "owner-1"}
 	for _, id := range []raftcluster.NodeID{"ingress", "owner-1", "owner-2"} {
-		nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address()})
-		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: id, Address: address(), Capabilities: features})
-		peer := raftcluster.Peer{ID: id, Address: address()}
+		nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address(id)})
+		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: id, Address: address(id), Capabilities: features})
+		peer := raftcluster.Peer{ID: id, Address: address(id)}
 		if id == "ingress" {
 			a.Peers = append(a.Peers, peer)
 		} else {
@@ -1304,7 +1325,7 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		t.Setenv("GOMAP_SELECTED_LIVE_RECEIPTS", dir)
 		// A real non-ingress runtime exercises the trusted pipe and profile
 		// sequence without opening ANN assets or relaxing the 512-query guard.
-		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t)[1])
+		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))[1])
 		setup := fixedPeerCostObserveV1(t, ctx, process, "setup", "")
 		beforePath := filepath.Join(dir, "before.pprof")
 		afterPath := filepath.Join(dir, "after.pprof")
@@ -1330,7 +1351,7 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "1")
 		t.Setenv("GOMAP_SELECTED_LIVE_RECEIPTS", dir)
-		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t)[1])
+		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))[1])
 		ack := filepath.Join(t.TempDir(), "rejected.json")
 		profile := filepath.Join(dir, "rejected.pprof")
 		if err := json.NewEncoder(process.input).Encode(fixedPeerCostCommandV1{"before", ack, profile}); err != nil {

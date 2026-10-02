@@ -2867,6 +2867,61 @@ lineage remain intact and affected page checksums are recomputed.
 
 ## Authenticated fixed-peer transport and operations (#4813)
 
+Listener ownership through bootstrap (#4929):
+
+- `TestFixedPeerFixtureRetainsBootstrapListenersV1` checks every advertised
+  control, catalog/data Raft, public-vector and hosted-shard role across the
+  shared fixture inventory. Its unchanged witness fails against the released
+  allocator and passes with retained reservations.
+- `TestFixedPeerListenerOutboundCollisionControlV1` records the actual outbound
+  local/remote addresses, owning PID and Linux socket inode for the released
+  control, then verifies its bind failure and retained-reservation rejection.
+- `TestFixedPeerListenerOwnershipFailureCleanupV1` covers invalid configuration,
+  persisted manifest refusal, a nil supplied listener, partial bind failure and
+  drain refusal. Existing subprocess, restart, replacement, standby, security,
+  sparse-catalog and multi-owner lifecycle tests exercise the same ownership seam.
+  Unix fixtures transfer held sockets; Windows subprocess builders select sockets
+  in their eventual child before publishing each address. Neither introduces a
+  release/rebind gap between fixture selection and runtime ownership.
+  Reserved cold shard sockets do not authenticate or serve until backend
+  authority checks succeed; observation still cannot warm the backend or READY.
+- `TestFixedPeerDormantListenerRefusalTakeoverV1` repeats prompt cold refusal,
+  exact-socket takeover, pump termination and cleared-deadline serving.
+  `TestFixedPeerDormantListenerFailureCleanupV1` checks close and interrupted
+  takeover close the socket exactly once and release the address.
+  `TestFixedPeerConsumedListenerCleanupV1` and
+  `TestFixedPeerListenerChildStartFailureCleanupV1` check consumed-transport
+  rejection/close and failed child startup cleanup. The Windows-only
+  `TestFixedPeerWindowsStagedListenerOwnershipV1`,
+  `TestFixedPeerWindowsUnactivatedListenerCleanupV1`,
+  `TestFixedPeerWindowsStagedConfigFailureCleanupV1` and
+  `TestFixedPeerWindowsStagedProtocolErrorCleanupV1` cover continuous child
+  ownership, activation, exact-address restart and cancellation/config failure.
+  Cross-compilation alone does not establish Windows runtime coverage.
+
+Reproduce focused controls with
+`GOWORK=off go test ./TreeDB/nativewire -run '^Test(FixedPeerFixtureRetainsBootstrapListeners|FixedPeerListener.*|FixedPeerDormantListener.*)V1$' -count=3 -v`,
+and repeat with `-race`. `BenchmarkFixedPeerTCPRuntimeStartupV1` measures the
+public opener with identical base/head harnesses; the existing
+`BenchmarkFixedPeerTCPRemoteOwnerCreateV1` covers the ordinary steady-state path.
+Port/directory allocation and close are outside the startup timer, and the
+remote-owner benchmark reports parent/client allocations rather than child
+process allocations.
+`TestFixedPeerDormantListenerResourceBoundsV1` reports temporary goroutine,
+descriptor and allocation costs for 32 dormant wrappers with raw socket setup
+excluded (descriptor deltas are unknown when the platform cannot measure them).
+Production cold roles additionally hold one socket per configured dormant role
+from bootstrap instead of allocating it only on activation. The identical
+base/head `TestFixedPeerColdRoleBootstrapResourceV1` audit measures the public
+opener for one cold immutable owner after fixture setup has released its sockets;
+it reports actual cold socket occupancy and total startup FD/goroutine/heap/allocation
+counts. These Go process-global allocation figures include background startup
+work, and syscall descriptor counts are platform dependent. Consumption leaves
+the ordinary serving path unchanged. The copied sparse benchmark keeps three
+private config/open/start callbacks with standalone base defaults,
+installed only by candidate test helpers so held fixture sockets reach children.
+This setup bridge runs outside the unchanged timed measurement body.
+
 - `TreeDB/nativewire/peer_*_test.go`, `fixed_peer_security_v1_test.go` and
   `vector_partition_global_connection_budget_v1_test.go`: actual TLS/control,
   Raft, snapshot, native/shard boundaries; identity/group denial; bounded sockets,
@@ -3069,7 +3124,7 @@ is excluded from `Catalog.Peers` before genesis.
 
 | Test | Covered boundary |
 | --- | --- |
-| `TestMultiOwnerTCPDomainSearchWithCatalogConsumerOwnerV1` | Four real processes complete BUILD/Stage/READY/PREPARE/ACTIVE and public strict-search parity with hosted-only owner assets, zero serving-source rows, no owner-local catalog files, and no local catalog applied index or raft group. After a positive direct-owner request, cached and cold quorum loss refuse candidates and READY; cold status/readiness observation does not bind the shard listener. Explicit lifecycle recovery restores serving after restart. |
+| `TestMultiOwnerTCPDomainSearchWithCatalogConsumerOwnerV1` | Four real processes complete BUILD/Stage/READY/PREPARE/ACTIVE and public strict-search parity with hosted-only owner assets, zero serving-source rows, no owner-local catalog files, and no local catalog applied index or raft group. After a positive direct-owner request, cached and cold quorum loss refuse candidates and READY; cold status/readiness observation does not authenticate or serve the reserved shard endpoint. Explicit lifecycle recovery restores serving after restart. |
 | `TestMultiOwnerTCPDomainSearchWithCatalogConsumerInvalidationV1` | The same initial positive consumer setup uses the existing in-flight invalidation control: public strict search refuses invalidated results, and the already-warm consumer refuses candidates and READY under the previous ready digest. |
 | `TestFixedPeerImmutableVectorCatalogDecisionBindsIdentityAndReadyV1` | Fresh decisions bind configured catalog/index/source/manifest/placement/owner identity and complete READY evidence. Negative controls retain strict voter requirements for mutable, router and non-owner configurations, and reject absent or mismatched credentials before local stores are opened. |
 | `TestFixedPeerImmutableOwnerReadCostV1/voter` and `/consumer` | The same bounded sampler observes owner status and public two-owner search: ten measured operations per loop, parent allocations/bytes/wall time, and existing child process resource logs. Consumer capability has no working old baseline. Parent allocations do not measure child/server allocations; child CPU/RSS cover the whole correctness/recovery case, not isolated steady reads. These samples do not establish a stable latency, throughput, or recall qualification. |

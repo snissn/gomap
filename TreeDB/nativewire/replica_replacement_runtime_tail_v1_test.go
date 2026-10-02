@@ -71,7 +71,7 @@ func testReplacementPromotionTailV1(t *testing.T, ctx context.Context, client *F
 		if err := runtimes[i].Close(); err != nil {
 			t.Fatal(err)
 		}
-		runtime, err := OpenFixedPeerTCPRuntimeV1(configs[i])
+		runtime, err := fixedPeerOpenTestRuntimeV1(t, configs[i])
 		if err != nil {
 			t.Fatal(err)
 		}
