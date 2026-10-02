@@ -305,3 +305,9 @@ bash docs/benchmarks/treedb_owned_values_20261001/qualify.sh FROZEN_CAPTURE_DIR
 It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
 and source/fixture hash inventories. These are standalone artifacts, not
 unified-bench profile-dir output or benchprof inputs.
+## TreeDB algorithm-work package harness
+
+`BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany` emit ordinary
+Go benchmark output and JSON diagnostic packets, as documented in
+[`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
+Their package-test profiles and counter-only overlays are not benchprof inputs.
