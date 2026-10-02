@@ -250,6 +250,41 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 - Point reads (`Get`, `GetMany`, `Has`, `GetAppend`) MUST reflect writes buffered in memtables (mutable + queued), even if they have not been flushed to the backend B+Tree yet.
 - Newer memtable entries MUST shadow older backend state ("newest wins"), including tombstones.
 
+### 2.5.1 Optional negative point lookup coverage
+
+`Options.NegativeLookupFilterBytes` enables an in-memory, fixed-size monotonic
+membership filter for the main backend. Zero disables it. Enabled budgets are
+8 bytes through 64 MiB, rounded down to whole 64-bit words. Dictionary/template
+side stores do not inherit this main-store budget. No on-disk format changes.
+
+- Cached point reads inspect visible mutable and queued buffers before backend
+  selection. Close, poison, admission, snapshot registration and lifetime checks
+  still precede any negative answer.
+- Only the raw tree attached to a coherent captured main-root view may reject a
+  point key. Existing index identity and base/candidate root and commit-sequence
+  coordinates prove publication coverage. Arbitrary roots, range/prefix scans
+  and successor searches retain exact lookup.
+- Every normalized point mutation key, including deletes and every intermediate
+  grouped batch, enters the filter before its root becomes visible. Abandoned
+  writes may leave bits set. Bits never clear, resize or rebuild per commit.
+- Old snapshots share monotonic bits safely: later inserts may add false
+  positives but cannot invalidate prior coverage. Tombstones are included in
+  bootstrap so versioned reads preserve stored tombstone revisions.
+- Startup performs one bounded keys-only scan after recovery and replay
+  finalizers. An incomplete/error scan authorizes no negative answers. At most
+  `floor(budget*8/10)` entries and `budget*64` key bytes are admitted; keys longer
+  than 1024 bytes always use exact lookup, including valid larger keys.
+- Unknown root/index replacement removes coverage from the new view and its
+  descendants. Later point deltas cannot restore it; reopening may bootstrap
+  complete coverage again. Metadata-only publication may preserve coverage when
+  main-root identity and commit sequence are unchanged. Explicit command-WAL
+  current-root metadata publication (including checkpoint fallback refresh) may
+  advance the sequence while carrying the existing exact base/candidate token
+  under the durable publication gate. Supplied root candidates remain uncovered,
+  even when their numeric IDs happen to match the current roots.
+- Saturation safely degrades to exact lookups. Ordinary missing-value, empty
+  value, callback ownership and revision contracts remain unchanged.
+
 ### 2.6 Target versioned entry reads
 
 Target versioned entry APIs return the visible value together with an
@@ -427,7 +462,7 @@ When the cached layer is enabled:
   capture before refresh and recapture. Its pointer MUST NOT reach callers,
   callbacks, root readers, or iterators; only owned results or caller-buffer
   appends may escape. Release clears captured state, reader interfaces, and the
-  tree pager before reuse. Public snapshots, batched callback reads, and
+  tree pager and negative-filter reference before reuse. Public snapshots, batched callback reads, and
   iterators continue to acquire fresh exported handles.
 
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
