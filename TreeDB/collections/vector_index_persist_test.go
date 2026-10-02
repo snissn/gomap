@@ -6021,3 +6021,127 @@ func vectorIndexSnapshotFilePath(tb testing.TB, manifestPath, fileName string) s
 	}
 	return filepath.Join(filepath.Dir(manifestPath), manifest.EpochDir, fileName)
 }
+
+// Domain-only publishers must survive another collection's commit and preserve
+// the stored-document parser while repairing an intentionally unnotified row.
+func TestCollectionVectorIndexDomainPublicationBindsIdentityAndFormat(t *testing.T) {
+	for _, format := range []DocumentFormat{DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1} {
+		for _, publication := range []string{"flush_all", "async", "admission_held"} {
+			t.Run(fmt.Sprintf("%s/%s", format, publication), func(t *testing.T) {
+				d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = d.Close() }()
+				mgr := NewCollectionManager(d)
+				def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+				if _, err := mgr.CreateCollection(&CollectionMeta{
+					Name:          "docs",
+					Options:       CollectionOptions{DocumentFormat: format, BufferedIndexedWrites: true, BufferedIndexedWriteMaxDocuments: 1024, DisableBufferedIndexedAsyncFlush: true},
+					Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+					VectorIndexes: []VectorIndexDefinition{def},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				col, err := mgr.OpenCollection("docs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := mgr.CreateCollection(&CollectionMeta{Name: "sibling"}); err != nil {
+					t.Fatal(err)
+				}
+				sibling, err := mgr.OpenCollection("sibling")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+					t.Fatal(err)
+				}
+				document := func(x, y float64) []byte {
+					switch format {
+					case DocumentFormatBSON:
+						return mustBSONCollectionDocument(t, bson.D{{Key: "kind", Value: "vector"}, {Key: "embedding", Value: bson.A{x, y}}})
+					case DocumentFormatTemplateV1:
+						var encoder TemplateV1Encoder
+						doc, err := encoder.EncodeDocument([]string{"kind", "embedding"}, []any{"vector", []any{x, y}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return doc
+					default:
+						return []byte(fmt.Sprintf(`{"kind":"vector","embedding":[%g,%g]}`, x, y))
+					}
+				}
+				if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{document(1, 0)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := col.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				index := col.registeredVectorIndex(def.Name)
+				if index == nil {
+					t.Fatal("missing installed native runtime")
+				}
+				// Expire the domain's exact catalog cache with no work to publish.
+				if _, err := sibling.Insert([]byte("first"), []byte("{}")); err != nil {
+					t.Fatal(err)
+				}
+				if err := sibling.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				if err := mgr.FlushAll(); err != nil {
+					t.Fatalf("no-op domain drain after sibling commit: %v", err)
+				}
+				if _, err := col.insertBatch([][]byte{[]byte("raw")}, [][]byte{document(0, 1)}, false, nil); err != nil {
+					t.Fatal(err)
+				}
+				generation, err := col.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if index.coversSourceDocumentGeneration(generation) || mgr.StatsSnapshot().PendingDocuments == 0 {
+					t.Fatal("raw fixture must remain buffered and unavailable before exact repair")
+				}
+				var staleBuffer VectorIndexSearchBuffer
+				staleResponse, staleErr := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &staleBuffer)
+				if !errors.Is(staleErr, ErrVectorIndexSearchUnavailable) || staleResponse.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+					t.Fatalf("unnotified native search response=%+v err=%v", staleResponse, staleErr)
+				}
+				if _, err := sibling.Insert([]byte("second"), []byte("{}")); err != nil {
+					t.Fatal(err)
+				}
+				if err := sibling.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				switch publication {
+				case "flush_all":
+					err = mgr.FlushAll()
+				case "async":
+					err = flushCollectionWriteDomainAsync(d, col.writeDomain)
+				case "admission_held":
+					release := col.lockNativeVectorAdmissionWrite()
+					err = col.flushCollectionWriteDomainsWithVectorAdmissionLocked()
+					release()
+				}
+				if err != nil {
+					t.Fatalf("domain publication: %v", err)
+				}
+				generation, err = col.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if col.registeredVectorIndex(def.Name) != index || !index.coversSourceDocumentGeneration(generation) || mgr.StatsSnapshot().PendingDocuments != 0 {
+					t.Fatal("exact domain publication replaced the runtime or failed coverage/drain")
+				}
+				var buffer VectorIndexSearchBuffer
+				response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+				if err != nil || len(response.Results) != 2 || string(response.Results[0].ID) != "raw" || string(response.Results[1].ID) != "seed" || response.Stats.SearchRouteNativeRuntime != 1 {
+					t.Fatalf("repaired native search response=%+v err=%v", response, err)
+				}
+				if err := d.Close(); err != nil {
+					t.Fatalf("close after domain publication: %v", err)
+				}
+			})
+		}
+	}
+}
