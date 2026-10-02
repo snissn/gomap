@@ -3357,6 +3357,13 @@ a corrupt applied durable prefix. These checks do not establish power-loss
 safety, independent quorum-loss qualification, or indefinite writes. Target
 and clear crash cuts remain apply-boundary/reopen controls.
 
+`TestDependencyStableRequiresExactPrefixAndNamespace` distinguishes unrelated
+volatile suffixes from unstable/corrupt/short required prefixes, absent names,
+changed physical identities and missing/rebound parent namespaces. It refuses
+unsupported LSN/RID manifest frontiers. The actual-cut enumerator derives each
+sealed generation's closure from its checksummed V1 manifest, while preserving
+newest-complete-root, command-frame replay, ACK and RO/RW key-state checks.
+
 
 ### Fixed-peer vector initialization prerequisite (#4250)
 

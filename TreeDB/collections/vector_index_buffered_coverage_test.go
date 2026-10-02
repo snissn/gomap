@@ -107,6 +107,99 @@ func TestBufferedNativeCoverageTracksUnnotifiedIDsPerIndex(t *testing.T) {
 	}
 }
 
+// Sequential repair must copy borrowed scalar bytes into both graph planes,
+// and clear prior scalar presence before parsing the next document.
+func TestBufferedVectorRepairScalarScratchDoesNotAliasColumns(t *testing.T) {
+	for _, liveDelta := range []bool{false, true} {
+		t.Run(fmt.Sprintf("live-delta=%v", liveDelta), func(t *testing.T) {
+			d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{
+				{Name: "tenant", Field: "tenant", ValueType: IndexValueString},
+				{Name: "sequence", Field: "sequence", ValueType: IndexValueInt64},
+			})
+			defer func() { _ = d.Close() }()
+			index, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(def))
+			if err != nil {
+				t.Fatal(err)
+			}
+			materializer, err := col.NewStoredDocumentJSONMaterializer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = materializer.Close() }()
+			if err := index.insertStoredDocument(materializer, []byte("seed"), []byte(`{"embedding":[1,0],"tenant":"seed","sequence":0}`)); err != nil {
+				t.Fatal(err)
+			}
+			if liveDelta {
+				index.setNativePersistent(true)
+				index.publishSearchView()
+				index.liveDeltaEnabled.Store(true)
+			}
+			documents := [][]byte{
+				[]byte(`{"embedding":[1,0],"tenant":"alpha","sequence":11}`),
+				[]byte(`{"embedding":[1,0],"tenant":"omega","sequence":22}`),
+				[]byte(`{"embedding":[1,0],"sequence":33}`),
+				[]byte(`{"embedding":[1,0],"tenant":"delta"}`),
+				[]byte(`{"embedding":[1,0]}`),
+			}
+			rows := make([]map[string][]byte, len(documents))
+			ids := make([][]byte, len(documents))
+			var scratch nativeScalarRowScratch
+			for i, document := range documents {
+				ids[i] = []byte(fmt.Sprintf("doc-%d", i))
+				rows[i], err = index.nativeScalarRow(materializer, document)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := index.reconcileBufferedStoredDocumentWithScalarScratch(materializer, ids[i], document, &scratch); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Reuse the same scratch for a tombstone, then check every previous row.
+			if err := index.reconcileBufferedStoredDocumentWithScalarScratch(materializer, ids[1], nil, &scratch); err != nil {
+				t.Fatal(err)
+			}
+			documents[1], rows[1] = nil, nil
+			index.mu.RLock()
+			if (index.liveDelta != nil) != liveDelta {
+				index.mu.RUnlock()
+				t.Fatal("fixture did not use the intended scalar graph plane")
+			}
+			beforeNodes, beforeSeq := len(index.nodes), index.mutationSeq
+			beforeDelta := 0
+			if index.liveDelta != nil {
+				beforeDelta = len(index.liveDelta.nodes)
+			}
+			for i, id := range ids {
+				vector := []float32{1, 0}
+				if documents[i] == nil {
+					vector = nil
+				}
+				if !index.bufferedStoredVectorMatchesLocked(id, vector, rows[i]) {
+					index.mu.RUnlock()
+					t.Fatalf("later scratch reuse changed stored scalar bytes or presence for %q", id)
+				}
+			}
+			index.mu.RUnlock()
+			// All unchanged values, missing values and the tombstone remain no-ops.
+			for i, document := range documents {
+				if err := index.reconcileBufferedStoredDocumentWithScalarScratch(materializer, ids[i], document, &scratch); err != nil {
+					t.Fatal(err)
+				}
+			}
+			index.mu.RLock()
+			afterDelta := 0
+			if index.liveDelta != nil {
+				afterDelta = len(index.liveDelta.nodes)
+			}
+			unchanged := len(index.nodes) == beforeNodes && index.mutationSeq == beforeSeq && afterDelta == beforeDelta
+			index.mu.RUnlock()
+			if !unchanged {
+				t.Fatal("borrowed unchanged scalar rows created graph debt")
+			}
+		})
+	}
+}
+
 func TestBufferedVectorRepairPreservesScalarDeltaAndMissingValues(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()
