@@ -1,0 +1,1928 @@
+===== baseline-checkpointed-1-time.txt =====
+2026/10/01 16:31:57 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:31:57 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:31:58 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:31:58 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:31:59 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:31:59 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:00 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:00 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.07
+	System time (seconds): 0.44
+	Percent of CPU this job got: 30%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.03
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 242116
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 24
+	Minor (reclaiming a frame) page faults: 103229
+	Voluntary context switches: 15986
+	Involuntary context switches: 748
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-checkpointed-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  179922	      3507 ns/op	  73.01 MB/s	 141768632 live_heap_B	     65564 pool_retained_B	        50.89 scratch_alloc_B/op	         0.001751 scratch_allocs/op	         1.002 scratch_gets/op	     888 B/op	       2 allocs/op
+PASS
+
+===== baseline-checkpointed-2-time.txt =====
+2026/10/01 16:32:12 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:12 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:13 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:13 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:14 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:14 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:15 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:15 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.05
+	System time (seconds): 0.44
+	Percent of CPU this job got: 31%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.79
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 224364
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 24
+	Minor (reclaiming a frame) page faults: 98492
+	Voluntary context switches: 15441
+	Involuntary context switches: 537
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-checkpointed-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  180759	      3518 ns/op	  72.77 MB/s	 141778264 live_heap_B	     65564 pool_retained_B	        50.66 scratch_alloc_B/op	         0.001743 scratch_allocs/op	         1.002 scratch_gets/op	     888 B/op	       2 allocs/op
+PASS
+
+===== baseline-checkpointed-3-time.txt =====
+2026/10/01 16:32:17 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:17 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:18 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:18 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:19 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:19 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:20 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:20 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.02
+	System time (seconds): 0.45
+	Percent of CPU this job got: 26%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.49
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 282676
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 23
+	Minor (reclaiming a frame) page faults: 113511
+	Voluntary context switches: 15758
+	Involuntary context switches: 587
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-checkpointed-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  167725	      3592 ns/op	  71.27 MB/s	 141798904 live_heap_B	     65564 pool_retained_B	        54.59 scratch_alloc_B/op	         0.001878 scratch_allocs/op	         1.002 scratch_gets/op	     892 B/op	       2 allocs/op
+PASS
+
+===== baseline-checkpointed-4-time.txt =====
+2026/10/01 16:32:34 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:34 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:35 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:35 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:36 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:36 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:37 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:37 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.03
+	System time (seconds): 0.44
+	Percent of CPU this job got: 29%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.03
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 214960
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 22
+	Minor (reclaiming a frame) page faults: 97678
+	Voluntary context switches: 16096
+	Involuntary context switches: 912
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-checkpointed-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  170650	      3545 ns/op	  72.21 MB/s	 141804312 live_heap_B	     65564 pool_retained_B	        53.66 scratch_alloc_B/op	         0.001846 scratch_allocs/op	         1.002 scratch_gets/op	     891 B/op	       2 allocs/op
+PASS
+
+===== baseline-checkpointed-5-time.txt =====
+2026/10/01 16:32:39 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:39 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:40 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:40 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:41 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:41 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:42 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:42 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.07
+	System time (seconds): 0.47
+	Percent of CPU this job got: 29%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.29
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 277440
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 23
+	Minor (reclaiming a frame) page faults: 111840
+	Voluntary context switches: 14924
+	Involuntary context switches: 893
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-checkpointed-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  183590	      3587 ns/op	  71.38 MB/s	 141807128 live_heap_B	     65564 pool_retained_B	        49.88 scratch_alloc_B/op	         0.001716 scratch_allocs/op	         1.002 scratch_gets/op	     887 B/op	       2 allocs/op
+PASS
+
+===== baseline-decode-1-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.58
+	System time (seconds): 0.59
+	Percent of CPU this job got: 109%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.73
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 22424
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 27278
+	Voluntary context switches: 36245
+	Involuntary context switches: 1574
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-decode-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15071809	        39.06 ns/op	1677666.59 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  495182	      1099 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  572089	      1034 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   38930	     15351 ns/op	2267.99 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32766 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   38100	     16237 ns/op	2144.22 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32896 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  123650	      4779 ns/op	7285.53 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   38150	     15695 ns/op	2218.24 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32778 B/op	       0 allocs/op
+PASS
+
+===== baseline-decode-2-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.59
+	System time (seconds): 0.58
+	Percent of CPU this job got: 109%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.74
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 24320
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 24281
+	Voluntary context switches: 35912
+	Involuntary context switches: 1643
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-decode-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15288804	        39.11 ns/op	1675473.94 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  495314	      1101 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  571095	      1107 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   38966	     15372 ns/op	2264.84 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32766 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   38031	     15709 ns/op	2216.35 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32911 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  118879	      4783 ns/op	7279.66 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   38338	     15662 ns/op	2222.91 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32779 B/op	       0 allocs/op
+PASS
+
+===== baseline-decode-3-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.58
+	System time (seconds): 0.62
+	Percent of CPU this job got: 109%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.76
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 61180
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 39186
+	Voluntary context switches: 35432
+	Involuntary context switches: 1529
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-decode-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15246391	        39.16 ns/op	1673645.71 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  495272	      1117 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  580428	      1066 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   36369	     15442 ns/op	2254.59 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   38191	     16037 ns/op	2170.99 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32849 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  123906	      4918 ns/op	7079.55 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   37656	     15778 ns/op	2206.59 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32778 B/op	       0 allocs/op
+PASS
+
+===== baseline-decode-4-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.54
+	System time (seconds): 0.66
+	Percent of CPU this job got: 110%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.71
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 20104
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 68889
+	Voluntary context switches: 34343
+	Involuntary context switches: 1633
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-decode-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15366880	        39.21 ns/op	1671210.31 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  495826	      1111 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  572017	      1045 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   34165	     16712 ns/op	2083.32 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   34408	     16385 ns/op	2124.84 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32871 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  118344	      5146 ns/op	6765.63 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   34122	     16334 ns/op	2131.47 MB/s	         0.5000 backing_allocs/op	      4096 scratch_cap_B	   32778 B/op	       0 allocs/op
+PASS
+
+===== baseline-decode-5-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.61
+	System time (seconds): 0.57
+	Percent of CPU this job got: 109%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.75
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 16248
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 20412
+	Voluntary context switches: 35986
+	Involuntary context switches: 2177
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-decode-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15303752	        38.95 ns/op	1682485.39 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  503127	      1098 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  573372	      1047 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   38893	     15386 ns/op	2262.88 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   38215	     16235 ns/op	2144.51 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32870 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  120633	      4787 ns/op	7272.38 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32767 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   38305	     15704 ns/op	2217.00 MB/s	         0.5000 backing_allocs/op	     65536 scratch_cap_B	   32780 B/op	       0 allocs/op
+PASS
+
+===== baseline-public-1-time.txt =====
+2026/10/01 16:26:46 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:26:46 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.62
+	System time (seconds): 0.26
+	Percent of CPU this job got: 44%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.00
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 157548
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 45470
+	Voluntary context switches: 4386
+	Involuntary context switches: 284
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-public-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  270290	      2376 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== baseline-public-2-time.txt =====
+2026/10/01 16:27:06 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:06 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.64
+	System time (seconds): 0.26
+	Percent of CPU this job got: 45%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.97
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 156216
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 45820
+	Voluntary context switches: 4724
+	Involuntary context switches: 421
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-public-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  272480	      2392 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== baseline-public-3-time.txt =====
+2026/10/01 16:27:12 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:12 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.60
+	System time (seconds): 0.25
+	Percent of CPU this job got: 44%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.94
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 159980
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 41759
+	Voluntary context switches: 4670
+	Involuntary context switches: 414
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-public-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  256830	      2395 ns/op	     282 B/op	       1 allocs/op
+PASS
+
+===== baseline-public-4-time.txt =====
+2026/10/01 16:27:32 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:32 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.61
+	System time (seconds): 0.28
+	Percent of CPU this job got: 51%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.74
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 155240
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 42775
+	Voluntary context switches: 4368
+	Involuntary context switches: 854
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-public-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  275100	      2392 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== baseline-public-5-time.txt =====
+2026/10/01 16:27:38 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:38 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.64
+	System time (seconds): 0.26
+	Percent of CPU this job got: 52%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.71
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 145852
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 40601
+	Voluntary context switches: 3832
+	Involuntary context switches: 387
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== baseline-public-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  269510	      2469 ns/op	     281 B/op	       1 allocs/op
+PASS
+
+===== candidate-checkpointed-1-time.txt =====
+2026/10/01 16:32:02 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:02 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:03 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:03 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:04 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:04 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:05 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:05 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.07
+	System time (seconds): 0.42
+	Percent of CPU this job got: 28%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.18
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 225224
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 24
+	Minor (reclaiming a frame) page faults: 99036
+	Voluntary context switches: 16965
+	Involuntary context switches: 1036
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-checkpointed-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  177494	      3548 ns/op	  72.14 MB/s	 141824064 live_heap_B	     65564 pool_retained_B	        51.59 scratch_alloc_B/op	         0.001775 scratch_allocs/op	         1.002 scratch_gets/op	     889 B/op	       2 allocs/op
+PASS
+
+===== candidate-checkpointed-2-time.txt =====
+2026/10/01 16:32:07 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:07 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:08 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:08 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:09 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:09 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:10 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:10 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.03
+	System time (seconds): 0.46
+	Percent of CPU this job got: 30%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.88
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 209724
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 23
+	Minor (reclaiming a frame) page faults: 94183
+	Voluntary context switches: 15458
+	Involuntary context switches: 677
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-checkpointed-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  168183	      3568 ns/op	  71.75 MB/s	 141801464 live_heap_B	     65564 pool_retained_B	        54.44 scratch_alloc_B/op	         0.001873 scratch_allocs/op	         1.002 scratch_gets/op	     892 B/op	       2 allocs/op
+PASS
+
+===== candidate-checkpointed-3-time.txt =====
+2026/10/01 16:32:22 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:22 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:23 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:24 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:25 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:25 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:26 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:26 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.02
+	System time (seconds): 0.40
+	Percent of CPU this job got: 25%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.53
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 213836
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 23
+	Minor (reclaiming a frame) page faults: 97957
+	Voluntary context switches: 17463
+	Involuntary context switches: 557
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-checkpointed-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  160359	      3515 ns/op	  72.83 MB/s	 141817904 live_heap_B	     65564 pool_retained_B	        57.10 scratch_alloc_B/op	         0.001964 scratch_allocs/op	         1.002 scratch_gets/op	     895 B/op	       2 allocs/op
+PASS
+
+===== candidate-checkpointed-4-time.txt =====
+2026/10/01 16:32:28 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:28 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:29 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:29 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:30 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:30 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:32 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:32 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.06
+	System time (seconds): 0.46
+	Percent of CPU this job got: 25%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.09
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 248812
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 24
+	Minor (reclaiming a frame) page faults: 105740
+	Voluntary context switches: 18224
+	Involuntary context switches: 605
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-checkpointed-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  182300	      3516 ns/op	  72.81 MB/s	 141815896 live_heap_B	     65564 pool_retained_B	        50.23 scratch_alloc_B/op	         0.001728 scratch_allocs/op	         1.002 scratch_gets/op	     887 B/op	       2 allocs/op
+PASS
+
+===== candidate-checkpointed-5-time.txt =====
+2026/10/01 16:32:44 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:44 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:45 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:45 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:47 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:47 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+2026/10/01 16:32:48 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:32:48 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public-checkpointed.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGetCheckpointed$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 1.10
+	System time (seconds): 0.48
+	Percent of CPU this job got: 28%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.48
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 287644
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 23
+	Minor (reclaiming a frame) page faults: 121660
+	Voluntary context switches: 16393
+	Involuntary context switches: 818
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 34160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-checkpointed-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  182433	      3727 ns/op	  68.69 MB/s	 141800136 live_heap_B	     65564 pool_retained_B	        50.19 scratch_alloc_B/op	         0.001727 scratch_allocs/op	         1.002 scratch_gets/op	     887 B/op	       2 allocs/op
+PASS
+
+===== candidate-decode-1-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.24
+	System time (seconds): 0.54
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.70
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 17628
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 14807
+	Voluntary context switches: 6727
+	Involuntary context switches: 1561
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-decode-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	14969538	        39.89 ns/op	1643023.92 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  498492	      1107 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  580761	      1058 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   41649	     14008 ns/op	2485.41 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   40245	     14284 ns/op	2437.38 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  191230	      3189 ns/op	10918.03 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   43575	     14233 ns/op	2446.21 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+PASS
+
+===== candidate-decode-2-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.23
+	System time (seconds): 0.54
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 13408
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 13121
+	Voluntary context switches: 7124
+	Involuntary context switches: 1361
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-decode-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15087331	        39.94 ns/op	1640882.40 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  496580	      1102 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  571540	      1059 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   43686	     13902 ns/op	2504.39 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   43485	     13782 ns/op	2526.21 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  188419	      3158 ns/op	11026.33 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   43616	     13852 ns/op	2513.48 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+PASS
+
+===== candidate-decode-3-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.19
+	System time (seconds): 0.54
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.66
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 13756
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 12459
+	Voluntary context switches: 6945
+	Involuntary context switches: 845
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-decode-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	14990152	        39.48 ns/op	1660053.59 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  500913	      1094 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  580594	      1045 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   43713	     13583 ns/op	2563.23 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   43539	     13749 ns/op	2532.21 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  187650	      3162 ns/op	11010.44 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   43353	     13738 ns/op	2534.24 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+PASS
+
+===== candidate-decode-4-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.27
+	System time (seconds): 0.51
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.70
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 13580
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 10652
+	Voluntary context switches: 7015
+	Involuntary context switches: 555
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-decode-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15206925	        39.32 ns/op	1666634.51 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  496576	      1096 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  570472	      1055 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   44103	     13702 ns/op	2540.95 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   43634	     13834 ns/op	2516.71 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  191188	      3182 ns/op	10941.29 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   43932	     14031 ns/op	2481.43 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+PASS
+
+===== candidate-decode-5-time.txt =====
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/valuelog.test -test.run ^$ -test.bench ^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 4.17
+	System time (seconds): 0.57
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.66
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 13368
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 13846
+	Voluntary context switches: 6921
+	Involuntary context switches: 1298
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-decode-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkValueLogDecodeFrameAlloc-4           	15111301	        39.36 ns/op	1664984.83 MB/s	      56 B/op	       2 allocs/op
+BenchmarkFileReadAppendCompressedFallback/nil_dst-4         	  498543	      1094 ns/op	     512 B/op	       1 allocs/op
+BenchmarkFileReadAppendCompressedFallback/reused_dst-4      	  577639	      1037 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/snappy-4             	  191475	      3147 ns/op	11064.42 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/legacy_zstd-4        	   43606	     13669 ns/op	2547.00 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/lz4-4                	   44418	     13690 ns/op	2543.24 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+BenchmarkValueLogDecodeFrameMixedReuse/zstd-4               	   42225	     13884 ns/op	2507.60 MB/s	         0 backing_allocs/op	     65536 scratch_cap_B	       0 B/op	       0 allocs/op
+PASS
+
+===== candidate-public-1-time.txt =====
+2026/10/01 16:26:52 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:26:52 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.61
+	System time (seconds): 0.28
+	Percent of CPU this job got: 44%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.01
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 154872
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 4
+	Minor (reclaiming a frame) page faults: 42778
+	Voluntary context switches: 4628
+	Involuntary context switches: 303
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-public-1.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  270696	      2394 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== candidate-public-2-time.txt =====
+2026/10/01 16:26:59 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:26:59 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.63
+	System time (seconds): 0.26
+	Percent of CPU this job got: 48%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.85
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 154956
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 40494
+	Voluntary context switches: 4603
+	Involuntary context switches: 302
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-public-2.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  268340	      2418 ns/op	     281 B/op	       1 allocs/op
+PASS
+
+===== candidate-public-3-time.txt =====
+2026/10/01 16:27:19 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:19 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.56
+	System time (seconds): 0.22
+	Percent of CPU this job got: 47%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.64
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 139680
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 40399
+	Voluntary context switches: 4116
+	Involuntary context switches: 388
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-public-3.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  208611	      2471 ns/op	     288 B/op	       1 allocs/op
+PASS
+
+===== candidate-public-4-time.txt =====
+2026/10/01 16:27:25 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:25 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.65
+	System time (seconds): 0.24
+	Percent of CPU this job got: 46%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.91
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 164228
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 47849
+	Voluntary context switches: 4716
+	Involuntary context switches: 302
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-public-4.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  272151	      2386 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== candidate-public-5-time.txt =====
+2026/10/01 16:27:45 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 16:27:45 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+	Command being timed: "/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/public.test -test.run ^$ -test.bench ^BenchmarkDBValueLogGet$/^Get$ -test.benchmem -test.benchtime 500ms -test.count=1"
+	User time (seconds): 0.63
+	System time (seconds): 0.26
+	Percent of CPU this job got: 51%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.74
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 155980
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 5
+	Minor (reclaiming a frame) page faults: 45525
+	Voluntary context switches: 4755
+	Involuntary context switches: 321
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8240
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== candidate-public-5.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	  271183	      2400 ns/op	     280 B/op	       1 allocs/op
+PASS
+
+===== checkpointed-allocs-top.txt =====
+File: public-checkpointed.test
+Build ID: 2487db187ac11ab167027bccff463dc2c970707d
+Type: alloc_space
+Time: 2026-10-01 16:32:56 HST
+Showing nodes accounting for 1178.27MB, 94.33% of 1249.15MB total
+Dropped 216 nodes (cum <= 6.25MB)
+      flat  flat%   sum%        cum   cum%
+  401.20MB 32.12% 32.12%   401.20MB 32.12%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+  209.14MB 16.74% 48.86%   209.14MB 16.74%  github.com/snissn/compress/zstd.(*fastBase).ensureHist (inline)
+  179.04MB 14.33% 63.19%   179.04MB 14.33%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readTo
+   98.39MB  7.88% 71.07%    98.39MB  7.88%  github.com/snissn/gomap/TreeDB/internal/memtable.getAppendOnlyEntries
+      64MB  5.12% 76.19%       64MB  5.12%  bufio.NewWriterSize (inline)
+      31MB  2.48% 78.68%       31MB  2.48%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+   20.33MB  1.63% 80.30%   238.37MB 19.08%  github.com/snissn/compress/zstd.(*fastEncoderDict).Reset
+   19.18MB  1.54% 81.84%    29.22MB  2.34%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CaptureStableExternalRIDFence
+   14.97MB  1.20% 83.04%    16.48MB  1.32%  github.com/snissn/compress/zstd.loadDict
+   12.61MB  1.01% 84.05%    12.61MB  1.01%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+   12.52MB  1.00% 85.05%    12.52MB  1.00%  github.com/snissn/gomap/TreeDB/zipper.(*ReadOnlyPrepareResult).ensureInitialCapacity
+   11.55MB  0.92% 85.97%    11.55MB  0.92%  github.com/snissn/compress/huff0.(*Scratch).prepare
+   10.09MB  0.81% 86.78%    14.61MB  1.17%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter
+   10.03MB   0.8% 87.58%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ExternalRefFenceV1FromRawKVPayload.func1
+    9.50MB  0.76% 88.34%     9.50MB  0.76%  fmt.Sprintf
+    9.46MB  0.76% 89.10%     9.46MB  0.76%  github.com/snissn/compress/zstd.(*blockEnc).init
+    8.64MB  0.69% 89.79%     8.64MB  0.69%  github.com/snissn/gomap/TreeDB/batch.(*Batch).Reserve (inline)
+    8.32MB  0.67% 90.46%     8.32MB  0.67%  github.com/snissn/compress/zstd.encoderOptions.encoder
+    8.25MB  0.66% 91.12%     8.25MB  0.66%  github.com/snissn/gomap/TreeDB/db.newLeafPageReadCacheWithWriteAdmission (inline)
+       8MB  0.64% 91.76%        8MB  0.64%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+    7.22MB  0.58% 92.34%     7.22MB  0.58%  github.com/snissn/gomap/TreeDB/internal/commitlog.encodeRawKVBatchPayloadPlannedTo
+    6.33MB  0.51% 92.84%    13.89MB  1.11%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).prepareBlockFrameBody
+    5.93MB  0.47% 93.32%   190.94MB 15.29%  github.com/snissn/gomap/TreeDB.openSnapshotValueLogBenchDB
+    4.21MB  0.34% 93.66%     7.06MB  0.57%  github.com/snissn/gomap/TreeDB/internal/valuelog.encodeBlockPayloadWithScratch
+    3.28MB  0.26% 93.92%    27.08MB  2.17%  github.com/snissn/gomap/TreeDB/internal/compression.shapeAndValidateDict
+    2.01MB  0.16% 94.08%    33.75MB  2.70%  github.com/snissn/gomap/TreeDB/db.(*DB).captureCommandWALExternalDependencies
+    1.06MB 0.085% 94.16%   209.88MB 16.80%  github.com/snissn/compress/zstd.(*Encoder).Reset
+       1MB  0.08% 94.25%    17.66MB  1.41%  github.com/snissn/compress/zstd.BuildDict
+    0.50MB  0.04% 94.29%   210.38MB 16.84%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayload
+    0.50MB  0.04% 94.33%    34.18MB  2.74%  github.com/snissn/gomap/TreeDB/caching.Open
+         0     0% 94.33%    10.54MB  0.84%  github.com/snissn/compress/huff0.Compress1X
+         0     0% 94.33%    38.19MB  3.06%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).EncodeAllWithDict
+         0     0% 94.33%    31.68MB  2.54%  github.com/snissn/compress/zstd.(*Encoder).encodeAll
+         0     0% 94.33%   218.04MB 17.45%  github.com/snissn/compress/zstd.(*fastBase).resetBase
+         0     0% 94.33%     9.53MB  0.76%  github.com/snissn/compress/zstd.NewReader
+         0     0% 94.33%    45.93MB  3.68%  github.com/snissn/gomap/TreeDB.(*DB).Checkpoint
+         0     0% 94.33%   625.36MB 50.06%  github.com/snissn/gomap/TreeDB.(*DB).Get
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1
+         0     0% 94.33%    49.44MB  3.96%  github.com/snissn/gomap/TreeDB.(*DB).checkpointCachedForPublicCommandWAL
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL.func1
+         0     0% 94.33%    62.56MB  5.01%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).WriteSync
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL
+         0     0% 94.33%    62.56MB  5.01%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write.func4
+         0     0% 94.33%   865.74MB 69.31%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGetCheckpointed
+         0     0% 94.33%   108.93MB  8.72%  github.com/snissn/gomap/TreeDB.Open
+         0     0% 94.33%   108.93MB  8.72%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0% 94.33%    62.56MB  5.01%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 94.33%    62.56MB  5.01%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 94.33%    62.56MB  5.01%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 94.33%    45.93MB  3.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint (inline)
+         0     0% 94.33%   625.36MB 50.06%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+         0     0% 94.33%    45.93MB  3.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 94.33%    34.40MB  2.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).finishFlushedCanonicalUnits
+         0     0% 94.33%    69.19MB  5.54%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnits
+         0     0% 94.33%    69.19MB  5.54%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed
+         0     0% 94.33%    33.32MB  2.67%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func4 (partial-inline)
+         0     0% 94.33%    27.80MB  2.23%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func5
+         0     0% 94.33%    69.19MB  5.54%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStreamed
+         0     0% 94.33%    69.69MB  5.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCheckpointFrontierLocked.func1
+         0     0% 94.33%    69.69MB  5.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCollectionModeFrontier
+         0     0% 94.33%    45.93MB  3.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).newMutableMemtableWithCapacityMode
+         0     0% 94.33%    34.40MB  2.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).publishMemtablesLocked
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).recycleMemtables
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).releaseMemtableViewRef
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).releasePublishedMemtableView (inline)
+         0     0% 94.33%    34.40MB  2.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).removeQueuedUnitsLocked
+         0     0% 94.33%    45.93MB  3.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).rotateMutableShardsLocked
+         0     0% 94.33%   226.90MB 18.16%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop
+         0     0% 94.33%   226.90MB 18.16%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop.func1
+         0     0% 94.33%    33.32MB  2.67%  github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk
+         0     0% 94.33%    27.80MB  2.23%  github.com/snissn/gomap/TreeDB/caching.mergeCanonicalStableIteratorUnits
+         0     0% 94.33%    19.16MB  1.53%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write
+         0     0% 94.33%     6.52MB  0.52%  github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync
+         0     0% 94.33%    25.69MB  2.06%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0% 94.33%   401.20MB 32.12%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB/db.(*DB).AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode (inline)
+         0     0% 94.33%   625.36MB 50.06%  github.com/snissn/gomap/TreeDB/db.(*DB).Get
+         0     0% 94.33%   625.36MB 50.06%  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1
+         0     0% 94.33%   401.20MB 32.12%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotOrErr
+         0     0% 94.33%   401.20MB 32.12%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld
+         0     0% 94.33%    48.49MB  3.88%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming
+         0     0% 94.33%    50.03MB  4.01%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawKVCommandWALOrderedEntryScanWithHintPrepared
+         0     0% 94.33%    23.68MB  1.90%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked
+         0     0% 94.33%    24.68MB  1.98%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch
+         0     0% 94.33%   224.16MB 17.95%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get
+         0     0% 94.33%    74.25MB  5.94%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0% 94.33%    74.25MB  5.94%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend
+         0     0% 94.33%     7.52MB   0.6%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).AppendCommandObservedWithHooks
+         0     0% 94.33%     7.52MB   0.6%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).appendCommand
+         0     0% 94.33%     7.22MB  0.58%  github.com/snissn/gomap/TreeDB/internal/commitlog.EncodeRawKVBatchPayloadPlanned (inline)
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ExternalRefFenceV1FromRawKVPayload
+         0     0% 94.33%       64MB  5.12%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+         0     0% 94.33%       64MB  5.12%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayload
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayload.func1
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayloadWithRevision
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchRIDs
+         0     0% 94.33%    10.03MB   0.8%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchRIDs.func1
+         0     0% 94.33%     6.52MB  0.52%  github.com/snissn/gomap/TreeDB/internal/commitlog.canonicalCommandPreconditionsV2
+         0     0% 94.33%     6.52MB  0.52%  github.com/snissn/gomap/TreeDB/internal/commitlog.prepareCommandFrameV2ForEncode
+         0     0% 94.33%    79.72MB  6.38%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).appendSample.func1
+         0     0% 94.33%    79.72MB  6.38%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).train
+         0     0% 94.33%     8.69MB   0.7%  github.com/snissn/gomap/TreeDB/internal/compression.ChooseKForDictOptions
+         0     0% 94.33%    37.28MB  2.98%  github.com/snissn/gomap/TreeDB/internal/compression.buildAndValidateDict
+         0     0% 94.33%     7.69MB  0.62%  github.com/snissn/gomap/TreeDB/internal/compression.decodeCostEstimate
+         0     0% 94.33%    43.42MB  3.48%  github.com/snissn/gomap/TreeDB/internal/compression.validateDict
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).ResetWithCapacityHard
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).replaceEntriesSliceWithPolicy
+         0     0% 94.33%    33.90MB  2.71%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).resetLockedWithPolicy
+         0     0% 94.33%    64.49MB  5.16%  github.com/snissn/gomap/TreeDB/internal/memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes
+         0     0% 94.33%    64.49MB  5.16%  github.com/snissn/gomap/TreeDB/internal/memtable.newAppendOnlyWithInitialEntries (inline)
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeAppend (inline)
+         0     0% 94.33%   179.04MB 14.33%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadTo
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readGroupedCompressedFromFileToVerify
+         0     0% 94.33%    12.61MB  1.01%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).takeDecodeScratch
+         0     0% 94.33%   226.90MB 18.16%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).PrepareFrameInto
+         0     0% 94.33%   209.88MB 16.80%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayloadStreaming
+         0     0% 94.33%     6.52MB  0.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).stableResourceTokenLocked
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend
+         0     0% 94.33%        8MB  0.64%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).ensureAppendBufCap
+         0     0% 94.33%     6.52MB  0.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.stableValueLogResourceToken
+         0     0% 94.33%       31MB  2.48%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+         0     0% 94.33%       31MB  2.48%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafEntryViewColumnarPrefixV2
+         0     0% 94.33%       31MB  2.48%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyAt (inline)
+         0     0% 94.33%       31MB  2.48%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+         0     0% 94.33%   224.16MB 17.95%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+         0     0% 94.33%   224.16MB 17.95%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend
+         0     0% 94.33%   193.16MB 15.46%  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey
+         0     0% 94.33%       31MB  2.48%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+         0     0% 94.33%    11.66MB  0.93%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).Run (inline)
+         0     0% 94.33%    11.66MB  0.93%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).run
+         0     0% 94.33%    24.18MB  1.94%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0% 94.33%    12.52MB  1.00%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).PrepareReadOnly
+         0     0% 94.33%    12.52MB  1.00%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).PrepareReadOnlyPlan
+         0     0% 94.33%    11.66MB  0.93%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+         0     0% 94.33%    11.66MB  0.93%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared.func2
+         0     0% 94.33%    11.16MB  0.89%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeLeaf
+         0     0% 94.33%     7.64MB  0.61%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).persistLeafPageBatchDataToWithConfig
+         0     0% 94.33%    11.66MB  0.93%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0% 94.33%     7.64MB  0.61%  github.com/snissn/gomap/TreeDB/zipper.(*spanNativeLeafLogOutputGate).persistLeafPageBatchDataTo
+         0     0% 94.33%     7.64MB  0.61%  github.com/snissn/gomap/TreeDB/zipper.(*spanNativeLeafLogOutputGate).persistLeafPageBatchDataToForWorker
+         0     0% 94.33%     7.64MB  0.61%  github.com/snissn/gomap/TreeDB/zipper.(*spanNativeLeafLogOutputGate).persistLeafPageBatchDataToLog
+         0     0% 94.33%    11.17MB  0.89%  sync.(*Pool).Get
+         0     0% 94.33%   789.47MB 63.20%  testing.(*B).launch
+         0     0% 94.33%    76.27MB  6.11%  testing.(*B).run1.func1
+         0     0% 94.33%   865.74MB 69.31%  testing.(*B).runN
+
+===== checkpointed-cpu-top.txt =====
+File: public-checkpointed.test
+Build ID: 2487db187ac11ab167027bccff463dc2c970707d
+Type: cpu
+Time: 2026-10-01 16:32:49 HST
+Duration: 6.96s, Total samples = 3.41s (48.97%)
+Showing nodes accounting for 2.97s, 87.10% of 3.41s total
+Dropped 180 nodes (cum <= 0.02s)
+      flat  flat%   sum%        cum   cum%
+     0.75s 21.99% 21.99%      0.75s 21.99%  internal/runtime/syscall/linux.Syscall6
+     0.20s  5.87% 27.86%      1.25s 36.66%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readGroupedCompressedFromFileToVerify
+     0.16s  4.69% 32.55%      0.16s  4.69%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.10s  2.93% 35.48%      0.10s  2.93%  hash/crc32.simpleUpdate (inline)
+     0.09s  2.64% 38.12%      0.09s  2.64%  github.com/snissn/gomap/TreeDB/internal/valuelog.groupedFrameOffsetsEqual (inline)
+     0.08s  2.35% 40.47%      0.08s  2.35%  internal/sync.(*Mutex).Unlock (inline)
+     0.08s  2.35% 42.82%      0.08s  2.35%  runtime.memclrNoHeapPointers
+     0.06s  1.76% 44.57%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readTo
+     0.06s  1.76% 46.33%      0.06s  1.76%  runtime.memmove
+     0.05s  1.47% 47.80%      1.45s 42.52%  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey
+     0.04s  1.17% 48.97%      0.04s  1.17%  cmpbody
+     0.04s  1.17% 50.15%      3.07s 90.03%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGetCheckpointed
+     0.04s  1.17% 51.32%      0.13s  3.81%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+     0.04s  1.17% 52.49%      0.04s  1.17%  hash/crc32.ieeeCLMUL
+     0.04s  1.17% 53.67%      0.04s  1.17%  sync/atomic.(*Int64).Add (inline)
+     0.04s  1.17% 54.84%      0.04s  1.17%  time.runtimeNow
+     0.03s  0.88% 55.72%      0.03s  0.88%  encoding/binary.littleEndian.Uint64 (inline)
+     0.03s  0.88% 56.60%      0.08s  2.35%  github.com/snissn/compress/zstd.(*fastEncoderDict).Reset
+     0.03s  0.88% 57.48%      2.51s 73.61%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+     0.03s  0.88% 58.36%      1.38s 40.47%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend
+     0.03s  0.88% 59.24%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal
+     0.03s  0.88% 60.12%      0.10s  2.93%  github.com/snissn/gomap/TreeDB/node.(*Node).searchLeafColumnarPrefixV2BlockWithMeta
+     0.03s  0.88% 61.00%      0.03s  0.88%  internal/runtime/atomic.(*Uint32).CompareAndSwap (inline)
+     0.03s  0.88% 61.88%      0.03s  0.88%  internal/sync.(*Mutex).Lock (inline)
+     0.03s  0.88% 62.76%      0.03s  0.88%  runtime.(*mspan).moveInlineMarks
+     0.03s  0.88% 63.64%      0.03s  0.88%  runtime.procyieldAsm
+     0.03s  0.88% 64.52%      0.07s  2.05%  runtime.scanObject
+     0.03s  0.88% 65.40%      0.03s  0.88%  sync/atomic.(*Bool).Load (inline)
+     0.03s  0.88% 66.28%      0.03s  0.88%  sync/atomic.(*Int32).Add (inline)
+     0.03s  0.88% 67.16%      0.03s  0.88%  sync/atomic.(*Uint64).Add (inline)
+     0.02s  0.59% 67.74%      0.03s  0.88%  fmt.(*pp).doPrintf
+     0.02s  0.59% 68.33%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).nativeRootValueLogAppendLaneForFileID
+     0.02s  0.59% 68.91%      1.40s 41.06%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend
+     0.02s  0.59% 69.50%      0.05s  1.47%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+     0.02s  0.59% 70.09%      0.05s  1.47%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+     0.02s  0.59% 70.67%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2EnsureMeta
+     0.02s  0.59% 71.26%      0.12s  3.52%  github.com/snissn/gomap/TreeDB/node.(*Node).searchLeafColumnarPrefixV2
+     0.02s  0.59% 71.85%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/node.compareSmallBigEndian (inline)
+     0.02s  0.59% 72.43%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/node.getUint16At (inline)
+     0.02s  0.59% 73.02%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     0.02s  0.59% 73.61%      0.05s  1.47%  hash/crc32.init.OnceFunc.func4
+     0.02s  0.59% 74.19%      0.02s  0.59%  internal/poll.(*fdMutex).incref (inline)
+     0.02s  0.59% 74.78%      0.02s  0.59%  memeqbody
+     0.02s  0.59% 75.37%      0.02s  0.59%  runtime.(*spanInlineMarkBits).init
+     0.02s  0.59% 75.95%      0.24s  7.04%  runtime.mallocgc
+     0.02s  0.59% 76.54%      0.05s  1.47%  runtime.mallocgcSmallScanNoHeader
+     0.02s  0.59% 77.13%      0.02s  0.59%  runtime.nextFreeFast (inline)
+     0.02s  0.59% 77.71%      0.03s  0.88%  runtime.tryDeferToSpanScan
+     0.02s  0.59% 78.30%      0.03s  0.88%  runtime.typePointers.next
+     0.02s  0.59% 78.89%      0.02s  0.59%  runtime.unlock2
+     0.02s  0.59% 79.47%      0.05s  1.47%  sort.partition_func
+     0.01s  0.29% 79.77%      0.26s  7.62%  github.com/snissn/go-crc32-asm.updateIEEEFast
+     0.01s  0.29% 80.06%      2.52s 73.90%  github.com/snissn/gomap/TreeDB.(*DB).Get
+     0.01s  0.29% 80.35%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).noteMemtableViewRetain (inline)
+     0.01s  0.29% 80.65%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.livePointRootDomainSnapshot
+     0.01s  0.29% 80.94%      0.06s  1.76%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Close
+     0.01s  0.29% 81.23%      0.08s  2.35%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+     0.01s  0.29% 81.52%      1.34s 39.30%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeAppend (inline)
+     0.01s  0.29% 81.82%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/valuelog.putDecodeScratch
+     0.01s  0.29% 82.11%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     0.01s  0.29% 82.40%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafValueViewColumnarPrefixV2
+     0.01s  0.29% 82.70%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/node.(*Node).rawFlags (inline)
+     0.01s  0.29% 82.99%      0.06s  1.76%  github.com/snissn/gomap/TreeDB/node.compareLeafPrefixVirtualKey
+     0.01s  0.29% 83.28%      2.14s 62.76%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+     0.01s  0.29% 83.58%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto
+     0.01s  0.29% 83.87%      0.68s 19.94%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     0.01s  0.29% 84.16%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad
+     0.01s  0.29% 84.46%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.getOuterLeafBuildPage (inline)
+     0.01s  0.29% 84.75%      0.02s  0.59%  internal/reflectlite.Swapper.func9
+     0.01s  0.29% 85.04%      0.05s  1.47%  runtime.(*mcentral).cacheSpan
+     0.01s  0.29% 85.34%      0.02s  0.59%  runtime.exitsyscall
+     0.01s  0.29% 85.63%      0.04s  1.17%  runtime.lock2
+     0.01s  0.29% 85.92%      0.08s  2.35%  runtime.makeslice
+     0.01s  0.29% 86.22%      0.03s  0.88%  sync.(*Once).Do
+     0.01s  0.29% 86.51%      0.03s  0.88%  sync.(*Pool).Get
+     0.01s  0.29% 86.80%      0.76s 22.29%  syscall.RawSyscall6
+     0.01s  0.29% 87.10%      0.80s 23.46%  syscall.Syscall6
+         0     0% 87.10%      0.05s  1.47%  bytes.Compare (inline)
+         0     0% 87.10%      0.02s  0.59%  bytes.Equal (inline)
+         0     0% 87.10%      0.03s  0.88%  fmt.Sprintf
+         0     0% 87.10%      0.02s  0.59%  github.com/pierrec/lz4/v4.(*Compressor).CompressBlock (inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/pierrec/lz4/v4/internal/lz4block.(*Compressor).CompressBlock
+         0     0% 87.10%      0.07s  2.05%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).EncodeAllWithDict
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).dictFor
+         0     0% 87.10%      0.05s  1.47%  github.com/snissn/compress/zstd.(*Encoder).Reset
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/compress/zstd.(*Encoder).encodeAll
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/compress/zstd.(*fastBase).ensureHist (inline)
+         0     0% 87.10%      0.05s  1.47%  github.com/snissn/compress/zstd.(*fastBase).resetBase
+         0     0% 87.10%      0.36s 10.56%  github.com/snissn/go-crc32-asm.Update
+         0     0% 87.10%      0.09s  2.64%  github.com/snissn/go-crc32-asm.checksumIEEEFallback (inline)
+         0     0% 87.10%      0.36s 10.56%  github.com/snissn/go-crc32-asm.updateIEEE
+         0     0% 87.10%      0.10s  2.93%  github.com/snissn/go-crc32-asm.updateIEEEFallback (inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB.(*DB).Close
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL.func1
+         0     0% 87.10%      0.43s 12.61%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).WriteSync
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL
+         0     0% 87.10%      0.43s 12.61%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write.func4
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGetCheckpointed.func1
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB.Open
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0% 87.10%      0.48s 14.08%  github.com/snissn/gomap/TreeDB.openSnapshotValueLogBenchDB
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/caching.(*Batch).Replay
+         0     0% 87.10%      0.43s 12.61%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 87.10%      0.43s 12.61%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 87.10%      0.43s 12.61%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog (inline)
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecords
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternal
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/caching.(*DB).beginForegroundRead
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).canBypassMemtableRead
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).currentValueLogSeq
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnits
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func4 (partial-inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func5
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStreamed
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCheckpointFrontierLocked.func1
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCollectionModeFrontier
+         0     0% 87.10%      0.06s  1.76%  github.com/snissn/gomap/TreeDB/caching.(*DB).installBackendValueLogReadBarrier.func2
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/caching.(*DB).noteRead
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).registerMemtableViewReader
+         0     0% 87.10%      0.07s  2.05%  github.com/snissn/gomap/TreeDB/caching.(*DB).retainMemtableView
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).shardIndex (inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogLaneForFileID
+         0     0% 87.10%      0.08s  2.35%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop
+         0     0% 87.10%      0.08s  2.35%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop.func1
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk
+         0     0% 87.10%      0.06s  1.76%  github.com/snissn/gomap/TreeDB/caching.dispatchBackendValueLogReadBarrierWithSize
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.hashKey
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.mergeCanonicalStableIteratorUnits
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/caching.snapshotBackendValueLogReadBarrierDBs
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0% 87.10%      0.10s  2.93%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB/db.(*DB).AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode (inline)
+         0     0% 87.10%      2.31s 67.74%  github.com/snissn/gomap/TreeDB/db.(*DB).Get
+         0     0% 87.10%      2.31s 67.74%  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1
+         0     0% 87.10%      0.10s  2.93%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotOrErr
+         0     0% 87.10%      0.09s  2.64%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming
+         0     0% 87.10%      0.38s 11.14%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawKVCommandWALOrderedEntryScanWithHintPrepared
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/db.(*DB).captureCommandWALExternalDependencies
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/db.(*DB).lookupCommandWALValueLogRID
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint.PlanRawKVBatchPayloadScan.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint.func2.func7
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint.func2 (inline)
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/db.(*DB).rawKVCommandWALOperationFromEntry
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch
+         0     0% 87.10%      2.15s 63.05%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseIfUnreferenced
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/db.(*rawKVCommandWALRIDCache).snapshot
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadLeafLogPageUnsafeViewWithState
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/internal/commitlog.PlanRawKVBatchPayloadScan (inline)
+         0     0% 87.10%      0.07s  2.05%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).appendSample.func1
+         0     0% 87.10%      0.07s  2.05%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).train
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/internal/compression.ChooseKForDictOptions
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/compression.batchTotalsWithEncodeWorkspace
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/compression.decodeCostEstimate
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/compression.shapeAndValidateDict
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/internal/compression.validateDict
+         0     0% 87.10%      0.13s  3.81%  github.com/snissn/gomap/TreeDB/internal/crc.ChecksumParts
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/internal/crc.Update (inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/rootpublication.buildStableResourceKindViews
+         0     0% 87.10%      1.33s 39.00%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0% 87.10%      0.28s  8.21%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadRIDUnverified
+         0     0% 87.10%      0.06s  1.76%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ensureCurrentWritableReadableFor
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadTo
+         0     0% 87.10%      0.08s  2.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).PrepareFrameInto
+         0     0% 87.10%      0.05s  1.47%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayload
+         0     0% 87.10%      0.05s  1.47%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayloadStreaming
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).prepareBlockFrameBody
+         0     0% 87.10%      0.20s  5.87%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CaptureStableExternalRIDFence
+         0     0% 87.10%      0.14s  4.11%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).ReadRIDUnverified
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/valuelog.NewStableExternalRIDFence
+         0     0% 87.10%      0.28s  8.21%  github.com/snissn/gomap/TreeDB/internal/valuelog.ReadRIDAtUnverified
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/valuelog.canonicalStableExternalRIDs
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/internal/valuelog.encodeBlockPayloadWithScratch
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/internal/valuelog.noteDecodeScratchSmallPoolTake (inline)
+         0     0% 87.10%      0.14s  4.11%  github.com/snissn/gomap/TreeDB/internal/valuelog.validateStableExternalRIDMembership
+         0     0% 87.10%      0.16s  4.69%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildRef
+         0     0% 87.10%      0.12s  3.52%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/node.(*Node).VerifyChecksum (inline)
+         0     0% 87.10%      0.15s  4.40%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafEntryViewColumnarPrefixV2
+         0     0% 87.10%      0.13s  3.81%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyAt (inline)
+         0     0% 87.10%      0.03s  0.88%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2KeyMetaAt
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/page.CalculateChecksum
+         0     0% 87.10%      0.23s  6.74%  github.com/snissn/gomap/TreeDB/page.VerifyChecksumNonMutating
+         0     0% 87.10%      2.13s 62.46%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend
+         0     0% 87.10%      0.04s  1.17%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto
+         0     0% 87.10%      0.25s  7.33%  github.com/snissn/gomap/TreeDB/tree.validateLeafLogNodeIntoWithState
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).Run (inline)
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).run
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared.func2
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeLeaf
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0% 87.10%      0.02s  0.59%  github.com/snissn/gomap/TreeDB/zipper.(*mergeScratch).acquireOuterLeafBuildPage
+         0     0% 87.10%      0.09s  2.64%  hash/crc32.ChecksumIEEE
+         0     0% 87.10%      0.10s  2.93%  hash/crc32.Update (inline)
+         0     0% 87.10%      0.14s  4.11%  hash/crc32.archUpdateIEEE
+         0     0% 87.10%      0.10s  2.93%  hash/crc32.slicingUpdate
+         0     0% 87.10%      0.10s  2.93%  hash/crc32.update
+         0     0% 87.10%      0.81s 23.75%  internal/poll.(*FD).Pread
+         0     0% 87.10%      0.78s 22.87%  internal/poll.(*FD).Pread.func1 (inline)
+         0     0% 87.10%      0.02s  0.59%  internal/poll.(*FD).incref (inline)
+         0     0% 87.10%      0.78s 22.87%  internal/poll.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 87.10%      0.02s  0.59%  internal/runtime/maps.newGroups (inline)
+         0     0% 87.10%      0.02s  0.59%  internal/runtime/maps.newarray
+         0     0% 87.10%      0.81s 23.75%  os.(*File).ReadAt
+         0     0% 87.10%      0.81s 23.75%  os.(*File).pread (inline)
+         0     0% 87.10%      0.02s  0.59%  os.ignoringEINTR (inline)
+         0     0% 87.10%      0.06s  1.76%  runtime.(*mcache).nextFree
+         0     0% 87.10%      0.06s  1.76%  runtime.(*mcache).refill
+         0     0% 87.10%      0.04s  1.17%  runtime.(*mcentral).grow
+         0     0% 87.10%      0.02s  0.59%  runtime.(*mheap).freeSpan (inline)
+         0     0% 87.10%      0.03s  0.88%  runtime.(*mspan).initHeapBits
+         0     0% 87.10%      0.02s  0.59%  runtime.(*mspan).initInlineMarkBits (inline)
+         0     0% 87.10%      0.05s  1.47%  runtime.(*sweepLocked).sweep
+         0     0% 87.10%      0.02s  0.59%  runtime.(*sweepLocked).sweep.(*mheap).freeSpan.func2
+         0     0% 87.10%      0.05s  1.47%  runtime.bgsweep
+         0     0% 87.10%      0.02s  0.59%  runtime.entersyscall
+         0     0% 87.10%      0.09s  2.64%  runtime.gcBgMarkWorker
+         0     0% 87.10%      0.09s  2.64%  runtime.gcBgMarkWorker.func2
+         0     0% 87.10%      0.09s  2.64%  runtime.gcDrain
+         0     0% 87.10%      0.03s  0.88%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 87.10%      0.06s  1.76%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 87.10%      0.04s  1.17%  runtime.lock (partial-inline)
+         0     0% 87.10%      0.04s  1.17%  runtime.lockWithRank (inline)
+         0     0% 87.10%      0.02s  0.59%  runtime.mProf_Malloc
+         0     0% 87.10%      0.06s  1.76%  runtime.mallocgcLarge
+         0     0% 87.10%      0.09s  2.64%  runtime.mallocgcSmallNoscan
+         0     0% 87.10%      0.02s  0.59%  runtime.markroot
+         0     0% 87.10%      0.05s  1.47%  runtime.memclrNoHeapPointersChunked
+         0     0% 87.10%      0.02s  0.59%  runtime.newarray
+         0     0% 87.10%      0.08s  2.35%  runtime.newobject
+         0     0% 87.10%      0.03s  0.88%  runtime.procyield (inline)
+         0     0% 87.10%      0.02s  0.59%  runtime.profilealloc
+         0     0% 87.10%      0.02s  0.59%  runtime.reentersyscall
+         0     0% 87.10%      0.02s  0.59%  runtime.scanblock
+         0     0% 87.10%      0.06s  1.76%  runtime.sweepone
+         0     0% 87.10%      0.15s  4.40%  runtime.systemstack
+         0     0% 87.10%      0.02s  0.59%  runtime.unlock (inline)
+         0     0% 87.10%      0.02s  0.59%  runtime.unlockWithRank (inline)
+         0     0% 87.10%      0.06s  1.76%  sort.Slice
+         0     0% 87.10%      0.06s  1.76%  sort.pdqsort_func
+         0     0% 87.10%      0.03s  0.88%  sync.(*Mutex).Lock (inline)
+         0     0% 87.10%      0.08s  2.35%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 87.10%      0.02s  0.59%  sync.(*RWMutex).RUnlock (partial-inline)
+         0     0% 87.10%      0.78s 22.87%  syscall.Pread (inline)
+         0     0% 87.10%      0.78s 22.87%  syscall.pread
+         0     0% 87.10%      2.94s 86.22%  testing.(*B).launch
+         0     0% 87.10%      0.13s  3.81%  testing.(*B).run1.func1
+         0     0% 87.10%      3.07s 90.03%  testing.(*B).runN
+         0     0% 87.10%      0.04s  1.17%  time.Now
+
+===== checkpointed-decode-path-error.txt =====
+no matches found for regexp: decodeFramePayloadTo
+
+===== checkpointed-decode-path.txt =====
+
+===== checkpointed-harness-sha256.txt =====
+b052a138c51b62a6a8471dccd1b03bb26838b1ede3ea3718397e012a2efadcfd  /mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/evidence/public-qualification-harness.go
+
+===== checkpointed-load.txt =====
+ 16:31:57 up 28 days, 17:56,  8 users,  load average: 1.47, 1.89, 1.95
+ 16:32:02 up 28 days, 17:56,  8 users,  load average: 1.67, 1.92, 1.96
+ 16:32:07 up 28 days, 17:56,  8 users,  load average: 1.88, 1.96, 1.97
+ 16:32:12 up 28 days, 17:56,  8 users,  load average: 1.88, 1.96, 1.97
+ 16:32:16 up 28 days, 17:57,  8 users,  load average: 1.97, 1.98, 1.98
+ 16:32:22 up 28 days, 17:57,  8 users,  load average: 2.12, 2.01, 1.99
+ 16:32:28 up 28 days, 17:57,  8 users,  load average: 2.27, 2.04, 2.00
+ 16:32:34 up 28 days, 17:57,  8 users,  load average: 2.41, 2.08, 2.01
+ 16:32:39 up 28 days, 17:57,  8 users,  load average: 2.46, 2.09, 2.02
+ 16:32:44 up 28 days, 17:57,  8 users,  load average: 2.50, 2.11, 2.02
+
+===== checkpointed-profile.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGetCheckpointed-4   	  715950	      3543 ns/op	  72.26 MB/s	 142995896 live_heap_B	     65564 pool_retained_B	        12.79 scratch_alloc_B/op	         0.0004400 scratch_allocs/op	         1.000 scratch_gets/op	     843 B/op	       2 allocs/op
+PASS
+
+===== context.txt =====
+Fri Oct  2 02:25:39 UTC 2026
+Linux mikers-B560-DS3H-AC-Y1 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux
+go version go1.26.3 linux/amd64
+/home/mikers/.gvm/gos/go1.26.3
+/home/mikers/.cache/go-build
+linux
+amd64
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  12
+On-line CPU(s) list:                     0-11
+Vendor ID:                               GenuineIntel
+Model name:                              11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+CPU family:                              6
+Model:                                   167
+Thread(s) per core:                      2
+Core(s) per socket:                      6
+Socket(s):                               1
+Stepping:                                1
+CPU max MHz:                             4400.0000
+CPU min MHz:                             800.0000
+BogoMIPS:                                5184.00
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid mpx avx512f avx512dq rdseed adx smap avx512ifma clflushopt intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm md_clear flush_l1d arch_capabilities
+Virtualization:                          VT-x
+L1d cache:                               288 KiB (6 instances)
+L1i cache:                               192 KiB (6 instances)
+L2 cache:                                3 MiB (6 instances)
+L3 cache:                                12 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-11
+Vulnerability Gather data sampling:      Mitigation; Microcode
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+               total        used        free      shared  buff/cache   available
+Mem:     33513058304  6599467008  1616216064   130404352 25297375232 25451753472
+Swap:    173946163200  8936034304 165010128896
+ 16:25:39 up 28 days, 17:50,  8 users,  load average: 1.58, 1.58, 1.75
+    PID %CPU %MEM COMMAND
+2272947  8.2  0.3 Runner.Worker
+   6357  4.6  3.2 clickhouse-serv
+ 681192  3.6  6.7 polystorechaind
+   1881  1.9  0.4 fluidsynth
+   1949  1.9  0.0 pulseaudio
+1194972  0.3  0.1 codex
+   5838  0.2  0.0 node_exporter
+1595344  0.2  0.1 codex
+3434909  0.2  0.1 codex
+3875558  0.2  0.1 codex
+     95  0.1  0.0 kcompactd0
+44e3452cd25f405bc4fe87323e68afc2b17d5f64575f359cd4ebe34650232e2a  /mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/TreeDB/internal/valuelog/reader.go
+457883d13aae6328dfd1a665a4b68b82e0424a13d23e03bc7857275bcb4af346  /mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/baseline/TreeDB/internal/valuelog/reader_decode_reuse_test.go
+c01cfd34bd8625514d6e8220f4dcd2f82738c5f89e4bcfb337e56aa96ce49fcb  /mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/TreeDB/internal/valuelog/reader.go
+457883d13aae6328dfd1a665a4b68b82e0424a13d23e03bc7857275bcb4af346  /mnt/fast4tb/codex-graph-4888-20261001/decoder-4889/candidate/TreeDB/internal/valuelog/reader_decode_reuse_test.go
+
+===== green.txt =====
+PASS
+
+===== load.txt =====
+ 16:26:41 up 28 days, 17:51,  8 users,  load average: 5.44, 2.76, 2.15
+ 16:26:47 up 28 days, 17:51,  8 users,  load average: 4.91, 2.74, 2.15
+ 16:26:54 up 28 days, 17:51,  8 users,  load average: 4.68, 2.72, 2.15
+ 16:27:01 up 28 days, 17:51,  8 users,  load average: 4.46, 2.71, 2.15
+ 16:27:07 up 28 days, 17:51,  8 users,  load average: 4.08, 2.69, 2.14
+ 16:27:14 up 28 days, 17:51,  8 users,  load average: 4.08, 2.71, 2.15
+ 16:27:20 up 28 days, 17:52,  8 users,  load average: 3.91, 2.70, 2.15
+ 16:27:27 up 28 days, 17:52,  8 users,  load average: 3.62, 2.67, 2.15
+ 16:27:33 up 28 days, 17:52,  8 users,  load average: 3.57, 2.68, 2.16
+ 16:27:40 up 28 days, 17:52,  8 users,  load average: 3.69, 2.72, 2.17
+
+===== public-allocs-top.txt =====
+File: public.test
+Build ID: 2b031c0ce3139f7589fdc7c13a1cfbecab6eee2f
+Type: alloc_space
+Time: 2026-10-01 16:27:50 HST
+Showing nodes accounting for 397.98MB, 93.16% of 427.18MB total
+Dropped 172 nodes (cum <= 2.14MB)
+      flat  flat%   sum%        cum   cum%
+  247.56MB 57.95% 57.95%   247.56MB 57.95%  github.com/snissn/gomap/TreeDB/caching.ownedReadResult
+   52.13MB 12.20% 70.15%    52.13MB 12.20%  github.com/snissn/compress/zstd.(*fastBase).ensureHist (inline)
+   37.77MB  8.84% 79.00%    37.77MB  8.84%  github.com/snissn/gomap/TreeDB/internal/memtable.getAppendOnlyEntries
+      16MB  3.75% 82.74%       16MB  3.75%  bufio.NewWriterSize (inline)
+       8MB  1.87% 84.61%        8MB  1.87%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+    6.33MB  1.48% 86.09%     6.33MB  1.48%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+    4.86MB  1.14% 87.23%     6.36MB  1.49%  github.com/snissn/compress/zstd.loadDict
+    4.45MB  1.04% 88.27%    59.35MB 13.89%  github.com/snissn/compress/zstd.(*fastEncoderDict).Reset
+    3.54MB  0.83% 89.10%     7.05MB  1.65%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CaptureStableExternalRIDFence
+    3.34MB  0.78% 89.88%     3.34MB  0.78%  github.com/snissn/compress/zstd.(*blockEnc).init
+    3.13MB  0.73% 90.62%     3.13MB  0.73%  github.com/snissn/gomap/TreeDB/zipper.(*ReadOnlyPrepareResult).ensureInitialCapacity
+       3MB   0.7% 91.32%        3MB   0.7%  fmt.Sprintf
+    2.50MB  0.59% 91.90%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ExternalRefFenceV1FromRawKVPayload.func1
+    2.47MB  0.58% 92.48%    66.13MB 15.48%  github.com/snissn/gomap/TreeDB.openSnapshotValueLogBenchDB
+    1.34MB  0.31% 92.80%     2.48MB  0.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter
+       1MB  0.24% 93.03%     9.06MB  2.12%  github.com/snissn/gomap/TreeDB/db.(*DB).captureCommandWALExternalDependencies
+    0.57MB  0.13% 93.16%     7.46MB  1.75%  github.com/snissn/gomap/TreeDB/internal/compression.shapeAndValidateDict
+         0     0% 93.16%    10.13MB  2.37%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).EncodeAllWithDict
+         0     0% 93.16%    50.92MB 11.92%  github.com/snissn/compress/zstd.(*Encoder).Reset
+         0     0% 93.16%     8.50MB  1.99%  github.com/snissn/compress/zstd.(*Encoder).encodeAll
+         0     0% 93.16%    54.90MB 12.85%  github.com/snissn/compress/zstd.(*fastBase).resetBase
+         0     0% 93.16%     3.14MB  0.73%  github.com/snissn/compress/zstd.BuildDict
+         0     0% 93.16%     4.20MB  0.98%  github.com/snissn/compress/zstd.NewReader
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB.(*DB).Close
+         0     0% 93.16%   254.89MB 59.67%  github.com/snissn/gomap/TreeDB.(*DB).Get
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB.(*DB).checkpointCachedForPublicCommandWAL
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL.func1
+         0     0% 93.16%    20.10MB  4.70%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).WriteSync
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL
+         0     0% 93.16%    20.10MB  4.70%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write.func4
+         0     0% 93.16%    77.15MB 18.06%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGet
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGet.func1
+         0     0% 93.16%   254.89MB 59.67%  github.com/snissn/gomap/TreeDB.BenchmarkDBValueLogGet.func2
+         0     0% 93.16%    40.06MB  9.38%  github.com/snissn/gomap/TreeDB.Open
+         0     0% 93.16%    40.06MB  9.38%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0% 93.16%    20.10MB  4.70%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 93.16%    20.10MB  4.70%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 93.16%    20.10MB  4.70%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint (inline)
+         0     0% 93.16%   254.89MB 59.67%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog (inline)
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecords
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternal
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).finishFlushedCanonicalUnits
+         0     0% 93.16%    16.04MB  3.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnits
+         0     0% 93.16%    16.04MB  3.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed
+         0     0% 93.16%     6.39MB  1.50%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func4
+         0     0% 93.16%     6.39MB  1.50%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func5
+         0     0% 93.16%    16.04MB  3.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStreamed
+         0     0% 93.16%    16.04MB  3.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCheckpointFrontierLocked.func1
+         0     0% 93.16%    16.04MB  3.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCollectionModeFrontier
+         0     0% 93.16%     7.33MB  1.72%  github.com/snissn/gomap/TreeDB/caching.(*DB).getMemtableAppend
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).newMutableMemtableWithCapacityMode
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).publishMemtablesLocked
+         0     0% 93.16%     7.33MB  1.72%  github.com/snissn/gomap/TreeDB/caching.(*DB).readValueLogAppend
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).recycleMemtables
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).releaseMemtableViewRef
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).releasePublishedMemtableView (inline)
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/caching.(*DB).removeQueuedUnitsLocked
+         0     0% 93.16%    11.02MB  2.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).rotateMutableShardsLocked
+         0     0% 93.16%    54.01MB 12.64%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop
+         0     0% 93.16%    54.01MB 12.64%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop.func1
+         0     0% 93.16%     6.39MB  1.50%  github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk
+         0     0% 93.16%    21.04MB  4.92%  github.com/snissn/gomap/TreeDB/caching.Open
+         0     0% 93.16%     6.39MB  1.50%  github.com/snissn/gomap/TreeDB/caching.mergeCanonicalStableIteratorUnits
+         0     0% 93.16%     4.92MB  1.15%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write
+         0     0% 93.16%     5.42MB  1.27%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB/db.(*DB).AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode (inline)
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming
+         0     0% 93.16%    12.09MB  2.83%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawKVCommandWALOrderedEntryScanWithHintPrepared
+         0     0% 93.16%     4.92MB  1.15%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked
+         0     0% 93.16%     4.92MB  1.15%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch
+         0     0% 93.16%    19.02MB  4.45%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0% 93.16%    19.02MB  4.45%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ExternalRefFenceV1FromRawKVPayload
+         0     0% 93.16%       16MB  3.75%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+         0     0% 93.16%       16MB  3.75%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayload
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayload.func1
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayloadWithRevision
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchRIDs
+         0     0% 93.16%     2.50MB  0.59%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchRIDs.func1
+         0     0% 93.16%    19.54MB  4.58%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).appendSample.func1
+         0     0% 93.16%    19.54MB  4.58%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).train
+         0     0% 93.16%     3.62MB  0.85%  github.com/snissn/gomap/TreeDB/internal/compression.ChooseKForDictOptions
+         0     0% 93.16%     8.47MB  1.98%  github.com/snissn/gomap/TreeDB/internal/compression.buildAndValidateDict
+         0     0% 93.16%     3.12MB  0.73%  github.com/snissn/gomap/TreeDB/internal/compression.decodeCostEstimate
+         0     0% 93.16%    12.22MB  2.86%  github.com/snissn/gomap/TreeDB/internal/compression.validateDict
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).ResetWithCapacityHard
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).replaceEntriesSliceWithPolicy
+         0     0% 93.16%     8.18MB  1.92%  github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).resetLockedWithPolicy
+         0     0% 93.16%    29.58MB  6.93%  github.com/snissn/gomap/TreeDB/internal/memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes
+         0     0% 93.16%    29.58MB  6.93%  github.com/snissn/gomap/TreeDB/internal/memtable.newAppendOnlyWithInitialEntries (inline)
+         0     0% 93.16%     7.33MB  1.72%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0% 93.16%     7.33MB  1.72%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readGroupedCompressedFromFileToVerify
+         0     0% 93.16%     6.33MB  1.48%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).takeDecodeScratch
+         0     0% 93.16%    53.51MB 12.53%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).PrepareFrameInto
+         0     0% 93.16%    50.92MB 11.92%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayload
+         0     0% 93.16%    50.92MB 11.92%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).encodePayloadStreaming
+         0     0% 93.16%     7.33MB  1.72%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).ReadAppend
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).AppendEncodedFrameInto
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).ensureAppendBufCap
+         0     0% 93.16%        8MB  1.87%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).writeBytes
+         0     0% 93.16%     2.29MB  0.54%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).Run (inline)
+         0     0% 93.16%     2.29MB  0.54%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).run
+         0     0% 93.16%     5.42MB  1.27%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0% 93.16%     3.13MB  0.73%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).PrepareReadOnly
+         0     0% 93.16%     3.13MB  0.73%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).PrepareReadOnlyPlan
+         0     0% 93.16%     2.29MB  0.54%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+         0     0% 93.16%     2.29MB  0.54%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared.func2
+         0     0% 93.16%   254.89MB 59.67%  testing.(*B).launch
+         0     0% 93.16%    77.15MB 18.06%  testing.(*B).run1.func1
+         0     0% 93.16%   332.04MB 77.73%  testing.(*B).runN
+
+===== public-decode-path.txt =====
+
+===== public-profile.txt =====
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBValueLogGet/Get-4         	 1000000	      2381 ns/op	     262 B/op	       1 allocs/op
+PASS
+
+===== red.txt =====
+--- FAIL: TestDecodeFramePayloadToPreservesReusedBacking (0.00s)
+    --- FAIL: TestDecodeFramePayloadToPreservesReusedBacking/lz4 (0.00s)
+        reader_decode_reuse_test.go:50: decode lost caller backing: len=4096 cap=4096 want cap=65536
+    --- FAIL: TestDecodeFramePayloadToPreservesReusedBacking/zstd (0.00s)
+        reader_decode_reuse_test.go:50: decode lost caller backing: len=4096 cap=4096 want cap=65536
+    --- FAIL: TestDecodeFramePayloadToPreservesReusedBacking/snappy (0.00s)
+        reader_decode_reuse_test.go:50: decode lost caller backing: len=4096 cap=4096 want cap=65536
+    --- FAIL: TestDecodeFramePayloadToPreservesReusedBacking/legacy_zstd (0.00s)
+        reader_decode_reuse_test.go:50: decode lost caller backing: len=4096 cap=4096 want cap=65536
+FAIL
+
+===== source-identities.txt =====
+0ad9ce9728e3b758de5c9300d89156f891dc13c3
+c60b2cfeb977bebb0563e4689b5bc68eafed3552
+c5e72c7e5c96a6d72c86ffbbacc1f5ae4c7d3741
+
+===== capture.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889
+export GOROOT=/home/mikers/.gvm/gos/go1.26.3
+export PATH="$GOROOT/bin:$PATH"
+export GOMAXPROCS=4 GOMEMLIMIT=1GiB GOWORK=off
+export GOCACHE=/home/mikers/.cache/go-build
+mkdir -p "$ROOT/tmp"
+export TMPDIR="$ROOT/tmp"
+for variant in baseline candidate; do
+  tar -xf "$ROOT/evidence/candidate.tar" -C "$ROOT/$variant"
+done
+cp "$ROOT/evidence/baseline-reader.go" "$ROOT/baseline/TreeDB/internal/valuelog/reader.go"
+{
+  date -u
+  uname -a
+  go version
+  go env GOROOT GOCACHE GOOS GOARCH
+  lscpu
+  free -b
+  uptime
+  ps -eo pid,pcpu,pmem,comm --sort=-pcpu | head -12
+  sha256sum "$ROOT"/{baseline,candidate}/TreeDB/internal/valuelog/{reader.go,reader_decode_reuse_test.go}
+} > "$ROOT/evidence/context.txt"
+for variant in baseline candidate; do
+  cd "$ROOT/$variant"
+  go test -c ./TreeDB/internal/valuelog -o "$ROOT/$variant/valuelog.test"
+  go test -c ./TreeDB -o "$ROOT/$variant/public.test"
+done
+set +e
+"$ROOT/baseline/valuelog.test" -test.run '^TestDecodeFramePayloadToPreservesReusedBacking$' -test.count=1 > "$ROOT/evidence/red.txt" 2>&1
+red_status=$?
+set -e
+if [[ "$red_status" != 1 ]]; then echo "Unexpected red status $red_status"; exit 1; fi
+"$ROOT/candidate/valuelog.test" -test.run '^TestDecodeFramePayloadTo' -test.count=1 > "$ROOT/evidence/green.txt" 2>&1
+for round in 1 2 3 4 5; do
+  if (( round % 2 )); then variants='baseline candidate'; else variants='candidate baseline'; fi
+  for variant in $variants; do
+    uptime >> "$ROOT/evidence/load.txt"
+    /usr/bin/time -v "$ROOT/$variant/valuelog.test" -test.run '^$' -test.bench '^Benchmark(ValueLogDecodeFrame(Alloc|MixedReuse)|FileReadAppendCompressedFallback)$' -test.benchmem -test.benchtime 500ms -test.count=1 > "$ROOT/evidence/${variant}-decode-${round}.txt" 2> "$ROOT/evidence/${variant}-decode-${round}-time.txt"
+    /usr/bin/time -v "$ROOT/$variant/public.test" -test.run '^$' -test.bench '^BenchmarkDBValueLogGet$/^Get$' -test.benchmem -test.benchtime 500ms -test.count=1 > "$ROOT/evidence/${variant}-public-${round}.txt" 2> "$ROOT/evidence/${variant}-public-${round}-time.txt"
+  done
+done
+"$ROOT/candidate/public.test" -test.run '^$' -test.bench '^BenchmarkDBValueLogGet$/^Get$' -test.benchtime 2s -test.cpuprofile "$ROOT/evidence/public-cpu.pprof" -test.memprofile "$ROOT/evidence/public-allocs.pprof" > "$ROOT/evidence/public-profile.txt"
+go tool pprof -top -alloc_space "$ROOT/candidate/public.test" "$ROOT/evidence/public-allocs.pprof" > "$ROOT/evidence/public-allocs-top.txt"
+go tool pprof -list decodeFramePayloadTo "$ROOT/candidate/public.test" "$ROOT/evidence/public-cpu.pprof" > "$ROOT/evidence/public-decode-path.txt"
+echo CAPTURE_COMPLETE
+
+===== capture-checkpointed.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/mnt/fast4tb/codex-graph-4888-20261001/decoder-4889
+export GOROOT=/home/mikers/.gvm/gos/go1.26.3
+export PATH="$GOROOT/bin:$PATH"
+export GOMAXPROCS=4 GOMEMLIMIT=1GiB GOWORK=off
+export GOCACHE=/home/mikers/.cache/go-build TMPDIR="$ROOT/tmp"
+sha256sum "$ROOT/evidence/public-qualification-harness.go" > "$ROOT/evidence/checkpointed-harness-sha256.txt"
+for variant in baseline candidate; do
+  cp "$ROOT/evidence/public-qualification-harness.go" "$ROOT/$variant/TreeDB/snapshot_read_bench_test.go"
+  cd "$ROOT/$variant"
+  go test -c ./TreeDB -o "$ROOT/$variant/public-checkpointed.test"
+done
+for round in 1 2 3 4 5; do
+  if (( round % 2 )); then variants='baseline candidate'; else variants='candidate baseline'; fi
+  for variant in $variants; do
+    uptime >> "$ROOT/evidence/checkpointed-load.txt"
+    /usr/bin/time -v "$ROOT/$variant/public-checkpointed.test" -test.run '^$' -test.bench '^BenchmarkDBValueLogGetCheckpointed$' -test.benchmem -test.benchtime 500ms -test.count=1 > "$ROOT/evidence/${variant}-checkpointed-${round}.txt" 2> "$ROOT/evidence/${variant}-checkpointed-${round}-time.txt"
+  done
+done
+"$ROOT/candidate/public-checkpointed.test" -test.run '^$' -test.bench '^BenchmarkDBValueLogGetCheckpointed$' -test.benchtime 2s -test.cpuprofile "$ROOT/evidence/checkpointed-cpu.pprof" -test.memprofile "$ROOT/evidence/checkpointed-allocs.pprof" > "$ROOT/evidence/checkpointed-profile.txt"
+go tool pprof -top -alloc_space "$ROOT/candidate/public-checkpointed.test" "$ROOT/evidence/checkpointed-allocs.pprof" > "$ROOT/evidence/checkpointed-allocs-top.txt"
+go tool pprof -list decodeFramePayloadTo "$ROOT/candidate/public-checkpointed.test" "$ROOT/evidence/checkpointed-cpu.pprof" > "$ROOT/evidence/checkpointed-decode-path.txt" 2> "$ROOT/evidence/checkpointed-decode-path-error.txt" || true
+echo CHECKPOINTED_CAPTURE_COMPLETE
