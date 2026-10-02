@@ -880,6 +880,10 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 // Stats returns database statistics.
 func (db *DB) Stats() map[string]string {
 	stats := make(map[string]string)
+	stats["treedb.negative_lookup_filter.active_bytes"] = "0"
+	if view := db.snapshotViewRO.Load(); view != nil {
+		stats["treedb.negative_lookup_filter.active_bytes"] = fmt.Sprint(view.negativeFilter.Bytes())
+	}
 	stats["cosmos.db.type"] = "treedb"
 	stats["treedb.profile.resolved"] = string(db.resolvedProfile)
 	stats["treedb.profile.ordinary_ack_class"] = db.resolvedProfile.OrdinaryAckClass()

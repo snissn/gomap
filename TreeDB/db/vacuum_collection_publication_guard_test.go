@@ -143,20 +143,52 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		}
 	}
 
-	wantPublishCallers := []string{
-		publicationGuardDBMethodID("RefreshValueLogSet"),
-		publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView"),
-		publicationGuardDBMethodID("finalizeCommitLockedWithOptions"),
-		publicationGuardPackageFuncID("openReadOnly"),
-		publicationGuardPackageFuncID("openReadOnlyNoLock"),
-		publicationGuardPackageFuncID("openWithLock"),
-		publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
-		publicationGuardDBMethodID("publishLeafGenerationState"),
-		publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
-		publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
-		publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
+	// The same publication inventory classifies membership coverage. Only
+	// bootstrap and normalized point-apply candidates may carry new coverage;
+	// metadata callers preserve exact unchanged coordinates, replacements drop it.
+	wantPublishCoverage := map[string]bool{
+		publicationGuardDBMethodID("bootstrapNegativeFilter"):                   true,
+		publicationGuardDBMethodID("RefreshValueLogSet"):                        false,
+		publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView"):      false,
+		publicationGuardDBMethodID("finalizeCommitLockedWithOptions"):           true,
+		publicationGuardPackageFuncID("openReadOnly"):                           false,
+		publicationGuardPackageFuncID("openReadOnlyNoLock"):                     false,
+		publicationGuardPackageFuncID("openWithLock"):                           false,
+		publicationGuardDBMethodID("publishCompactStorageValueLogSet"):          false,
+		publicationGuardDBMethodID("publishLeafGenerationState"):                false,
+		publicationGuardDBMethodID("publishValueLogSetNoRefresh"):               false,
+		publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"):                false,
+		publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"): true,
+	}
+	var wantPublishCallers []string
+	for name := range wantPublishCoverage {
+		wantPublishCallers = append(wantPublishCallers, name)
 	}
 	sort.Strings(wantPublishCallers)
+	for _, file := range source.files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			caller, _ := source.info.Defs[fn.Name].(*types.Func)
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || publicationGuardCalledFunc(call.Fun, source.info) != analysis.publishSnapshotView {
+					return true
+				}
+				want := 3
+				if wantPublishCoverage[publicationGuardFuncID(caller)] {
+					want = 4
+				}
+				if len(call.Args) != want {
+					t.Errorf("%s membership coverage arguments=%d want %d", publicationGuardFuncID(caller), len(call.Args), want)
+				}
+				return true
+			})
+		}
+	}
+
 	var gotPublishCallers []string
 	for caller, callees := range analysis.calls {
 		if _, ok := callees[analysis.publishSnapshotView]; ok {
