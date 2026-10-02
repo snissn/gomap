@@ -117,17 +117,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	leader := -1
-	fixedPeerWaitV1(t, ctx, func() bool {
-		for i := range configs[:3] {
-			status, err := client.Status(ctx, configs[i].NodeID)
-			if err == nil && status.CatalogRaft.State == "Leader" {
-				leader = i
-				return true
-			}
-		}
-		return false
-	})
+	leader := fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes[:3])
 	members := []raftcluster.NodeID{"ingress", "owner-1", "owner-2"}
 	catalog := raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: group.ID, Members: members}}, Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, GroupID: group.ID}}}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
@@ -165,21 +155,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 		// Catalog readiness does not imply the data group has committed a
 		// current-term leader. A follower's discovery hint is insufficient for
 		// choosing the old voter in this completion fixture.
-		var initialLeader raftcluster.NodeID
-		fixedPeerWaitV1(t, ctx, func() bool {
-			for i := range configs[:3] {
-				local := runtimes[i].localDataV1(group.ID)
-				if local == nil || local.provider == nil {
-					continue
-				}
-				committed, err := local.provider.CommittedConfigurationV1(ctx)
-				if err == nil && committed.GroupID == group.ID && committed.LeaderID == configs[i].NodeID && len(committed.Members) == len(group.Peers) {
-					initialLeader = configs[i].NodeID
-					return true
-				}
-			}
-			return false
-		})
+		initialLeader := fixedPeerWaitDataLeaderV1(t, ctx, runtimes[:3], group)
 		for _, peer := range group.Peers {
 			if peer.ID != initialLeader {
 				oldNode = peer.ID
@@ -210,22 +186,13 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 	}
 	// Catalog election is independent of the data group's election. Snapshot
 	// capture also requires a real applied command, not a config/no-op index.
+	sourceNode := fixedPeerWaitDataLeaderV1(t, ctx, runtimes[:3], group)
 	var source *fixedPeerDataV1
-	var sourceNode raftcluster.NodeID
-	fixedPeerWaitV1(t, ctx, func() bool {
-		id, err := client.leader(ctx, group)
-		if err != nil {
-			return false
+	for _, runtime := range runtimes[:3] {
+		if runtime.config.NodeID == sourceNode {
+			source = runtime.localDataV1(group.ID)
 		}
-		for _, runtime := range runtimes[:3] {
-			if runtime.config.NodeID == id {
-				source = runtime.localDataV1(group.ID)
-				sourceNode = id
-				return true
-			}
-		}
-		return false
-	})
+	}
 	version, known, err := source.fsm.CurrentCatalogVersion(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -571,4 +538,52 @@ func TestFixedPeerRuntimeClosePreservesFirstFSMErrorAfterInternalRetryV1(t *test
 	if err := r.Close(); !errors.Is(err, cleanupErr) {
 		t.Fatalf("later Close lost first error: %v", err)
 	}
+}
+
+// Status and leader hints are observations; fixture mutations start only after
+// an existing quorum/current-term read fence succeeds. No mutation is retried.
+func fixedPeerWaitCatalogLeaderV1(t testing.TB, ctx context.Context, runtimes []*FixedPeerTCPRuntimeV1) int {
+	t.Helper()
+	leader := -1
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for i, runtime := range runtimes {
+			if runtime.meta == nil || runtime.closed.Load() {
+				continue
+			}
+			status := runtime.meta.RuntimeStatusV1()
+			if status.State != "Leader" || status.LeaderID != runtime.config.NodeID {
+				continue
+			}
+			if _, err := runtime.meta.LinearizableCatalogMetaReadProofV1(ctx); err == nil {
+				leader = i
+				return true
+			}
+		}
+		return false
+	})
+	return leader
+}
+
+func fixedPeerWaitDataLeaderV1(t testing.TB, ctx context.Context, runtimes []*FixedPeerTCPRuntimeV1, group FixedPeerTCPGroupV1) raftcluster.NodeID {
+	t.Helper()
+	var leader raftcluster.NodeID
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, runtime := range runtimes {
+			local := runtime.localDataV1(group.ID)
+			if runtime.closed.Load() || local == nil || local.provider == nil {
+				continue
+			}
+			status, err := local.provider.RuntimeStatusV1(ctx)
+			if err != nil || status.State != "Leader" || status.LeaderID != runtime.config.NodeID {
+				continue
+			}
+			committed, err := local.provider.CommittedConfigurationV1(ctx)
+			if err == nil && committed.GroupID == group.ID && committed.LeaderID == runtime.config.NodeID && len(committed.Members) == len(group.Peers) {
+				leader = runtime.config.NodeID
+				return true
+			}
+		}
+		return false
+	})
+	return leader
 }
