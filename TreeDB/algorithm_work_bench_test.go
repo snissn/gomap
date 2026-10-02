@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -445,6 +446,72 @@ func algorithmBatches(keys int, shape string) [][][]byte {
 	return batches
 }
 
+// Both routes pay this full consumer check, including callback synchronization.
+// Errors remain sticky even if a faulty callback implementation ignores them.
+func algorithmBatchConsumer(batch [][]byte) (func(int, []byte, []byte, bool) error, func() error) {
+	var mu sync.Mutex
+	seen := make([]bool, len(batch))
+	var failed error
+	consume := func(i int, key, value []byte, found bool) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failed != nil {
+			return failed
+		}
+		if i < 0 || i >= len(batch) || seen[i] || !bytes.Equal(key, batch[i]) {
+			failed = fmt.Errorf("invalid, duplicate or mismatched callback index %d", i)
+			return failed
+		}
+		physical := int(binary.BigEndian.Uint64(key[24:]))
+		if physical%2 == 1 {
+			if found || value != nil {
+				failed = fmt.Errorf("found missing input %d", i)
+			}
+		} else if !found || !algorithmValid(value, physical/2, 0) {
+			failed = fmt.Errorf("invalid value at input %d", i)
+		}
+		seen[i] = true
+		return failed
+	}
+	finish := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failed != nil {
+			return failed
+		}
+		for i, visited := range seen {
+			if !visited {
+				return fmt.Errorf("omitted callback input %d", i)
+			}
+		}
+		return nil
+	}
+	return consume, finish
+}
+
+func algorithmGetManyValidated(d *DB, batch [][]byte, view bool) error {
+	consume, finish := algorithmBatchConsumer(batch)
+	if view {
+		if err := d.GetManyView(batch, consume); err != nil {
+			return err
+		}
+	} else {
+		out, err := d.GetMany(batch)
+		if err != nil {
+			return err
+		}
+		if len(out) != len(batch) {
+			return fmt.Errorf("owned output count differs from input")
+		}
+		for i, value := range out {
+			if err := consume(i, batch[i], value, value != nil); err != nil {
+				return err
+			}
+		}
+	}
+	return finish()
+}
+
 // Natural batches are supplied by this caller. It does not buffer scalar reads.
 func BenchmarkAlgorithmGetMany(b *testing.B) {
 	keys := 250000
@@ -465,51 +532,19 @@ func BenchmarkAlgorithmGetMany(b *testing.B) {
 				batches := algorithmBatches(keys, shape)
 				for _, view := range []bool{false, true} {
 					b.Run(fmt.Sprintf("%s/view=%v", shape, view), func(b *testing.B) {
-						consume := func(_ int, key, value []byte, found bool) error {
-							physical := int(binary.BigEndian.Uint64(key[24:]))
-							if physical%2 == 1 {
-								if found || value != nil {
-									return fmt.Errorf("found missing key")
-								}
-								return nil
-							}
-							if !found || !algorithmValid(value, physical/2, 0) {
-								return fmt.Errorf("invalid value")
-							}
-							return nil
-						}
 						for _, batch := range batches {
-							out, err := d.GetMany(batch)
-							if err != nil || len(out) != len(batch) {
-								b.Fatal("batch warmup", err)
-							}
-							for j, value := range out {
-								if err := consume(j, batch[j], value, value != nil); err != nil {
+							for _, warmView := range []bool{false, true} {
+								if err := algorithmGetManyValidated(d, batch, warmView); err != nil {
 									b.Fatal("batch warmup", err)
 								}
-							}
-							if err := d.GetManyView(batch, consume); err != nil {
-								b.Fatal("callback warmup", err)
 							}
 						}
 						b.ReportAllocs()
 						b.ResetTimer()
 						for i := 0; i < b.N; i++ {
 							batch := batches[i%len(batches)]
-							if view {
-								if err := d.GetManyView(batch, consume); err != nil {
-									b.Fatal(err)
-								}
-							} else {
-								out, err := d.GetMany(batch)
-								if err != nil || len(out) != len(batch) {
-									b.Fatal(err)
-								}
-								for j, value := range out {
-									if err := consume(j, batch[j], value, value != nil); err != nil {
-										b.Fatal(err)
-									}
-								}
+							if err := algorithmGetManyValidated(d, batch, view); err != nil {
+								b.Fatal(err)
 							}
 						}
 						b.StopTimer()
@@ -517,6 +552,52 @@ func BenchmarkAlgorithmGetMany(b *testing.B) {
 						b.ReportMetric(64, "keys/op")
 					})
 				}
+			}
+		})
+	}
+}
+
+func TestAlgorithmWorkBatchConsumer(t *testing.T) {
+	batch := [][]byte{algorithmKey(0), algorithmKey(1), algorithmKey(0)}
+	consume, finish := algorithmBatchConsumer(batch)
+	var wg sync.WaitGroup
+	for i := len(batch) - 1; i >= 0; i-- {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var value []byte
+			if i != 1 {
+				value = algorithmValue(0, 0)
+			}
+			if err := consume(i, batch[i], value, value != nil); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if err := finish(); err != nil {
+		t.Fatal("concurrent/out-of-order valid callbacks", err)
+	}
+	for _, failure := range []string{"omitted", "duplicate", "negative_index", "high_index", "wrong_key"} {
+		t.Run(failure, func(t *testing.T) {
+			consume, finish := algorithmBatchConsumer(batch)
+			_ = consume(0, batch[0], algorithmValue(0, 0), true)
+			switch failure {
+			case "duplicate":
+				_ = consume(0, batch[0], algorithmValue(0, 0), true)
+			case "negative_index":
+				_ = consume(-1, batch[0], nil, false)
+			case "high_index":
+				_ = consume(len(batch), batch[0], nil, false)
+			case "wrong_key":
+				_ = consume(1, batch[0], algorithmValue(0, 0), true)
+			}
+			if failure != "omitted" {
+				_ = consume(1, batch[1], nil, false)
+			}
+			_ = consume(2, batch[2], algorithmValue(0, 0), true)
+			if err := finish(); err == nil {
+				t.Fatal("invalid callback sequence accepted")
 			}
 		})
 	}
@@ -560,12 +641,7 @@ func TestAlgorithmWorkFixture(t *testing.T) {
 					t.Fatal("invalid owned batch value")
 				}
 			}
-			if err := d.GetManyView(batch, func(i int, key, value []byte, found bool) error {
-				if !bytes.Equal(key, batch[i]) || found != (got[i] != nil) || !bytes.Equal(value, got[i]) {
-					return fmt.Errorf("callback differs from owned result")
-				}
-				return nil
-			}); err != nil {
+			if err := algorithmGetManyValidated(d, batch, true); err != nil {
 				t.Fatal(err)
 			}
 		}

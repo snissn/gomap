@@ -77,11 +77,14 @@ class CaptureTests(unittest.TestCase):
         freeze, packets, rows = self.fixture()
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
-            freeze['environment'] = {'GOWORK': 'off'}
+            freeze['environment'] = dict(capture.RUNTIME_ENV)
             (output / 'freeze.json').write_text(json.dumps(freeze))
             (output / 'stdout.log').write_text(self.log(packets, rows))
             (output / 'stderr.log').write_text('independent engine diagnostics\n')
-            source = dict(runtime_head=freeze['runtime_head'])
+            freeze.update(inputs={'synthetic.go': 'a'*64}, go_environment={'GOARCH': 'arm64'},
+                          modules={'synthetic': {}}, capture_sha256='a'*64, overlay_generator_sha256='a'*64)
+            (output / 'freeze.json').write_text(json.dumps(freeze))
+            source = capture.frozen_identity(freeze)
             record = dict(complete=True, returncode=0, source_before=source, source_after=source,
                           prepared=str(output), freeze_sha256=capture.digest(output / 'freeze.json'),
                           binary_sha256=freeze['binary_sha256'], family='writes', pilot=False, small_flush=False,
@@ -96,6 +99,25 @@ class CaptureTests(unittest.TestCase):
                 (output / 'execution.json').write_text(json.dumps(changed))
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     capture.validate_capture(output, freeze)
+            for source in ({}, {k: v for k, v in capture.frozen_identity(freeze).items() if k != 'inputs'}):
+                changed = dict(record, source_before=source, source_after=source)
+                (output / 'execution.json').write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):
+                    capture.validate_capture(output, freeze)
+            changed = dict(record, environment=dict(freeze['environment'], GOGC='off'))
+            (output / 'execution.json').write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):
+                capture.validate_capture(output, freeze)
+
+    def test_runtime_environment_is_normalized_and_architectures_recorded(self):
+        normal = capture.normalized_environment({'GOGC': 'off', 'GODEBUG': 'cpu.all=off',
+                                                'PRIVATE_TOKEN': 'secret', 'GOARM64': 'v8.1'})
+        self.assertEqual(normal['GOGC'], '100')
+        self.assertEqual(normal['GODEBUG'], '')
+        self.assertNotIn('PRIVATE_TOKEN', normal)
+        self.assertEqual(normal['GOARM64'], 'v8.1')
+        self.assertIn('GOARM64', capture.ENV_KEYS)
+        self.assertIn('GOAMD64', capture.ENV_KEYS)
 
 
 if __name__ == '__main__':

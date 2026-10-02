@@ -14,7 +14,27 @@ import time
 HERE = Path(__file__).resolve().parent
 ENV_KEYS = ('GOROOT', 'GOVERSION', 'GOTOOLCHAIN', 'GOWORK', 'GOFLAGS', 'GOEXPERIMENT',
             'GOOS', 'GOARCH', 'CGO_ENABLED', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_CPPFLAGS',
-            'CGO_CXXFLAGS', 'CGO_LDFLAGS', 'GOMOD', 'GOPATH', 'GOCACHE')
+            'CGO_CXXFLAGS', 'CGO_LDFLAGS', 'GOMOD', 'GOPATH', 'GOCACHE',
+            'GOAMD64', 'GOARM64', 'GOARM', 'GO386', 'GOPPC64', 'GORISCV64', 'GOMIPS', 'GOMIPS64', 'GOWASM')
+IDENTITY_KEYS = ('runtime_head', 'runtime_tree', 'harness_sha256', 'inputs', 'go_environment',
+                 'modules', 'capture_sha256', 'overlay_generator_sha256')
+RUNTIME_ENV = dict(GOWORK='off', GOTOOLCHAIN='local', GOFLAGS='', GOMAXPROCS='2', GOMEMLIMIT='2GiB',
+                   GOGC='100', GODEBUG='', GOTRACEBACK='single', GORACE='')
+
+
+def normalized_environment(inherited):
+    # Only known build/path inputs cross the process boundary; no arbitrary
+    # inherited settings or secrets. Runtime controls are fixed for every cohort.
+    allowed = set(ENV_KEYS) | {'HOME', 'PATH', 'TMPDIR', 'GOTMPDIR', 'GOENV'}
+    return dict({k: v for k, v in inherited.items() if k in allowed}, **RUNTIME_ENV)
+
+
+def frozen_identity(freeze):
+    if any(k not in freeze for k in IDENTITY_KEYS):
+        raise ValueError('incomplete frozen identity schema')
+    if any(not isinstance(freeze[k], dict) or not freeze[k] for k in ('inputs', 'go_environment', 'modules')):
+        raise ValueError('empty compiled-input/module/environment inventory')
+    return {k: freeze[k] for k in IDENTITY_KEYS}
 WORK_COUNTERS = ('treedb.flush_apply.apply_ops_total',
                  'treedb.flush_apply.old_leaf_read_decode.node_loads_total',
                  'treedb.flush_apply.old_leaf_read_decode.bytes_total',
@@ -186,9 +206,10 @@ def validate_capture(output, freeze):
     if record.get('binary_sha256') != freeze['binary_sha256']:
         raise ValueError('wrong binary identity')
     if (record.get('command') != execution_command(record['family'], Path(record['prepared']) / 'algorithm-work.test')
-            or record.get('environment') != freeze['environment'] or not record.get('grant')):
+            or record.get('environment') != freeze['environment'] or record.get('environment') != RUNTIME_ENV
+            or not record.get('grant')):
         raise ValueError('wrong execution command/environment/grant')
-    if any(record['source_before'].get(k) != freeze[k] for k in record['source_before']):
+    if record['source_before'] != frozen_identity(freeze):
         raise ValueError('capture differs from source/dependency freeze')
     for name in ('stdout', 'stderr'):
         if record.get(name + '_sha256') != digest(output / (name + '.log')):
@@ -221,14 +242,11 @@ def main():
         parser.error('internal family requires its overlay; timed families forbid overlays')
     root, output = Path(args.source).resolve(), Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, GOWORK='off', GOTOOLCHAIN='local', GOFLAGS='', GOMAXPROCS='2', GOMEMLIMIT='2GiB')
-    for key in tuple(env):
-        if key.startswith('TREEDB_'):
-            del env[key]
+    env = normalized_environment(os.environ)
     go = str(Path(env.get('GOROOT') or subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip()) / 'bin/go')
     overlay = Path(args.overlay).resolve() if args.overlay else None
     before = identity(root, go, env, overlay)
-    freeze = dict(before, source=str(root), environment={k: env[k] for k in ('GOWORK', 'GOTOOLCHAIN', 'GOFLAGS', 'GOMAXPROCS', 'GOMEMLIMIT')}, complete=False)
+    freeze = dict(before, source=str(root), environment={k: env[k] for k in RUNTIME_ENV}, complete=False)
     if args.mode == 'prepare':
         binary = output / 'algorithm-work.test'
         command = [go, 'test', *(['-overlay=' + str(overlay)] if overlay else []), '-c', '-o', str(binary), './TreeDB']
@@ -236,12 +254,14 @@ def main():
         prepared = Path(args.prepared).resolve()
         freeze = json.loads((prepared / 'freeze.json').read_text())
         binary = prepared / 'algorithm-work.test'
-        if not freeze.get('complete') or any(freeze.get(k) != v for k, v in before.items()) or digest(binary) != freeze['binary_sha256']:
+        if (not freeze.get('complete') or frozen_identity(freeze) != before
+                or freeze.get('environment') != {k: env[k] for k in RUNTIME_ENV}
+                or digest(binary) != freeze['binary_sha256']):
             raise ValueError('source/dependency/toolchain/binary changed since preparation')
         env.update(TREEDB_ALGORITHM_RUNTIME_HEAD=freeze['runtime_head'], TREEDB_ALGORITHM_FREEZE_FILE=str(prepared / 'freeze.json'),
                    TREEDB_ALGORITHM_PILOT='1' if args.pilot else '0', TREEDB_ALGORITHM_SMALL_FLUSH='1' if args.small_flush else '0')
         command = execution_command(args.family, binary)
-    record = dict(command=command, environment={k: env[k] for k in ('GOWORK', 'GOTOOLCHAIN', 'GOFLAGS', 'GOMAXPROCS', 'GOMEMLIMIT')}, source_before=before, grant=args.grant,
+    record = dict(command=command, environment={k: env[k] for k in RUNTIME_ENV}, source_before=before, grant=args.grant,
                   pilot=args.pilot, small_flush=args.small_flush, family=args.family, complete=False)
     if args.mode == 'capture':
         record.update(prepared=str(prepared), freeze_sha256=digest(prepared / 'freeze.json'))
