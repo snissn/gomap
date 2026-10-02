@@ -98,16 +98,18 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 		}
 		b.Skip("closed verified canonical fixture exported; no timed reads")
 	}
-	if os.Getenv("TREEDB_OWNED_VLOG_VALIDATE_ONLY") != "" {
-		b.Skip("fixture clone verified; no timed reads")
-	}
+	validateOnly := os.Getenv("TREEDB_OWNED_VLOG_VALIDATE_ONLY") != ""
 	runtime.GC()
 	runtime.ReadMemStats(&warm)
 	before := db.Stats()
 	pathBefore := tree.ReadPathStatsSnapshot()
-	b.ReportAllocs()
-	b.SetBytes(256)
-	b.ResetTimer()
+	if validateOnly {
+		b.StopTimer()
+	} else {
+		b.ReportAllocs()
+		b.SetBytes(256)
+		b.ResetTimer()
+	}
 	for i := range b.N {
 		out, err := db.Get(keys[i%len(keys)])
 		if err != nil || len(out) != 256 {
@@ -142,7 +144,16 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 	if route["mmap_hits/op"]+route["fallbacks/op"] != uint64(b.N) || route["crc_checks/op"] != uint64(b.N) || route["cache_hits/op"] > route["mmap_hits/op"]+route["fallbacks/op"] {
 		b.Fatalf("public route counters are inconsistent: %v", route)
 	}
+	retained, err := strconv.ParseUint(after["treedb.vlog.grouped_frame_cache.retained_bytes"], 10, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
+	budget, err := strconv.ParseUint(after["treedb.vlog.grouped_frame_cache.budget_bytes"], 10, 64)
+	if err != nil || retained > budget {
+		b.Fatalf("cache budget: retained=%d budget=%d err=%v", retained, budget, err)
+	}
 	for metric, key := range map[string]string{
+		"raw_budget_B":   "treedb.vlog.grouped_frame_cache.budget_bytes",
 		"retained_raw_B": "treedb.vlog.grouped_frame_cache.retained_bytes",
 		"mapped_B":       "treedb.process.memory.vlog_mmap_active_bytes",
 	} {
@@ -155,4 +166,8 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 	b.ReportMetric(float64(pathAfter.GetAppendPointerHitsTotal-pathBefore.GetAppendPointerHitsTotal)/float64(b.N), "pointer_hits/op")
 	b.ReportMetric(float64(pathAfter.GetAppendInlineHitsTotal-pathBefore.GetAppendInlineHitsTotal)/float64(b.N), "inline_hits/op")
 	b.ReportMetric(float64(int64(warm.HeapAlloc)-int64(cold.HeapAlloc)), "warm_heap_delta_B")
+	if validateOnly {
+		b.Logf("clone full-value validation passed; pointer=%d inline=%d transport=%v retained=%d budget=%d", pathAfter.GetAppendPointerHitsTotal-pathBefore.GetAppendPointerHitsTotal, pathAfter.GetAppendInlineHitsTotal-pathBefore.GetAppendInlineHitsTotal, route, retained, budget)
+		b.Skip("fixture clone and route verified; probe untimed")
+	}
 }
