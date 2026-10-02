@@ -1,0 +1,60 @@
+[
+  {
+    "source": "base",
+    "argv": [
+      "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+      "test",
+      "./TreeDB/collections",
+      "-run",
+      "^TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452$",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "environment": {
+      "HOME": "/home/mikers",
+      "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "GOPATH": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "2GiB",
+      "GOGC": "100",
+      "GODEBUG": ""
+    },
+    "started_unix": 1790929835.6273766,
+    "elapsed_seconds": 79.26321792602539,
+    "exit": 0,
+    "stdout_sha256": "e86c2b3ec4653ced981747e49d013a35a903ca923137cb828f4220bffd81ef47",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "source": "candidate",
+    "argv": [
+      "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+      "test",
+      "./TreeDB/collections",
+      "-run",
+      "^TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452$",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "environment": {
+      "HOME": "/home/mikers",
+      "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "GOPATH": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "2GiB",
+      "GOGC": "100",
+      "GODEBUG": ""
+    },
+    "started_unix": 1790929914.8909853,
+    "elapsed_seconds": 80.39466404914856,
+    "exit": 0,
+    "stdout_sha256": "e9ff779322c0a224894ad617b1587a9d15d5367a06e635a402554c403c0da279",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]
