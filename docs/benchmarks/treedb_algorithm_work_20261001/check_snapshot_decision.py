@@ -112,6 +112,7 @@ def main():
     freeze=json.loads((root/'4916-e3-full-packet/normal-prepared/freeze.json').read_text(encoding='utf-8'))
     assert freeze['runtime_head']==HEAD and freeze['runtime_tree']==TREE and freeze['complete'] is True
     assert len(freeze['inputs'])==2402 and len(freeze['modules'])==17
+    assert sha(root/'4916-e3-full-packet/normal-prepared/algorithm-work.test')==freeze['binary_sha256'], 'retained binary differs'
     plans=json.loads((root/'4916-e3-matched-pre-timer-plans.json').read_text(encoding='utf-8'))
     assert plans['eligibility_excluded_from_matched_three'] is True and len(plans['plans'])==3
     packets=[]
