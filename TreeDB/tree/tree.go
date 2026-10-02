@@ -1259,6 +1259,9 @@ func (t *Tree) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 		scratch.present[i] = true
 	}
 
+	var pointerScratch *leafRefPageScratch
+	defer func() { putLeafRefPageScratch(pointerScratch) }()
+
 	if len(scratch.groups) > 0 {
 		treeGetManyGroupedCallsTotal.Add(1)
 		treeGetManyLeafGroupsTotal.Add(uint64(len(scratch.groups)))
@@ -1277,7 +1280,7 @@ func (t *Tree) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 			}
 			for probeIdx := g.first; probeIdx >= 0; probeIdx = scratch.probes[probeIdx].next {
 				probe := scratch.probes[probeIdx]
-				if err := t.visitLeafValueFromNode(&n, probe.key, probe.outIndex, fn); err != nil {
+				if err := t.visitLeafValueFromNode(&n, probe.key, probe.outIndex, fn, &pointerScratch); err != nil {
 					lease.Release()
 					return err
 				}
@@ -1518,7 +1521,20 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 	return lease, nil
 }
 
-func (t *Tree) pointerValueViewForKey(key []byte, ptr page.ValuePtr) ([]byte, error) {
+func (t *Tree) pointerValueViewForKey(key []byte, ptr page.ValuePtr, scratch **leafRefPageScratch) ([]byte, error) {
+	if t.slabKeyAppender != nil || (t.slabKeyReader == nil && t.slabAppender != nil) {
+		if *scratch == nil {
+			*scratch = getLeafRefPageScratch()
+		}
+		// This destination is separate from the active leaf page. Never retain
+		// the returned view: oversized output stays temporary and the pool keeps
+		// only its original page-sized backing, reused after each callback.
+		dst := (*scratch).buf[:0]
+		if t.slabKeyAppender != nil {
+			return t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst)
+		}
+		return t.slabAppender.ReadUnsafeAppend(ptr, dst)
+	}
 	if t.slabKeyReader != nil {
 		return t.slabKeyReader.ReadUnsafeForKey(ptr, key)
 	}
@@ -1528,7 +1544,7 @@ func (t *Tree) pointerValueViewForKey(key []byte, ptr page.ValuePtr) ([]byte, er
 	return t.slabReader.ReadUnsafe(ptr)
 }
 
-func (t *Tree) visitLeafValueFromNode(n *node.Node, key []byte, outIndex int, fn GetManyViewFunc) error {
+func (t *Tree) visitLeafValueFromNode(n *node.Node, key []byte, outIndex int, fn GetManyViewFunc, pointerScratch **leafRefPageScratch) error {
 	idx, found, err := n.SearchLeaf(key)
 	if err != nil {
 		return err
@@ -1544,7 +1560,7 @@ func (t *Tree) visitLeafValueFromNode(n *node.Node, key []byte, outIndex int, fn
 		return fn(outIndex, key, nil, false)
 	}
 	if flags&node.FlagPointer != 0 {
-		val, err = t.pointerValueViewForKey(key, ptr)
+		val, err = t.pointerValueViewForKey(key, ptr, pointerScratch)
 		if err != nil {
 			return err
 		}

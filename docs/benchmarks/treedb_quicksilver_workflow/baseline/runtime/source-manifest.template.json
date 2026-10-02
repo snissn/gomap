@@ -1,0 +1,48 @@
+{
+  "additions": {
+    "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462",
+    "TreeDB/quicksilver_workflow_bench_test.go": "05d2a485efd14d43e3f60f715761e3cbfb50b7a31aa11e55f44e8d4ffc42da96",
+    "scripts/treedb_memory_budget_capture.py": "4a8c7750475ace639c12f15d13000f8c93602c0074d47523c9938b153f0eead3",
+    "scripts/treedb_memory_budget_overlay.py": "156abcee681ea4de1366df75e6dfe868ead23a240334f33d331804f529730167",
+    "scripts/treedb_quicksilver_capture.py": "336786c5637b71667babf35b81537b10d3d6f287de43e0385932c3587f549d29"
+  },
+  "canonical_head": "7e1c51d41bcc0392fcb17dec12e46fdab42449bc",
+  "canonical_sources": {
+    "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462",
+    "TreeDB/quicksilver_workflow_bench_test.go": "05d2a485efd14d43e3f60f715761e3cbfb50b7a31aa11e55f44e8d4ffc42da96"
+  },
+  "external_inputs": {
+    "TreeDB/memory_budget_bench_test.go": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/TreeDB/memory_budget_bench_test.go",
+      "sha256": "68599f74579bcb0f5dba0155a70120ec2a480185044f0edc09cca930191e4508"
+    },
+    "TreeDB/quicksilver_workflow_bench_test.go": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/TreeDB/quicksilver_workflow_bench_test.go",
+      "sha256": "84d0c67576d3e3396baa5c421bcf6ac6158958787e071d45e808337d148c3736"
+    },
+    "go_binary": {
+      "path": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64/bin/go",
+      "sha256": "ae2238c208f2f1f5a8faa3287acf5ced5d6b3c396dbf75e8f446e47905b0a75d"
+    },
+    "prepare_baseline.py": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/prepare_baseline.py",
+      "sha256": "573c0e069e8c86babc2052a3c7064358f0eb1d9f66fe662a1df7f7e5d4bb1655"
+    },
+    "scripts/treedb_memory_budget_capture.py": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/scripts/treedb_memory_budget_capture.py",
+      "sha256": "3578922871fc0bf80f5d83c44e68869f24b17f3a19a49119221f4d2bb87127bf"
+    },
+    "scripts/treedb_memory_budget_overlay.py": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/scripts/treedb_memory_budget_overlay.py",
+      "sha256": "156abcee681ea4de1366df75e6dfe868ead23a240334f33d331804f529730167"
+    },
+    "scripts/treedb_quicksilver_capture.py": {
+      "path": "/tmp/gomap-4895-baseline-compat-runtime-proposal/scripts/treedb_quicksilver_capture.py",
+      "sha256": "4873183be0d55ae945987cbae42197a3f6730460061d5b7092d1a9ae1a0ea428"
+    }
+  },
+  "runtime_head": "ef22ce55b85524de2707453f22c5f8cd6ba89eaa",
+  "schema": "baseline-source-manifest-v1",
+  "tracked_tree": "c023d39fee5b91e3764b7669c415b4182df429b3",
+  "treedb_tree": "d3dcef28f252494cf083b8058ee9e06779949842"
+}
