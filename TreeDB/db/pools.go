@@ -86,6 +86,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
+	s.tree.SetNegativeFilter(nil)
 	s.db = nil
 	s.idx = nil
 	s.state = nil

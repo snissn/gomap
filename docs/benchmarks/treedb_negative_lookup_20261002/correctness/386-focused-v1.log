@@ -1,0 +1,24 @@
+# github.com/snissn/gomap/TreeDB/internal/rootpublication [github.com/snissn/gomap/TreeDB/tree.test]
+TreeDB/internal/rootpublication/durable_format_v1.go:127:36: constant 4294967295 overflows int
+FAIL	github.com/snissn/gomap/TreeDB/tree [build failed]
+# github.com/snissn/gomap/TreeDB/internal/rootpublication
+TreeDB/internal/rootpublication/durable_format_v1.go:127:36: constant 4294967295 overflows int
+# github.com/snissn/gomap/TreeDB/internal/outerleaf
+TreeDB/internal/outerleaf/block.go:875:18: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:881:22: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:964:25: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:1000:20: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:1003:22: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:1090:23: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:1127:20: constant 4294967295 overflows int
+TreeDB/internal/outerleaf/block.go:1130:22: constant 4294967295 overflows int
+# github.com/snissn/gomap/TreeDB/internal/typedcolumn
+TreeDB/internal/typedcolumn/aggregate_metadata.go:314:32: math.MaxUint32 (untyped int constant 4294967295) overflows int
+TreeDB/internal/typedcolumn/query_ready_base.go:277:18: math.MaxUint32 (untyped int constant 4294967295) overflows int
+TreeDB/internal/typedcolumn/query_ready_base.go:493:18: math.MaxUint32 (untyped int constant 4294967295) overflows int
+TreeDB/internal/typedcolumn/query_ready_delta.go:136:99: math.MaxUint32 (untyped int constant 4294967295) overflows int
+TreeDB/internal/typedcolumn/query_ready_delta.go:162:115: math.MaxUint32 (untyped int constant 4294967295) overflows int
+TreeDB/internal/typedcolumn/query_ready_execution_image.go:130:28: math.MaxInt64 (untyped int constant 9223372036854775807) overflows int
+TreeDB/internal/typedcolumn/query_ready_execution_image.go:225:50: math.MaxUint32 (untyped int constant 4294967295) overflows int
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

@@ -89,6 +89,22 @@ func main() {
 }
 ```
 
+## Optional negative point lookups
+
+Set `opts.NegativeLookupFilterBytes` before `Open` to reserve a fixed in-memory
+membership filter for the main backend. Zero (the default) disables it. Enabled
+budgets range from 8 bytes to 64 MiB; for example, 1,250,000 bytes provides roughly
+10 bits per key for one million keys. The theoretical false-positive rate near
+that density is about 1%; it is not a throughput guarantee.
+
+The filter skips tree descent only when it proves a point key absent. Cached
+writes retain ordinary visibility. Open performs a bounded keys-only bootstrap
+including tombstones; an insufficient bootstrap budget uses exact reads. Long
+keys and unknown maintenance root/index replacement also use exact reads.
+Bits accumulate across writes, so churn may reduce effectiveness until reopen.
+See the [coverage contract](docs/spec/contracts.md#251-optional-negative-point-lookup-coverage)
+and [qualification guide](docs/performance/negative-lookup-342.md).
+
 ## Durability Profiles
 
 If you want a simple, documented “bundle” of options, start with a profile and
