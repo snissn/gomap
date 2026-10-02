@@ -3,6 +3,7 @@ package raftfsm
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -84,6 +85,53 @@ func prepareStorageOrderFixtureV1(t *testing.T) (*backenddb.DB, *FSM, []byte) {
 // storage barrier. Both actual preflight and committed prepare must release
 // their short capture RLock before waiting, then borrow through execution.
 func TestVectorPrepareFSMStorageOrderActualPreflightAndApplyV1(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		for _, preflight := range []bool{true, false} {
+			t.Run(fmt.Sprintf("preflight=%v", preflight), func(t *testing.T) {
+				db, f, raw := prepareStorageOrderFixtureV1(t)
+				before, ok := db.StateToken()
+				if !ok {
+					t.Fatal("unsupported prepare baseline has no state")
+				}
+				next := db.CommandWALNextLSN()
+				last, hadLast := f.LastApplied()
+				id := raftentry.ApplyEntryID{Term: 1, Index: 2}
+				if _, present, err := f.results.LookupApplyResult(id); err != nil || present {
+					t.Fatalf("unexpected baseline prepare result: present=%v err=%v", present, err)
+				}
+				var err error
+				if preflight {
+					_, err = f.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{EntryBytes: raw, CurrentCatalogVersion: testCatalogVersionStart, HasCurrentCatalogVersion: true})
+				} else {
+					var result raftentry.ApplyResultV1
+					result, err = f.ApplyCommittedEntryV1(committedCommand(1, 2, raw))
+					if result.Status != raftentry.ApplyStatusRejectedConflict {
+						t.Fatalf("unsupported prepare result=%+v", result)
+					}
+				}
+				if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) {
+					t.Fatalf("unsupported prepare refusal=%v", err)
+				}
+				if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+					t.Fatalf("unsupported prepare code=%s err=%v", code, err)
+				}
+				after, ok := db.StateToken()
+				if !ok || after != before || db.CommandWALNextLSN() != next {
+					t.Fatalf("refused prepare changed roots/WAL: before=%+v/%d after=%+v/%d", before, next, after, db.CommandWALNextLSN())
+				}
+				if got, present := f.LastApplied(); got != last || present != hadLast {
+					t.Fatalf("refused prepare advanced progress: before=%+v/%v after=%+v/%v", last, hadLast, got, present)
+				}
+				if _, present, err := f.results.LookupApplyResult(id); err != nil || present {
+					t.Fatalf("refused prepare published result: present=%v err=%v", present, err)
+				}
+				if err := db.CheckCommandWALPublishReady(); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+		return
+	}
 	for _, preflight := range []bool{true, false} {
 		t.Run(fmt.Sprintf("preflight=%v", preflight), func(t *testing.T) {
 			db, f, raw := prepareStorageOrderFixtureV1(t)

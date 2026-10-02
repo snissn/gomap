@@ -77,6 +77,49 @@ func TestVectorPrepareActualAppendMaintenanceOrderV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		completed = true // This branch has no parked goroutines or assigned handle.
+		before, ok := d.StateToken()
+		if !ok {
+			t.Fatal("unsupported prepare baseline has no state")
+		}
+		next := d.CommandWALNextLSN()
+		progress, results := raftapply.NewMemoryApplyProgressStore(8, 8), raftapply.NewMemoryApplyResultStore(8)
+		id := raftentry.ApplyEntryID{Term: 3, Index: 1}
+		appended := false
+		result, err := raftapply.ApplyCommittedEntryV1(d, raw, raftapply.ApplyMetadataV1{GroupID: "group-a", EntryID: id, LocalDurabilityBoundary: raftapply.LocalDurabilityCommandWALV1, SyncLocalCommandWAL: true, CurrentCatalogVersion: 1, HasCurrentCatalogVersion: true}, raftapply.Options{ProgressStore: progress, ResultStore: results, FaultInjector: vectorPrepareOwnershipFaultV1(func(point raftapply.FaultPointV1, _ raftapply.ApplyFaultContextV1) error {
+			if point == raftapply.FaultAfterLocalWALAppendBeforeVisibleV1 {
+				appended = true
+			}
+			return nil
+		})})
+		if !errors.Is(err, collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1) || result.Status != raftentry.ApplyStatusRejectedConflict {
+			t.Fatalf("unsupported prepare result=%+v err=%v", result, err)
+		}
+		if appended {
+			t.Fatal("unsupported prepare reached actual Append")
+		}
+		after, ok := d.StateToken()
+		if !ok || after != before || d.CommandWALNextLSN() != next {
+			t.Fatalf("refused prepare changed roots/WAL: before=%+v/%d after=%+v/%d", before, next, after, d.CommandWALNextLSN())
+		}
+		if _, ok := progress.LastApplied(); ok {
+			t.Fatal("refused prepare advanced apply progress")
+		}
+		if _, ok, err := results.LookupApplyResult(id); err != nil || ok {
+			t.Fatalf("refused prepare published result: present=%v err=%v", ok, err)
+		}
+		if err := d.CheckCommandWALPublishReady(); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range []struct{ id, body string }{{"x", `{"embedding":[1,0]}`}, {"y", `{"embedding":[0,1]}`}, {"minus-x", `{"embedding":[-1,0]}`}} {
+			got, err := c.Get([]byte(row.id))
+			if err != nil || string(got) != row.body {
+				t.Fatalf("refused prepare source %s=%s err=%v", row.id, got, err)
+			}
+		}
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	appended, resume, maintenance := make(chan struct{}), make(chan struct{}), make(chan struct{})

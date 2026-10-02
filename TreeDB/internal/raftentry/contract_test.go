@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -607,4 +609,70 @@ func repoPath(t *testing.T, rel string) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), rel))
+}
+
+// The native entry and local command frame share kind and source identity;
+// only the applying FSM adds the actual entry digest and positions.
+func TestVectorPrepareV1NativeAndLocalGoldenKindAlignment(t *testing.T) {
+	v := commitlog.VectorPrepareV1{
+		Version: 1, Operation: "prepare", Collection: "docs", Index: "embedding",
+		Group: "data-a", IndexDefinitionDigest: strings.Repeat("a", 64),
+		Generation: 7, MaxSourceRows: 512, SourceGeneration: 1,
+		SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4,
+	}
+	payload, err := commitlog.EncodeVectorPreparePayloadV1(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandVectorPrepareV1, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("fixture/prepare")},
+		{ID: nativewire.SectionCollectionRef, Bytes: append([]byte{1}, []byte("docs")...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+		{ID: nativewire.SectionVectorPrepareV1, Bytes: payload},
+	}
+	validated, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, validated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeCommandEntryV1(entry, DecodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Row.Decision != DecisionAccepted || decoded.Row.CommandWALKind != "CollectionVectorPrepareV1" {
+		t.Fatalf("row=%+v", decoded.Row)
+	}
+	v.Term, v.IndexPosition, v.CommandDigest = 2, 8, decoded.Digest.Hex()
+	localPayload, err := commitlog.EncodeVectorPreparePayloadV1(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := commitlog.EncodeCommandFrame(commitlog.CommandEnvelope{
+		LSN: 11, Kind: commitlog.CommandKindCollectionVectorPrepareV1,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionVectorPrepareV1, Payload: localPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := commitlog.DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := commitlog.DecodeVectorPreparePayloadV1(env.Payload)
+	if err != nil || recovered != v {
+		t.Fatalf("recovered=%+v err=%v", recovered, err)
+	}
+	nativeGolden := readHexFixture(t, "../nativewire/testdata/v1/vector_prepare_v1_entry.hex")
+	localGolden := readHexFixture(t, "../commitlog/testdata/command_wal_v1_collection_vector_prepare_v1.hex")
+	if !bytes.Equal(entry, nativeGolden) {
+		t.Fatalf("native vector prepare golden mismatch: got=%x want=%x", entry, nativeGolden)
+	}
+	if !bytes.Equal(frame, localGolden) {
+		t.Fatalf("local vector prepare golden mismatch: got=%x want=%x", frame, localGolden)
+	}
 }

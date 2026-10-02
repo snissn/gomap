@@ -100,7 +100,7 @@ func (c *Collection) lockCommandWALStagingWithAdmission(a *collectionCommandWALA
 
 // Prepared callbacks need the DB-minted guard itself for later capture borrowing.
 // Ordinary staged writers keep the existing function-returning fast path above.
-func (c *Collection) lockCommandWALStagingGuardWithAdmission(a *collectionCommandWALAdmission) (*backenddb.CommandWALStagingGuardV1, error) {
+func (c *Collection) lockCommandWALStagingGuardWithAdmission(a *collectionCommandWALAdmission, revalidate func() error) (*backenddb.CommandWALStagingGuardV1, error) {
 	for {
 		guard, err := c.db.LockCommandWALStagingGuardV1()
 		if err != nil {
@@ -118,7 +118,7 @@ func (c *Collection) lockCommandWALStagingGuardWithAdmission(a *collectionComman
 		if drain == nil {
 			return nil, err
 		}
-		if err := a.drainBeforeAssignment(nil, a.mutation, a.mutationLocked, drain, nil); err != nil {
+		if err := a.drainBeforeAssignment(nil, a.mutation, a.mutationLocked, drain, revalidate); err != nil {
 			return nil, err
 		}
 	}

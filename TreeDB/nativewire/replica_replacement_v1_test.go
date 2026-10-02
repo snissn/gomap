@@ -238,6 +238,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 		// Lose a reply even if the underlying authenticated native transport
 		// survives its own deadline. The receiver remains the only authority.
 		source.transport = replacementLostSeedReplyV1{Transport: source.transport}
+		leader = fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes[:3])
 		caller, cancelCaller := context.WithCancel(ctx)
 		defer cancelCaller()
 		returned := make(chan error, 1)
@@ -312,6 +313,8 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 		}
 
 	}
+	// Data election/setup may outlast the earlier catalog leader observation.
+	leader = fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes[:3])
 	membership, err := client.PrepareReplicaReplacementV1(ctx, configs[leader].NodeID, operation)
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		if err == nil || runtimes[3].localDataV1(group.ID) != nil {
@@ -320,6 +323,15 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, co
 		return
 	}
 	if err != nil {
+		t.Logf("replacement Prepare failure: catalog_leader=%s data_source=%s group=%s raft_timeout=%s request_timeout=%s ctx_err=%v", configs[leader].NodeID, sourceNode, group.ID, configs[0].RaftTimeout, configs[0].RequestTimeout, ctx.Err())
+		for _, runtime := range runtimes[:3] {
+			if runtime.meta == nil {
+				t.Logf("replacement catalog failure: node=%s meta=nil closed=%t", runtime.config.NodeID, runtime.closed.Load())
+				continue
+			}
+			catalog, known := runtime.authority.Status()
+			t.Logf("replacement catalog failure: node=%s closed=%t runtime=%+v catalog=%+v catalog_known=%t read_stats=%+v", runtime.config.NodeID, runtime.closed.Load(), runtime.meta.RuntimeStatusV1(), catalog, known, runtime.meta.CatalogMetaLinearizableReadStatsV1())
+		}
 		t.Fatalf("prepare actual nonvoter: %v", err)
 	}
 	admission := runtimes[3].client.peerTransport.admission
