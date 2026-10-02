@@ -32,7 +32,14 @@ def plan(manifest, run_id):
     if set(manifest) != {"image", "binary", "binary_sha256", "nodes"}:
         raise ValueError("manifest requires exactly image, binary, binary_sha256, nodes")
     image = manifest["image"]
-    if not isinstance(image, str) or not re.fullmatch(r"(?:[A-Za-z0-9./:_-]+@)?sha256:[0-9a-f]{64}", image):
+    if isinstance(image, str):
+        images = dict.fromkeys(HOSTS, image)
+    elif isinstance(image, dict) and set(image) == set(HOSTS):
+        images = image
+    else:
+        raise ValueError("image must be an immutable identity or a mapping for exactly both hosts")
+    if any(not isinstance(value, str) or not re.fullmatch(r"(?:[A-Za-z0-9./:_-]+@)?sha256:[0-9a-f]{64}", value)
+           for value in images.values()):
         raise ValueError("image must be immutable sha256 identity")
     binary = manifest["binary"]
     if not isinstance(binary, str) or not binary.startswith("/") or "\x00" in binary:
@@ -73,7 +80,7 @@ def plan(manifest, run_id):
             sources[filename] = str(source)
             credentials[field] = "/credentials/" + filename
         config = dict(config, Credentials=credentials, DataRoot="/data", RaftRoot="/raft")
-        result.append(dict(host=node["host"], node=node_id, root=root, name="treedb-4250-" + run_id + "-" + node_id,
+        result.append(dict(host=node["host"], image=images[node["host"]], node=node_id, root=root, name="treedb-4250-" + run_id + "-" + node_id,
                            config=config, credentials=sources))
     if ids != {n["ID"] for n in shared["Nodes"]}:
         raise ValueError("manifest must name all configured voters")
@@ -97,7 +104,7 @@ def main():
     driver = next(n for n in nodes if n["host"] == HOSTS[1])
     public_plan = {"provisional": True, "workflow": ["inspect3", "serve3", "initialize", "stop3", "start3", "qualify"],
                    "image": manifest["image"], "binary_sha256": manifest["binary_sha256"],
-                   "nodes": [{k: n[k] for k in ("host", "node", "root", "name")} for n in nodes],
+                   "nodes": [{k: n[k] for k in ("host", "image", "node", "root", "name")} for n in nodes],
                    "driver_node": driver["node"], "source_rows": 3, "max_total_documents": 4}
     if not args.execute:
         print(json.dumps(public_plan, indent=2))
@@ -169,18 +176,18 @@ def main():
             remote(node, "new-root-" + node["node"], ["mkdir", "-m", "700", root])
             command("copy-" + node["node"], ["scp", "-q", "-r", str(bundle) + "/.",
                     args.ssh_user + "@" + node["host"] + ":" + root + "/"])
-            inspected = json.loads(docker(node, "inspect-" + node["node"], ["run", "--rm", "--entrypoint", manifest["binary"]] + mounts(node) + [manifest["image"]] + cli("inspect")))
+            inspected = json.loads(docker(node, "inspect-" + node["node"], ["run", "--rm", "--entrypoint", manifest["binary"]] + mounts(node) + [node["image"]] + cli("inspect")))
             identity = inspected["Config"]
             if not identity["Authenticated"] or (shared_digest is not None and identity["SharedSHA256"] != shared_digest):
                 raise RuntimeError("actual normalized config identities disagree")
             shared_digest = identity["SharedSHA256"]
         for node in nodes:
             docker(node, "serve-" + node["node"], ["run", "-d", "--restart=no", "--entrypoint", manifest["binary"], "--name", node["name"],
-                   "--label", "treedb.fixed-cluster.run=" + args.run_id] + mounts(node) + [manifest["image"]] + cli("serve"))
+                   "--label", "treedb.fixed-cluster.run=" + args.run_id] + mounts(node) + [node["image"]] + cli("serve"))
 
         for mode in ("initialize", "qualify"):
             docker(driver, mode, ["run", "--rm", "--entrypoint", manifest["binary"], "--name", "treedb-4250-" + args.run_id + "-driver-" + mode] +
-                   mounts(driver) + [manifest["image"]] + cli(mode) + ["-request-id", args.run_id, "-operation-timeout", "120s"])
+                   mounts(driver) + [driver["image"]] + cli(mode) + ["-request-id", args.run_id, "-operation-timeout", "120s"])
             if mode == "initialize":
                 for node in nodes:
                     label = docker(node, "ownership-" + node["node"],

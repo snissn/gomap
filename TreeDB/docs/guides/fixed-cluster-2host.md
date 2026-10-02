@@ -36,6 +36,14 @@ Create a local manifest; substitute real digests and paths:
 {"image":"registry.example/treedb@sha256:REPLACE_64_LOWERCASE_HEX","binary":"/usr/local/bin/treedb-fixed-peer","binary_sha256":"REPLACE_64_LOWERCASE_HEX","nodes":[{"host":"192.168.0.111","config":"/absolute/config/node-a.json"},{"host":"192.168.0.111","config":"/absolute/config/node-b.json"},{"host":"192.168.0.185","config":"/absolute/config/node-c.json"}]}
 ```
 
+The existing image string selects the same immutable reference on both hosts. Docker image stores can assign different immutable image IDs to the same loaded image. In that case, replace only `image` with an exact mapping for both hosts:
+
+```json
+{"image":{"192.168.0.111":"sha256:REPLACE_HOST111_64_LOWERCASE_HEX","192.168.0.185":"sha256:REPLACE_HOST185_64_LOWERCASE_HEX"}}
+```
+
+The helper uses each host's reference for inspection, daemons and the driver, and records it in the node plan. Missing or extra hosts, mutable tags and invalid identities are rejected. The shared `binary_sha256` remains mandatory, and every node must still pass the same executable and normalized shared-config checks. Images must already be installed; `--pull=never` is unchanged.
+
 ```sh
 python3 scripts/treedb_fixed_cluster_2host.py --manifest /absolute/manifest.json --run-id trial01
 python3 scripts/treedb_fixed_cluster_2host.py --manifest /absolute/manifest.json --run-id trial01 --execute --output /absolute/new-receipts
