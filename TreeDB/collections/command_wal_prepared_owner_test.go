@@ -650,7 +650,7 @@ func TestCollectionCommandWALOrdinaryAppendDrainsPublishedForeignReservation(t *
 						done <- frameErr
 						return
 					}
-					handle, _, err = commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+					handle, _, err = commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
 				} else {
 					meta := CollectionMeta{Name: "created", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}
 					normalized, normalizeErr := normalizeCollectionMeta(meta)
@@ -675,7 +675,7 @@ func TestCollectionCommandWALOrdinaryAppendDrainsPublishedForeignReservation(t *
 					}
 					_, err = mgr.CreateCollectionWithPreparedCommandWALIntent(meta, func() (*backenddb.CommandWALIntent, error) {
 						var appendErr error
-						handle, _, appendErr = commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+						handle, _, appendErr = commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
 						if appendErr != nil {
 							return nil, appendErr
 						}
