@@ -216,8 +216,8 @@ def packet_from(stderr):
     return json.loads(lines[0])
 
 
-def check_observations(packet, leaf):
-    boundaries = [packet["initial_stats"], packet["closure_stats"], packet["reopen_stats"]]
+def check_observations(packet, leaf, filter_bytes=0, extra_stats=()):
+    boundaries = [packet["initial_stats"], packet["closure_stats"], packet["reopen_stats"], *extra_stats]
     boundaries += [phase["stats"] for phase in packet["phases"]]
     boundaries += [phase["before_stats"] for phase in packet["phases"] if phase["operations"]]
     for stats in boundaries:
@@ -225,7 +225,7 @@ def check_observations(packet, leaf):
         for name in REQUIRED_STATS:
             value = stats.get(name)
             require(isinstance(value, str) and value.isascii() and value.isdecimal(), "missing/invalid observation: " + name)
-        require(stats.get("treedb.vlog.read_integrity") == "verify" and int(stats["treedb.negative_lookup_filter.active_bytes"]) == 0, "integrity/filter configuration drift")
+        require(stats.get("treedb.vlog.read_integrity") == "verify" and int(stats["treedb.negative_lookup_filter.active_bytes"]) == filter_bytes, "integrity/filter configuration drift")
         require(not stats.get("treedb.command_wal.stats_error"), "command-WAL stats unavailable")
         require(int(stats["treedb.process.read_path.outer_leaf.cache.capacity"]) * 4096 == leaf << 20, "wrong leaf limit")
         require(int(stats["treedb.vlog.grouped_frame_cache.budget_bytes"]) == (64 - leaf) << 20, "wrong frame limit")

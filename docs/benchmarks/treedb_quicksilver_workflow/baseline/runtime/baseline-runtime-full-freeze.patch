@@ -1,0 +1,366 @@
+--- canonical/TreeDB/memory_budget_bench_test.go
++++ baseline/TreeDB/memory_budget_bench_test.go
+@@ -59,7 +59,7 @@
+ 		"combined_configured_main_budget_bytes": 64 << 20, "gc_is_diagnostic": true,
+ 		"rss_available": runtime.GOOS == "linux" && memoryBudgetStat(b, stats, "treedb.process.memory.rss_bytes") > 0, "go_version": runtime.Version(),
+ 		"goos": runtime.GOOS, "goarch": runtime.GOARCH, "gomaxprocs": runtime.GOMAXPROCS(0),
+-		"gomemlimit": os.Getenv("GOMEMLIMIT"), "negative_filter_bytes": opts.NegativeLookupFilterBytes,
++		"gomemlimit": os.Getenv("GOMEMLIMIT"), "negative_filter_bytes": 0,
+ 		"crc_disabled": false, "side_store_limits_changed": false,
+ 		"background_maintenance_disabled": true, "batch_size": 1000, "update_stride": 7919,
+ 		"binary_sha256": binaryHash, "process_id": os.Getpid(), "process_argv": os.Args,
+@@ -249,7 +249,7 @@
+ 
+ func memoryBudgetCheckConfiguration(tb testing.TB, stats map[string]string, leafMiB int) {
+ 	tb.Helper()
+-	if stats["treedb.vlog.read_integrity"] != "verify" || memoryBudgetStat(tb, stats, "treedb.negative_lookup_filter.active_bytes") != 0 {
++	if stats["treedb.vlog.read_integrity"] != "verify" || quicksilverBaselineFilterStatsPresent(stats) {
+ 		tb.Fatal("requires default checksums and negative filtering off")
+ 	}
+ 	if memoryBudgetStat(tb, stats, "treedb.process.read_path.outer_leaf.cache.capacity") != uint64(leafMiB<<20/page.PageSize) ||
+--- canonical/TreeDB/quicksilver_workflow_bench_test.go
++++ baseline/TreeDB/quicksilver_workflow_bench_test.go
+@@ -39,7 +39,9 @@
+ 	}
+ 	queries := quicksilverQueries(keys, reads, miss, distribution, size)
+ 	opts := memoryBudgetOptions(b.TempDir(), leaf, threshold)
+-	opts.NegativeLookupFilterBytes = filterBytes
++	if filterBytes != 0 {
++		b.Fatal("baseline has no negative lookup filter")
++	}
+ 	d, err := Open(opts)
+ 	if err != nil {
+ 		b.Fatal(err)
+@@ -141,7 +143,7 @@
+ 	}
+ 	environment := os.Environ()
+ 	sort.Strings(environment)
+-	packet := map[string]any{"schema": "quicksilver-workflow-v1", "pilot": pilot,
++	packet := map[string]any{"schema": "quicksilver-baseline-workflow-v1", "negative_filter_support": "absent", "pilot": pilot,
+ 		"keys": keys, "updates": updates, "read_keys": reads, "value_bytes": size, "key_bytes": 32,
+ 		"pointer_threshold": threshold, "verified_pointer_entries": pointers, "miss_percent": miss,
+ 		"distribution": distribution, "read_batch": batchSize, "negative_filter_bytes": filterBytes,
+@@ -259,7 +261,7 @@
+ func quicksilverCheckConfiguration(tb testing.TB, stats map[string]string, leafMiB, filterBytes int) {
+ 	tb.Helper()
+ 	if stats["treedb.vlog.read_integrity"] != "verify" ||
+-		memoryBudgetStat(tb, stats, "treedb.negative_lookup_filter.active_bytes") != uint64(filterBytes) ||
++		filterBytes != 0 || quicksilverBaselineFilterStatsPresent(stats) ||
+ 		memoryBudgetStat(tb, stats, "treedb.process.read_path.outer_leaf.cache.capacity")*4096 != uint64(leafMiB<<20) ||
+ 		memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.budget_bytes") != uint64((64-leafMiB)<<20) ||
+ 		leafMiB == 64 && memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.capacity") != 0 {
+@@ -342,3 +344,21 @@
+ 	}
+ 	quicksilverVerify(t, d, 100, 256, 0)
+ }
++
++func algorithmQuantile(samples []int64, fraction float64) int64 {
++	if len(samples) == 0 {
++		return 0
++	}
++	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
++	return samples[min(int(float64(len(samples))*fraction), len(samples)-1)]
++}
++
++
++func quicksilverBaselineFilterStatsPresent(stats map[string]string) bool {
++	for name := range stats {
++		if strings.HasPrefix(name, "treedb.negative_lookup_filter.") {
++			return true
++		}
++	}
++	return false
++}
+--- /dev/null
++++ baseline/check_full_freeze.py
+@@ -0,0 +1,82 @@
++#!/usr/bin/env python3
++"""Bounded source-guard checks, plus optional prepared-input drift check."""
++import argparse
++import copy
++import json
++from pathlib import Path
++import sys
++from unittest.mock import patch
++
++sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
++import treedb_memory_budget_capture as memory
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument("--source-root", type=Path, required=True)
++parser.add_argument("--manifest", type=Path, required=True)
++parser.add_argument("--manifest-sha256", required=True)
++parser.add_argument("--prepared", type=Path)
++parser.add_argument("--freeze-sha256")
++args = parser.parse_args()
++root, manifest_path = args.source_root.resolve(), args.manifest.resolve()
++memory.check_baseline_sources(root, manifest_path, args.manifest_sha256)
++real_git = memory.git
++
++
++def rejects(call, message):
++    try:
++        call()
++    except ValueError as error:
++        assert message in str(error), (message, str(error))
++    else:
++        raise AssertionError("accepted " + message)
++
++
++for target, changed, message in (
++    (("diff", "--name-only", "HEAD", "--"), "TreeDB/public.go", "dirty tracked baseline source"),
++    (("ls-files", "--others", "--exclude-standard", "-z"),
++        real_git(root, "ls-files", "--others", "--exclude-standard", "-z") + "\0unallowed.go\0", "unallowed/missing baseline additions"),
++    (("ls-files", "--others", "--ignored", "--exclude-standard", "-z"), "tmp/ignored.go\0", "unallowed ignored source input"),
++    (("rev-parse", "HEAD"), "wrong", "wrong baseline product runtime_head"),
++):
++    def git(source, *command):
++        return changed if command == target else real_git(source, *command)
++    with patch.object(memory, "git", git):
++        rejects(lambda: memory.check_baseline_sources(root, manifest_path, args.manifest_sha256), message)
++rejects(lambda: memory.check_baseline_sources(root, manifest_path, "wrong"), "wrong/changed external baseline manifest")
++fixture = Path(__file__).resolve().parent / "full-freeze-selfcheck-fixture"
++fixture.mkdir(exist_ok=True)
++manifest = copy.deepcopy(json.loads(manifest_path.read_text()))
++replacement = fixture / "changed-replacement.go"
++replacement.write_text("package changed\n")
++manifest["external_inputs"]["TreeDB/quicksilver_workflow_bench_test.go"]["path"] = str(replacement)
++changed_manifest = fixture / "changed-input-manifest.json"
++memory.write_json(changed_manifest, manifest)
++rejects(lambda: memory.check_baseline_sources(root, changed_manifest, memory.digest(changed_manifest)), "changed baseline replacement/toolchain input")
++if args.prepared:
++    assert args.freeze_sha256
++    prepared = args.prepared.resolve()
++    freeze = memory.load_freeze(prepared, args.freeze_sha256)
++    assert freeze["pilot"] is False and freeze["environment"]["TREEDB_MEMORY_PILOT"] == "0"
++    tracked = root / "TreeDB/public.go"
++    original = tracked.read_bytes()
++    try:
++        tracked.write_bytes(original + b"\n// deliberate source-guard test mutation\n")
++        rejects(lambda: memory.check_baseline_sources(root, manifest_path, args.manifest_sha256), "dirty tracked baseline source")
++    finally:
++        tracked.write_bytes(original)
++    unallowed = root / "unallowed_full_freeze_check.go"
++    assert not unallowed.exists()
++    try:
++        unallowed.write_text("package unallowed\n")
++        rejects(lambda: memory.check_baseline_sources(root, manifest_path, args.manifest_sha256), "unallowed/missing baseline additions")
++    finally:
++        unallowed.rename(fixture / "unallowed_full_freeze_check.go")
++    replacement = prepared / "overlay/quicksilver_workflow_bench_test.go"
++    original = replacement.read_bytes()
++    try:
++        replacement.write_bytes(original + b"\n// deliberately changed compiled replacement\n")
++        rejects(lambda: memory.load_freeze(prepared, args.freeze_sha256), "wrong/changed source/input/overlay/binary identity")
++    finally:
++        replacement.write_bytes(original)
++    memory.load_freeze(prepared, args.freeze_sha256)
++print("baseline full-freeze guard checks PASS; no benchmark executed")
+--- /dev/null
++++ baseline/prepare_baseline.py
+@@ -0,0 +1,57 @@
++#!/usr/bin/env python3
++"""Prepare the exact baseline with pinned harness additions; never run it."""
++import argparse
++import json
++from pathlib import Path
++import sys
++
++sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
++import treedb_memory_budget_capture as memory
++
++
++def prepare(args):
++    root, proposal = args.source_root.resolve(), Path(__file__).resolve().parent
++    manifest = json.loads(args.manifest.read_text())
++    memory.check_baseline_sources(root, args.manifest, args.manifest_sha256)
++    memory.require(Path(manifest["external_inputs"]["prepare_baseline.py"]["path"]).resolve() == Path(__file__).resolve(), "wrong executing baseline preparation helper")
++    original_generate = memory.generate
++
++    def generate(source, destination, frame_mib):
++        identity = original_generate(source, destination, frame_mib)
++        overlay = destination / "overlay.json"
++        mapping = json.loads(overlay.read_text())
++        identity["baseline_test_compatibility"] = {}
++        for name in ("TreeDB/quicksilver_workflow_bench_test.go", "TreeDB/memory_budget_bench_test.go"):
++            canonical, replacement = source / name, destination / Path(name).name
++            external = Path(manifest["external_inputs"][name]["path"])
++            memory.require(external.resolve() == (proposal / name).resolve(), "wrong replacement location")
++            replacement.write_bytes(external.read_bytes())
++            mapping["Replace"][str(canonical.resolve())] = str(replacement.resolve())
++            identity["baseline_test_compatibility"][name] = {
++                "canonical_sha256": memory.digest(canonical),
++                "replacement_sha256": memory.digest(replacement),
++            }
++        memory.write_json(overlay, mapping)
++        identity["overlay_sha256"] = memory.digest(overlay)
++        memory.write_json(destination / "identity.json", identity)
++        return identity
++
++    memory.generate = generate
++    memory.prepare(argparse.Namespace(source_root=root, output=args.output,
++        leaf_mib=args.leaf_mib, value_bytes=args.value_bytes, threshold=args.threshold,
++        pilot=False, go=args.go, runtime_head=manifest["runtime_head"],
++        harness_sha256=manifest["canonical_sources"]["TreeDB/memory_budget_bench_test.go"],
++        baseline_manifest=args.manifest, baseline_manifest_sha256=args.manifest_sha256))
++
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--source-root", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    parser.add_argument("--manifest-sha256", required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--go", type=Path, required=True)
++    parser.add_argument("--leaf-mib", type=int, choices=memory.COHORTS, required=True)
++    parser.add_argument("--value-bytes", type=int, choices=(256, 4096), required=True)
++    parser.add_argument("--threshold", type=int, choices=(1, 1024), required=True)
++    prepare(parser.parse_args())
+--- canonical/scripts/treedb_memory_budget_capture.py
++++ baseline/scripts/treedb_memory_budget_capture.py
+@@ -49,7 +49,6 @@
+         "budget_bytes", "capacity", "allocated_shards", "allocated_slots", "entries", "retained_bytes", "hits", "misses",
+         "stores", "evictions", "releases", "skipped_budget", "skipped_contention", "skipped_disabled", "skipped_oversize"),
+     "treedb.vlog.decode_scratch.": ("small_pool.retained_bytes", "large_pool.retained_bytes", "file_stash.retained_bytes"),
+-    "treedb.negative_lookup_filter.": ("active_bytes",),
+     "treedb.command_wal.": ("applied_lsn", "live_accepted_max_lsn"),
+ }.items() for suffix in suffixes)
+ 
+@@ -146,15 +145,56 @@
+     identity["overlay_files"] = {name: digest(prepared / "overlay" / name)
+                                  for name in ("identity.json", "overlay.json", "db.go")}
+     identity["go_binary_sha256"] = digest(freeze["go_binary"])
++    if "baseline_manifest" in freeze:
++        identity.update(check_baseline_sources(root, **freeze["baseline_manifest"]))
+     return identity
++
++
++def check_baseline_sources(root, path, sha256):
++    path = Path(path)
++    require(sha256 and digest(path) == sha256, "wrong/changed external baseline manifest")
++    manifest = json.loads(path.read_text())
++    require(manifest["schema"] == "baseline-source-manifest-v1" and
++            manifest["runtime_head"] in ("ef22ce55b85524de2707453f22c5f8cd6ba89eaa", "1f0b09b8ffad0c3eaa1eae0146958f45e57d8c1c") and
++            manifest["canonical_head"] == "7e1c51d41bcc0392fcb17dec12e46fdab42449bc", "unsupported baseline/canonical identity")
++    for field, revision in (("runtime_head", "HEAD"), ("tracked_tree", "HEAD^{tree}"), ("treedb_tree", "HEAD:TreeDB")):
++        require(git(root, "rev-parse", revision) == manifest[field], "wrong baseline product " + field)
++    require(not git(root, "diff", "--name-only", "HEAD", "--"), "dirty tracked baseline source")
++    additions = manifest["additions"]
++    require(set(additions) == {"TreeDB/quicksilver_workflow_bench_test.go", "TreeDB/memory_budget_bench_test.go",
++            "scripts/treedb_quicksilver_capture.py", "scripts/treedb_memory_budget_capture.py", "scripts/treedb_memory_budget_overlay.py"}, "wrong baseline additions allowlist")
++    actual = set(git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")) - {""}
++    require(actual == set(additions), "unallowed/missing baseline additions")
++    ignored = git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split("\0")
++    require(not any(name and Path(name).suffix in SOURCE_SUFFIXES for name in ignored), "unallowed ignored source input")
++    canonical = {"TreeDB/quicksilver_workflow_bench_test.go": "05d2a485efd14d43e3f60f715761e3cbfb50b7a31aa11e55f44e8d4ffc42da96",
++                 "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462"}
++    require(manifest["canonical_sources"] == canonical and all(additions[name] == value for name, value in canonical.items()), "wrong canonical harness identity")
++    for name, expected in additions.items():
++        require((root / name).is_file() and not (root / name).is_symlink() and digest(root / name) == expected, "changed addition: " + name)
++    inputs = manifest["external_inputs"]
++    require(set(inputs) == {"TreeDB/quicksilver_workflow_bench_test.go", "TreeDB/memory_budget_bench_test.go",
++            "scripts/treedb_quicksilver_capture.py", "scripts/treedb_memory_budget_capture.py",
++            "scripts/treedb_memory_budget_overlay.py", "prepare_baseline.py", "go_binary"}, "wrong external input allowlist")
++    require(Path(inputs["scripts/treedb_memory_budget_capture.py"]["path"]).resolve() == Path(__file__).resolve(), "wrong executing baseline freeze helper")
++    actual_inputs = {name: digest(item["path"]) for name, item in inputs.items()}
++    require(actual_inputs == {name: item["sha256"] for name, item in inputs.items()}, "changed baseline replacement/toolchain input")
++    return {"baseline_manifest_sha256": sha256, "baseline_inputs": actual_inputs}
+ 
+ 
+ def prepare(args):
+     root, output = args.source_root.resolve(), args.output.resolve()
+     require(not output.is_relative_to(root), "prepared artifacts must be outside source checkout")
+     before = source_identity(root)
++    baseline_manifest = None
++    baseline_inputs = None
++    if getattr(args, "baseline_manifest", None):
++        require(not args.pilot, "baseline retained-preparation path cannot relabel a pilot")
++        baseline_manifest = {"path": str(args.baseline_manifest.resolve()), "sha256": args.baseline_manifest_sha256}
++        baseline_inputs = check_baseline_sources(root, **baseline_manifest)
+     if not args.pilot:
+-        require(not git(root, "status", "--porcelain", "--untracked-files=all"), "full preparation requires clean reviewed/landed checkout")
++        if baseline_manifest is None:
++            require(not git(root, "status", "--porcelain", "--untracked-files=all"), "full preparation requires clean reviewed/landed checkout")
+         require(args.runtime_head == before["runtime_head"], "wrong external runtime HEAD")
+         require(args.harness_sha256 == before["harness_sha256"], "wrong external harness SHA")
+     output.mkdir(parents=True, exist_ok=False)
+@@ -164,6 +204,9 @@
+     probe_env = {key: value for key, value in env.items() if key != "GOROOT"}
+     env["GOROOT"] = subprocess.check_output([go_binary, "env", "GOROOT"], env=probe_env, text=True).strip()
+     go_hash = digest(go_binary)
++    if baseline_manifest:
++        compiler = json.loads(Path(baseline_manifest["path"]).read_text())["external_inputs"]["go_binary"]
++        require(go_binary == str(Path(compiler["path"]).resolve()) and go_hash == compiler["sha256"], "wrong actual baseline compiler")
+     overlay_path = str(output / "overlay/overlay.json")
+     list_argv = [go_binary, "list", "-deps", "-test", "-json", "-overlay", overlay_path, "./TreeDB"]
+     listed = command(list_argv, root, env, output, "inputs")
+@@ -182,12 +225,17 @@
+     require(source_identity(root) == {key: value for key, value in before.items() if key != "compile_inputs"}, "source changed during build")
+     require(before["compile_inputs"] == {path: digest(path) for path in before["compile_inputs"]}, "compile input changed during build")
+     require(digest(go_binary) == go_hash, "toolchain executable changed during build")
++    if baseline_manifest:
++        check_identity(check_baseline_sources(root, **baseline_manifest), baseline_inputs)
++        before.update(baseline_inputs)
+     before.update(binary_sha256=digest(output / "memory-budget.test"), go_binary_sha256=go_hash,
+                   overlay_files={name: digest(output / "overlay" / name) for name in ("identity.json", "overlay.json", "db.go")})
+     freeze = {"schema": "memory-budget-freeze-v1", "pilot": args.pilot, "source_root": str(root),
+               "go_binary": go_binary, "identity": before, "overlay": overlay, "environment": env,
+               "host": {"platform": platform.platform(), "hostname": platform.node()},
+               "inputs_process": listed, "inputs_after_process": listed_after, "build_process": build}
++    if baseline_manifest:
++        freeze["baseline_manifest"] = baseline_manifest
+     write_json(output / "freeze.json", freeze)
+     print(digest(output / "freeze.json"))
+ 
+@@ -225,7 +273,7 @@
+         for name in REQUIRED_STATS:
+             value = stats.get(name)
+             require(isinstance(value, str) and value.isascii() and value.isdecimal(), "missing/invalid observation: " + name)
+-        require(stats.get("treedb.vlog.read_integrity") == "verify" and int(stats["treedb.negative_lookup_filter.active_bytes"]) == filter_bytes, "integrity/filter configuration drift")
++        require(stats.get("treedb.vlog.read_integrity") == "verify" and filter_bytes == 0 and not any(name.startswith("treedb.negative_lookup_filter.") for name in stats), "integrity/filter configuration drift")
+         require(not stats.get("treedb.command_wal.stats_error"), "command-WAL stats unavailable")
+         require(int(stats["treedb.process.read_path.outer_leaf.cache.capacity"]) * 4096 == leaf << 20, "wrong leaf limit")
+         require(int(stats["treedb.vlog.grouped_frame_cache.budget_bytes"]) == (64 - leaf) << 20, "wrong frame limit")
+@@ -420,6 +468,8 @@
+     prep.add_argument("--go", type=Path, help="actual Go 1.26+ executable; automatic toolchain switching is disabled")
+     prep.add_argument("--runtime-head")
+     prep.add_argument("--harness-sha256")
++    prep.add_argument("--baseline-manifest", type=Path)
++    prep.add_argument("--baseline-manifest-sha256")
+     for name in ("run", "validate"):
+         sub = commands.add_parser(name)
+         sub.add_argument("--prepared", type=Path, required=True)
+--- canonical/scripts/treedb_quicksilver_capture.py
++++ baseline/scripts/treedb_quicksilver_capture.py
+@@ -43,12 +43,14 @@
+ 
+ 
+ def check_packet(packet, freeze, process, controls, retained):
++    memory.require(freeze["identity"]["runtime_head"] in ("ef22ce55b85524de2707453f22c5f8cd6ba89eaa", "1f0b09b8ffad0c3eaa1eae0146958f45e57d8c1c"), "unsupported baseline product identity")
++    memory.require(controls["filter"] == "off", "baseline filter support absent")
+     env = freeze["environment"]
+     pilot, keys, updates, reads, filter_bytes = workload(env, controls)
+     memory.require(not retained or not pilot, "pilot cannot satisfy retained validation")
+     leaf, size, threshold = (int(env[name]) for name in ("TREEDB_MEMORY_LEAF_MIB", "TREEDB_MEMORY_VALUE_BYTES", "TREEDB_MEMORY_POINTER_THRESHOLD"))
+     batch, miss = controls["read_batch"], controls["miss_percent"]
+-    expected = {"schema": "quicksilver-workflow-v1", "pilot": pilot, "keys": keys, "updates": updates,
++    expected = {"schema": "quicksilver-baseline-workflow-v1", "negative_filter_support": "absent", "pilot": pilot, "keys": keys, "updates": updates,
+                 "read_keys": reads, "key_bytes": 32, "shared_prefix_bytes": 24, "value_bytes": size,
+                 "pointer_threshold": threshold, "verified_pointer_entries": keys if threshold == 1 or size == 4096 else 0,
+                 "miss_percent": miss, "distribution": controls["distribution"], "read_batch": batch,
+@@ -100,9 +102,14 @@
+ def load(args):
+     prepared = args.prepared.resolve()
+     freeze = memory.load_freeze(prepared, args.freeze_sha256)
++    if "baseline_manifest" in freeze:
++        manifest = json.loads(Path(freeze["baseline_manifest"]["path"]).read_text())
++        memory.require(Path(manifest["external_inputs"]["scripts/treedb_quicksilver_capture.py"]["path"]).resolve() == Path(__file__).resolve(), "wrong executing baseline capture helper")
+     harness_hash = freeze["identity"]["source_files"][HARNESS]
+     input_path = str(Path(freeze["source_root"]) / HARNESS)
+-    memory.require(freeze["identity"]["compile_inputs"].get(input_path) == harness_hash, "canonical harness was not a compiled input")
++    replacements = json.loads((prepared / "overlay/overlay.json").read_text())["Replace"]
++    compiled_path = replacements.get(input_path, input_path)
++    memory.require(freeze["identity"]["compile_inputs"].get(compiled_path) == memory.digest(compiled_path), "baseline harness was not a compiled input")
+     if not freeze["pilot"]:
+         memory.require(args.runtime_head == freeze["identity"]["runtime_head"] and
+                        args.harness_sha256 == harness_hash, "wrong/missing external canonical identity")

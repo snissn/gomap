@@ -363,3 +363,16 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
   --output /tmp/algorithm-snapshot-rotations-eligibility --family snapshot-rotations \
   --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 ```
+
+## Canonical Quicksilver workflow
+
+The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
+uses explicit public read/update phases and a package-build freeze. Its optional
+standalone Go profiles use `go tool pprof`; their names/JSON/raw logs are not
+benchprof or unified-bench profile-dir artifacts.
+
+The standalone Quicksilver workflow packet also retains40 (pilot8)
+WriteSync-only update acknowledgement samples, a separate fixed-present owned
+Get concurrent reader, and explicitly scoped process IO counters. See
+[its measured boundaries](../../docs/benchmarks/treedb_quicksilver_workflow/README.md);
+these package packets are not benchprof profile-dir artifacts.
