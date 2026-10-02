@@ -82,9 +82,10 @@ compressed pointer records through file fallback, mapped decode and warmed
 mapped cache. The cache row pre-admits the same raw frame through a reusable
 destination on both revisions, isolating the final owned-copy cost. The
 `cold_open_map` row includes OS-cache-warm open, map, read, admission and close
-costs. Each result still owns its output bytes. The cache reports its
-retained raw bytes separately from per-read output allocations; mapping and
-cache admission retain their existing limits. Use reopened public `Get` route
+costs. Each result still owns its output bytes. Cache retained-byte counters
+measure raw payload lengths; pooled backing capacity may be larger. Report GC
+heap, mapped bytes and process RSS separately. Mapping and cache admission
+retain their existing limits. Use reopened public `Get` route
 counters to prove the selected path rather than comparing inline values against
 pointer values. For paired retained capture, export one fully verified closed
 canonical fixture with `TREEDB_OWNED_VLOG_FIXTURE_EXPORT=/new/fixture/path`
@@ -94,7 +95,9 @@ clones the fixture before opening it. Existing snapshot restore helpers rebind
 only physical dependency identities in the copied indexes; value-log and
 dictionary bytes, pointers and logical roots stay identical. Copy, identity
 rebind, full-value verification and warmup are outside timing. Normal constructors remain separate guardrails because
-asynchronous dictionary training can change their stored layout. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
+asynchronous dictionary training can change their stored layout. The
+[retained #4891 packet](../../../docs/benchmarks/treedb_owned_values_20261001/README.md)
+records sources, fixture hashes, repetitions and memory limits. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
 
 ```sh
 GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \

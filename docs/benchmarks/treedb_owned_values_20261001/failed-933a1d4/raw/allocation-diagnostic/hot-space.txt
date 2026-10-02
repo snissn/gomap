@@ -1,0 +1,48 @@
+File: treedb-diagnostic.test
+Build ID: 7e542e9b18717b8b08c4f1beac5eec98844046ee
+Type: alloc_space
+Time: 2026-10-01 18:26:16 HST
+Showing nodes accounting for 86919.22kB, 99.15% of 87664.70kB total
+Dropped 78 nodes (cum <= 438.32kB)
+      flat  flat%   sum%        cum   cum%
+   50000kB 57.04% 57.04%    50000kB 57.04%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+   25000kB 28.52% 85.55%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo
+ 5830.19kB  6.65% 92.20%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+ 3228.84kB  3.68% 95.89%  3228.84kB  3.68%  runtime/pprof.allFrames
+ 1002.97kB  1.14% 97.03%  1173.93kB  1.34%  runtime/pprof.(*profileBuilder).emitLocation
+     648kB  0.74% 97.77%  1171.88kB  1.34%  compress/flate.NewWriter (inline)
+     512kB  0.58% 98.35%  6792.45kB  7.75%  runtime/pprof.writeHeapInternal
+  376.12kB  0.43% 98.78%  6280.45kB  7.16%  runtime/pprof.writeHeapProto
+     320kB  0.37% 99.15%   523.88kB   0.6%  compress/flate.(*compressor).init
+    0.98kB 0.0011% 99.15%  4405.24kB  5.03%  runtime/pprof.(*profileBuilder).appendLocsForStack
+    0.11kB 0.00012% 99.15%  6792.77kB  7.75%  github.com/snissn/gomap/TreeDB.BenchmarkDBOwnedValueLogRoute.func2
+         0     0% 99.15%  1178.62kB  1.34%  compress/gzip.(*Writer).Write
+         0     0% 99.15% 80830.19kB 92.20%  github.com/snissn/gomap/TreeDB.(*DB).Get
+         0     0% 99.15% 87622.95kB   100%  github.com/snissn/gomap/TreeDB.BenchmarkDBOwnedValueLogRoute
+         0     0% 99.15% 80830.19kB 92.20%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+         0     0% 99.15%    50000kB 57.04%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0% 99.15% 80830.19kB 92.20%  github.com/snissn/gomap/TreeDB/db.(*DB).Get
+         0     0% 99.15% 80830.19kB 92.20%  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1
+         0     0% 99.15%    50000kB 57.04%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotOrErr
+         0     0% 99.15%    50000kB 57.04%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld
+         0     0% 99.15% 30830.19kB 35.17%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeAppend (inline)
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadAppend
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapAppend
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend
+         0     0% 99.15%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+         0     0% 99.15%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafEntryViewColumnarPrefixV2
+         0     0% 99.15%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyAt (inline)
+         0     0% 99.15%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+         0     0% 99.15% 30830.19kB 35.17%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+         0     0% 99.15% 30830.19kB 35.17%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend
+         0     0% 99.15%    25000kB 28.52%  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey
+         0     0% 99.15%  5830.19kB  6.65%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+         0     0% 99.15%  6792.45kB  7.75%  runtime/pprof.(*Profile).WriteTo
+         0     0% 99.15%  1178.62kB  1.34%  runtime/pprof.(*profileBuilder).flush
+         0     0% 99.15%  1189.38kB  1.36%  runtime/pprof.(*profileBuilder).pbSample
+         0     0% 99.15%  6792.45kB  7.75%  runtime/pprof.writeAlloc
+         0     0% 99.15% 87622.95kB   100%  testing.(*B).launch
+         0     0% 99.15% 87622.95kB   100%  testing.(*B).runN
