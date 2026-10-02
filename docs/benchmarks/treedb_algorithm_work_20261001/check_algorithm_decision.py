@@ -71,7 +71,17 @@ HASHES = {'algorithm-full-primary-inspection.json': 'db4dc6bc746201b7512c4d13c9a
  'algorithm-full-primary-packet/many-view-internal/validated-profile.json': '3bad267bafa22d4896b8f2af28f83c496edb739becc7e8581b42901d61c44908',
  'algorithm-full-primary-packet/many-view-internal/profile.json': '7ff5f376b638165097101cab2b29d2a3078f93ef2c5407f175d3b62f06c6d0ca',
  'algorithm-full-primary-packet/many-view-internal/top.txt': '3ad4ad9538251c27d89994a28266b7eac31b9b9a22ee1a444fb1487c27aa5516',
- 'algorithm-full-primary-packet/many-view-internal/callpath.txt': 'ce38dda4aba020774b859fc6c2ba3b020705fcb655a3c150bbd5852ae3e72962'}
+ 'algorithm-full-primary-packet/many-view-internal/callpath.txt': 'ce38dda4aba020774b859fc6c2ba3b020705fcb655a3c150bbd5852ae3e72962',
+ 'algorithm-full-normal-retained/algorithm-work.test': 'bb190f318f0a10f22c50d2f92a094b28cb35e2a3f44d734da42551b6777ec543',
+ 'algorithm-full-counter-retained/algorithm-work.test': '390367fa96037d46282795fe61ba7baf643ad98fbd697930fe273d9c0bb070ab',
+ 'algorithm-paired-4919-732-packet/normal-prepared/freeze.json': '482f64f7b9dd36f3acd8352ae3a29b31b32403dc7c5d1c25d1c71cd6542d9668',
+ 'algorithm-paired-4919-732-packet/normal-prepared/algorithm-work.test': 'a1043e3ad4bc7117114575d24b9b0acc28663d010076e8e97d687c1d51ec2a2f',
+ 'algorithm-paired-4919-732-packet/counter-prepared/freeze.json': '540b79511ad6709c6a27af6d123de596968a6c0e0ebb9df5233a724f299f81dd',
+ 'algorithm-paired-4919-732-packet/counter-prepared/algorithm-work.test': '5f4841a35cdab13d3cb30dd2eb548e0489cc4516230ed38c14369daa0c925223',
+ '4919-singleton-screen-packet/control-normal-pilot-prepared/freeze.json': 'f73e788d7876df3d70cc7502d83c79ba551e8d5f3825a5395874e5fc54ebf6b5',
+ '4919-singleton-screen-packet/control-normal-pilot-prepared/algorithm-work.test': '20e69fac0ad85bebc6dc00e13d1360dd841b2076050a8c8845298fe2abff88c7',
+ '4919-singleton-screen-packet/candidate-normal-pilot-prepared/freeze.json': '31294d1e297c8452f11328f2635b9ea336e828457a567b285a8fa029332d7108',
+ '4919-singleton-screen-packet/candidate-normal-pilot-prepared/algorithm-work.test': '210fb4d93677a46729d1c6bba55cf11326ad7ed4fa58ee97c68f9b4dfdc8c156'}
 HERE = Path(__file__).resolve().parent
 
 def sha(path):
@@ -103,6 +113,7 @@ def render(root):
     cap=importlib.util.module_from_spec(spec); spec.loader.exec_module(cap)
     freeze=read(root/'algorithm-full-normal-freeze.json')
     assert freeze['complete'] is True and freeze['runtime_head']=='a51b4795cebc194c7a158b262242668877932934'
+    assert sha(root/'algorithm-full-normal-retained/algorithm-work.test')==freeze['binary_sha256']
     packets=[]
     for i in range(1,4):
         directory=root/f'algorithm-full-primary-packet/writes-r{i}'
@@ -140,6 +151,7 @@ def render(root):
             f"{min(vals('read_samples'))}–{max(vals('read_samples'))}",
             stats([p['kernel_process_io_after']['write_bytes']-p['kernel_process_io_before']['write_bytes'] for p in ps],2**20)])
     counter=read(root/'algorithm-full-counter-freeze.json')
+    assert sha(root/'algorithm-full-counter-retained/algorithm-work.test')==counter['binary_sha256']
     actual=cap.validate_log((root/'algorithm-full-primary-packet/internal/stdout.log').read_text(encoding='utf-8'),'internal',counter,False,False)
     assert actual==read(root/'algorithm-full-primary-packet/internal/parsed.json')
     assert actual['internal_counters']==read(root/'algorithm-full-primary-inspection.json')['internal_counters']
@@ -173,9 +185,42 @@ def render(root):
     exec(compile(selected,'retained canonical arithmetic','exec'),ns)
     shared=read(root/'algorithm-paired-4919-732-five-repeat-analysis.json')
     singleton=read(root/'4919-singleton-five-pair-independent-screen-analysis.json')
+    for product in ('control','candidate'):
+        prepared=root/f'4919-singleton-screen-packet/{product}-normal-pilot-prepared'
+        assert sha(prepared/'algorithm-work.test')==read(prepared/'freeze.json')['binary_sha256']
+    normal={}; diagnostics={}
+    candidate_freezes={mode:read(root/f'algorithm-paired-4919-732-packet/{mode}-prepared/freeze.json') for mode in ('normal','counter')}
+    for mode,f in candidate_freezes.items():
+        assert sha(root/f'algorithm-paired-4919-732-packet/{mode}-prepared/algorithm-work.test')==f['binary_sha256']
+    for row in shared['raw_captures']:
+        run=row['run_id']; product=run.rsplit('-',1)[1]
+        packet='algorithm-paired-4919-732-extension-packet' if run.startswith(('many-r4-','many-r5-')) else 'algorithm-paired-4919-732-packet'
+        directory=root/packet/'runs'/run
+        for name,digest in row['raw_sha256'].items(): assert sha(directory/name)==digest,(run,name)
+        execution=read(directory/'execution.json'); family='internal' if run.startswith('internal-') else 'many'
+        f=candidate_freezes['counter' if family=='internal' else 'normal'] if product=='candidate' else counter if family=='internal' else freeze
+        assert execution['complete'] is True and execution['returncode']==0 and execution['family']==family
+        assert execution['binary_sha256']==f['binary_sha256']
+        assert execution['source_before']==execution['source_after']
+        assert all(execution['source_before'][k]==f[k] for k in cap.IDENTITY_KEYS)
+        parsed=cap.validate_log((directory/'stdout.log').read_text(encoding='utf-8'),family,f,False,False)
+        assert parsed==read(directory/'parsed.json')
+        if family=='internal': diagnostics[product]=parsed['internal_counters']
+        else:
+            repeat=int(run.split('-')[1][1:])
+            normal[(product,repeat)]=parsed['rows']
+    assert set(normal)=={(p,i) for p in ('control','candidate') for i in range(1,6)}
     rows=[]; screen=[]
     for name,cell in sorted(shared['cells'].items()):
-        for metric,s in cell['metrics'].items(): assert ns['compare'](s['control']['values'],s['candidate']['values'])==s
+        pointer,shape,view=name.split('/')[1:]
+        key='/'.join([pointer.removeprefix('pointer='),shape,view.removeprefix('view=')])
+        assert cell['counts']=={p:diagnostics[p][key] for p in ('control','candidate')}
+        for metric,s in cell['metrics'].items():
+            samples={}
+            for product in ('control','candidate'):
+                metrics=[normal[(product,i)][name]['metrics'] for i in range(1,6)]
+                samples[product]=[1e9/m['ns/op']*(64 if metric=='64keys/s' else 1) for m in metrics] if metric in ('ops/s','64keys/s') else [m[metric] for m in metrics]
+            assert ns['compare'](samples['control'],samples['candidate'])==s
         s=cell['metrics']['ns/op']; b=cell['metrics']['B/op']; a=cell['metrics']['allocs/op']
         rows.append([name.removeprefix('BenchmarkAlgorithmGetMany/'),f"{s['median_change_pct']:+.3f}",
             '/'.join(f'{x:+.2f}' for x in s['paired_change_pct']),
@@ -212,6 +257,6 @@ def main():
     if args.print_tables: print(expected); return
     actual=text.split('<!-- canonical-tables:start -->\n',1)[1].split('\n<!-- canonical-tables:end -->',1)[0]
     assert actual==expected,'canonical table differs'
-    print('PASS: pinned primary raw/counter packets; canonical shared/singleton arithmetic; exact artifact rows and decision tables')
+    print('PASS: actual retained binaries; primary and five-pair raw packets; canonical arithmetic; exact artifact rows and decision tables')
 
 if __name__=='__main__': main()

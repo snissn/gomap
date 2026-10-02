@@ -31,9 +31,12 @@ three full natural GetMany captures (36 cells), and twelve untimed actual
 internal-load cells. Captured normal binary identity is
 `bb190f318f0a10f22c50d2f92a094b28cb35e2a3f44d734da42551b6777ec543`.
 The recorder freezes actual source/dependencies/toolchain/environment and checks
-them before/after each process. Local verification of the actual primary
-executable bytes remains a final binding gate; a recorded digest alone is not
-an independent rehash of that executable.
+them before/after each process. Actual retained primary normal and counter executable bytes are independently
+rehash-bound to their respective original freezes; counter binary SHA-256 is
+`390367fa96037d46282795fe61ba7baf643ad98fbd697930fe273d9c0bb070ab`.
+The checker also rehashes the retained 732 normal/counter executable bytes and
+reparses all ten full five-pair normal captures plus both untimed diagnostics,
+including every original and extension raw-file hash in the canonical analysis.
 
 The retained captures use Go 1.26.3 linux/amd64, GOAMD64=v1, CGO enabled,
 GOWORK=off, GOMAXPROCS=2, GOMEMLIMIT=2GiB, GOGC=100, normalized environment,
@@ -238,16 +241,16 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/check_algorithm_decision.
 It reuses the existing capture `validate_log` for primary write/many/counter raw
 streams and the existing paired reducer's pure `spread`/`compare` arithmetic.
 It verifies exact artifact-name/hash rows and tables, including every shared
-and singleton cell, without invoking recorder/native code. Shared/singleton
-canonical analyses and independent reports bind their full raw provenance;
+and singleton cell, without invoking recorder/native code. The shared five-pair table is rebuilt from all original/extension raw sample
+arrays using the canonical validator and arithmetic; singleton canonical
+analysis/independent review binds its raw provenance;
 this checker does not claim to re-run their Linux live-freeze validations.
 Optimized Python fails before document/evidence I/O; all text is explicit UTF-8.
 The raw packets, freezes, pre-timer order, normal/counter separation and profile
 exclusion remain the authoritative provenance contract.
 
 Final acceptance requires root's selected #4920 qualification/disposition,
-actual merged product identity if selected, #4931 landing, primary actual-binary
-binding, root acceptance of the bounded persistent-delta decision, independent
+actual merged product identity if selected, #4931 landing, root acceptance of the bounded persistent-delta decision, independent
 fresh-context Sol review, current-head CI/review inventory and unchanged parent
 capacity/maintenance/representative obligations. No pending metric is supplied,
 no rejected runtime is shipped, and no closure keyword is used by this draft.
@@ -389,3 +392,13 @@ bytes, not just the occurrence of a digest anywhere in this document.
 | `algorithm-full-primary-packet/many-view-internal/profile.json` | `7ff5f376b638165097101cab2b29d2a3078f93ef2c5407f175d3b62f06c6d0ca` |
 | `algorithm-full-primary-packet/many-view-internal/top.txt` | `3ad4ad9538251c27d89994a28266b7eac31b9b9a22ee1a444fb1487c27aa5516` |
 | `algorithm-full-primary-packet/many-view-internal/callpath.txt` | `ce38dda4aba020774b859fc6c2ba3b020705fcb655a3c150bbd5852ae3e72962` |
+| `algorithm-full-normal-retained/algorithm-work.test` | `bb190f318f0a10f22c50d2f92a094b28cb35e2a3f44d734da42551b6777ec543` |
+| `algorithm-full-counter-retained/algorithm-work.test` | `390367fa96037d46282795fe61ba7baf643ad98fbd697930fe273d9c0bb070ab` |
+| `algorithm-paired-4919-732-packet/normal-prepared/freeze.json` | `482f64f7b9dd36f3acd8352ae3a29b31b32403dc7c5d1c25d1c71cd6542d9668` |
+| `algorithm-paired-4919-732-packet/normal-prepared/algorithm-work.test` | `a1043e3ad4bc7117114575d24b9b0acc28663d010076e8e97d687c1d51ec2a2f` |
+| `algorithm-paired-4919-732-packet/counter-prepared/freeze.json` | `540b79511ad6709c6a27af6d123de596968a6c0e0ebb9df5233a724f299f81dd` |
+| `algorithm-paired-4919-732-packet/counter-prepared/algorithm-work.test` | `5f4841a35cdab13d3cb30dd2eb548e0489cc4516230ed38c14369daa0c925223` |
+| `4919-singleton-screen-packet/control-normal-pilot-prepared/freeze.json` | `f73e788d7876df3d70cc7502d83c79ba551e8d5f3825a5395874e5fc54ebf6b5` |
+| `4919-singleton-screen-packet/control-normal-pilot-prepared/algorithm-work.test` | `20e69fac0ad85bebc6dc00e13d1360dd841b2076050a8c8845298fe2abff88c7` |
+| `4919-singleton-screen-packet/candidate-normal-pilot-prepared/freeze.json` | `31294d1e297c8452f11328f2635b9ea336e828457a567b285a8fa029332d7108` |
+| `4919-singleton-screen-packet/candidate-normal-pilot-prepared/algorithm-work.test` | `210fb4d93677a46729d1c6bba55cf11326ad7ed4fa58ee97c68f9b4dfdc8c156` |
