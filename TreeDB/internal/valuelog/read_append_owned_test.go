@@ -282,6 +282,9 @@ func TestFileRead_SealedDeadMappingCap(t *testing.T) {
 			if stale.tryEnableSealedLazyMmap() {
 				t.Fatal("capped stale mapping reported eligible")
 			}
+			if stale.deadMappingsCount.Load() != 1 || stale.remapCount.Load() != 0 {
+				t.Fatal("capped read changed retained mappings")
+			}
 			if stale.sealedLazyMmapDenied.Load() || stale.sealedMapDeniedByCount.Load() != 0 || stale.sealedMapDeniedByBytes.Load() != 0 {
 				t.Fatal("dead-mapping cap changed manager-budget denial state")
 			}
@@ -291,6 +294,16 @@ func TestFileRead_SealedDeadMappingCap(t *testing.T) {
 			check(got, err, want[0])
 			if stale.mmapReadHits.Load() != 1 || stale.mmapReadFallbackReadAt.Load() != 1 {
 				t.Fatal("cap increase did not recover mapped read")
+			}
+			// A saturated old count alone does not prohibit an initial map.
+			MaxDeadMappings = 1
+			unmapped, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+			unmapped.manager = &Manager{files: map[uint32]*File{unmapped.ID: unmapped}}
+			unmapped.deadMappingsCount.Store(1)
+			got, err = read(unmapped, ptrs[0])
+			check(got, err, want[0])
+			if unmapped.mmapReadHits.Load() != 1 || unmapped.mmapReadFallbackReadAt.Load() != 0 {
+				t.Fatal("nil mapping was denied solely by old retained count")
 			}
 		})
 	}
