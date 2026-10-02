@@ -1439,6 +1439,14 @@ func TestLeafGenerationGC_IgnoresStaleReachabilityCache(t *testing.T) {
 }
 
 func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		t.Run(fmt.Sprintf("private=%v", private), func(t *testing.T) {
+			testLeafGenerationGCRetiresPinnedCapture(t, private)
+		})
+	}
+}
+
+func testLeafGenerationGCRetiresPinnedCapture(t *testing.T, private bool) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 64, 'a')
@@ -1447,7 +1455,18 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	manifestBefore := loadLeafGenerationManifestOrFatal(t, db.dir)
 	gen1 := findLeafGenerationByFileID(t, manifestBefore, rawFileID1)
 
-	snap := db.AcquireSnapshot()
+	var snap *Snapshot
+	var release func() error
+	if private {
+		read, err := db.acquireOneShotReadOrErr()
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, release = &read.snapshot, read.close
+	} else {
+		snap = db.AcquireSnapshot()
+		release = snap.Close
+	}
 	if snap == nil {
 		t.Fatal("expected snapshot")
 	}
@@ -1502,7 +1521,7 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		t.Fatalf("retiring generation state=%q, want %q", got, want)
 	}
 
-	if err := snap.Close(); err != nil {
+	if err := release(); err != nil {
 		t.Fatalf("close snapshot: %v", err)
 	}
 	if got := db.leafGenerationPinCountForTesting(gen1.GenerationID); got != 0 {

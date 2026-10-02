@@ -1658,12 +1658,23 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	if db == nil {
 		return nil
 	}
+	snap := db.snapPool.Get()
+	if !db.captureSnapshotWithValueLogPublicationLockHeld(snap) {
+		db.snapPool.Put(snap)
+		return nil
+	}
+	return snap
+}
+
+// captureSnapshotWithValueLogPublicationLockHeld is shared by fresh exported
+// handles and private one-shot reads. The caller owns the publication lock and
+// an inactive handle, and must release a successful capture with Snapshot.Close.
+func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
-		return nil
+		return false
 	}
-	snap := db.snapPool.Get()
 	if snap.registryShardHint == snapshotShardHintUnset {
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
@@ -1677,14 +1688,12 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 		db.snapshotAcquireRO[acqShard].Add(-1)
 	}()
 	if db.closing.Load() {
-		db.snapPool.Put(snap)
-		return nil
+		return false
 	}
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		db.snapPool.Put(snap)
-		return nil
+		return false
 	}
 	idx := view.idx
 	state := view.state
@@ -1693,8 +1702,7 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			db.snapPool.Put(snap)
-			return nil
+			return false
 		}
 		vm.Acquire(vlogSet)
 	}
@@ -1705,8 +1713,7 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 			if vlogNeedsPin && vm != nil {
 				_ = vm.Release(vlogSet)
 			}
-			db.snapPool.Put(snap)
-			return nil
+			return false
 		}
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
@@ -1772,7 +1779,7 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	snap.closed.Store(false)
 	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
-	return snap
+	return true
 }
 
 // AcquireStableSnapshot pins the current index generation against online
