@@ -12,8 +12,14 @@ below the key selects its child, with the first child selected below the first
 separator. Root fences prune below the inclusive lower bound and at or above
 the exclusive upper bound. The checked loader continues to enforce selected
 root extents, checksums and page types, and the 50-level corruption guard still
-applies. Internal node views and decode scratch remain on the traversal stack;
-separator views never enter pooled scratch.
+applies. Internal node views remain on the traversal stack. Multi-key intervals
+find the exact floor separator once per occupied child, then partition sorted
+probes at the next separator. Singleton intervals retain the checked child
+search. Sparse intervals skip untouched children. Base-delta separator decoding
+borrows one existing page-sized scratch buffer lazily for the planning call;
+parent separator comparisons finish before a child can overwrite that buffer.
+No separator views survive in pooled scratch. The buffer returns before leaf
+materialization, separately from any active leaf buffer or lease.
 
 `GetMany` returns independent, capacity-capped owned values, including duplicate
 inputs. Misses are nil; present empty values are non-nil. `GetManyView` reports
@@ -86,6 +92,23 @@ go test -overlay=/tmp/getmany-loader-overlay/overlay.json \
 The deterministic three-level fixture expects seven actual loads in each mode;
 its per-key predecessor performs 212 loads on the same shuffled 72 inputs.
 This is a focused mechanism regression, not public throughput acceptance.
+
+A separate disposable overlay counts calls to the existing node search and
+entry-view methods. Its same fixture performs 210 child searches before the
+separator partition refinement; the refined planner performs 28 entry reads
+and no child searches, in each mode:
+
+```sh
+python3 TreeDB/tree/testdata/getmany_routing_overlay.py "$PWD" /tmp/getmany-routing-overlay
+go test -overlay=/tmp/getmany-routing-overlay/overlay.json \
+  -tags=getmany_routing_overlay ./TreeDB/tree \
+  -run '^TestTreeGetManySharedTraversalRoutingWork$' -count=1 -v
+```
+
+Run the semantic suite normally and under the race detector. It includes
+malformed directory offsets, empty internal pages, and long shared prefixes
+across parent/child decodes. The normal warm planner check expects zero
+allocations.
 
 Use the unchanged `BenchmarkAlgorithmGetMany` with the full equivalent consumer
 for public allocation and latency comparison. Timed runs must use normal

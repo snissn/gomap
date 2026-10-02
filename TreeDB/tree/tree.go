@@ -1321,13 +1321,16 @@ func (t *Tree) planGetMany(keys [][]byte, scratch *getManyScratch, verifyAlways 
 	slices.SortFunc(scratch.probes, func(a, b getManyLeafProbe) int {
 		return compareTreeKey(a.key, b.key)
 	})
-	return t.planGetManyInterval(page.PageChildRef(t.rootPageID), 0, len(scratch.probes), 0, scratch, verifyAlways)
+	var keyScratch *leafRefPageScratch
+	defer func() { putLeafRefPageScratch(keyScratch) }()
+	return t.planGetManyInterval(page.PageChildRef(t.rootPageID), 0, len(scratch.probes), 0, scratch, verifyAlways, &keyScratch)
 }
 
 // Sorted probes taking the same child form one interval: each visited internal
 // page is loaded once. Parent nodes stay on the bounded traversal stack; their
-// decode scratch and mmap views never enter pooled scratch.
-func (t *Tree) planGetManyInterval(ref page.ChildRef, start, end, depth int, scratch *getManyScratch, verifyAlways bool) (bool, error) {
+// mmap views stay out of pooled scratch. One bounded decode buffer is shared
+// only after each parent separator has been consumed.
+func (t *Tree) planGetManyInterval(ref page.ChildRef, start, end, depth int, scratch *getManyScratch, verifyAlways bool, keyScratch **leafRefPageScratch) (bool, error) {
 	if start == end {
 		return true, nil
 	}
@@ -1383,28 +1386,78 @@ func (t *Tree) planGetManyInterval(ref page.ChildRef, start, end, depth int, scr
 	if start == end {
 		return true, nil
 	}
-	child, _, err := n.SearchInternalChildRef(scratch.probes[start].key)
-	if err != nil {
-		return false, err
+	if n.Count() == 0 {
+		return false, node.ErrCorruptedNode
 	}
-	for i := start + 1; i <= end; i++ {
-		var next page.ChildRef
-		if i < end {
-			next, _, err = n.SearchInternalChildRef(scratch.probes[i].key)
+	if end-start == 1 {
+		child, _, err := n.SearchInternalChildRef(scratch.probes[start].key)
+		if err != nil {
+			return false, err
+		}
+		return t.planGetManyInterval(child, start, end, depth+1, scratch, verifyAlways, keyScratch)
+	}
+	if n.InternalBaseDeltaEnabled() {
+		if *keyScratch == nil {
+			*keyScratch = getLeafRefPageScratch()
+		}
+		n.SetKeyScratch((*keyScratch).buf)
+	}
+	for start < end {
+		// Find the exact floor separator, including the first-child rule below
+		// the first separator. Decode views are consumed before the next decode.
+		lo, hi := 0, int(n.Count())
+		child := page.ChildRef{}
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			separator, ref, err := getManyInternalEntryRefView(&n, uint16(mid))
 			if err != nil {
 				return false, err
 			}
-			if next == child {
-				continue
+			if compareTreeKey(separator, scratch.probes[start].key) <= 0 {
+				lo, child = mid+1, ref
+			} else {
+				hi = mid
 			}
 		}
-		groupable, err := t.planGetManyInterval(child, start, i, depth+1, scratch, verifyAlways)
+		if lo == 0 {
+			var err error
+			_, child, err = getManyInternalEntryRefView(&n, 0)
+			if err != nil {
+				return false, err
+			}
+			lo = 1
+		}
+		next := end
+		if lo < int(n.Count()) {
+			separator, _, err := getManyInternalEntryRefView(&n, uint16(lo))
+			if err != nil {
+				return false, err
+			}
+			if compareTreeKey(scratch.probes[end-1].key, separator) >= 0 {
+				next = start + sort.Search(end-start, func(i int) bool {
+					return compareTreeKey(scratch.probes[start+i].key, separator) >= 0
+				})
+			}
+		}
+		groupable, err := t.planGetManyInterval(child, start, next, depth+1, scratch, verifyAlways, keyScratch)
 		if err != nil || !groupable {
 			return groupable, err
 		}
-		start, child = i, next
+		start = next
 	}
 	return true, nil
+}
+
+// Entry views check their payload bounds; also reject header offsets, as the
+// checked page-ID child search does. Keep malformed directories out of decoding.
+func getManyInternalEntryRefView(n *node.Node, index uint16) ([]byte, page.ChildRef, error) {
+	data := n.Data()
+	dir := node.NodeHeaderSize + int(index)*node.DirectoryEntrySize
+	if index >= n.Count() || dir+node.DirectoryEntrySize > len(data) ||
+		binary.LittleEndian.Uint16(data[dir:dir+node.DirectoryEntrySize]) < node.NodeHeaderSize {
+		return nil, page.ChildRef{}, node.ErrCorruptedNode
+	}
+	return n.GetInternalEntryRefView(index)
 }
 
 func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyAlways bool) (getManyLeafNodeLease, error) {
