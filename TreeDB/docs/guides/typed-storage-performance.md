@@ -27,6 +27,36 @@ Recommended starting point for new performance work:
 4. Measure the direct typed path separately from setup, load, checkpoint/reopen,
    final document fetch, and public response materialization.
 
+## Cache budgets and retained owners
+
+For point-read memory planning, use the measured
+[owner/budget decision](../../../docs/benchmarks/treedb_memory_budget/OWNER_DECISION.md)
+and [capture guide](../../../docs/benchmarks/treedb_memory_budget/README.md).
+The original 20-cohort sweep varies existing `Options.LeafPageReadCacheEntries`,
+static `Options.ValueLog.PointerThreshold`, and an experimental MAIN grouped-frame
+budget overlay. The combined configured leaf/frame budget is 64 MiB; actual
+heap, RSS, free entry bins, DB reset leases, scratch and metadata are separate.
+It is not a universal total-memory limit or a recommendation to change defaults.
+
+The 60-cell warm fixture shows placement-dependent read/residency tradeoffs:
+inline256 reads favor larger leaf budgets but retain more heap; random4096
+pointer reads and heap favor leaf64/frame0 over leaf0/frame64; pointer256's
+fastest reads and lowest retained heap occur at different splits. Full-byte
+validation and fixture generation are included in the reported phase costs.
+Choose budgets against a declared workload and memory requirement, preserving
+owned results and live iterator/snapshot leases.
+
+The selected policy retains current admission/pressure/reset controls. A rejected
+checkpoint-only free-entry-bin trial recovered about 22.8 MiB direct post-GC heap
+in targeted inline cohorts, but unresolved warm update/checkpoint guards and
+inconclusive labeled CPU attribution block promotion. This is a trial result,
+not an improvement in the selected baseline. Global free bins retain their
+existing 256 MiB admission ceiling; separate 32 MiB generic-entry/batch checkpoint
+targets do not impose a 32 MiB global-bin or process bound. Persistent value-log
+storage remains separate from redo WAL. See the decision for exact controls,
+remaining writer/integration/final qualification gates and concrete revisit
+conditions.
+
 ## Current optimized or landed paths
 
 | Path | Current status | Evidence command |
