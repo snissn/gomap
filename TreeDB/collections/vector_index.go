@@ -2564,6 +2564,10 @@ func (idx *VectorIndex) insertStoredDocumentUnpublished(materializer *StoredDocu
 }
 
 func (idx *VectorIndex) parseStoredVectorRow(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) ([]float32, map[string][]byte, error) {
+	return idx.parseStoredVectorRowWithScalarScratch(materializer, documentID, document, nil)
+}
+
+func (idx *VectorIndex) parseStoredVectorRowWithScalarScratch(materializer *StoredDocumentJSONMaterializer, documentID, document []byte, scratch *nativeScalarRowScratch) ([]float32, map[string][]byte, error) {
 	if idx == nil {
 		return nil, nil, errors.New("collections: vector index is nil")
 	}
@@ -2580,7 +2584,7 @@ func (idx *VectorIndex) parseStoredVectorRow(materializer *StoredDocumentJSONMat
 	if !present {
 		return nil, nil, nil
 	}
-	scalarRow, err := idx.nativeScalarRow(materializer, document)
+	scalarRow, err := idx.nativeScalarRowWithScratch(materializer, document, scratch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("collections: native scalar fields in document %q: %w", documentID, err)
 	}

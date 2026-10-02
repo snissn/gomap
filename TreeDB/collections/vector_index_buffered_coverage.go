@@ -272,8 +272,9 @@ func (c *Collection) reconcileBufferedVectorPublicationWithMutationState(proof *
 		if !eligible {
 			continue
 		}
+		var scalarScratch nativeScalarRowScratch
 		for i, id := range proof.documentIDs {
-			if err := index.reconcileBufferedStoredDocument(materializer, id, documents[i]); err != nil {
+			if err := index.reconcileBufferedStoredDocumentWithScalarScratch(materializer, id, documents[i], &scalarScratch); err != nil {
 				index.invalidateSourceDocumentRoots()
 				return err
 			}
@@ -292,7 +293,11 @@ func (c *Collection) reconcileBufferedVectorPublicationWithMutationState(proof *
 // Publication repair may replay an already maintained logical row. Compare the
 // effective delta before the base and all scalar presence/bytes before mutation.
 func (idx *VectorIndex) reconcileBufferedStoredDocument(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
-	vector, scalarRow, err := idx.parseStoredVectorRow(materializer, documentID, document)
+	return idx.reconcileBufferedStoredDocumentWithScalarScratch(materializer, documentID, document, nil)
+}
+
+func (idx *VectorIndex) reconcileBufferedStoredDocumentWithScalarScratch(materializer *StoredDocumentJSONMaterializer, documentID, document []byte, scratch *nativeScalarRowScratch) error {
+	vector, scalarRow, err := idx.parseStoredVectorRowWithScalarScratch(materializer, documentID, document, scratch)
 	if err != nil {
 		return err
 	}
