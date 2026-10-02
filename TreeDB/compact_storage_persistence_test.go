@@ -433,7 +433,8 @@ func TestCompactStorageExhaustiveCommandWALRandom4KOffline(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				// The original-sized fixture also runs under the race detector in CI.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				stats, compactErr := backend.CompactStorage(ctx, backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true})
 				if compactErr == nil {
 					_, compactErr = backend.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
