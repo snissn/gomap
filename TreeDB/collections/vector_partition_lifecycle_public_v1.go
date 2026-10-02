@@ -82,25 +82,35 @@ func (c *Collection) activeVectorPartitionManifestForLiveRecoveryV1(ctx context.
 	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
-		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
-		if err != nil {
-			return err
-		}
-		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
-		if err != nil {
-			return err
-		}
-		generation := loaded.state.ActiveGeneration
-		if !present || generation == 0 {
-			return fmt.Errorf("%w: index %q has no active generation", ErrVectorPartitionManifestInvalid, index)
-		}
-		entry, ok := loaded.state.Generations[generation]
-		if !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
-			return fmt.Errorf("%w: generation %d is not complete and ready", ErrVectorPartitionManifestInvalid, generation)
-		}
-		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		var err error
+		manifest, err = c.activeVectorPartitionManifestMutationLockedV1(ctx, index)
 		return err
 	})
+	return manifest, err
+}
+
+// The append-only lifecycle reader is also used by status/readiness without
+// the namespace barrier. An actual mutation owner can read it directly;
+// acquiring storage here would invert the public storage -> mutation order.
+func (c *Collection) activeVectorPartitionManifestMutationLockedV1(ctx context.Context, index string) (VectorPartitionManifestV1, error) {
+	var manifest VectorPartitionManifestV1
+	store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	if err != nil {
+		return manifest, err
+	}
+	loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+	if err != nil {
+		return manifest, err
+	}
+	generation := loaded.state.ActiveGeneration
+	if !present || generation == 0 {
+		return manifest, fmt.Errorf("%w: index %q has no active generation", ErrVectorPartitionManifestInvalid, index)
+	}
+	entry, ok := loaded.state.Generations[generation]
+	if !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+		return manifest, fmt.Errorf("%w: generation %d is not complete and ready", ErrVectorPartitionManifestInvalid, generation)
+	}
+	manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
 	return manifest, err
 }
 

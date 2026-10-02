@@ -715,14 +715,18 @@ jobs:
           caching_test_file="$(make_tmp)"
           db_all_file="$(make_tmp)"
           db_test_file="$(make_tmp)"
-          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
+          nativewire_all_file="$(make_tmp)"
+          nativewire_test_file="$(make_tmp)"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | grep -v '^github.com/snissn/gomap/TreeDB/nativewire$' > "$package_all_file"
           go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
           go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
           go test ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$db_all_file"
+          go test ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$nativewire_all_file"
           weighted_shard_file package "$shard_index" "$shard_count" "$weights_file" "$package_all_file" "$package_file"
           weighted_shard_file root "$shard_index" "$shard_count" "$weights_file" "$root_all_file" "$root_test_file"
           weighted_shard_file caching "$shard_index" "$shard_count" "$weights_file" "$caching_all_file" "$caching_test_file"
           weighted_shard_file db "$shard_index" "$shard_count" "$weights_file" "$db_all_file" "$db_test_file"
+          weighted_shard_file nativewire "$shard_index" "$shard_count" "$weights_file" "$nativewire_all_file" "$nativewire_test_file"
           echo "TreeDB race package shard=${shard_index}/${shard_count}"
           ran_tests=false
           if [ -s "$package_file" ]; then
@@ -746,6 +750,12 @@ jobs:
             db_regex="^($(paste -sd'|' "$db_test_file"))$"
             echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run "$db_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
+          fi
+          if [ -s "$nativewire_test_file" ]; then
+            nativewire_regex="^($(paste -sd'|' "$nativewire_test_file"))$"
+            echo "TreeDB/nativewire race test shard=${shard_index}/${shard_count} regex=${nativewire_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./nativewire -run "$nativewire_regex" | tee -a treedb-race.jsonl
             ran_tests=true
           fi
           if [ "$ran_tests" = false ]; then

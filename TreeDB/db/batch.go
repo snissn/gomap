@@ -301,26 +301,32 @@ func (b *Batch) write(sync bool) error {
 		maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
 		return group.writeBatch(b, sync, maxEntryRevision)
 	}
-	b.db.teardownMu.RLock()
-	defer b.db.teardownMu.RUnlock()
+	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
+		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
+		return b.db.checkpoint(false)
+	}
+	var unlockRawPublish func()
+	if !b.physicalOnly && b.db.commandWAL {
+		var err error
+		unlockRawPublish, err = b.db.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return err
+		}
+		defer unlockRawPublish()
+	} else {
+		b.db.teardownMu.RLock()
+		defer b.db.teardownMu.RUnlock()
+	}
 	if err := b.db.publicationPoisonedError(); err != nil {
 		return err
 	}
 	if b.db.closing.Load() {
 		return ErrClosed
 	}
-	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
-		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
-		return b.db.checkpointTeardownPinned(false)
-	}
 	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
 	intent := b.commandWALPublishIntent
-	if !b.physicalOnly && b.db.commandWAL {
-		unlockRawPublish, err := b.db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if err != nil {
-			return err
-		}
-		defer unlockRawPublish()
+	if unlockRawPublish != nil {
+		var err error
 		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err
@@ -837,20 +843,25 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
-	b.db.teardownMu.RLock()
-	defer b.db.teardownMu.RUnlock()
+	var unlockRawPublish func()
+	if !b.physicalOnly && b.db.commandWAL {
+		var err error
+		unlockRawPublish, err = b.db.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return err
+		}
+		defer unlockRawPublish()
+	} else {
+		b.db.teardownMu.RLock()
+		defer b.db.teardownMu.RUnlock()
+	}
 	if b.db.closing.Load() {
 		return ErrClosed
 	}
 	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
 	intent := b.commandWALPublishIntent
 	var err error
-	if !b.physicalOnly && b.db.commandWAL {
-		unlockRawPublish, err := b.db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if err != nil {
-			return err
-		}
-		defer unlockRawPublish()
+	if unlockRawPublish != nil {
 		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err

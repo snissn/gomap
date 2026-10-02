@@ -226,8 +226,8 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admission := c.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
 	if replayPayload == nil {
 		if err := validateTypedMetadataMutation(c.Meta(), set, unset, generation); err != nil {
 			return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
@@ -245,7 +245,14 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 		}
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
+	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer unbind()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return TypedMetadataUpdateResult{}, err
 	}
@@ -273,9 +280,9 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 				return TypedMetadataUpdateResult{}, e
 			}
 		}
-		_, err = c.publishUpdateBatchPlanLocked(plan, intent)
+		_, err = c.publishUpdateBatchPlanLocked(plan, intent, admission)
 		plan.close()
-		if isRetriableCollectionMutationError(err) {
+		if intent.AssignedLSN() == 0 && isRetriableCollectionMutationError(err) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue

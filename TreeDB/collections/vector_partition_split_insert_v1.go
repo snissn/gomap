@@ -355,6 +355,10 @@ func (c *Collection) PendingVectorPartitionSplitInsertV1(identity commitlog.Spli
 // Apply repeats the same checks and the root publisher compares exact prior
 // state, so a racing writer cannot turn this observation into authority.
 func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, v commitlog.SplitVectorInsertV1) error {
+	return c.preflightVectorPartitionSplitInsertV1(ctx, v, false)
+}
+
+func (c *Collection) preflightVectorPartitionSplitInsertV1(ctx context.Context, v commitlog.SplitVectorInsertV1, admitted bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -369,7 +373,13 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	if v.Operation == "source" {
-		vector, err := c.ValidatedVectorFromDocumentV1(v.Index, DocumentFormatJSON, v.Document)
+		var vector []float32
+		var err error
+		if admitted {
+			vector, err = c.validatedVectorFromDocumentPreparedV1(v.Index, DocumentFormatJSON, v.Document)
+		} else {
+			vector, err = c.ValidatedVectorFromDocumentV1(v.Index, DocumentFormatJSON, v.Document)
+		}
 		if err != nil || len(vector) != len(v.Vector) {
 			return errors.Join(ErrVectorPartitionSplitInsertConflictV1, err)
 		}
@@ -430,6 +440,9 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 		if document != nil {
 			return ErrVectorPartitionSplitInsertConflictV1
 		}
+		if admitted {
+			return nil
+		} // The pre-owner phase restored carriers; owned admission prevents replacement.
 		// Restore checkpointed local carriers before canonical roots change.
 		// This existing replay seam never scans rows or builds a graph.
 		snap := c.db.AcquireSnapshot()
@@ -460,13 +473,25 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 	if state.Pending != nil {
 		return ErrVectorPartitionSplitInsertConflictV1
 	}
-	manifest, err := c.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx, v.Index, v.Generation)
+	var manifest VectorPartitionManifestV1
+	if admitted {
+		manifest, err = c.activeVectorPartitionManifestMutationLockedV1(ctx, v.Index)
+		if err == nil && manifest.Generation != v.Generation {
+			err = ErrVectorPartitionSplitInsertConflictV1
+		}
+	} else {
+		manifest, err = c.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx, v.Index, v.Generation)
+	}
 	if err != nil {
 		return err
 	}
 	// Replicated apply may restore a persisted carrier, never independently
 	// publish a missing binding before the command's own atomic WAL intent.
-	if _, err := c.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx, manifest); err != nil {
+	if !admitted {
+		if _, err := c.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx, manifest); err != nil {
+			return err
+		}
+	} else if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 		return err
 	}
 	idx := c.registeredVectorIndex(v.Index)
@@ -483,10 +508,14 @@ func (c *Collection) PreflightVectorPartitionSplitInsertV1(ctx context.Context, 
 // row, its durable retry slot, and existing local carrier maintenance together.
 // The supplied source position is the actual applying FSM entry, never ReadIndex.
 func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx context.Context, v commitlog.SplitVectorInsertV1, intent *backenddb.CommandWALIntent) error {
+	return c.insertVectorPartitionSplitSourceWithOwnerV1(ctx, v, intent, nil)
+}
+
+func (c *Collection) insertVectorPartitionSplitSourceWithOwnerV1(ctx context.Context, v commitlog.SplitVectorInsertV1, intent *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) error {
 	if intent == nil || v.Operation != "source" || v.SourceTerm == 0 || v.SourceIndex == 0 {
 		return ErrVectorPartitionSplitInsertConflictV1
 	}
-	if err := c.PreflightVectorPartitionSplitInsertV1(ctx, v); err != nil {
+	if err := c.preflightVectorPartitionSplitInsertV1(ctx, v, owner != nil); err != nil {
 		return err
 	}
 	state, previous, present, err := c.readSplitInsertStateV1(v)
@@ -501,12 +530,14 @@ func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx 
 		if state.Pending != nil && (state.Pending.SourceTerm != v.SourceTerm || state.Pending.SourceIndex != v.SourceIndex) {
 			return ErrVectorPartitionSplitInsertConflictV1
 		}
-		unlockAdmission := c.lockNativeVectorAdmissionWrite()
-		defer unlockAdmission()
-		unlockCoverage := c.lockVectorIndexCoveragePersistence()
-		defer unlockCoverage()
-		unlockMutation := c.lockMutation()
-		defer unlockMutation.Unlock()
+		if owner == nil {
+			unlockAdmission := c.lockNativeVectorAdmissionWrite()
+			defer unlockAdmission()
+			unlockCoverage := c.lockVectorIndexCoveragePersistence()
+			defer unlockCoverage()
+			unlockMutation := c.lockMutation()
+			defer unlockMutation.Unlock()
+		}
 		return c.publishSplitInsertNoopV1(intent)
 	}
 	state.Pending = &v
@@ -515,14 +546,19 @@ func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx 
 		return err
 	}
 	defer func() { c.db.ReleaseValueLogValues(publication.appendedPtrs) }()
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	var admission *collectionCommandWALAdmission
+	if owner == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admission = c.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
+	} else {
+		admission = owner.admission
+	}
 	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatJSON || !columnStoreWriteEnabled(c.meta) {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked([][]byte{v.ID}, [][]byte{v.Document}, false, nil, intent, insertBatchExecutionOptions{returnResultIDs: true, splitInsert: publication})
+	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked([][]byte{v.ID}, [][]byte{v.Document}, false, nil, intent, insertBatchExecutionOptions{admission: admission, borrowMutation: owner != nil, returnResultIDs: true, splitInsert: publication})
 	if err == nil {
 		err = commitAmbiguousError("split source insert vector maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
@@ -532,21 +568,27 @@ func (c *Collection) InsertVectorPartitionSplitSourceWithCommandWALIntentV1(ctx 
 // ProjectVectorPartitionSplitInsertWithCommandWALIntentV1 publishes only native
 // graph deltas and their exact receipt. It never inserts a canonical target row.
 func (c *Collection) ProjectVectorPartitionSplitInsertWithCommandWALIntentV1(ctx context.Context, v commitlog.SplitVectorInsertV1, targetTerm, targetIndex uint64, intent *backenddb.CommandWALIntent) (VectorPartitionSplitInsertReceiptV1, error) {
+	return c.projectVectorPartitionSplitInsertWithOwnerV1(ctx, v, targetTerm, targetIndex, intent, nil)
+}
+
+func (c *Collection) projectVectorPartitionSplitInsertWithOwnerV1(ctx context.Context, v commitlog.SplitVectorInsertV1, targetTerm, targetIndex uint64, intent *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (VectorPartitionSplitInsertReceiptV1, error) {
 	var zero VectorPartitionSplitInsertReceiptV1
 	if intent == nil || v.Operation != "project" || targetTerm == 0 || targetIndex == 0 {
 		return zero, ErrVectorPartitionSplitInsertConflictV1
 	}
-	if err := c.PreflightVectorPartitionSplitInsertV1(ctx, v); err != nil {
+	if err := c.preflightVectorPartitionSplitInsertV1(ctx, v, owner != nil); err != nil {
 		return zero, err
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	unlockAdmission := c.lockNativeVectorAdmissionWrite()
-	defer unlockAdmission()
-	unlockCoverage := c.lockVectorIndexCoveragePersistence()
-	defer unlockCoverage()
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	if owner == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		unlockAdmission := c.lockNativeVectorAdmissionWrite()
+		defer unlockAdmission()
+		unlockCoverage := c.lockVectorIndexCoveragePersistence()
+		defer unlockCoverage()
+		unlockMutation := c.lockMutation()
+		defer unlockMutation.Unlock()
+	}
 	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
 		return zero, err
 	}
@@ -653,20 +695,26 @@ func (c *Collection) ProjectVectorPartitionSplitInsertWithCommandWALIntentV1(ctx
 // CompleteVectorPartitionSplitInsertWithCommandWALIntentV1 retires the single
 // source retry slot only with an exact committed target receipt.
 func (c *Collection) CompleteVectorPartitionSplitInsertWithCommandWALIntentV1(ctx context.Context, v commitlog.SplitVectorInsertV1, intent *backenddb.CommandWALIntent) error {
+	return c.completeVectorPartitionSplitInsertWithOwnerV1(ctx, v, intent, nil)
+}
+
+func (c *Collection) completeVectorPartitionSplitInsertWithOwnerV1(ctx context.Context, v commitlog.SplitVectorInsertV1, intent *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) error {
 	if intent == nil || v.Operation != "clear" {
 		return ErrVectorPartitionSplitInsertConflictV1
 	}
-	if err := c.PreflightVectorPartitionSplitInsertV1(ctx, v); err != nil {
+	if err := c.preflightVectorPartitionSplitInsertV1(ctx, v, owner != nil); err != nil {
 		return err
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	unlockAdmission := c.lockNativeVectorAdmissionWrite()
-	defer unlockAdmission()
-	unlockCoverage := c.lockVectorIndexCoveragePersistence()
-	defer unlockCoverage()
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	if owner == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		unlockAdmission := c.lockNativeVectorAdmissionWrite()
+		defer unlockAdmission()
+		unlockCoverage := c.lockVectorIndexCoveragePersistence()
+		defer unlockCoverage()
+		unlockMutation := c.lockMutation()
+		defer unlockMutation.Unlock()
+	}
 	state, previous, present, err := c.readSplitInsertStateV1(v)
 	if err != nil {
 		return err
