@@ -688,7 +688,7 @@ func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
 	writerDone := make(chan error, 1)
 	go func() {
 		unlockSchema := col.lockCollectionSchemaRead()
-		unlockCoverage := col.lockVectorIndexCoverageMutation()
+		admission := col.lockCollectionCommandWALAdmission()
 		close(writerEntered)
 		<-releaseWriter
 		_, err := col.insertBatchSchemaLocked(
@@ -696,8 +696,9 @@ func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
 			[][]byte{[]byte(`{"body":"ordinary write"}`)},
 			false,
 			nil,
+			&admission,
 		)
-		unlockCoverage()
+		admission.unlock()
 		unlockSchema()
 		writerDone <- err
 	}()
@@ -846,6 +847,7 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 			mutation.Unlock()
 		}
 	}()
+	// These waits cover scheduling and durable publication, not a latency budget.
 	admissionHeld := make(chan struct{})
 	var hookOnce sync.Once
 	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
@@ -863,7 +865,7 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 	}()
 	select {
 	case <-admissionHeld:
-	case <-time.After(time.Second):
+	case <-time.After(collectionTestTimeout(t, 10*time.Second)):
 		t.Fatal("ingestion did not reach the admission-protected flush")
 	}
 
@@ -883,7 +885,7 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 		if err != nil {
 			t.Fatalf("ingest: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(collectionTestTimeout(t, 10*time.Second)):
 		t.Fatal("ingestion remained blocked after mutation release")
 	}
 	select {
@@ -891,7 +893,7 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 		if err != nil {
 			t.Fatalf("register vector index: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(collectionTestTimeout(t, 10*time.Second)):
 		t.Fatal("vector registration remained blocked after ingestion")
 	}
 }

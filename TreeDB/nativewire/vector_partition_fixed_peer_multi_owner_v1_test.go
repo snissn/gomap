@@ -67,8 +67,6 @@ func TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1(t *testing.T) {
 
 func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, queryCount, topK, efSearch, mergeEntries int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
 	definition := collections.VectorIndexDefinition{
 		Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine,
 		Dimensions: 768, M: 16, EfConstruction: 128, EfSearch: 128,
@@ -93,6 +91,10 @@ func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, que
 	}
 	seed := newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, nil, [2]string{"group-b", "group-c"}, true, true, definition)
 	t.Cleanup(func() { _ = seed.database.Close() })
+	// Seed construction is synchronous setup, not part of the TCP correctness
+	// deadline. Keep the real graph geometry and the same bounded operation budget.
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
 	persisted := seed.collection.MetaView()
 	expectedDigest := collections.VectorIndexDefinitionDigestV1(definition)
 	if len(persisted.VectorIndexes) != 1 || persisted.VectorIndexes[0].SchemaGeneration != 1 ||
@@ -1627,19 +1629,9 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 // selection that incorrectly treats local group membership as leadership.
 func fixedPeerAddSourceFollowerMetaLeaderV1(t testing.TB, configs []FixedPeerTCPConfigV1) []FixedPeerTCPConfigV1 {
 	t.Helper()
-	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := listener.Addr().String()
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return addr
-	}
 	const follower raftcluster.NodeID = "source-follower"
-	metaAddress, dataAddress, controlAddress, publicAddress := address(), address(), address(), address()
+	addresses := fixedPeerFixtureUnusedAddressesV1(t, configs, 4)
+	metaAddress, dataAddress, controlAddress, publicAddress := addresses[0], addresses[1], addresses[2], addresses[3]
 	meta := configs[0].Catalog
 	meta.BootstrapNode = follower
 	meta.Peers = append(append([]raftcluster.Peer(nil), meta.Peers...), raftcluster.Peer{

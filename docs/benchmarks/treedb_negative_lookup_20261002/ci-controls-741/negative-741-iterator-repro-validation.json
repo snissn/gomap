@@ -1,0 +1,16 @@
+{
+  "verdict": "controlled reproduction PASS; current-head CI still required",
+  "validated_at_utc": "2026-10-02T08:33:06.633867+00:00",
+  "capture_sha256": "a6e9fb246a0bc529e9dd8ca39661bb38b890d7c637ea131c281791c56769ca81",
+  "external_freeze_sha256": "f6f2fd48a60b6ae085c6f8c7811ddc682d5850bdefa79aeeef3f4e75a457b045",
+  "base": "784b0170f228f1d617727c49cee9606348b76d9c",
+  "candidate": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+  "baseline_ns": 299.54999999999995,
+  "candidate_ns": 304.35,
+  "paired_delta_percent": 1.539495609321495,
+  "B_op": 112,
+  "allocs_op": 2,
+  "raw_pairs_verified": 8,
+  "actual_compiled_source_git_audit": "negative-741-iterator-external-freeze.json",
+  "scope": "Existing empty iterator route, shared Linux i5-11400F CPU4 Go1.26.3, not same CI hardware/CPU0. CI+5.13% failure preserved and not explained away; no default/filter code on steady-loop route. One affected CI retry after all failure classifications, then diagnose repeat."
+}

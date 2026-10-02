@@ -1,0 +1,87 @@
+2026/10/01 19:44:04 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=3956 ratio=0.030
+2026/10/01 19:44:04 treedb: value-log dict published class=single_value dict_id=3352450148154684535 k=16 payload_ratio=0.027 total_ratio=0.031
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=0/Get-4     	  175065	      3425 ns/op	     10240 filter-bytes	         1.000 keys/op	     315 B/op	       1 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=0/GetAppend-4         	  177819	      3291 ns/op	     10240 filter-bytes	         1.000 keys/op	      59 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=0/GetMany64-4         	    3542	    169592 ns/op	     10240 filter-bytes	        64.00 keys/op	   54987 B/op	       9 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=0/GetManyView64-4     	     390	   1562441 ns/op	     10240 filter-bytes	        64.00 keys/op	  264647 B/op	     195 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=0/OldSnapshot-4       	  204633	      2831 ns/op	     10240 filter-bytes	         1.000 keys/op	     315 B/op	       1 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=50/Get-4              	  285801	      1992 ns/op	     10240 filter-bytes	         1.000 keys/op	     157 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=50/GetAppend-4        	  294309	      1998 ns/op	     10240 filter-bytes	         1.000 keys/op	      29 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=50/GetMany64-4        	    6745	     95884 ns/op	     10240 filter-bytes	        64.00 keys/op	   19998 B/op	       4 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=50/GetManyView64-4    	     747	    793756 ns/op	     10240 filter-bytes	        64.00 keys/op	  132279 B/op	      99 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=50/OldSnapshot-4      	  401100	      1539 ns/op	     10240 filter-bytes	         1.000 keys/op	     158 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=90/Get-4              	  622821	       873.7 ns/op	     10240 filter-bytes	         1.000 keys/op	      31 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=90/GetAppend-4        	  696426	       867.4 ns/op	     10240 filter-bytes	         1.000 keys/op	       6 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=90/GetMany64-4        	   25881	     22735 ns/op	     10240 filter-bytes	        64.00 keys/op	   10561 B/op	       3 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=90/GetManyView64-4    	    3462	    173383 ns/op	     10240 filter-bytes	        64.00 keys/op	   26986 B/op	      22 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=90/OldSnapshot-4      	 1676877	       356.1 ns/op	     10240 filter-bytes	         1.000 keys/op	      31 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=99/Get-4              	  949773	       558.0 ns/op	     10240 filter-bytes	         1.000 keys/op	       3 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=99/GetAppend-4        	 1000000	       551.0 ns/op	     10240 filter-bytes	         1.000 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=99/GetMany64-4        	   77020	      7095 ns/op	     10240 filter-bytes	        64.00 keys/op	   10561 B/op	       3 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=99/GetManyView64-4    	   29092	     20873 ns/op	     10240 filter-bytes	        64.00 keys/op	    3334 B/op	       4 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/uniform/miss=99/OldSnapshot-4      	 7170567	        84.10 ns/op	     10240 filter-bytes	         1.000 keys/op	       3 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=0/Get-4                  	  211965	      2839 ns/op	     10240 filter-bytes	         1.000 keys/op	     307 B/op	       1 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=0/GetAppend-4            	  216296	      2784 ns/op	     10240 filter-bytes	         1.000 keys/op	      51 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=0/GetMany64-4            	    4092	    132272 ns/op	     10240 filter-bytes	        64.00 keys/op	   54983 B/op	       9 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=0/GetManyView64-4        	    1124	    529151 ns/op	     10240 filter-bytes	        64.00 keys/op	  132559 B/op	     195 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=0/OldSnapshot-4          	  272949	      2114 ns/op	     10240 filter-bytes	         1.000 keys/op	     307 B/op	       1 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=50/Get-4                 	  336321	      1693 ns/op	     10240 filter-bytes	         1.000 keys/op	     153 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=50/GetAppend-4           	  345481	      1618 ns/op	     10240 filter-bytes	         1.000 keys/op	      25 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=50/GetMany64-4           	    9115	     64250 ns/op	     10240 filter-bytes	        64.00 keys/op	   19993 B/op	       4 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=50/GetManyView64-4       	    2368	    265205 ns/op	     10240 filter-bytes	        64.00 keys/op	   66510 B/op	      98 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=50/OldSnapshot-4         	  526365	      1061 ns/op	     10240 filter-bytes	         1.000 keys/op	     153 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=90/Get-4                 	  754630	       749.3 ns/op	     10240 filter-bytes	         1.000 keys/op	      30 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=90/GetAppend-4           	  758886	       733.5 ns/op	     10240 filter-bytes	         1.000 keys/op	       5 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=90/GetMany64-4           	   34014	     16670 ns/op	     10240 filter-bytes	        64.00 keys/op	   10561 B/op	       3 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=90/GetManyView64-4       	   10000	     54273 ns/op	     10240 filter-bytes	        64.00 keys/op	   13568 B/op	      22 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=90/OldSnapshot-4         	 2421441	       249.1 ns/op	     10240 filter-bytes	         1.000 keys/op	      30 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=99/Get-4                 	 1000000	       523.4 ns/op	     10240 filter-bytes	         1.000 keys/op	       3 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=99/GetAppend-4           	 1000000	       533.2 ns/op	     10240 filter-bytes	         1.000 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=99/GetMany64-4           	   85954	      6447 ns/op	     10240 filter-bytes	        64.00 keys/op	   10562 B/op	       3 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=99/GetManyView64-4       	   64454	      9702 ns/op	     10240 filter-bytes	        64.00 keys/op	    1954 B/op	       4 allocs/op
+BenchmarkNegativeLookup/compressible256/enabled=true/zipf/miss=99/OldSnapshot-4         	 8448032	        68.00 ns/op	     10240 filter-bytes	         1.000 keys/op	       3 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=0/Get-4                    	   81469	      6726 ns/op	     10240 filter-bytes	         1.000 keys/op	    4155 B/op	       1 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=0/GetAppend-4              	   93987	      6084 ns/op	     10240 filter-bytes	         1.000 keys/op	      59 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=0/GetMany64-4              	    1309	    461301 ns/op	     10240 filter-bytes	        64.00 keys/op	 1345147 B/op	      27 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=0/GetManyView64-4          	     872	    583333 ns/op	     10240 filter-bytes	        64.00 keys/op	 2965516 B/op	     131 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=0/OldSnapshot-4            	   82784	      6331 ns/op	     10240 filter-bytes	         1.000 keys/op	    4160 B/op	       1 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=50/Get-4                   	  153697	      3717 ns/op	     10240 filter-bytes	         1.000 keys/op	    2077 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=50/GetAppend-4             	  171528	      3305 ns/op	     10240 filter-bytes	         1.000 keys/op	      29 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=50/GetMany64-4             	    2594	    226880 ns/op	     10240 filter-bytes	        64.00 keys/op	  605475 B/op	      20 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=50/GetManyView64-4         	    1980	    296746 ns/op	     10240 filter-bytes	        64.00 keys/op	 1516858 B/op	      67 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=50/OldSnapshot-4           	  166718	      3474 ns/op	     10240 filter-bytes	         1.000 keys/op	    2077 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=90/Get-4                   	  470254	      1254 ns/op	     10240 filter-bytes	         1.000 keys/op	     415 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=90/GetAppend-4             	  494456	      1120 ns/op	     10240 filter-bytes	         1.000 keys/op	       6 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=90/GetMany64-4             	    9741	     52895 ns/op	     10240 filter-bytes	        64.00 keys/op	  108180 B/op	       9 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=90/GetManyView64-4         	    8956	     68277 ns/op	     10240 filter-bytes	        64.00 keys/op	  312268 B/op	      15 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=90/OldSnapshot-4           	  751803	       768.0 ns/op	     10240 filter-bytes	         1.000 keys/op	     415 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=99/Get-4                   	  935418	       567.0 ns/op	     10240 filter-bytes	         1.000 keys/op	      41 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=99/GetAppend-4             	  940004	       563.2 ns/op	     10240 filter-bytes	         1.000 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=99/GetMany64-4             	   69247	      7730 ns/op	     10240 filter-bytes	        64.00 keys/op	   10562 B/op	       3 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=99/GetManyView64-4         	   61815	      8152 ns/op	     10240 filter-bytes	        64.00 keys/op	   17254 B/op	       4 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/uniform/miss=99/OldSnapshot-4           	 5404876	       102.5 ns/op	     10240 filter-bytes	         1.000 keys/op	      41 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=0/Get-4                       	   48962	     10531 ns/op	     10240 filter-bytes	         1.000 keys/op	    4148 B/op	       1 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=0/GetAppend-4                 	   60261	      9831 ns/op	     10240 filter-bytes	         1.000 keys/op	      52 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=0/GetMany64-4                 	     868	    694821 ns/op	     10240 filter-bytes	        64.00 keys/op	 1345167 B/op	      27 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=0/GetManyView64-4             	     480	   1199124 ns/op	     10240 filter-bytes	        64.00 keys/op	 7765086 B/op	     131 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=0/OldSnapshot-4               	   19933	     33037 ns/op	     10240 filter-bytes	         1.000 keys/op	    4148 B/op	       1 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=50/Get-4                      	   94975	      6433 ns/op	     10240 filter-bytes	         1.000 keys/op	    2073 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=50/GetAppend-4                	  104299	      5664 ns/op	     10240 filter-bytes	         1.000 keys/op	      26 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=50/GetMany64-4                	    1659	    357900 ns/op	     10240 filter-bytes	        64.00 keys/op	  605291 B/op	      20 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=50/GetManyView64-4            	     884	    593612 ns/op	     10240 filter-bytes	        64.00 keys/op	 3914220 B/op	      67 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=50/OldSnapshot-4              	   37712	     16066 ns/op	     10240 filter-bytes	         1.000 keys/op	    2073 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=90/Get-4                      	  369825	      1584 ns/op	     10240 filter-bytes	         1.000 keys/op	     414 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=90/GetAppend-4                	  379437	      1500 ns/op	     10240 filter-bytes	         1.000 keys/op	       5 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=90/GetMany64-4                	    7186	     77550 ns/op	     10240 filter-bytes	        64.00 keys/op	  108188 B/op	       9 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=90/GetManyView64-4            	    4854	    127893 ns/op	     10240 filter-bytes	        64.00 keys/op	  791280 B/op	      15 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=90/OldSnapshot-4              	  199808	      3103 ns/op	     10240 filter-bytes	         1.000 keys/op	     414 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=99/Get-4                      	  893304	       600.8 ns/op	     10240 filter-bytes	         1.000 keys/op	      41 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=99/GetAppend-4                	  887401	       599.6 ns/op	     10240 filter-bytes	         1.000 keys/op	       0 B/op	       0 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=99/GetMany64-4                	   52489	     10236 ns/op	     10240 filter-bytes	        64.00 keys/op	   10560 B/op	       3 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=99/GetManyView64-4            	   38859	     14911 ns/op	     10240 filter-bytes	        64.00 keys/op	   64526 B/op	       4 allocs/op
+BenchmarkNegativeLookup/random4096/enabled=true/zipf/miss=99/OldSnapshot-4              	 1519515	       330.4 ns/op	     10240 filter-bytes	         1.000 keys/op	      41 B/op	       0 allocs/op
+PASS

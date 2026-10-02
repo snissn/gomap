@@ -151,7 +151,8 @@ func (c *Collection) importVectorPartitionSourceChunkV2(ownership sourcepartitio
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return zero, err
@@ -318,7 +319,8 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 
 func (c *Collection) importSourceChunkSchemaLockedWithAdmissionV2(command sourceImportCommandMetadataV2, ids, retained [][]byte, projection *trustedFloat32Projection, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, stats *VectorPartitionSourceImportStatsV2, admission *collectionCommandWALAdmission) (VectorPartitionSourceImportProgressV2, error) {
 	if admission == nil {
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 	}
 
@@ -365,8 +367,8 @@ func (c *Collection) importSourceChunkSchemaLockedWithAdmissionV2(command source
 			unlockMutation.Unlock()
 		}
 	}()
-	unbindAdmission := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbindAdmission()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return zero, err
 	}
@@ -624,7 +626,8 @@ func replayCollectionSourceImportV2(db *backenddb.DB, env commitlog.CommandEnvel
 	}
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	_, err = collection.importSourceChunkSchemaLockedWithAdmissionV2(command, ids, retained, projection, intent, nil, nil, admission)
 	return err

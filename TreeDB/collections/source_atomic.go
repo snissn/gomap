@@ -84,7 +84,8 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	return c.replaceSourceDocumentsAtomicSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, nil, admission)
 }
@@ -96,7 +97,8 @@ func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, d
 func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool, insertStats *CollectionInsertStats, admissions ...*collectionCommandWALAdmission) (int, error) {
 	admission := collectionCommandWALAdmissionArgument(admissions)
 	if admission == nil {
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 	}
 	unlockMutation := c.lockMutation()
@@ -106,8 +108,8 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 			unlockMutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return 0, err
 	}

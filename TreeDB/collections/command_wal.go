@@ -475,7 +475,8 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 		}
 		unlockSchema := collection.lockCollectionSchemaRead()
 		defer unlockSchema()
-		admission := collection.lockCollectionCommandWALAdmission()
+		admissionState := collection.lockCollectionCommandWALAdmission()
+		admission := &admissionState
 		defer admission.unlock()
 		_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, retained, intent, nil, projection, admission)
 		if err != nil {
@@ -504,7 +505,8 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	}
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, documents, intent, nil, nil, admission)
 	if err != nil {

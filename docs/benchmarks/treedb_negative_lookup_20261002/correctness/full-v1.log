@@ -1,0 +1,80 @@
+ok  	github.com/snissn/gomap/TreeDB/tree	0.021s
+ok  	github.com/snissn/gomap/TreeDB/db	437.239s
+2026/10/01 17:45:06 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=32 raw=524288 stored=864 ratio=0.002
+2026/10/01 17:45:07 treedb: value-log dict published class=single_value dict_id=13268910099223670290 k=2 payload_ratio=0.001 total_ratio=0.003
+2026/10/01 17:45:13 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=8 raw=131072 stored=216 ratio=0.002
+2026/10/01 17:45:13 treedb: value-log dict published class=single_value dict_id=2420518865635390528 k=8 payload_ratio=0.001 total_ratio=0.002
+2026/10/01 17:45:58 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=342 raw=32832 stored=7189 ratio=0.219
+2026/10/01 17:45:58 treedb: value-log dict published class=single_value dict_id=15564807277485310840 k=32 payload_ratio=0.018 total_ratio=0.155
+2026/10/01 17:46:10 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=32 raw=524288 stored=864 ratio=0.002
+2026/10/01 17:46:10 treedb: value-log dict published class=single_value dict_id=5575629324766830347 k=2 payload_ratio=0.001 total_ratio=0.003
+--- FAIL: TestProductionAuthorityBehaviorRegistryExactEquality (0.00s)
+    production_authority_matrix_test.go:685: scan focused omission evidence: ._negative_lookup_bench_test.go:1:1: illegal character NUL (and 1 more errors)
+--- FAIL: TestDurabilityProfilePublicEntrypointInventory (0.01s)
+    profile_entrypoint_inventory_test.go:23: parse /mnt/fast4tb/gomap-issue-342-negative/source/TreeDB: /mnt/fast4tb/gomap-issue-342-negative/source/TreeDB/._public.go:1:1: illegal character NUL (and 1 more errors)
+2026/10/01 17:48:59 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=401 raw=32789 stored=7980 ratio=0.243
+2026/10/01 17:48:59 treedb: value-log dict published class=single_value dict_id=8816037138829862257 k=8 payload_ratio=0.037 total_ratio=0.239
+2026/10/01 17:49:00 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=401 raw=32789 stored=7980 ratio=0.243
+2026/10/01 17:49:00 treedb: value-log dict published class=single_value dict_id=1700835296346772188 k=8 payload_ratio=0.037 total_ratio=0.239
+2026/10/01 17:49:01 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=1663 ratio=0.013
+2026/10/01 17:49:01 treedb: value-log dict published class=single_value dict_id=4228324662447988803 k=4 payload_ratio=0.004 total_ratio=0.009
+2026/10/01 17:49:01 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=1663 ratio=0.013
+2026/10/01 17:49:01 treedb: value-log dict published class=single_value dict_id=4228324662447988803 k=4 payload_ratio=0.004 total_ratio=0.009
+2026/10/01 17:49:09 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=123033 stored=4349 ratio=0.035
+2026/10/01 17:49:09 treedb: value-log dict published class=single_value dict_id=17811582791728040176 k=32 payload_ratio=0.015 total_ratio=0.019
+2026/10/01 17:51:56 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=136 raw=46390 stored=5735 ratio=0.124
+2026/10/01 17:51:56 treedb: value-log dict published class=single_value dict_id=9483688786069555031 k=8 payload_ratio=0.042 total_ratio=0.090
+2026/10/01 17:52:09 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=262656 stored=439 ratio=0.002
+2026/10/01 17:52:09 treedb: value-log dict published class=single_value dict_id=4823790072309192584 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:52:09 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:52:09 treedb: value-log dict published class=single_value dict_id=16622750152030536767 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:52:10 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:52:10 treedb: value-log dict published class=single_value dict_id=15536942413676865237 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:52:13 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=262656 stored=438 ratio=0.002
+2026/10/01 17:52:13 treedb: value-log dict published class=single_value dict_id=14476400337924442738 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:52:13 treedb: value-log dict published class=single_value dict_id=2046193972259789807 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/01 17:52:39 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=262656 stored=438 ratio=0.002
+2026/10/01 17:52:40 treedb: value-log dict published class=single_value dict_id=3171456488386096915 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:52:40 treedb: value-log dict published class=single_value dict_id=13380495787828463473 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/01 17:53:40 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=123392 stored=2931 ratio=0.024
+2026/10/01 17:53:40 treedb: value-log dict published class=single_value dict_id=514293775353110318 k=16 payload_ratio=0.003 total_ratio=0.007
+2026/10/01 17:53:54 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=86 raw=33024 stored=2172 ratio=0.066
+2026/10/01 17:53:54 treedb: value-log dict published class=single_value dict_id=7328532852326789545 k=32 payload_ratio=0.008 total_ratio=0.042
+2026/10/01 17:53:54 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:53:54 treedb: value-log dict published class=single_value dict_id=14036609979365147213 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:53:54 treedb: value-log dict published class=single_value dict_id=17894417590898957496 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/01 17:53:57 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:53:57 treedb: value-log dict published class=single_value dict_id=16622750152030536767 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:53:57 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:53:57 treedb: value-log dict published class=single_value dict_id=15536942413676865237 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:53:57 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/01 17:53:58 treedb: value-log dict published class=single_value dict_id=6538460776466266599 k=2 payload_ratio=0.001 total_ratio=0.005
+2026/10/01 17:53:58 treedb: value-log dict published class=single_value dict_id=10726380033346846428 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/01 17:53:58 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=524288 stored=412 ratio=0.001
+2026/10/01 17:53:58 treedb: value-log dict published class=single_value dict_id=15702958085521415407 k=2 payload_ratio=0.001 total_ratio=0.003
+2026/10/01 17:53:58 treedb: value-log dict published class=single_value dict_id=1504286489741798705 k=32 payload_ratio=0.000 total_ratio=0.001
+2026/10/01 17:54:00 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=65536 stored=673 ratio=0.010
+2026/10/01 17:54:00 treedb: value-log dict published class=single_value dict_id=17284583298811304208 k=32 payload_ratio=0.000 total_ratio=0.007
+2026/10/01 17:55:01 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=32768 stored=1297 ratio=0.040
+2026/10/01 17:55:01 treedb: value-log dict published class=single_value dict_id=15949865256041835367 k=8 payload_ratio=0.148 total_ratio=0.165
+2026/10/01 17:55:02 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=32768 stored=1165 ratio=0.036
+2026/10/01 17:55:02 treedb: value-log dict published class=single_value dict_id=14521524703687147809 k=8 payload_ratio=0.144 total_ratio=0.160
+2026/10/01 17:55:03 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=32768 stored=1184 ratio=0.036
+2026/10/01 17:55:03 treedb: value-log dict published class=single_value dict_id=6091140994629858131 k=8 payload_ratio=0.146 total_ratio=0.162
+2026/10/01 17:55:03 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=66032 stored=1294 ratio=0.020
+2026/10/01 17:55:03 treedb: value-log dict published class=single_value dict_id=4122673634066989429 k=16 payload_ratio=0.014 total_ratio=0.020
+2026/10/01 17:55:04 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=32768 stored=1159 ratio=0.035
+2026/10/01 17:55:04 treedb: value-log dict published class=single_value dict_id=18035964051671342353 k=8 payload_ratio=0.144 total_ratio=0.160
+2026/10/01 17:55:04 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=66032 stored=1294 ratio=0.020
+2026/10/01 17:55:05 treedb: value-log dict published class=single_value dict_id=13840058080908848307 k=16 payload_ratio=0.014 total_ratio=0.020
+2026/10/01 17:55:05 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=32768 stored=1372 ratio=0.042
+2026/10/01 17:55:05 treedb: value-log dict published class=single_value dict_id=4758073791129105524 k=8 payload_ratio=0.150 total_ratio=0.166
+2026/10/01 17:55:06 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=32768 stored=1041 ratio=0.032
+2026/10/01 17:55:06 treedb: value-log dict published class=single_value dict_id=17138550720952227535 k=8 payload_ratio=0.142 total_ratio=0.158
+2026/10/01 17:55:06 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=66032 stored=1294 ratio=0.020
+2026/10/01 17:55:06 treedb: value-log dict published class=single_value dict_id=8173390143519945488 k=16 payload_ratio=0.014 total_ratio=0.020
+2026/10/01 17:55:07 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=66032 stored=1294 ratio=0.020
+2026/10/01 17:55:07 treedb: value-log dict published class=single_value dict_id=4362045979857726299 k=16 payload_ratio=0.014 total_ratio=0.020
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	668.733s
+FAIL

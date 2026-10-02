@@ -28,6 +28,47 @@ type Iterator interface {
 // object can distinguish those aliases.
 type SnapshotPool struct{}
 
+// oneShotRead is never exposed to callers, callbacks, or iterators. Its owner
+// performs exactly one synchronous owned-value read before returning it to the
+// pool. Exported Snapshot handles must never enter this pool.
+type oneShotRead struct {
+	snapshot Snapshot
+}
+
+var oneShotReadPool = sync.Pool{New: func() any {
+	return &oneShotRead{snapshot: Snapshot{registryShardHint: snapshotShardHintUnset}}
+}}
+
+func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return nil, err
+	}
+	r := oneShotReadPool.Get().(*oneShotRead)
+	db.valueLogPublicationMu.RLock()
+	ok := db.captureSnapshotWithValueLogPublicationLockHeld(&r.snapshot)
+	db.valueLogPublicationMu.RUnlock()
+	if !ok {
+		oneShotReadPool.Put(r)
+		return nil, ErrClosed
+	}
+	return r, nil
+}
+
+func (r *oneShotRead) close() error {
+	// Close shares all registry, value-log, and leaf-generation release logic.
+	// The read has returned, so there are no outstanding readers or iterators.
+	err := r.snapshot.Close()
+	// Do not keep an index pager or its reader interfaces alive in the pool.
+	r.snapshot.tree.Reset(nil, nil, 0)
+	r.snapshot.treePager = nil
+	r.snapshot.treeRoot = 0
+	oneShotReadPool.Put(r)
+	return err
+}
+
 func NewSnapshotPool() *SnapshotPool {
 	return &SnapshotPool{}
 }
@@ -45,6 +86,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
+	s.tree.SetNegativeFilter(nil)
 	s.db = nil
 	s.idx = nil
 	s.state = nil

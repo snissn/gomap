@@ -42,7 +42,8 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := &collectionCommandWALAdmission{collection: c, acquire: acquire, release: acquire(), prepared: true}
+	admissionState := collectionCommandWALAdmission{collection: c, acquire: acquire, release: acquire(), prepared: true}
+	admission := &admissionState
 	defer admission.unlock()
 	mutation := c.lockMutation()
 	held := true
@@ -51,8 +52,8 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 			mutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&mutation, &held)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&mutation, &held)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return err
 	}

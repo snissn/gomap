@@ -89,7 +89,7 @@ func (c *Collection) validateBSONSetDocumentFormat() error {
 	if c == nil {
 		return errCollectionNil
 	}
-	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+	if normalizedDocumentFormat(c.metadataForIngress().Options.DocumentFormat) != DocumentFormatBSON {
 		return errBSONSetRequiresBSONFormat
 	}
 	return nil
@@ -143,7 +143,8 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	results, batched, err := c.updateBSONSetBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexChanges, admission)
 	if err == nil && batched {
@@ -213,7 +214,8 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return nil, err
@@ -293,7 +295,8 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 func (c *Collection) updateBSONSetBatchSchemaLocked(items []BSONSetUpdateBatchItem, mode updateBatchMode, admissions ...*collectionCommandWALAdmission) ([]UpdateBatchResult, bool, error) {
 	admission := collectionCommandWALAdmissionArgument(admissions)
 	if admission == nil {
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 	}
 	if c == nil {

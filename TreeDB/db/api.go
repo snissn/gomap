@@ -233,12 +233,12 @@ func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
 	readOnce := func() ([]byte, error) {
-		snap, err := db.acquireSnapshotOrErr()
+		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return nil, err
 		}
-		defer snap.Close()
-		return snap.Get(key)
+		defer snap.close()
+		return snap.snapshot.Get(key)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
@@ -261,12 +261,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
 	readOnce := func() ([]byte, page.EntryRevision, error) {
-		snap, err := db.acquireSnapshotOrErr()
+		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return nil, page.LegacyEntryRevision, err
 		}
-		defer snap.Close()
-		return snap.GetVersioned(key)
+		defer snap.close()
+		return snap.snapshot.GetVersioned(key)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
@@ -520,12 +520,12 @@ func (db *DB) CheckStorageMaintenanceReady() error {
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
 	readOnce := func(base []byte) ([]byte, error) {
-		snap, err := db.acquireSnapshotOrErr()
+		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return base, err
 		}
-		defer snap.Close()
-		return snap.GetAppend(key, base)
+		defer snap.close()
+		return snap.snapshot.GetAppend(key, base)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
@@ -551,12 +551,12 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
 	readOnce := func(base []byte) ([]byte, page.EntryRevision, error) {
-		snap, err := db.acquireSnapshotOrErr()
+		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return base, page.LegacyEntryRevision, err
 		}
-		defer snap.Close()
-		return snap.GetVersionedAppend(key, base)
+		defer snap.close()
+		return snap.snapshot.GetVersionedAppend(key, base)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
@@ -880,6 +880,10 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 // Stats returns database statistics.
 func (db *DB) Stats() map[string]string {
 	stats := make(map[string]string)
+	stats["treedb.negative_lookup_filter.active_bytes"] = "0"
+	if view := db.snapshotViewRO.Load(); view != nil {
+		stats["treedb.negative_lookup_filter.active_bytes"] = fmt.Sprint(view.negativeFilter.Bytes())
+	}
 	stats["cosmos.db.type"] = "treedb"
 	stats["treedb.profile.resolved"] = string(db.resolvedProfile)
 	stats["treedb.profile.ordinary_ack_class"] = db.resolvedProfile.OrdinaryAckClass()

@@ -62,7 +62,8 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 	if hook := typedSourceBeforeAdmissionTestHook.Load(); hook != nil {
 		(*hook)(c)
 	}
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return 0, true, stats, err
@@ -117,14 +118,10 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 	if coord == nil {
 		return 0, false, stats, nil
 	}
-	// Preserve insert-only pre-queue eligibility without lending locks to
-	// waiting requests. Execution repeats the check under its fresh owner.
-	ingressMutation, locked := c.tryLockMutation()
-	if !locked {
-		return 0, false, stats, nil
-	}
+	// GetInto supports concurrent reads, so pre-queue eligibility need not
+	// borrow mutation ownership or decline merely because a writer is active.
+	// Execution repeats the insert-only check under its actual mutation owner.
 	absent, err := typedUpsertGroupIDsAbsent(c, ownedIDs)
-	ingressMutation.Unlock()
 	if err != nil {
 		return 0, true, stats, err
 	}
@@ -213,7 +210,8 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 	c := requests[0].collection
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return typedUpsertGroupErrorResults(requests, err)
@@ -245,8 +243,8 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 			mutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&mutation, &held)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&mutation, &held)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return typedUpsertGroupErrorResults(requests, err)
 	}

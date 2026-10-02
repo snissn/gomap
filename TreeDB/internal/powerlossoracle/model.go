@@ -280,6 +280,45 @@ func (m *Model) PathStable(root, path string) (bool, error) {
 	return node != nil && bytes.Equal(node.volatile, node.stable), nil
 }
 
+// DependencyStable checks a decoded manifest's required prefix, not later
+// process-visible appends. root is the model-relative publishing directory. LSN/RID frontiers need their own producer validator;
+// this byte-prefix seam refuses them rather than treating them as byte fences.
+func (m *Model) DependencyStable(root string, entry rootpublication.DependencyManifestEntryV1) (bool, error) {
+	if entry.Frontier.Bytes == 0 || entry.Frontier.MaxLSN != 0 || len(entry.Frontier.RIDs()) != 0 {
+		return false, fmt.Errorf("powerlossoracle: unsupported dependency frontier for %q", entry.DiagnosticPath)
+	}
+	rel, err := normalize(filepath.ToSlash(entry.DiagnosticPath))
+	if err != nil {
+		return false, err
+	}
+	base, err := normalize(filepath.ToSlash(root))
+	if err != nil {
+		return false, err
+	}
+	rel = cleanInternal(pathpkg.Join(base, rel))
+	volatileID, volatileOK := m.volatile[rel]
+	stableID, stableOK := m.stable[rel]
+	if !volatileOK || !stableOK || volatileID != stableID || !stableDirReachable(m.stableDirs, cleanInternal(pathpkg.Dir(rel))) {
+		return false, nil
+	}
+	node := m.inodes[stableID]
+	if node == nil || !rootpublication.SamePhysicalIdentity(node.stableIdentity, entry.Identity) ||
+		entry.Frontier.Bytes > uint64(len(node.stable)) || entry.Frontier.Bytes > uint64(len(node.volatile)) ||
+		!bytes.Equal(node.stable[:entry.Frontier.Bytes], node.volatile[:entry.Frontier.Bytes]) {
+		return false, nil
+	}
+	if namespace := entry.Namespace; namespace != nil {
+		parent := cleanInternal(pathpkg.Join(base, namespace.DiagnosticPath))
+		identity, ok := m.stableDirs[parent]
+		if !ok || !stableDirReachable(m.stableDirs, parent) ||
+			!rootpublication.SamePhysicalIdentity(identity, namespace.ParentIdentity) ||
+			pathpkg.Join(parent, namespace.NewName) != rel {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // Overlay makes another real directory the volatile process-visible state.
 // No stable bytes or names change until SyncFile or SyncDir is called.
 func (m *Model) Overlay(root string) error {

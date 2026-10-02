@@ -1,0 +1,8 @@
+{
+  "qualification": false,
+  "purpose": "single 100x fail-closed constructor rehearsal only; no throughput interpretation",
+  "base": "dc86c51e7f61de596affc3c788880686e00d4e09",
+  "candidate": "6345710f77b393c7a3d47c424351dd9d3d3d31fe",
+  "internal_benchmark_overlay_sha256": "e5be45f9b3ffb9bfd149c134560f091b960a75b098d7504580ff1dfb5e2c65aa",
+  "public_benchmark_sha256": "ee3bb42d99cc233b785cef168b146e27e596eea3b0f61d5fae2a6c44292b6710"
+}

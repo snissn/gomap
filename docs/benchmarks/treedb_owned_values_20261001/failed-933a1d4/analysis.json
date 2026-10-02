@@ -1,0 +1,2188 @@
+{
+  "samples": [
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18112,
+      "metrics": {
+        "ns/op": 66720.0,
+        "MB/s": 491.13,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32773.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18072,
+      "metrics": {
+        "ns/op": 65396.0,
+        "MB/s": 501.07,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 184442,
+      "metrics": {
+        "ns/op": 6457.0,
+        "MB/s": 5074.45,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 65536.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13604,
+      "metrics": {
+        "ns/op": 88570.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 1.0,
+        "mmap_hits/op": 0.0,
+        "B/op": 299166.0,
+        "allocs/op": 13.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 960284,
+      "metrics": {
+        "ns/op": 1126.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1068.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12242658,
+      "metrics": {
+        "ns/op": 101.4,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18045,
+      "metrics": {
+        "ns/op": 64934.0,
+        "MB/s": 504.64,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32773.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18794,
+      "metrics": {
+        "ns/op": 63707.0,
+        "MB/s": 514.36,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 201355,
+      "metrics": {
+        "ns/op": 6033.0,
+        "MB/s": 5431.09,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 65536.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 14166,
+      "metrics": {
+        "ns/op": 85127.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 1.0,
+        "mmap_hits/op": 0.0,
+        "B/op": 299166.0,
+        "allocs/op": 13.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1092.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1040.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 11972497,
+      "metrics": {
+        "ns/op": 98.56,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18492,
+      "metrics": {
+        "ns/op": 64535.0,
+        "MB/s": 507.75,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32773.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18790,
+      "metrics": {
+        "ns/op": 65130.0,
+        "MB/s": 503.12,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 195584,
+      "metrics": {
+        "ns/op": 6373.0,
+        "MB/s": 5141.69,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 65536.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 14065,
+      "metrics": {
+        "ns/op": 84899.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 1.0,
+        "mmap_hits/op": 0.0,
+        "B/op": 299165.0,
+        "allocs/op": 13.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 994045,
+      "metrics": {
+        "ns/op": 1103.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1041.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12576634,
+      "metrics": {
+        "ns/op": 99.44,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18556,
+      "metrics": {
+        "ns/op": 66863.0,
+        "MB/s": 490.08,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32773.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18853,
+      "metrics": {
+        "ns/op": 63523.0,
+        "MB/s": 515.84,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 202260,
+      "metrics": {
+        "ns/op": 5986.0,
+        "MB/s": 5473.97,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 65536.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 14331,
+      "metrics": {
+        "ns/op": 84644.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 1.0,
+        "mmap_hits/op": 0.0,
+        "B/op": 299166.0,
+        "allocs/op": 13.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 992569,
+      "metrics": {
+        "ns/op": 1097.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1037.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12665302,
+      "metrics": {
+        "ns/op": 98.61,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18577,
+      "metrics": {
+        "ns/op": 64802.0,
+        "MB/s": 505.66,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32773.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18235,
+      "metrics": {
+        "ns/op": 64810.0,
+        "MB/s": 505.6,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 181774,
+      "metrics": {
+        "ns/op": 6731.0,
+        "MB/s": 4868.18,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 65536.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13665,
+      "metrics": {
+        "ns/op": 84823.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 1.0,
+        "mmap_hits/op": 0.0,
+        "B/op": 299165.0,
+        "allocs/op": 13.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1092.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1032.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12269852,
+      "metrics": {
+        "ns/op": 95.32,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 877724,
+      "metrics": {
+        "ns/op": 1278.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1166.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18594,
+      "metrics": {
+        "ns/op": 64655.0,
+        "MB/s": 506.81,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32771.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18619,
+      "metrics": {
+        "ns/op": 63390.0,
+        "MB/s": 516.93,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 382731,
+      "metrics": {
+        "ns/op": 3041.0,
+        "MB/s": 10775.72,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13641,
+      "metrics": {
+        "ns/op": 87649.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 0.0,
+        "mmap_hits/op": 1.0,
+        "B/op": 299321.0,
+        "allocs/op": 14.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 11617096,
+      "metrics": {
+        "ns/op": 101.9,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 893806,
+      "metrics": {
+        "ns/op": 1227.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1148.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18696,
+      "metrics": {
+        "ns/op": 64365.0,
+        "MB/s": 509.09,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32771.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18954,
+      "metrics": {
+        "ns/op": 63434.0,
+        "MB/s": 516.56,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 381939,
+      "metrics": {
+        "ns/op": 3203.0,
+        "MB/s": 10231.01,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13460,
+      "metrics": {
+        "ns/op": 88803.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 0.0,
+        "mmap_hits/op": 1.0,
+        "B/op": 299321.0,
+        "allocs/op": 15.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12022030,
+      "metrics": {
+        "ns/op": 97.14,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 886759,
+      "metrics": {
+        "ns/op": 1234.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1186.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18734,
+      "metrics": {
+        "ns/op": 64121.0,
+        "MB/s": 511.03,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32771.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18884,
+      "metrics": {
+        "ns/op": 63635.0,
+        "MB/s": 514.94,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 381738,
+      "metrics": {
+        "ns/op": 3328.0,
+        "MB/s": 9845.61,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13450,
+      "metrics": {
+        "ns/op": 87495.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 0.0,
+        "mmap_hits/op": 1.0,
+        "B/op": 299321.0,
+        "allocs/op": 15.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 11636750,
+      "metrics": {
+        "ns/op": 102.8,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 882922,
+      "metrics": {
+        "ns/op": 1224.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1153.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18685,
+      "metrics": {
+        "ns/op": 64288.0,
+        "MB/s": 509.7,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32771.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18823,
+      "metrics": {
+        "ns/op": 63607.0,
+        "MB/s": 515.16,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 367360,
+      "metrics": {
+        "ns/op": 3089.0,
+        "MB/s": 10606.3,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13760,
+      "metrics": {
+        "ns/op": 88443.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 0.0,
+        "mmap_hits/op": 1.0,
+        "B/op": 299321.0,
+        "allocs/op": 15.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 12124776,
+      "metrics": {
+        "ns/op": 99.62,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/nil_dst-4",
+      "iterations": 893083,
+      "metrics": {
+        "ns/op": 1231.0,
+        "B/op": 512.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendCompressedFallback/reused_dst-4",
+      "iterations": 1000000,
+      "metrics": {
+        "ns/op": 1148.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/fallback-4",
+      "iterations": 18649,
+      "metrics": {
+        "ns/op": 64283.0,
+        "MB/s": 509.74,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32771.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_decode-4",
+      "iterations": 18907,
+      "metrics": {
+        "ns/op": 63641.0,
+        "MB/s": 514.89,
+        "cache_hits/op": 0.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 0.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/mmap_cache-4",
+      "iterations": 391652,
+      "metrics": {
+        "ns/op": 3091.0,
+        "MB/s": 10600.15,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "retained_raw_B": 262144.0,
+        "B/op": 32768.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkFileReadAppendOwned/cold_open_map-4",
+      "iterations": 13130,
+      "metrics": {
+        "ns/op": 87071.0,
+        "cache_stores/op": 1.0,
+        "fallbacks/op": 0.0,
+        "mmap_hits/op": 1.0,
+        "B/op": 299320.0,
+        "allocs/op": 14.0
+      }
+    },
+    {
+      "block": "internal",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4",
+      "iterations": 11870228,
+      "metrics": {
+        "ns/op": 101.4,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 542371,
+      "metrics": {
+        "ns/op": 2461.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 592676,
+      "metrics": {
+        "ns/op": 2218.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 545666,
+      "metrics": {
+        "ns/op": 2358.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 608919,
+      "metrics": {
+        "ns/op": 2117.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 536304,
+      "metrics": {
+        "ns/op": 2435.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 609372,
+      "metrics": {
+        "ns/op": 2110.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 541028,
+      "metrics": {
+        "ns/op": 2374.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 610401,
+      "metrics": {
+        "ns/op": 2124.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 543062,
+      "metrics": {
+        "ns/op": 2426.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 607443,
+      "metrics": {
+        "ns/op": 2116.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 531051,
+      "metrics": {
+        "ns/op": 2462.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 596212,
+      "metrics": {
+        "ns/op": 2124.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 532837,
+      "metrics": {
+        "ns/op": 2370.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 602234,
+      "metrics": {
+        "ns/op": 2130.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 536703,
+      "metrics": {
+        "ns/op": 2384.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 605996,
+      "metrics": {
+        "ns/op": 2183.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 529000,
+      "metrics": {
+        "ns/op": 2384.0,
+        "B/op": 268.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 605646,
+      "metrics": {
+        "ns/op": 2137.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBValueLogGet/Get-4",
+      "iterations": 493765,
+      "metrics": {
+        "ns/op": 2447.0,
+        "B/op": 269.0,
+        "allocs/op": 1.0
+      }
+    },
+    {
+      "block": "public-guard",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBValueLogGet/GetAppend-4",
+      "iterations": 603483,
+      "metrics": {
+        "ns/op": 2130.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "base",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 389568,
+      "metrics": {
+        "ns/op": 3362.0,
+        "MB/s": 76.14,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 236469.0,
+        "mmap_hits/op": 0.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13095640.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "base",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 404072,
+      "metrics": {
+        "ns/op": 3183.0,
+        "MB/s": 80.42,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 236469.0,
+        "mmap_hits/op": 0.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13091472.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "base",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 400456,
+      "metrics": {
+        "ns/op": 3319.0,
+        "MB/s": 77.14,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 236469.0,
+        "mmap_hits/op": 0.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13091280.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "base",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 400062,
+      "metrics": {
+        "ns/op": 3241.0,
+        "MB/s": 78.99,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 236469.0,
+        "mmap_hits/op": 0.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13095864.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "base",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 402600,
+      "metrics": {
+        "ns/op": 3312.0,
+        "MB/s": 77.29,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 1.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 236469.0,
+        "mmap_hits/op": 0.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13091744.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "candidate",
+      "repetition": 1,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 647808,
+      "metrics": {
+        "ns/op": 2026.0,
+        "MB/s": 126.35,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 873560.0,
+        "mmap_hits/op": 1.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13290280.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "candidate",
+      "repetition": 2,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 643706,
+      "metrics": {
+        "ns/op": 2009.0,
+        "MB/s": 127.45,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 873560.0,
+        "mmap_hits/op": 1.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13082816.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "candidate",
+      "repetition": 3,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 647398,
+      "metrics": {
+        "ns/op": 2008.0,
+        "MB/s": 127.49,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 873560.0,
+        "mmap_hits/op": 1.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13083664.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "candidate",
+      "repetition": 4,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 622008,
+      "metrics": {
+        "ns/op": 2021.0,
+        "MB/s": 126.68,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 873560.0,
+        "mmap_hits/op": 1.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 12878744.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    },
+    {
+      "block": "public-route",
+      "revision": "candidate",
+      "repetition": 5,
+      "benchmark": "BenchmarkDBOwnedValueLogRoute-4",
+      "iterations": 643761,
+      "metrics": {
+        "ns/op": 2015.0,
+        "MB/s": 127.03,
+        "cache_hits/op": 1.0,
+        "crc_checks/op": 1.0,
+        "fallbacks/op": 0.0,
+        "inline_hits/op": 0.0,
+        "mapped_B": 873560.0,
+        "mmap_hits/op": 1.0,
+        "pointer_hits/op": 1.0,
+        "raw_budget_B": 67108864.0,
+        "retained_raw_B": 9389893.0,
+        "warm_heap_delta_B": 13083088.0,
+        "B/op": 827.0,
+        "allocs/op": 2.0
+      }
+    }
+  ],
+  "summary": {
+    "internal/BenchmarkFileReadAppendCompressedFallback/nil_dst-4": {
+      "base": {
+        "ns/op": {
+          "median": 1097.0,
+          "min": 1092.0,
+          "max": 1126.0
+        },
+        "B/op": {
+          "median": 512.0,
+          "min": 512.0,
+          "max": 512.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 1231.0,
+          "min": 1224.0,
+          "max": 1278.0
+        },
+        "B/op": {
+          "median": 512.0,
+          "min": 512.0,
+          "max": 512.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "median_time_change_pct": 12.215132178669098
+    },
+    "internal/BenchmarkFileReadAppendCompressedFallback/reused_dst-4": {
+      "base": {
+        "ns/op": {
+          "median": 1040.0,
+          "min": 1032.0,
+          "max": 1068.0
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 1153.0,
+          "min": 1148.0,
+          "max": 1186.0
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "median_time_change_pct": 10.86538461538462
+    },
+    "internal/BenchmarkFileReadAppendOwned/cold_open_map-4": {
+      "base": {
+        "ns/op": {
+          "median": 84899.0,
+          "min": 84644.0,
+          "max": 88570.0
+        },
+        "cache_stores/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "mmap_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "B/op": {
+          "median": 299166.0,
+          "min": 299165.0,
+          "max": 299166.0
+        },
+        "allocs/op": {
+          "median": 13.0,
+          "min": 13.0,
+          "max": 13.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 87649.0,
+          "min": 87071.0,
+          "max": 88803.0
+        },
+        "cache_stores/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "mmap_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "B/op": {
+          "median": 299321.0,
+          "min": 299320.0,
+          "max": 299321.0
+        },
+        "allocs/op": {
+          "median": 15.0,
+          "min": 14.0,
+          "max": 15.0
+        }
+      },
+      "median_time_change_pct": 3.23914298166057
+    },
+    "internal/BenchmarkFileReadAppendOwned/fallback-4": {
+      "base": {
+        "ns/op": {
+          "median": 64934.0,
+          "min": 64535.0,
+          "max": 66863.0
+        },
+        "MB/s": {
+          "median": 504.64,
+          "min": 490.08,
+          "max": 507.75
+        },
+        "cache_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "retained_raw_B": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "B/op": {
+          "median": 32773.0,
+          "min": 32773.0,
+          "max": 32773.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 64288.0,
+          "min": 64121.0,
+          "max": 64655.0
+        },
+        "MB/s": {
+          "median": 509.7,
+          "min": 506.81,
+          "max": 511.03
+        },
+        "cache_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "retained_raw_B": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "B/op": {
+          "median": 32771.0,
+          "min": 32771.0,
+          "max": 32771.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "median_time_change_pct": -0.9948563156435775
+    },
+    "internal/BenchmarkFileReadAppendOwned/mmap_cache-4": {
+      "base": {
+        "ns/op": {
+          "median": 6373.0,
+          "min": 5986.0,
+          "max": 6731.0
+        },
+        "MB/s": {
+          "median": 5141.69,
+          "min": 4868.18,
+          "max": 5473.97
+        },
+        "cache_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "retained_raw_B": {
+          "median": 262144.0,
+          "min": 262144.0,
+          "max": 262144.0
+        },
+        "B/op": {
+          "median": 65536.0,
+          "min": 65536.0,
+          "max": 65536.0
+        },
+        "allocs/op": {
+          "median": 2.0,
+          "min": 2.0,
+          "max": 2.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 3091.0,
+          "min": 3041.0,
+          "max": 3328.0
+        },
+        "MB/s": {
+          "median": 10600.15,
+          "min": 9845.61,
+          "max": 10775.72
+        },
+        "cache_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "retained_raw_B": {
+          "median": 262144.0,
+          "min": 262144.0,
+          "max": 262144.0
+        },
+        "B/op": {
+          "median": 32768.0,
+          "min": 32768.0,
+          "max": 32768.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "median_time_change_pct": -51.49850933626235
+    },
+    "internal/BenchmarkFileReadAppendOwned/mmap_decode-4": {
+      "base": {
+        "ns/op": {
+          "median": 64810.0,
+          "min": 63523.0,
+          "max": 65396.0
+        },
+        "MB/s": {
+          "median": 505.6,
+          "min": 501.07,
+          "max": 515.84
+        },
+        "cache_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "retained_raw_B": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "B/op": {
+          "median": 32768.0,
+          "min": 32768.0,
+          "max": 32768.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 63607.0,
+          "min": 63390.0,
+          "max": 63641.0
+        },
+        "MB/s": {
+          "median": 515.16,
+          "min": 514.89,
+          "max": 516.93
+        },
+        "cache_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "retained_raw_B": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "B/op": {
+          "median": 32768.0,
+          "min": 32768.0,
+          "max": 32768.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "median_time_change_pct": -1.856195031630925
+    },
+    "internal/BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo-4": {
+      "base": {
+        "ns/op": {
+          "median": 98.61,
+          "min": 95.32,
+          "max": 101.4
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 101.4,
+          "min": 97.14,
+          "max": 102.8
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "median_time_change_pct": 2.8293276543961188
+    },
+    "public-guard/BenchmarkDBValueLogGet/Get-4": {
+      "base": {
+        "ns/op": {
+          "median": 2426.0,
+          "min": 2358.0,
+          "max": 2461.0
+        },
+        "B/op": {
+          "median": 268.0,
+          "min": 268.0,
+          "max": 268.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 2384.0,
+          "min": 2370.0,
+          "max": 2462.0
+        },
+        "B/op": {
+          "median": 268.0,
+          "min": 268.0,
+          "max": 269.0
+        },
+        "allocs/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        }
+      },
+      "median_time_change_pct": -1.731244847485569
+    },
+    "public-guard/BenchmarkDBValueLogGet/GetAppend-4": {
+      "base": {
+        "ns/op": {
+          "median": 2117.0,
+          "min": 2110.0,
+          "max": 2218.0
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 2130.0,
+          "min": 2124.0,
+          "max": 2183.0
+        },
+        "B/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "allocs/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      },
+      "median_time_change_pct": 0.6140765233821455
+    },
+    "public-route/BenchmarkDBOwnedValueLogRoute-4": {
+      "base": {
+        "ns/op": {
+          "median": 3312.0,
+          "min": 3183.0,
+          "max": 3362.0
+        },
+        "MB/s": {
+          "median": 77.29,
+          "min": 76.14,
+          "max": 80.42
+        },
+        "cache_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "inline_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "mapped_B": {
+          "median": 236469.0,
+          "min": 236469.0,
+          "max": 236469.0
+        },
+        "mmap_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "pointer_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "raw_budget_B": {
+          "median": 67108864.0,
+          "min": 67108864.0,
+          "max": 67108864.0
+        },
+        "retained_raw_B": {
+          "median": 9389893.0,
+          "min": 9389893.0,
+          "max": 9389893.0
+        },
+        "warm_heap_delta_B": {
+          "median": 13091744.0,
+          "min": 13091280.0,
+          "max": 13095864.0
+        },
+        "B/op": {
+          "median": 827.0,
+          "min": 827.0,
+          "max": 827.0
+        },
+        "allocs/op": {
+          "median": 2.0,
+          "min": 2.0,
+          "max": 2.0
+        }
+      },
+      "candidate": {
+        "ns/op": {
+          "median": 2015.0,
+          "min": 2008.0,
+          "max": 2026.0
+        },
+        "MB/s": {
+          "median": 127.03,
+          "min": 126.35,
+          "max": 127.49
+        },
+        "cache_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "crc_checks/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "fallbacks/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "inline_hits/op": {
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "mapped_B": {
+          "median": 873560.0,
+          "min": 873560.0,
+          "max": 873560.0
+        },
+        "mmap_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "pointer_hits/op": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "raw_budget_B": {
+          "median": 67108864.0,
+          "min": 67108864.0,
+          "max": 67108864.0
+        },
+        "retained_raw_B": {
+          "median": 9389893.0,
+          "min": 9389893.0,
+          "max": 9389893.0
+        },
+        "warm_heap_delta_B": {
+          "median": 13083088.0,
+          "min": 12878744.0,
+          "max": 13290280.0
+        },
+        "B/op": {
+          "median": 827.0,
+          "min": 827.0,
+          "max": 827.0
+        },
+        "allocs/op": {
+          "median": 2.0,
+          "min": 2.0,
+          "max": 2.0
+        }
+      },
+      "median_time_change_pct": -39.160628019323674
+    }
+  },
+  "setup_inclusive_peak_rss_KiB": {
+    "internal-base-1.rss.txt": 16136,
+    "internal-base-2.rss.txt": 16148,
+    "internal-base-3.rss.txt": 34424,
+    "internal-base-4.rss.txt": 20328,
+    "internal-base-5.rss.txt": 35496,
+    "internal-candidate-1.rss.txt": 36828,
+    "internal-candidate-2.rss.txt": 28820,
+    "internal-candidate-3.rss.txt": 27160,
+    "internal-candidate-4.rss.txt": 16028,
+    "internal-candidate-5.rss.txt": 41724,
+    "public-guard-base-1.rss.txt": 170364,
+    "public-guard-base-2.rss.txt": 140268,
+    "public-guard-base-3.rss.txt": 139244,
+    "public-guard-base-4.rss.txt": 140472,
+    "public-guard-base-5.rss.txt": 158024,
+    "public-guard-candidate-1.rss.txt": 164736,
+    "public-guard-candidate-2.rss.txt": 143436,
+    "public-guard-candidate-3.rss.txt": 169116,
+    "public-guard-candidate-4.rss.txt": 139364,
+    "public-guard-candidate-5.rss.txt": 147444,
+    "public-route-base-1.rss.txt": 137232,
+    "public-route-base-2.rss.txt": 137144,
+    "public-route-base-3.rss.txt": 136148,
+    "public-route-base-4.rss.txt": 137192,
+    "public-route-base-5.rss.txt": 136792,
+    "public-route-candidate-1.rss.txt": 144212,
+    "public-route-candidate-2.rss.txt": 138376,
+    "public-route-candidate-3.rss.txt": 138172,
+    "public-route-candidate-4.rss.txt": 143136,
+    "public-route-candidate-5.rss.txt": 138452
+  }
+}

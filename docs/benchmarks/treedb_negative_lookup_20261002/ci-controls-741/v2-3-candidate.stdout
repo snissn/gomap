@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRepeatedIterator 	 7396922	       303.9 ns/op	     112 B/op	       2 allocs/op
+PASS

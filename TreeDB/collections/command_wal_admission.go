@@ -20,8 +20,10 @@ type collectionCommandWALAdmission struct {
 	mutationLocked *bool
 }
 
-func (c *Collection) lockCollectionCommandWALAdmission() *collectionCommandWALAdmission {
-	return &collectionCommandWALAdmission{collection: c, release: c.lockVectorIndexCoverageMutation(), acquire: c.lockVectorIndexCoverageMutation}
+// Ordinary admission is an operation-local value. Only prepared owners need
+// to retain a custom reacquire function.
+func (c *Collection) lockCollectionCommandWALAdmission() collectionCommandWALAdmission {
+	return collectionCommandWALAdmission{collection: c, release: c.lockVectorIndexCoverageMutation()}
 }
 
 func (a *collectionCommandWALAdmission) unlock() {
@@ -48,7 +50,11 @@ func (a *collectionCommandWALAdmission) drainBeforeAssignment(intent *backenddb.
 	err := drain.Drain()
 	// Restore the owner's leases even on rejection so existing cleanup and
 	// accepted-publication invalidation retain their original ownership.
-	a.release = a.acquire()
+	if a.acquire != nil {
+		a.release = a.acquire()
+	} else {
+		a.release = a.collection.lockVectorIndexCoverageMutation()
+	}
 	if held {
 		*mutation = a.collection.lockMutation()
 		*mutationLocked = true
@@ -126,13 +132,20 @@ func (c *Collection) withCommandWALPublishCoordinatorAdmission(intent *backenddb
 }
 
 // bindMutation names the actual defer-owned state; it never copies a mutex.
-func (a *collectionCommandWALAdmission) bindMutation(mutation *collectionMutationUnlock, held *bool) func() {
+// The prior binding is returned by value for deferred restoration.
+func (a *collectionCommandWALAdmission) bindMutation(mutation *collectionMutationUnlock, held *bool) (*collectionMutationUnlock, *bool) {
 	if a == nil {
-		return func() {}
+		return nil, nil
 	}
 	previousMutation, previousHeld := a.mutation, a.mutationLocked
 	a.mutation, a.mutationLocked = mutation, held
-	return func() { a.mutation, a.mutationLocked = previousMutation, previousHeld }
+	return previousMutation, previousHeld
+}
+
+func (a *collectionCommandWALAdmission) restoreMutation(mutation *collectionMutationUnlock, held *bool) {
+	if a != nil {
+		a.mutation, a.mutationLocked = mutation, held
+	}
 }
 
 func (c *Collection) withMutationLockForCommandWALStagingAdmission(raw *func(), intent *backenddb.CommandWALIntent, a *collectionCommandWALAdmission, fn func() error) error {
@@ -146,8 +159,8 @@ func (c *Collection) withMutationLockForCommandWALStagingAdmission(raw *func(), 
 			mutation.Unlock()
 		}
 	}()
-	unbind := a.bindMutation(&mutation, &held)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := a.bindMutation(&mutation, &held)
+	defer a.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	return fn()
 }
 

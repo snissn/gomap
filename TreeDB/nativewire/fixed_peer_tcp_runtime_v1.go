@@ -644,6 +644,12 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 				_ = r.client.peerTransport.Close()
 			}
 		}
+		// A speculative self-dial may be idle in our outbound pool but still
+		// StateNew to the HTTP server. Retire its owner before inbound shutdown.
+		if r.client != nil {
+			r.client.http.CloseIdleConnections()
+			r.client.readHTTP.CloseIdleConnections()
+		}
 		if r.server != nil {
 			err := r.server.Shutdown(ctx)
 			if err != nil {

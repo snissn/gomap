@@ -3336,6 +3336,13 @@ visibility fences, wrong producer identity, automatic pending replay after
 reopen, idle retry without network work, and shutdown while foreground work
 owns the mutation lock. Coupled catalog/target quorum loss refuses cached
 receipts and watermark hits; the source fixture has one voter.
+TestFixedPeerCloseRetiresUnusedAuthenticatedSelfDialV1 deterministically races
+an authenticated speculative self-dial with a returned HTTP connection, then
+checks graceful Close and complete resource release. TestFixedPeerAuthenticatedControlSocketCleanupOrderV1
+characterizes the caller-first fixture ownership requirement. Existing
+TestPeerSecurityDrainNativeVectorSelfFanoutV1 and
+TestPeerSecurityShutdownTimeoutAndForcedCloseV1 retain admitted-work and bounded
+shutdown-error coverage.
 TestVectorPartitionSplitSourceInsertLegacyRefusedBeforeMutationV1 and
 TestSplitInsertVisibilityWireOwnedAndBoundedV1 cover unsupported legacy
 routing and bounded owned wire extensions.
@@ -3349,6 +3356,13 @@ preserves a complete source intent before an incomplete next frame and refuses
 a corrupt applied durable prefix. These checks do not establish power-loss
 safety, independent quorum-loss qualification, or indefinite writes. Target
 and clear crash cuts remain apply-boundary/reopen controls.
+
+`TestDependencyStableRequiresExactPrefixAndNamespace` distinguishes unrelated
+volatile suffixes from unstable/corrupt/short required prefixes, absent names,
+changed physical identities and missing/rebound parent namespaces. It refuses
+unsupported LSN/RID manifest frontiers. The actual-cut enumerator derives each
+sealed generation's closure from its checksummed V1 manifest, while preserving
+newest-complete-root, command-frame replay, ACK and RO/RW key-state checks.
 
 
 ### Fixed-peer vector initialization prerequisite (#4250)

@@ -49,7 +49,8 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	if hook := typedSourceBeforeAdmissionTestHook.Load(); hook != nil {
 		(*hook)(c)
 	}
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return 0, err

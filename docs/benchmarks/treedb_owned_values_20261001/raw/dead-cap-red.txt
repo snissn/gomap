@@ -1,0 +1,10 @@
+--- FAIL: TestFileRead_SealedDeadMappingCap (0.03s)
+    --- FAIL: TestFileRead_SealedDeadMappingCap/owned_append (0.01s)
+        read_append_owned_test.go:280: capped miss retried stale mapping: out-of-range=2 fallback=1 CRC=1
+    --- FAIL: TestFileRead_SealedDeadMappingCap/unsafe (0.01s)
+        read_append_owned_test.go:280: capped miss retried stale mapping: out-of-range=2 fallback=1 CRC=1
+    --- FAIL: TestFileRead_SealedDeadMappingCap/unsafe_to (0.01s)
+        read_append_owned_test.go:280: capped miss retried stale mapping: out-of-range=2 fallback=1 CRC=1
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.037s
+FAIL

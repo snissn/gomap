@@ -550,7 +550,8 @@ func (c *Collection) insertVectorPartitionSplitSourceWithOwnerV1(ctx context.Con
 	if owner == nil {
 		unlockSchema := c.lockCollectionSchemaRead()
 		defer unlockSchema()
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 	} else {
 		admission = owner.admission
