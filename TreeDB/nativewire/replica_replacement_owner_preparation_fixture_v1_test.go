@@ -78,67 +78,19 @@ func immutableOwnerReplacementEndpointFixtureV1(t *testing.T, endpoint bool) (co
 	meta.Options.ColumnStore = &column
 	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
 	fixedPeerCatalogConsumerOwnerConfigV1(t, configs)
-	excluded := map[string]bool{}
-	for _, config := range configs {
-		excluded[config.ListenAddress] = true
-		for _, value := range config.RaftListen {
-			excluded[value] = true
-		}
-		for _, node := range config.Nodes {
-			excluded[node.Address] = true
-		}
-		for _, peer := range config.Catalog.Peers {
-			excluded[peer.Address] = true
-		}
-		for _, group := range config.Groups {
-			for _, peer := range group.Peers {
-				excluded[peer.Address] = true
-			}
-		}
-		for _, value := range config.Vector.PublicAddresses {
-			excluded[value] = true
-		}
-		for _, addresses := range config.Vector.ShardAddresses {
-			for _, value := range addresses {
-				excluded[value] = true
-			}
-		}
+	count := 3
+	if endpoint {
+		count++
 	}
-	reserved := []net.Listener{}
-	t.Cleanup(func() {
-		for _, listener := range reserved {
-			_ = listener.Close()
-		}
-	})
-	address := func() string {
-		for {
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			value := listener.Addr().String()
-			// Hold colliding sockets too, so allocation must move past them.
-			reserved = append(reserved, listener)
-			if !excluded[value] {
-				excluded[value] = true
-				return value
-			}
-		}
-	}
+	addresses := fixedPeerFixtureUnusedAddressesV1(t, configs, count)
 	const target raftcluster.NodeID = "replacement"
-	targetAddress, targetRaft := address(), address()
+	targetAddress, targetRaft := addresses[0], addresses[1]
 	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), FixedPeerTCPNodeV1{ID: target, Address: targetAddress})
 	vector := cloneFixedPeerVectorConfigV1(configs[0].Vector)
-	vector.PublicAddresses[target] = address()
+	vector.PublicAddresses[target] = addresses[2]
 	if endpoint {
-		vector.ShardAddresses["group-b"][target] = address()
+		vector.ShardAddresses["group-b"][target] = addresses[3]
 	}
-	for _, listener := range reserved {
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	reserved = nil
 	for i := range configs {
 		configs[i].Nodes, configs[i].Vector = nodes, vector
 	}
