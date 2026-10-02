@@ -77,7 +77,7 @@ def main():
     text = doc.read_text()
     for name, expected in HASHES.items():
         assert hashlib.sha256((args.evidence_root/name).read_bytes()).hexdigest() == expected, name
-        assert expected in text, f'missing documented hash: {name}'
+        assert [line for line in text.splitlines() if line.startswith(f'| `{name}` |')] == [f'| `{name}` | `{expected}` |'], f'wrong documented artifact row: {name}'
     original = json.loads((args.evidence_root/'memory-full-analysis-output.json').read_text())
     paired = json.loads((args.evidence_root/'checkpoint-paired-4915-five-repeat-compact-summary.json').read_text())
     full = json.loads((args.evidence_root/'checkpoint-paired-4915-analysis-v2-output.json').read_text())
