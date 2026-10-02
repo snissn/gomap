@@ -348,25 +348,7 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 	t.Helper()
 	catalogLeader := func() raftcluster.NodeID {
 		t.Helper()
-		var result raftcluster.NodeID
-		fixedPeerWaitV1(t, ctx, func() bool {
-			// Discovery returns a follower's leader hint, which can still name
-			// the just-stopped catalog voter. Wait for a live leader and its
-			// committed catalog fence before beginning the next operation.
-			for _, peer := range configs[0].Catalog.Peers {
-				status, err := client.Status(ctx, peer.ID)
-				if err != nil || status.CatalogRaft.State != "Leader" || status.CatalogRaft.LeaderID != peer.ID {
-					continue
-				}
-				_, err = client.call(ctx, peer.ID, "catalog-read", fixedPeerRequestV1{}, false)
-				if err == nil {
-					result = peer.ID
-					return true
-				}
-			}
-			return false
-		})
-		return result
+		return runtimes[fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes)].config.NodeID
 	}
 	find := func(id raftcluster.NodeID) int {
 		for i, cfg := range configs {

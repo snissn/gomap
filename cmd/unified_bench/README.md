@@ -784,6 +784,19 @@ Its `capture.py prepare|capture|validate` flow retains an external source/depend
 toolchain/binary freeze and separately hashed `stdout.log`/`stderr.log`; internal
 visit diagnostics use a separate overlay binary and cannot enter timed captures.
 
+`BenchmarkAlgorithmSparseUpdatesSnapshotRotations` adds one checked public
+snapshot/read/close per acknowledged batch. It emits
+`algorithm-work-snapshot-rotations-v1` packets with snapshot counts and
+`snapshot_ns`, using the same freeze and raw artifact format. After review,
+landing, preparation and coordinator runner grant, select it explicitly:
+
+```sh
+python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
+  --source "$PWD" --prepared /tmp/algorithm-prepared \
+  --output /tmp/algorithm-snapshot-rotations-eligibility --family snapshot-rotations \
+  --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+```
+
 ## Canonical Quicksilver workflow
 
 The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)

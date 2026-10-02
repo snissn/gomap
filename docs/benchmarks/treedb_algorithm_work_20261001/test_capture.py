@@ -11,7 +11,7 @@ import capture
 
 
 class CaptureTests(unittest.TestCase):
-    def fixture(self):
+    def fixture(self, family='writes'):
         freeze = {k: 'a' * (40 if k in ('runtime_head', 'runtime_tree') else 64)
                   for k in ('runtime_head', 'runtime_tree', 'harness_sha256', 'binary_sha256')}
         packet = dict(schema='algorithm-work-v1', keys=250000, updates=40000, commits=40,
@@ -26,8 +26,15 @@ class CaptureTests(unittest.TestCase):
                    for p, c, w in itertools.product((1, 16384), (1, 4), (False, True))]
         for key in capture.WORK_COUNTERS:
             packet['before'][key], packet['after'][key] = '1', '2'
+        if family == 'snapshot-rotations':
+            for packet in packets:
+                packet.update(schema='algorithm-work-snapshot-rotations-v1',
+                              write_shape='public-snapshot-per-ack-batch',
+                              snapshot_acquisitions=40, snapshot_closes=40,
+                              snapshot_stride=1000, snapshot_ns=10, allocated_bytes=10,
+                              allocations=1, post_reopen_gc_heap_bytes=100)
         rows = [name + '-2 1 100 ns/op 10 B/op 1 allocs/op'
-                for name in sorted(capture.benchmark_names('writes'))]
+                for name in sorted(capture.benchmark_names(family))]
         return freeze, packets, rows
 
     def log(self, packets, rows):
@@ -59,6 +66,48 @@ class CaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 capture.validate_log(broken, 'writes', freeze, False, False)
 
+    def test_snapshot_rotation_family_and_schema(self):
+        family = 'snapshot-rotations'
+        freeze, packets, rows = self.fixture(family)
+        parsed = capture.validate_log(self.log(packets, rows), family, freeze, False, False)
+        self.assertEqual(len(parsed['write_packets']), 8)
+        command = capture.execution_command(family, Path('/frozen/algorithm-work.test'))
+        self.assertIn('-test.bench=^BenchmarkAlgorithmSparseUpdatesSnapshotRotations$', command)
+        self.assertIn('-test.benchtime=1x', command)
+        for field, bad in (('schema', 'algorithm-work-v1'), ('write_shape', 'other'),
+                           ('snapshot_acquisitions', 39), ('snapshot_closes', 39),
+                           ('snapshot_stride', 999), ('snapshot_ns', 0), ('snapshot_ns', 60),
+                           ('snapshot_acquisitions', 40.0), ('snapshot_closes', '40'),
+                           ('snapshot_ns', True), ('keys', 250000.0), ('checkpoints', True),
+                           ('allowed_concurrent_generations', [False, True]),
+                           ('final_close_checked', 1), ('validated_all_values_and_misses', False)):
+            changed = copy.deepcopy(packets)
+            changed[0][field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaises(ValueError):
+                capture.validate_log(self.log(changed, rows), family, freeze, False, False)
+        for invalid in (0, 'false', None):
+            changed = copy.deepcopy(packets)
+            changed[0]['provenance']['pilot'] = invalid
+            with self.assertRaises(ValueError):
+                capture.validate_log(self.log(changed, rows), family, freeze, False, False)
+        for field in ('snapshot_closes', 'snapshot_ns', 'final_close_checked', 'validated_all_values_and_misses'):
+            changed = copy.deepcopy(packets)
+            del changed[0][field]
+            with self.subTest(missing=field), self.assertRaises(ValueError):
+                capture.validate_log(self.log(changed, rows), family, freeze, False, False)
+        for changed, changed_rows in ((packets[:-1], rows), (packets + [packets[0]], rows),
+                                      (packets, rows[:-1]), (packets, rows + [rows[0]])):
+            with self.assertRaises(ValueError):
+                capture.validate_log(self.log(changed, changed_rows), family, freeze, False, False)
+        primary_freeze, primary, primary_rows = self.fixture()
+        for text, selected in ((self.log(packets, rows), 'writes'),
+                               (self.log(primary, primary_rows), family)):
+            with self.assertRaises(ValueError):
+                capture.validate_log(text, selected, primary_freeze, False, False)
+        for selected in ('wrong-family', '', None):
+            with self.assertRaises(ValueError):
+                capture.execution_command(selected, Path('/binary'))
+
     def test_many_cell_and_operation_counts(self):
         rows = [name + '-2 1000 100 ns/op 64 keys/op 10 B/op 1 allocs/op'
                 for name in sorted(capture.benchmark_names('many'))]
@@ -74,8 +123,11 @@ class CaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 capture.validate_log('\n'.join(broken + ['PASS']), 'internal', {}, True, False)
 
-    def test_raw_capture_hashes_binary_and_incomplete_status(self):
-        freeze, packets, rows = self.fixture()
+    def test_snapshot_rotation_raw_capture_freeze_and_family(self):
+        self.test_raw_capture_hashes_binary_and_incomplete_status('snapshot-rotations')
+
+    def test_raw_capture_hashes_binary_and_incomplete_status(self, family='writes'):
+        freeze, packets, rows = self.fixture(family)
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             freeze['environment'] = capture.normalized_environment({'TMPDIR': '/frozen/database-filesystem', 'PATH': '/frozen/toolchain/bin', 'HOME': '/frozen/home', 'CC': 'clang'})
@@ -90,12 +142,12 @@ class CaptureTests(unittest.TestCase):
             source = capture.frozen_identity(freeze)
             record = dict(complete=True, returncode=0, source_before=source, source_after=source,
                           prepared=str(output), freeze_sha256=capture.digest(output / 'freeze.json'),
-                          binary_sha256=freeze['binary_sha256'], family='writes', pilot=False, small_flush=False,
+                          binary_sha256=freeze['binary_sha256'], family=family, pilot=False, small_flush=False,
                           grant='synthetic-only', environment=dict(freeze['environment'],
                               TREEDB_ALGORITHM_RUNTIME_HEAD=freeze['runtime_head'],
                               TREEDB_ALGORITHM_FREEZE_FILE=str(output / 'freeze.json'),
                               TREEDB_ALGORITHM_PILOT='0', TREEDB_ALGORITHM_SMALL_FLUSH='0'),
-                          command=capture.execution_command('writes', output / 'algorithm-work.test'),
+                          command=capture.execution_command(family, output / 'algorithm-work.test'),
                           stdout_sha256=capture.digest(output / 'stdout.log'), stderr_sha256=capture.digest(output / 'stderr.log'))
             (output / 'execution.json').write_text(json.dumps(record))
             capture.validate_capture(output, expected)
@@ -103,7 +155,9 @@ class CaptureTests(unittest.TestCase):
                 with self.subTest(expected=missing_or_wrong), self.assertRaises(ValueError):
                     capture.validate_capture(output, missing_or_wrong)
             for field, bad in (('complete', False), ('returncode', 1), ('binary_sha256', 'b'*64),
-                               ('stderr_sha256', 'b'*64), ('stdout_sha256', 'b'*64), ('command', ['wrong']), ('environment', {})):
+                               ('stderr_sha256', 'b'*64), ('stdout_sha256', 'b'*64), ('command', ['wrong']), ('environment', {}),
+                               ('family', 'writes' if family == 'snapshot-rotations' else 'snapshot-rotations'),
+                               ('family', 'unknown')):
                 changed = dict(record, **{field: bad})
                 (output / 'execution.json').write_text(json.dumps(changed))
                 with self.subTest(field=field), self.assertRaises(ValueError):
