@@ -1,0 +1,7 @@
+Typed infrastructure failure, provisional Mac correctness phase
+Command: focused TreeDB/db GC test build, GOWORK=off.
+Result: compiler failed before tests executed.
+Observed error: compile: writing output write $WORK/b123/_pkg_.a: no space left on device
+Coordinator stopped new Mac builds; shared caches were not cleaned.
+Replacement Linux focused GC suite passed (gc.txt), Go1.26.3/GOMAXPROCS2/GOMEMLIMIT2GiB.
+This reconstruction records the observed build error and disposition, not an original full stdout stream.

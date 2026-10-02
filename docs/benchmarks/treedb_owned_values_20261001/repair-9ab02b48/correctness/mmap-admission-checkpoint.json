@@ -1,0 +1,60 @@
+{
+  "runtime_commit": "9ab02b48ce2397410940a7e42cc22bbf95a96c5a",
+  "previous_review_head": "ab2e9124fcca72710b896cf78577fa6bd37a11b0",
+  "qualification_base": "a68a84c7195e0c5d8c339343a385b40acf818d03",
+  "status": "Construction/risk correctness checkpoint only; no new Linux correctness or timing. Old measured packets unchanged and source-bound.",
+  "toolchain": "go version go1.26.0 darwin/arm64",
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "2GiB"
+  },
+  "checks": [
+    {
+      "command": "go test ./TreeDB/internal/valuelog -run '^TestMmapAdmission_' -count=1",
+      "source": "old ab2 + initial new test overlay; before final labels/bool assertion/removed-handle addition",
+      "outcome": "red: all four count/bytes class publications overshoot; direct range budget bypass; mmap failure retires old mapping",
+      "raw": "tmp/mmap-admission-red.txt"
+    },
+    {
+      "command": "go test -race ./TreeDB/internal/valuelog -run 'TestMmapAdmission_|TestFileRead_SealedDeadMappingCap|Sealed|CurrentWritable|MmapSafety|RemapToFile|Demot|GroupedFrameCache.*Close' -count=1",
+      "source": "9ab02b48ce2397410940a7e42cc22bbf95a96c5a",
+      "outcome": "pass 1.865s",
+      "raw": "tmp/mmap-admission-final-green-race.txt"
+    },
+    {
+      "command": "go vet ./TreeDB/internal/valuelog",
+      "source": "9ab02b48ce2397410940a7e42cc22bbf95a96c5a",
+      "outcome": "pass",
+      "raw": "tmp/mmap-admission-vet.txt"
+    }
+  ],
+  "source_sha256": {
+    "TreeDB/internal/valuelog/reader_mmap.go": "ed83a571b50a5ce1f06c52f009a0b9c01cec35cc1eb4b7352beeda6ee176a397",
+    "TreeDB/internal/valuelog/manager.go": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf",
+    "TreeDB/internal/valuelog/grouped_frame_cache.go": "f453ef5c72b6c2f2bf973e6a4d08fda1fdd85fcc2e876b029aa5a12c47004d5d",
+    "TreeDB/internal/valuelog/reader.go": "c01cfd34bd8625514d6e8220f4dcd2f82738c5f89e4bcfb337e56aa96ce49fcb",
+    "TreeDB/internal/valuelog/mmap_admission_test.go": "fd03b973a6f07ce08279d40bfc5a028a08d8a6018b0fe04c16103065003b3201",
+    "TreeDB/internal/valuelog/read_append_owned_test.go": "676c0f9dbc1f625f140a27b98037ebd8dae405834e119a125453c630b4a383f7",
+    "TreeDB/value_log_owned_bench_test.go": "75e72ffddf82bcf884cbfcbbab09762c865839d9d1edf0104717b1d23cf7550e",
+    "TreeDB/value_log_owned_route_test.go": "538bb8a6665d2a586184edc11b3fb1870070ef7ef062e6ccfdd796bd0beac642",
+    "TreeDB/snapshot_read_bench_test.go": "8d0244fab4707e68b5f96d18e4445a18dc5b419895c5c9a33e8455daeb9030e0",
+    "TreeDB/db/api.go": "9f9bf7dbf31ca7cffb86fa2bc87d9677ae4245454efb2a186f6fe474edc4db34",
+    "TreeDB/db/pools.go": "69fab007700c7c361d483cc163cdf928ee91d85dba4119d4e0eb8bf9e90cc3f4",
+    "go.mod": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+    "go.sum": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+    "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "CONTRIBUTING.md": "a20ed8c10b32b4a0caed9d5b962e2bab654e268c9562871154d471c9dbec636e",
+    "TreeDB/docs/spec/contracts.md": "4b51be5ff755606d7838d9ee22f5842bed73f2c2e765746830adeafca157f64b"
+  },
+  "raw_sha256": {
+    "tmp/mmap-admission-red.txt": "7fdff7b539f936c7d1fafd0eec96ec8e7bf78f3dc96b4d7a3a5ca57bd2229e0a",
+    "tmp/mmap-admission-green-race.txt": "391b699537cca8db9fc117d6ea51c0638f07b55e8e0db6859ac50ce30d9d29a1",
+    "tmp/mmap-admission-final-green-race.txt": "043da5000a8688a55325d39eb5e47b23d3b364ef3912ce7db934d4dc7f722c53",
+    "tmp/mmap-admission-vet.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "risk_proof": "All managed remaps acquire manager then file locks through actual Stat-sized admission and mmapData publication, same registered handle required; existing denial/dead-cap early return and locked recheck, sealed one-scan gate, bool publication result, old unsafe mapping retired only after mmap success. Existing shared ReadAppend cache/ownership code and R90 code unchanged.",
+  "harness_delta": "None versus ab2; public benchmark and internal BenchmarkFileReadAppendOwned function unchanged. R90 merged main changes remain outside this repair diff.",
+  "in_flight_writers": false
+}
