@@ -408,6 +408,10 @@ func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(
 	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
 	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
 	const workers = 16
+	// This checks atomic first-write concurrency, not the latency of durable syncs.
+	ctx, cancelOperations := context.WithTimeout(t.Context(), time.Minute)
+	defer cancelOperations()
+	var images [workers]int32
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
@@ -417,8 +421,6 @@ func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(
 		go func() {
 			defer wg.Done()
 			<-start
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
 			var value bson.M
 			err := coll.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: "u1"}}, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}, options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)).Decode(&value)
 			if err != nil {
@@ -427,6 +429,8 @@ func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(
 			}
 			if n, ok := value["n"].(int32); !ok || n < 1 || n > workers {
 				errs <- fmt.Errorf("returned value=%v", value)
+			} else {
+				images[i] = n
 			}
 		}()
 	}
@@ -436,8 +440,13 @@ func TestStandaloneServerOfficialDriverConcurrentFirstWriteFindAndModifyUpserts(
 	for err := range errs {
 		t.Error(err)
 	}
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelCtx()
+	var seen [workers + 1]bool
+	for _, n := range images {
+		if n < 1 || n > workers || seen[n] {
+			t.Fatalf("returned increments=%v want each of 1..%d once", images, workers)
+		}
+		seen[n] = true
+	}
 	var stored bson.M
 	if err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: "u1"}}).Decode(&stored); err != nil {
 		t.Fatal(err)
