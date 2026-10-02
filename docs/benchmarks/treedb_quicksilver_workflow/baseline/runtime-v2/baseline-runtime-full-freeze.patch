@@ -49,7 +49,7 @@
  		memoryBudgetStat(tb, stats, "treedb.process.read_path.outer_leaf.cache.capacity")*4096 != uint64(leafMiB<<20) ||
  		memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.budget_bytes") != uint64((64-leafMiB)<<20) ||
  		leafMiB == 64 && memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.capacity") != 0 {
-@@ -600,3 +602,21 @@
+@@ -617,3 +619,21 @@
  		t.Fatal("raw chronology changed")
  	}
  }
@@ -252,7 +252,7 @@
 +    require(actual == set(additions), "unallowed/missing baseline additions")
 +    ignored = git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split("\0")
 +    require(not any(name and Path(name).suffix in SOURCE_SUFFIXES for name in ignored), "unallowed ignored source input")
-+    canonical = {"TreeDB/quicksilver_workflow_bench_test.go": "8cd0c7f40218a311f22710967e2b6f16c2b5a7ec3375d85bfcb55f636aefc460",
++    canonical = {"TreeDB/quicksilver_workflow_bench_test.go": "3796b0c5219a43371026a0f82748f4404baf5380c13246a01afc40722c5a27ec",
 +                 "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462"}
 +    require(manifest["canonical_sources"] == canonical and all(additions[name] == value for name, value in canonical.items()), "wrong canonical harness identity")
 +    for name, expected in additions.items():

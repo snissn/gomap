@@ -1,9 +1,9 @@
 {
   "TreeDB/memory_budget_bench_test.go": "68599f74579bcb0f5dba0155a70120ec2a480185044f0edc09cca930191e4508",
-  "TreeDB/quicksilver_workflow_bench_test.go": "4b9b11725351106e9fe0e9aae9d3d8440ccbc4f145fc69e1fa8d3dc21fc54440",
+  "TreeDB/quicksilver_workflow_bench_test.go": "5afa9e20dd2af3cb0ce5621b1a95d1913fe0d00156eed8cf6c9846f1052fcbbe",
   "check_full_freeze.py": "b1887f88cfdcc10fbb7107d63c0596b936d17d4f0de7bbbff163d283eea6a58e",
   "prepare_baseline.py": "573c0e069e8c86babc2052a3c7064358f0eb1d9f66fe662a1df7f7e5d4bb1655",
-  "scripts/treedb_memory_budget_capture.py": "136f4c7f6b29d5794a54c650b98d387a27f201e7c01129f80c6e22918bc4da54",
+  "scripts/treedb_memory_budget_capture.py": "422db7726c3d7997b5431149937853871900a701d26a1faf01f0fb90414e8b28",
   "scripts/treedb_memory_budget_overlay.py": "156abcee681ea4de1366df75e6dfe868ead23a240334f33d331804f529730167",
   "scripts/treedb_quicksilver_capture.py": "6743cb317df3f603aa7f8b52f87a254c24861a8523a55449d44d01cbd22cd090"
 }

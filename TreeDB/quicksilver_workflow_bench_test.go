@@ -428,6 +428,12 @@ type quicksilverReader struct {
 }
 
 func quicksilverStartReader(get func([]byte) ([]byte, error), keys, size, capacity int) *quicksilverReader {
+	return quicksilverStartReaderMeasured(get, keys, size, capacity, func(start time.Time) int64 { return time.Since(start).Nanoseconds() })
+}
+
+// Inject only the elapsed observation for mocked unit reads. Native captures
+// always use the real monotonic API timer above and reject nonpositive samples.
+func quicksilverStartReaderMeasured(get func([]byte) ([]byte, error), keys, size, capacity int, elapsed func(time.Time) int64) *quicksilverReader {
 	r := &quicksilverReader{start: time.Now(), started: make(chan error, 1), done: make(chan quicksilverConcurrentResult, 1)}
 	go func() {
 		result := quicksilverConcurrentResult{API: "owned Get", Readers: 1, KeyDomain: "present even keys; permutation 7919", Generations: []int{0, 1}, Stride: quicksilverLatencyStride, Capacity: capacity, Samples: make([]int64, 0, capacity)}
@@ -440,9 +446,9 @@ func quicksilverStartReader(get func([]byte) ([]byte, error), keys, size, capaci
 			memoryBudgetValue(id, 1, updated)
 			readStart := time.Now()
 			value, err := get(key)
-			ns := time.Since(readStart).Nanoseconds()
+			ns := elapsed(readStart)
 			if err != nil || !quicksilverConcurrentValid(value, old, updated) || ns <= 0 {
-				result.Error = fmt.Sprintf("concurrent Get invalid id=%d err=%v", id, err)
+				result.Error = fmt.Sprintf("concurrent Get invalid id=%d err=%v ns=%d", id, err, ns)
 				break
 			}
 			if ns > result.MaxNS {
@@ -509,11 +515,23 @@ func quicksilverIO() map[string]any {
 }
 
 func TestQuicksilverUpdateReader(t *testing.T) {
+	// Returning tiny in-memory mock values can occupy zero clock ticks on Windows.
+	// Lifecycle/value tests use known positive samples, not scheduler timing.
+	startReader := func(get func([]byte) ([]byte, error), keys, size, capacity int) *quicksilverReader {
+		return quicksilverStartReaderMeasured(get, keys, size, capacity, func(time.Time) int64 { return 1 })
+	}
 	old, updated := memoryBudgetValue(0, 0, make([]byte, 256)), memoryBudgetValue(0, 1, make([]byte, 256))
 	for _, value := range [][]byte{old, updated} {
 		if !quicksilverConcurrentValid(value, old, updated) {
 			t.Fatal("valid generation rejected")
 		}
+	}
+	zero := quicksilverStartReaderMeasured(func([]byte) ([]byte, error) { return old, nil }, 1, 256, 65536, func(time.Time) int64 { return 0 })
+	if err := <-zero.started; err == nil {
+		t.Fatal("zero-duration valid mock read announced success")
+	}
+	if result := zero.finish(); result.Error == "" || !strings.Contains(result.Error, "ns=0") || !result.Joined || !zero.failed.Load() || result.FullValuesValidated || result.Reads != 0 || len(result.Samples) != 0 {
+		t.Fatal("zero-duration read accepted", result)
 	}
 	corrupt := append([]byte(nil), old...)
 	corrupt[len(corrupt)-1] ^= 1
@@ -524,7 +542,7 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 	}
 	for _, fail := range []bool{false, true} {
 		for _, value := range [][]byte{nil, {}, corrupt} {
-			failed := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return value, nil }, 1, 256, 65536)
+			failed := startReader(func([]byte) ([]byte, error) { return value, nil }, 1, 256, 65536)
 			if err := <-failed.started; err == nil {
 				t.Fatal("invalid read announced success")
 			}
@@ -534,7 +552,7 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 		}
 		// Deferred joins also run on an early writer/checkpoint failure return.
 		for _, stage := range []string{"write", "checkpoint"} {
-			reader := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return old, nil }, 1, 256, 65536)
+			reader := startReader(func([]byte) ([]byte, error) { return old, nil }, 1, 256, 65536)
 			if err := <-reader.started; err != nil {
 				t.Fatal(err)
 			}
@@ -543,11 +561,10 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 				t.Fatal("failure cleanup did not join", stage)
 			}
 		}
-		r := quicksilverStartReader(func([]byte) ([]byte, error) {
+		r := startReader(func([]byte) ([]byte, error) {
 			if fail {
 				return nil, fmt.Errorf("injected read error")
 			}
-			runtime.Gosched()
 			return old, nil
 		}, 1, 256, 65536)
 		first := <-r.started
@@ -559,7 +576,7 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 			t.Fatal("join not idempotent")
 		}
 	}
-	r := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return old, nil }, 1, 256, 1)
+	r := startReader(func([]byte) ([]byte, error) { return old, nil }, 1, 256, 1)
 	if err := <-r.started; err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +591,7 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 	// lifetime includes that wait and reader-side quantiles/channel completion.
 	entered, release := make(chan struct{}), make(chan struct{})
 	joined := make(chan quicksilverConcurrentResult, 1)
-	delayed := quicksilverStartReader(func([]byte) ([]byte, error) {
+	delayed := startReader(func([]byte) ([]byte, error) {
 		close(entered)
 		<-release
 		return old, nil

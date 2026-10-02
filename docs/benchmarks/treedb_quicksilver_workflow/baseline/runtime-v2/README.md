@@ -6,7 +6,7 @@ into H base b1bb478b90eed1afeddc09c6d13a189e26d3a449 (merge
 aee6e8aaa08aa62386bfc506abd8689db79eb060). Exact new canonical five-input
 hashes are in canonical-source-hashes.json; exact external seven replacement/
 checker input hashes are in source-hashes.json. The contextual patch SHA256 is
-`0d13b6f526a3987dd3b5922a998ff6682e8bf942c88fe8b6ce1a78344221b772`. It reconstructs those seven files from external copies of the
+`bbc75b0cb284c58686df2b616532d92cfe7548fa85e544448eb5bab6ec5f696e`. It reconstructs those seven files from external copies of the
 new canonical additions; the canonical memory overlay bytes remain unchanged.
 
 The replacement H Go retains the same acknowledgement timing, chronological
@@ -30,7 +30,7 @@ separately by Git objects and current hashes. Regenerate actual host/compiler/
 module/path/environment and original/control manifests/freezes after landing.
 Do not add A's Go file as a sixth baseline addition.
 
-External proposal: /tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal.
+External proposal: /tmp/gomap-4895-baseline-compat-reader-clock-proposal.
 Original/control constructor overlays and source manifests are labeled
 construction-only. Their packet checks do not replace a full prepared freeze.
 See ../../README.md for timing/sample/reader/process-IO boundaries. At40 full
@@ -44,3 +44,7 @@ Review fixes align elapsed support through final phase capture including joined
 reader quantiles, contain all eight phases, enforce coherent chronological
 process/phase IO and exact configuration types. Prior proposal/constructor paths
 remain historical; this inventory requires fresh preparation after review/landing.
+
+Windows mock-clock repair adds deterministic positive/zero duration unit
+observations; native readers retain real time.Since and strict zero rejection.
+The preceding source proposals/raw constructors remain historical.

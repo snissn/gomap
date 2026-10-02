@@ -1,7 +1,7 @@
 {
   "additions": {
     "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462",
-    "TreeDB/quicksilver_workflow_bench_test.go": "8cd0c7f40218a311f22710967e2b6f16c2b5a7ec3375d85bfcb55f636aefc460",
+    "TreeDB/quicksilver_workflow_bench_test.go": "3796b0c5219a43371026a0f82748f4404baf5380c13246a01afc40722c5a27ec",
     "scripts/treedb_memory_budget_capture.py": "4a8c7750475ace639c12f15d13000f8c93602c0074d47523c9938b153f0eead3",
     "scripts/treedb_memory_budget_overlay.py": "156abcee681ea4de1366df75e6dfe868ead23a240334f33d331804f529730167",
     "scripts/treedb_quicksilver_capture.py": "f98deee21a53c11bfa89cc0423e4ef086abda1f5eea24af5b978160875e5b9ed"
@@ -9,35 +9,35 @@
   "canonical_head": "7e1c51d41bcc0392fcb17dec12e46fdab42449bc",
   "canonical_sources": {
     "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462",
-    "TreeDB/quicksilver_workflow_bench_test.go": "8cd0c7f40218a311f22710967e2b6f16c2b5a7ec3375d85bfcb55f636aefc460"
+    "TreeDB/quicksilver_workflow_bench_test.go": "3796b0c5219a43371026a0f82748f4404baf5380c13246a01afc40722c5a27ec"
   },
   "external_inputs": {
     "TreeDB/memory_budget_bench_test.go": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/TreeDB/memory_budget_bench_test.go",
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/TreeDB/memory_budget_bench_test.go",
       "sha256": "68599f74579bcb0f5dba0155a70120ec2a480185044f0edc09cca930191e4508"
     },
     "TreeDB/quicksilver_workflow_bench_test.go": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/TreeDB/quicksilver_workflow_bench_test.go",
-      "sha256": "4b9b11725351106e9fe0e9aae9d3d8440ccbc4f145fc69e1fa8d3dc21fc54440"
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/TreeDB/quicksilver_workflow_bench_test.go",
+      "sha256": "5afa9e20dd2af3cb0ce5621b1a95d1913fe0d00156eed8cf6c9846f1052fcbbe"
     },
     "go_binary": {
       "path": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64/bin/go",
       "sha256": "ae2238c208f2f1f5a8faa3287acf5ced5d6b3c396dbf75e8f446e47905b0a75d"
     },
     "prepare_baseline.py": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/prepare_baseline.py",
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/prepare_baseline.py",
       "sha256": "573c0e069e8c86babc2052a3c7064358f0eb1d9f66fe662a1df7f7e5d4bb1655"
     },
     "scripts/treedb_memory_budget_capture.py": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/scripts/treedb_memory_budget_capture.py",
-      "sha256": "136f4c7f6b29d5794a54c650b98d387a27f201e7c01129f80c6e22918bc4da54"
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/scripts/treedb_memory_budget_capture.py",
+      "sha256": "422db7726c3d7997b5431149937853871900a701d26a1faf01f0fb90414e8b28"
     },
     "scripts/treedb_memory_budget_overlay.py": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/scripts/treedb_memory_budget_overlay.py",
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/scripts/treedb_memory_budget_overlay.py",
       "sha256": "156abcee681ea4de1366df75e6dfe868ead23a240334f33d331804f529730167"
     },
     "scripts/treedb_quicksilver_capture.py": {
-      "path": "/tmp/gomap-4895-baseline-compat-update-tail-review-fix-proposal/scripts/treedb_quicksilver_capture.py",
+      "path": "/tmp/gomap-4895-baseline-compat-reader-clock-proposal/scripts/treedb_quicksilver_capture.py",
       "sha256": "6743cb317df3f603aa7f8b52f87a254c24861a8523a55449d44d01cbd22cd090"
     }
   },
