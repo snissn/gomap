@@ -311,3 +311,5 @@ unified-bench profile-dir output or benchprof inputs.
 Go benchmark output and JSON diagnostic packets, as documented in
 [`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
 Their package-test profiles and counter-only overlays are not benchprof inputs.
+The dedicated `capture.py prepare|capture|validate` flow emits `freeze.json`,
+`execution.json`, `parsed.json`, and separately hashed stdout/stderr logs.

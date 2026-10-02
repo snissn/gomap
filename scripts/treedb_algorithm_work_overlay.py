@@ -59,6 +59,7 @@ func TestAlgorithmWorkInternalVisits(t *testing.T) {
  for _,pointer:=range []bool{false,true} {
  d:=algorithmFixture(t,algorithmOptions(t.TempDir(),pointer,false),keys)
  defer func(){ if err:=d.Close();err!=nil {t.Error(err)} }()
+ algorithmVerify(t,d,keys,0)
  for _,shape:=range []string{"sorted","clustered","uniform"} {
   for _,view:=range []bool{false,true} {
    var total, union uint64

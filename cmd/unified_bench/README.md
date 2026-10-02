@@ -744,3 +744,6 @@ use public TreeDB APIs without unified-bench adapters. Their fixed-work boundary
 counter-only overlay, artifact units, and reproduction commands are documented in
 [`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
 These package-test profiles are not benchprof inputs.
+Its `capture.py prepare|capture|validate` flow retains an external source/dependency/
+toolchain/binary freeze and separately hashed `stdout.log`/`stderr.log`; internal
+visit diagnostics use a separate overlay binary and cannot enter timed captures.
