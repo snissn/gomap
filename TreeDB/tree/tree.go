@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -1140,34 +1141,14 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 
 	scratch := getGetManyScratch(len(keys))
 	defer putGetManyScratch(scratch)
-	for i, key := range keys {
-		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
-		if err == ErrKeyNotFound {
-			out[i] = nil
-			continue
-		}
-		if err != nil {
-			return arena, err
-		}
-		if !groupable {
-			treeGetManyFallbackCallsTotal.Add(1)
-			return t.getManyAppendFallback(keys, out, arena)
-		}
-
-		groupIdx, ok := scratch.groupByRef[ref]
-		if !ok {
-			groupIdx = len(scratch.groups)
-			scratch.groupByRef[ref] = groupIdx
-			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
-		}
-		probeIdx := len(scratch.probes)
-		scratch.probes = append(scratch.probes, getManyLeafProbe{
-			key:      key,
-			outIndex: i,
-			next:     scratch.groups[groupIdx].first,
-		})
-		scratch.groups[groupIdx].first = probeIdx
-		scratch.groups[groupIdx].count++
+	clear(out[:len(keys)])
+	groupable, err := t.planGetMany(keys, scratch, verifyAlways)
+	if err != nil {
+		return arena, err
+	}
+	if !groupable {
+		treeGetManyFallbackCallsTotal.Add(1)
+		return t.getManyAppendFallback(keys, out, arena)
 	}
 	if len(scratch.groups) == 0 {
 		return arena, nil
@@ -1229,34 +1210,13 @@ func (t *Tree) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 
 	scratch := getGetManyScratch(len(keys))
 	defer putGetManyScratch(scratch)
-	for i, key := range keys {
-		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
-		if err == ErrKeyNotFound {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !groupable {
-			treeGetManyFallbackCallsTotal.Add(1)
-			return t.getManyViewFallback(keys, fn)
-		}
-
-		groupIdx, ok := scratch.groupByRef[ref]
-		if !ok {
-			groupIdx = len(scratch.groups)
-			scratch.groupByRef[ref] = groupIdx
-			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
-		}
-		probeIdx := len(scratch.probes)
-		scratch.probes = append(scratch.probes, getManyLeafProbe{
-			key:      key,
-			outIndex: i,
-			next:     scratch.groups[groupIdx].first,
-		})
-		scratch.groups[groupIdx].first = probeIdx
-		scratch.groups[groupIdx].count++
-		scratch.present[i] = true
+	groupable, err := t.planGetMany(keys, scratch, verifyAlways)
+	if err != nil {
+		return err
+	}
+	if !groupable {
+		treeGetManyFallbackCallsTotal.Add(1)
+		return t.getManyViewFallback(keys, fn)
 	}
 
 	if len(scratch.groups) > 0 {
@@ -1347,56 +1307,101 @@ func (t *Tree) getManyAppendFallback(keys [][]byte, out [][]byte, arena []byte) 
 	return arena, nil
 }
 
-func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildRef, bool, error) {
-	if t == nil {
-		return page.ChildRef{}, false, errors.New("missing tree")
-	}
-	if t.pointDefinitelyAbsent(key) {
-		return page.ChildRef{}, false, ErrKeyNotFound
-	}
-	currRef := page.PageChildRef(t.rootPageID)
-	for depth := 0; depth < maxTraversalDepth; depth++ {
-		if currRef.Kind == page.ChildRefLeafLog {
-			return currRef, true, nil
+// planGetMany sorts only local key/index probes. Complete planning before any
+// materialization so pager leaves can request whole-call fallback safely.
+func (t *Tree) planGetMany(keys [][]byte, scratch *getManyScratch, verifyAlways bool) (bool, error) {
+	for i, key := range keys {
+		if !t.pointDefinitelyAbsent(key) {
+			scratch.probes = append(scratch.probes, getManyLeafProbe{key: key, outIndex: i, next: -1})
 		}
-		var n node.Node
-		if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
-			return page.ChildRef{}, false, err
+	}
+	slices.SortFunc(scratch.probes, func(a, b getManyLeafProbe) int {
+		return compareTreeKey(a.key, b.key)
+	})
+	return t.planGetManyInterval(page.PageChildRef(t.rootPageID), 0, len(scratch.probes), 0, scratch, verifyAlways)
+}
+
+// Sorted probes taking the same child form one interval: each visited internal
+// page is loaded once. Parent nodes stay on the bounded traversal stack; their
+// decode scratch and mmap views never enter pooled scratch.
+func (t *Tree) planGetManyInterval(ref page.ChildRef, start, end, depth int, scratch *getManyScratch, verifyAlways bool) (bool, error) {
+	if start == end {
+		return true, nil
+	}
+	if depth >= maxTraversalDepth {
+		return false, errors.New("tree too deep")
+	}
+	if ref.Kind == page.ChildRefLeafLog {
+		groupIdx, ok := scratch.groupByRef[ref]
+		if !ok {
+			groupIdx = len(scratch.groups)
+			scratch.groupByRef[ref] = groupIdx
+			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
 		}
-		switch n.Type() {
-		case page.PageTypeInternal:
-			if depth == 0 {
-				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
-					return page.ChildRef{}, false, err
-				} else if ok {
-					if len(low) > 0 && compareTreeKey(key, low) < 0 {
-						return page.ChildRef{}, false, ErrKeyNotFound
-					}
-					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
-						return page.ChildRef{}, false, ErrKeyNotFound
-					}
-				}
+		g := &scratch.groups[groupIdx]
+		for i := start; i < end; i++ {
+			scratch.probes[i].next = g.first
+			g.first = i
+			g.count++
+			scratch.present[scratch.probes[i].outIndex] = true
+		}
+		return true, nil
+	}
+	var n node.Node
+	if err := t.loadChildRefViewInto(&n, ref, verifyAlways, false); err != nil {
+		return false, err
+	}
+	switch n.Type() {
+	case page.PageTypeLeaf:
+		return false, nil
+	case page.PageTypeInternal:
+	default:
+		return false, fmt.Errorf("invalid page type %d", n.Type())
+	}
+	if depth == 0 {
+		low, high, ok, err := n.InternalFenceBounds()
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			for start < end && len(low) > 0 && compareTreeKey(scratch.probes[start].key, low) < 0 {
+				start++
 			}
-			if n.InternalLeafLogRefsEnabled() {
-				childRef, _, err := n.SearchInternalChildRef(key)
-				if err != nil {
-					return page.ChildRef{}, false, err
-				}
-				currRef = childRef
-			} else {
-				childID, _, err := n.SearchInternalChildID(key)
-				if err != nil {
-					return page.ChildRef{}, false, err
-				}
-				currRef = page.PageChildRef(childID)
+			for start < end && len(high) > 0 && compareTreeKey(scratch.probes[end-1].key, high) >= 0 {
+				end--
 			}
-		case page.PageTypeLeaf:
-			return currRef, false, nil
-		default:
-			return page.ChildRef{}, false, fmt.Errorf("invalid page type %d", n.Type())
+			// Compact once at the root; clear discarded borrowed keys too.
+			count := copy(scratch.probes, scratch.probes[start:end])
+			clear(scratch.probes[count:])
+			scratch.probes = scratch.probes[:count]
+			start, end = 0, count
 		}
 	}
-	return page.ChildRef{}, false, errors.New("tree too deep")
+	if start == end {
+		return true, nil
+	}
+	child, _, err := n.SearchInternalChildRef(scratch.probes[start].key)
+	if err != nil {
+		return false, err
+	}
+	for i := start + 1; i <= end; i++ {
+		var next page.ChildRef
+		if i < end {
+			next, _, err = n.SearchInternalChildRef(scratch.probes[i].key)
+			if err != nil {
+				return false, err
+			}
+			if next == child {
+				continue
+			}
+		}
+		groupable, err := t.planGetManyInterval(child, start, i, depth+1, scratch, verifyAlways)
+		if err != nil || !groupable {
+			return groupable, err
+		}
+		start, child = i, next
+	}
+	return true, nil
 }
 
 func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyAlways bool) (getManyLeafNodeLease, error) {

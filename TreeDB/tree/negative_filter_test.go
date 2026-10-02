@@ -29,8 +29,14 @@ func TestNegativeFilterPointEntrancesNeverDescend(t *testing.T) {
 	if found, err := tr.Has(k); found || err != nil {
 		t.Fatal(found, err)
 	}
-	if _, _, err := tr.findLeafRefForGetMany(k, false); !errors.Is(err, ErrKeyNotFound) {
-		t.Fatal(err)
+	scratch := getGetManyScratch(getManyLeafGroupMinKeys)
+	defer putGetManyScratch(scratch)
+	keys := make([][]byte, getManyLeafGroupMinKeys)
+	for i := range keys {
+		keys[i] = k
+	}
+	if groupable, err := tr.planGetMany(keys, scratch, false); err != nil || !groupable || len(scratch.groups) != 0 {
+		t.Fatal("negative-filter batch descended", groupable, err)
 	}
 	if err := tr.GetManyView([][]byte{k}, func(_ int, _, v []byte, found bool) error {
 		if found || v != nil {
