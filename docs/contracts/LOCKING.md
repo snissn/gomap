@@ -1,4 +1,4 @@
-# Locking (Exclusive Open)
+# Locking
 
 ## TL;DR
 
@@ -28,3 +28,35 @@
 
 - Abnormal termination releases the lock when the OS closes file descriptors.
 - There is currently no “read-only shared open” mode; the contract is single-writer.
+
+## Collection command-WAL ownership
+
+Collection command-WAL admission belongs to the executing operation. Queued
+combiner and typed-group requests retain no admission or mutation lease. Their
+eligibility reads are speculative; the selected worker acquires its own leases
+and revalidates the current source plan before assigning a command LSN. It
+reconciles every affected handle's vector indexes before delivering results.
+
+An unassigned operation may receive an internal pending-drain handoff. Its raw
+publication and owned teardown guards unwind before draining. It releases its
+actual mutation lease and runs the complete vector coverage/admission finalizer;
+neither mutation nor the write-domain mutex may remain held during the drain.
+Afterward it reacquires admission with a fresh coverage baseline and restores its
+actual mutation lease, including on error. A successful drain also checks that
+the write domain and DB remain open, revalidates the plan and reruns the barriers.
+This handoff never permits retrying an append, accepted publication or user
+callback. An already assigned intent retains its append owner's guards.
+
+External append/apply callers, including Raft executors, use
+`WithPreparedCommandWALMutation` or `WithPreparedCommandWALSplitMutationV1`.
+These own schema, vector admission/coverage and mutation before append through
+apply and `Finalize` or `Abort`. The admitted handle is callback-local, and its
+appended frame must be finalized or aborted before the callback returns. Passing
+an assigned intent directly to a collection operation does not establish this
+ownership contract.
+
+See [write-path and durability](../../TreeDB/docs/spec/write-path-and-durability.md)
+for command-WAL visibility and recovery boundaries. Deterministic stale-owner,
+same-schema, prepared-owner and queue-controlled publication tests cover these
+rules in `TreeDB/collections`; actual append/finalize callers are covered in
+`TreeDB/internal/raftapply`.

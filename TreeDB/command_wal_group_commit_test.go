@@ -1099,66 +1099,93 @@ func TestPublicCommandWALGroupCommitCloseDoesNotTearDownArmedLeader(t *testing.T
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = db.Close()
-		}
-	}()
+	closeTimeout := 3 * time.Second
+	if runtime.GOOS == "windows" {
+		// Windows CI can spend several seconds in the post-coordinator cached
+		// close after the armed leader has already made progress. The
+		// correctness assertion below owns the coordinator deadline; this
+		// deadline only bounds the platform's remaining close work.
+		closeTimeout = 10 * time.Second
+	}
 
 	db.commandWALGroupCommit.delay = time.Hour
 	db.commandWALGroupCommit.maxCommits = 64
 	db.commandWALGroupCommit.maxBytes = 1 << 30
 	leaderArmed := make(chan struct{})
 	releaseLeader := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
 	db.commandWALGroupCommit.testBeforeLeaderWait = func() {
 		close(leaderArmed)
 		<-releaseLeader
 	}
 
-	// Use the same forced group participant that checkpoint/Close uses without
-	// taking a public-operation read lock. This lets Close reach coordinator
-	// lifecycle handling while the leader retains the armed timer and wake
-	// channel immediately before select.
 	forceDone := make(chan error, 1)
-	go func() { forceDone <- db.forcePublicCommandWALGroupCommit() }()
+	forceFinished := make(chan struct{})
+	closeDone := make(chan error, 1)
+	closeFinished := make(chan struct{})
+	closeStarted := false
+	defer func() {
+		release()
+		select {
+		case <-forceFinished:
+		case <-time.After(3 * time.Second):
+			t.Error("forced group participant did not join during cleanup")
+			return
+		}
+		if closeStarted {
+			select {
+			case <-closeFinished:
+			case <-time.After(closeTimeout):
+				t.Error("Close did not join during cleanup")
+			}
+			return
+		}
+		if err := db.Close(); err != nil {
+			t.Errorf("cleanup Close: %v", err)
+		}
+	}()
+
+	// This synthetic forced participant bypasses the public-operation read
+	// lease so Close can reach coordinator lifecycle handling while the leader
+	// retains its armed timer and wake channel immediately before select.
+	go func() {
+		forceDone <- db.forcePublicCommandWALGroupCommit()
+		close(forceFinished)
+	}()
 	select {
 	case <-leaderArmed:
 	case <-time.After(time.Second):
 		t.Fatal("group leader did not arm timer before select")
 	}
 
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- db.Close() }()
+	closeStarted = true
+	go func() {
+		closeDone <- db.Close()
+		close(closeFinished)
+	}()
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Close returned while armed leader was held: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	close(releaseLeader)
+	release()
 
 	select {
 	case err := <-forceDone:
-		if err != nil {
-			t.Fatalf("forced group participant: %v", err)
+		// The synthetic participant has no public lifecycle lease, so a raw
+		// force after backend shutdown may reject it with ErrClosed.
+		if err != nil && !errors.Is(err, ErrClosed) {
+			t.Errorf("forced group participant: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("armed leader remained stranded after Close entered")
-	}
-	closeTimeout := 3 * time.Second
-	if runtime.GOOS == "windows" {
-		// Windows CI can spend several seconds in the post-coordinator cached
-		// close after the armed leader has already made progress. The
-		// correctness assertion above owns the coordinator deadline; this
-		// deadline only bounds the platform's remaining close work.
-		closeTimeout = 10 * time.Second
 	}
 	select {
 	case err := <-closeDone:
 		if err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-		closed = true
 	case <-time.After(closeTimeout):
 		t.Fatal("Close did not finish after armed leader progressed")
 	}

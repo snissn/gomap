@@ -474,9 +474,10 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 		}
 		unlockSchema := collection.lockCollectionSchemaRead()
 		defer unlockSchema()
-		unlockCoverage := collection.lockVectorIndexCoverageMutation()
-		defer unlockCoverage()
-		_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, retained, intent, nil, projection)
+		admissionState := collection.lockCollectionCommandWALAdmission()
+		admission := &admissionState
+		defer admission.unlock()
+		_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, retained, intent, nil, projection, admission)
 		if err != nil {
 			return err
 		}
@@ -503,9 +504,10 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	}
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := collection.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, documents, intent, nil, nil)
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
+	_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, documents, intent, nil, nil, admission)
 	if err != nil {
 		return err
 	}

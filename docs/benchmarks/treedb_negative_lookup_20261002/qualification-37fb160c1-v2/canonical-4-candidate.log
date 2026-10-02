@@ -1,0 +1,11 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkSnapshotValueLogGet/Get-4     	  280689	      2077 ns/op	     256 B/op	       1 allocs/op
+BenchmarkSnapshotValueLogGet/GetAppend-4         	  336260	      1940 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshotValueLogGet/GetUnsafe-4         	  132878	      4443 ns/op	    4580 B/op	       3 allocs/op
+BenchmarkDBCheckpointedValueLogGet/Get-4         	  190059	      3342 ns/op	     315 B/op	       1 allocs/op
+BenchmarkDBCheckpointedValueLogGet/GetAppend-4   	  195462	      3214 ns/op	      59 B/op	       0 allocs/op
+BenchmarkDBCheckpointedValueLogGet/GetUnsafe-4   	  191887	      3352 ns/op	     315 B/op	       1 allocs/op
+PASS

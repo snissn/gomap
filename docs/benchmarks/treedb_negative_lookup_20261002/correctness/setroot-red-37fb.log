@@ -1,0 +1,6 @@
+=== RUN   TestNegativeFilterSetRootDropsCoverage
+    negative_filter_test.go:58: SetRoot retained coverage of another root
+--- FAIL: TestNegativeFilterSetRootDropsCoverage (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/tree	0.447s
+FAIL

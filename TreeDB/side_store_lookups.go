@@ -54,15 +54,16 @@ func (kv templateBackendKV) AcquireStableTemplateSnapshot() (templatedb.StablePh
 	return acquireStableTemplateSnapshot(kv.db), nil
 }
 
-func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
+func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.StableDictionaryResourceProvider, error) {
 	if opts == nil || opts.DisableSideStores {
-		return func() error { return nil }, nil
+		return func() error { return nil }, nil, nil
 	}
 	if rootDir == "" {
-		return nil, fmt.Errorf("treedb: missing root dir for side-store lookup wiring")
+		return nil, nil, fmt.Errorf("treedb: missing root dir for side-store lookup wiring")
 	}
 
 	var closers []func() error
+	var dictionaryResources db.StableDictionaryResourceProvider
 	cleanup := func() error {
 		var first error
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -79,10 +80,10 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 		indexInfo, err := os.Stat(indexPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("treedb: stat dictdb index: %w", err)
+				return nil, nil, fmt.Errorf("treedb: stat dictdb index: %w", err)
 			}
 		} else if indexInfo.IsDir() {
-			return nil, fmt.Errorf("treedb: dictdb index path is a directory: %s", indexPath)
+			return nil, nil, fmt.Errorf("treedb: dictdb index path is a directory: %s", indexPath)
 		} else {
 			dictChunk := opts.DictDBChunkSize
 			if dictChunk <= 0 {
@@ -90,6 +91,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			dictOpts := *opts
 			dictOpts.PhysicalSnapshotSideStoreCapture = nil
+			dictOpts.NegativeLookupFilterBytes = 0
 			dictOpts.Dir = dictDir
 			dictOpts.ReadOnly = opts.ReadOnly
 			dictOpts.ChunkSize = dictChunk
@@ -109,7 +111,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 
 			dictBackend, err := db.Open(dictOpts)
 			if err != nil {
-				return nil, fmt.Errorf("treedb: open dictdb: %w", err)
+				return nil, nil, fmt.Errorf("treedb: open dictdb: %w", err)
 			}
 			closers = append(closers, dictBackend.Close)
 			previousCapture := opts.PhysicalSnapshotSideStoreCapture
@@ -128,6 +130,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 				return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 			}
 			store := dictdb.New(dictBackend)
+			dictionaryResources = store
 			opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 				return store.GetDictBytes(context.Background(), dictID)
 			}
@@ -166,11 +169,11 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 		if err != nil {
 			if !os.IsNotExist(err) {
 				_ = cleanup()
-				return nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
+				return nil, nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
 			}
 		} else if indexInfo.IsDir() {
 			_ = cleanup()
-			return nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
+			return nil, nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
 		} else {
 			templateChunk := opts.TemplateDBChunkSize
 			if templateChunk <= 0 {
@@ -178,6 +181,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			templateOpts := *opts
 			templateOpts.PhysicalSnapshotSideStoreCapture = nil
+			templateOpts.NegativeLookupFilterBytes = 0
 			templateOpts.Dir = templateDir
 			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff
 			templateOpts.ReadOnly = templateReadOnly
@@ -198,7 +202,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			templateBackend, err := db.Open(templateOpts)
 			if err != nil {
 				_ = cleanup()
-				return nil, fmt.Errorf("treedb: open templatedb: %w", err)
+				return nil, nil, fmt.Errorf("treedb: open templatedb: %w", err)
 			}
 			closers = append(closers, templateBackend.Close)
 			previousCapture := opts.PhysicalSnapshotSideStoreCapture
@@ -235,5 +239,5 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 		}
 	}
 
-	return cleanup, nil
+	return cleanup, dictionaryResources, nil
 }

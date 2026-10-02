@@ -53,6 +53,97 @@ Recommended starting point for new performance work:
 
 ## Benchmark commands
 
+### Persistent value-log decode scratch
+
+Retained document and outer-leaf reads can reach the shared value-log
+compressed-frame decoder. Its output remains bounded to each raw
+frame length while successful same-backing reuse preserves caller capacity.
+Compare alternating 64 KiB/4 KiB frames independently from owned result copies:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkValueLogDecodeFrame(Alloc|MixedReuse)$' \
+  -benchmem -count 5
+```
+
+`MixedReuse` reports `backing_allocs/op` and `scratch_cap_B` alongside runtime,
+throughput, `B/op`, and `allocs/op`; warmed reuse should allocate no replacement
+backing. `scratch_cap_B` is the visible capacity of one retained buffer, not
+process RSS or a cache budget. Preserving capacity does not increase that
+buffer's physical allocation; it exposes its existing backing for reuse.
+Use ordinary `BenchmarkDBValueLogGet/Get` as a separate public-path guardrail.
+Allocation reduction alone is not a claim of faster point reads, and there is
+no on-disk format change. See [decode scratch reuse](../spec/value-log-lifecycle.md#11-decode-scratch-reuse).
+The [#4889 qualification packet](../../../docs/benchmarks/treedb_decode_reuse_20261001/README.md)
+retains matched sources, public caller/ownership audit and physical-capacity caveats.
+
+For owned value-log routing, `BenchmarkFileReadAppendOwned` compares equal
+compressed pointer records through file fallback, mapped decode and warmed
+mapped cache. The cache row pre-admits the same raw frame through a reusable
+destination on both revisions, isolating the final owned-copy cost. The
+`cold_open_map` row includes OS-cache-warm open, map, read, admission and close
+costs. Each result still owns its output bytes. Cache retained-byte counters
+measure raw payload lengths; pooled backing capacity may be larger. Report GC
+heap, mapped bytes and process RSS separately. Mapping and cache admission
+retain their existing limits. Use reopened public `Get` route
+counters to prove the selected path rather than comparing inline values against
+pointer values. For paired retained capture, export one fully verified closed
+canonical fixture with `TREEDB_OWNED_VLOG_FIXTURE_EXPORT=/new/fixture/path`
+(the benchmark skips timed reads), freeze its file hashes, then pass
+`TREEDB_OWNED_VLOG_FIXTURE=/frozen/fixture/path` to both revisions. Each process
+clones the fixture before opening it. Existing snapshot restore helpers rebind
+only physical dependency identities in the copied indexes; value-log and
+dictionary bytes, pointers and logical roots stay identical. Copy, identity
+rebind, full-value verification and warmup are outside timing. Normal constructors remain separate guardrails because
+asynchronous dictionary training can change their stored layout. The
+[retained #4891 packet](../../../docs/benchmarks/treedb_owned_values_20261001/README.md)
+records sources, fixture hashes, repetitions and memory limits. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
+
+The [final mmap publication repair packet](../../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md)
+binds runtime 9ab and the unchanged read/fixture blobs after main integration.
+Its ordinary pointer Get median improves 3098→1928 ns while allocations remain
+315 B/op and integer 1 alloc/op. It explicitly accepts the measured capped nil
+fallback +55 ns/+5.04% and OS-warm lifecycle +7.32% tradeoffs; the separate exact
+ab2→9ab control cannot erase those base comparisons. Integer allocation fields
+and logical raw-cache counters do not prove exact allocation counts or physical
+memory reductions.
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkFileReadAppendOwned$' -benchmem -count 5
+TREEDB_HOT_PATH_STATS=1 GOWORK=off go test ./TreeDB -run '^$' \
+  -bench '^BenchmarkDBOwnedValueLogRoute$' -benchmem -count 5
+```
+
+### Main-cache residency and static value placement
+
+Use the [#4892 instrumentation runbook](../../../docs/benchmarks/treedb_memory_budget/README.md)
+when comparing read residency. `BenchmarkMemoryBudgetWorkflow` captures a full
+public load/checkpoint/Get/GetAppend/GC/update/reopen workflow with original
+source, overlay, compiled-input and binary identities. Land and freeze the
+reviewed harness before collecting full 250,000-key retained cells. Bounded
+8,192-key pilots verify construction only and cannot establish a memory win.
+
+Existing leaf-cache entries and grouped-frame byte/admission limits govern the
+backend main caches. The five leaf/frame splits share 64 MiB of configured
+limits; lazy slot allocation, spare backing, metadata, mmap, cache-layer
+readers and side stores mean physical memory can differ. Valid leaf/frame byte
+counters are not all backing capacity. Frame max-bytes zero removes its byte
+limit; disabling entries is also required to turn it off. No new public knob
+or runtime controller is introduced for the experiment.
+
+Report GC1/GC2 heap and each owner alongside sampled heap peaks and observed
+Linux RSS/HWM. Preserve mmap bytes separately; do not sum them with RSS or sum
+aliases of the same owner. Per-phase elapsed/allocation deltas include fixture
+generation or full consumer validation, and need normalization by actual
+operations. Thresholds 1/1024 contrast 256-byte values; random 4 KB values use
+persistent value-log pointers in both. Persisted entry flags prove placement.
+Keep WAL bytes separate from persistent value/leaf logs, indexes and side
+stores; file lengths are logical storage, not allocated blocks or RAM. Forced
+GC is diagnostic and does not authorize storage reclamation or prove a useful
+production trim. Activate a narrow trim only after retained owner evidence
+shows unnecessary idle backing without required live leases.
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:

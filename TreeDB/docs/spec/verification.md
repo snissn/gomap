@@ -762,6 +762,22 @@ Coverage:
 - `TreeDB/compact_storage_test.go`
   - `TestCompactStorageFullPacksLeafGenerationDebtOffline`
   - `TestCompactStorageCachedDeletesZeroByteValueLogFiles`
+- `TreeDB/compact_storage_persistence_test.go`
+  - `TestCompactStorageExhaustiveCommandWALRandom4KOffline`: dependency-free
+    public durable command-WAL fixture with 32-byte keys, random 4-KiB values,
+    synced spread updates, cached-owner close/reopen, and exclusive backend
+    Exhaustive compaction with synced phases. Both the 20,000-key characterization
+    and original 100,000-key size run two maintenance/GC passes and verify every
+    final value plus 10,000 missing keys through independent read-only opens.
+    The smaller case also checks partial-phase failure, cleanup, and retry when
+    packed dictionary authority is unavailable. `-short` skips the original size.
+- `TreeDB/side_store_lookups_test.go`
+  - read-only dictionary owners retain lookups without writes; stable capture
+    succeeds on supported owners and returns typed namespace refusal without
+    authority on reopened read-only Windows owners
+- `TreeDB/db/leaf_generation_pack_authority_test.go`
+  - dictionary closure lifetime, rollback after partial install, and post-install
+    failure cleanup
 - `TreeDB/compact_storage_cached_internal_test.go`
   - `TestCompactStorageCachedAdvancesWritersPastBackendSegments`
 
@@ -3320,6 +3336,13 @@ visibility fences, wrong producer identity, automatic pending replay after
 reopen, idle retry without network work, and shutdown while foreground work
 owns the mutation lock. Coupled catalog/target quorum loss refuses cached
 receipts and watermark hits; the source fixture has one voter.
+TestFixedPeerCloseRetiresUnusedAuthenticatedSelfDialV1 deterministically races
+an authenticated speculative self-dial with a returned HTTP connection, then
+checks graceful Close and complete resource release. TestFixedPeerAuthenticatedControlSocketCleanupOrderV1
+characterizes the caller-first fixture ownership requirement. Existing
+TestPeerSecurityDrainNativeVectorSelfFanoutV1 and
+TestPeerSecurityShutdownTimeoutAndForcedCloseV1 retain admitted-work and bounded
+shutdown-error coverage.
 TestVectorPartitionSplitSourceInsertLegacyRefusedBeforeMutationV1 and
 TestSplitInsertVisibilityWireOwnedAndBoundedV1 cover unsupported legacy
 routing and bounded owned wire extensions.

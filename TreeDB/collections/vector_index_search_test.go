@@ -4030,7 +4030,7 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 }
 
 func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
-	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "mutation_waits_for_delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
+	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "mutation_waits_for_delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async", "no_index_noop_update", "no_index_prepared_noop", "no_index_prepared_abort", "indexed_prepared_noop", "indexed_prepared_abort"} {
 		t.Run(publication, func(t *testing.T) {
 			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 			if err != nil {
@@ -4040,7 +4040,7 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 
 			def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
 			indexes := []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
-			if publication == "no_index_read" || publication == "concurrent_no_index_search" {
+			if publication == "no_index_read" || publication == "concurrent_no_index_search" || publication == "no_index_noop_update" || publication == "no_index_prepared_noop" || publication == "no_index_prepared_abort" {
 				indexes = nil
 			}
 			mgr := NewCollectionManager(d)
@@ -4083,6 +4083,48 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			}
 
 			switch publication {
+			case "no_index_noop_update", "no_index_prepared_noop", "no_index_prepared_abort", "indexed_prepared_noop", "indexed_prepared_abort":
+				generation, err := col.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					t.Fatalf("buffered seed generation: %v", err)
+				}
+				if index := col.registeredVectorIndex(def.Name); index == nil || !index.coversSourceDocumentGeneration(generation) {
+					t.Fatalf("buffered seed lacks native coverage for generation %d", generation)
+				}
+				var buffer VectorIndexSearchBuffer
+				got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+				if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" || got.Stats.SearchRouteNativeRuntime != 1 {
+					t.Fatalf("covered buffered seed search response=%+v err=%v", got, err)
+				}
+				if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+					t.Fatal("native seed search drained the buffered document")
+				}
+			}
+
+			switch publication {
+			case "no_index_noop_update":
+				matched, modified, err := col.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
+					return current, false, nil
+				})
+				if err != nil || !matched || modified {
+					t.Fatalf("no-op Update matched=%v modified=%v err=%v", matched, modified, err)
+				}
+			case "no_index_prepared_noop", "no_index_prepared_abort", "indexed_prepared_noop", "indexed_prepared_abort":
+				var callbackErr error
+				if publication == "no_index_prepared_abort" || publication == "indexed_prepared_abort" {
+					callbackErr = errors.New("reject prepared mutation before frame append")
+				}
+				called := false
+				err := col.WithPreparedCommandWALMutation(func(owner *CommandWALAdmittedCollection) error {
+					called = true
+					if pending := mgr.StatsSnapshot().PendingDocuments; pending != 0 {
+						return fmt.Errorf("prepared callback pending documents=%d want 0", pending)
+					}
+					return callbackErr
+				})
+				if !called || !errors.Is(err, callbackErr) {
+					t.Fatalf("prepared callback called=%v err=%v want %v", called, err, callbackErr)
+				}
 			case "status":
 				if _, err := col.VectorIndexStatus(def.Name); err != nil {
 					t.Fatalf("VectorIndexStatus: %v", err)
@@ -4286,6 +4328,12 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 			if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" {
 				t.Fatalf("SearchVectorIndexWithBuffer results=%+v err=%v", got.Results, err)
+			}
+			switch publication {
+			case "no_index_noop_update", "no_index_prepared_noop", "no_index_prepared_abort", "indexed_prepared_noop", "indexed_prepared_abort":
+				if got.Stats.SearchRouteNativeRuntime != 1 {
+					t.Fatalf("flushed seed search did not use current native runtime: %+v", got)
+				}
 			}
 			generation, err := col.currentVectorIndexDocumentGeneration()
 			if err != nil {
@@ -6072,14 +6120,17 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 		t.Fatal("published native search waited on graph mutation lock")
 	}
 	index.mu.Unlock()
-	unlockCoverage := col.lockVectorIndexCoverageMutation()
+	unlockSchema := col.lockCollectionSchemaRead()
+	defer unlockSchema()
+	admission := col.lockCollectionCommandWALAdmission()
+	unlockCoverage := admission.unlock
 	coverageLocked := true
 	defer func() {
 		if coverageLocked {
 			unlockCoverage()
 		}
 	}()
-	ids, err := col.insertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	ids, err := col.insertBatchSchemaLocked([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil, &admission)
 	if err != nil {
 		t.Fatalf("insertBatch: %v", err)
 	}

@@ -105,6 +105,18 @@ func (c *Collection) ValidatedVectorFromDocumentV1(index string, format Document
 	if err != nil {
 		return nil, err
 	}
+	return c.validatedVectorFromDefinitionV1(def, format, document)
+}
+
+func (c *Collection) validatedVectorFromDocumentPreparedV1(index string, format DocumentFormat, document []byte) ([]float32, error) {
+	def, err := c.declaredVectorIndexDefinitionPrepared(index)
+	if err != nil {
+		return nil, err
+	}
+	return c.validatedVectorFromDefinitionV1(def, format, document)
+}
+
+func (c *Collection) validatedVectorFromDefinitionV1(def VectorIndexDefinition, format DocumentFormat, document []byte) ([]float32, error) {
 	want, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat)
 	if err != nil {
 		return nil, err

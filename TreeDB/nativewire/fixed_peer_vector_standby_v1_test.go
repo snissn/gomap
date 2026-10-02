@@ -23,24 +23,17 @@ func TestFixedPeerImmutableVectorNodesOnlyStandbyV1(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer listener.Close()
-		return listener.Addr().String()
-	}
+	addresses := fixedPeerFixtureUnusedAddressesV1(t, configs, 2)
 	const spareID raftcluster.NodeID = "standby"
 	spare := configs[0]
-	spare.NodeID, spare.ListenAddress = spareID, address()
+	spare.NodeID, spare.ListenAddress = spareID, addresses[0]
 	spare.Nodes = append(append([]FixedPeerTCPNodeV1(nil), spare.Nodes...), FixedPeerTCPNodeV1{ID: spareID, Address: spare.ListenAddress})
 	vector := *spare.Vector
 	vector.PublicAddresses = make(map[raftcluster.NodeID]string, len(spare.Vector.PublicAddresses)+1)
 	for id, addr := range spare.Vector.PublicAddresses {
 		vector.PublicAddresses[id] = addr
 	}
-	vector.PublicAddresses[spareID] = address()
+	vector.PublicAddresses[spareID] = addresses[1]
 	spare.Vector = &vector
 	spare.RaftListen = map[raftcluster.GroupID]string{}
 	spare.DataRoot, spare.RaftRoot = filepath.Join(t.TempDir(), "data"), filepath.Join(t.TempDir(), "raft")

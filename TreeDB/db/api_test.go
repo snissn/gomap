@@ -660,18 +660,30 @@ func TestGet_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 		t.Fatalf("initial Get: %v", err)
 	}
 
-	forceStalePublishedValueLogSetForReadRetryTest(t, db)
-	before := db.valueLogManager.RefreshScanCount()
-	got, err := db.Get(key)
-	if err != nil {
-		t.Fatalf("Get after stale state: %v", err)
-	}
-	after := db.valueLogManager.RefreshScanCount()
-	if after <= before {
-		t.Fatalf("expected Get retry to refresh value-log set: before=%d after=%d", before, after)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("Get mismatch after retry")
+	for _, tc := range []struct {
+		name string
+		read func() ([]byte, error)
+	}{
+		{"Get", func() ([]byte, error) { return db.Get(key) }},
+		{"GetAppend", func() ([]byte, error) { return db.GetAppend(key, nil) }},
+		{"GetVersioned", func() ([]byte, error) { v, _, err := db.GetVersioned(key); return v, err }},
+		{"GetVersionedAppend", func() ([]byte, error) { v, _, err := db.GetVersionedAppend(key, nil); return v, err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forceStalePublishedValueLogSetForReadRetryTest(t, db)
+			before := db.valueLogManager.RefreshScanCount()
+			got, err := tc.read()
+			if err != nil {
+				t.Fatalf("read after stale state: %v", err)
+			}
+			after := db.valueLogManager.RefreshScanCount()
+			if after <= before {
+				t.Fatalf("expected retry refresh: before=%d after=%d", before, after)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatal("value mismatch after retry")
+			}
+		})
 	}
 }
 

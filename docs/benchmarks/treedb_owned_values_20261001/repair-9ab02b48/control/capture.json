@@ -1,0 +1,688 @@
+{
+  "cells": 20,
+  "complete": true,
+  "grant": "root-values-fallback-ab2-9ab-20261002T0648-exclusive",
+  "original_packet_modified": false,
+  "processes": [
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "d434ece8962b252a1d8265d532191cc4081071b6314ef261701836e8c73b6a8a",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923715968608938,
+      "max_rss_kib": 13356,
+      "pid": 2678470,
+      "repetition": 1,
+      "revision": "previous",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 966691,
+          "ns_per_op": 1119.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1043.0
+        }
+      },
+      "rss_sha256": "7b06c8d882d9a414c1749167973480eaca34db3f6cd3df73604d6af379293547",
+      "started_unix_ns": 1790923713799575176,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "34a0877f809064e2288311f5e73d2b185e63d1cbaa2620c5ce11478ea6e9bf6e",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/previous-1.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "c95ca5f11a02395b81ac397bc4feecb421262e352f17206427479d01449d17ef",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923718152119805,
+      "max_rss_kib": 13028,
+      "pid": 2678481,
+      "repetition": 1,
+      "revision": "candidate",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 968425,
+          "ns_per_op": 1118.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1059.0
+        }
+      },
+      "rss_sha256": "8392122204f308adf85f51677927b25c89a55d9f7861466fa64785b0b4dc491a",
+      "started_unix_ns": 1790923715977126358,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "0c6f585a8696c15f39c5b4da9498a2c09e6e20d2aa35be723fa99072a0b6f9da",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/candidate-1.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "c95ca5f11a02395b81ac397bc4feecb421262e352f17206427479d01449d17ef",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923720369298339,
+      "max_rss_kib": 13524,
+      "pid": 2678497,
+      "repetition": 2,
+      "revision": "candidate",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 946686,
+          "ns_per_op": 1122.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1112.0
+        }
+      },
+      "rss_sha256": "a4eb50a537e2205345dac379df484e4da07be4103d25008860004a836e927003",
+      "started_unix_ns": 1790923718162283811,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "38b9387a54cf83e2f277fbdb3cd6183bf98e267a62267c57249889cb22181d3e",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/candidate-2.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "d434ece8962b252a1d8265d532191cc4081071b6314ef261701836e8c73b6a8a",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923722527315688,
+      "max_rss_kib": 13572,
+      "pid": 2678574,
+      "repetition": 2,
+      "revision": "previous",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 964573,
+          "ns_per_op": 1114.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1042.0
+        }
+      },
+      "rss_sha256": "98197d9dca1e461ca8fc05f7e8a8ff5c25c425e958b299c1870edcf341f77f76",
+      "started_unix_ns": 1790923720378431325,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "cdbafc892d4b1ff976a9d88446b11b7996a3eb96c9528c109ae8e00f8e403a32",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/previous-2.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "d434ece8962b252a1d8265d532191cc4081071b6314ef261701836e8c73b6a8a",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923724690305079,
+      "max_rss_kib": 14096,
+      "pid": 2678582,
+      "repetition": 3,
+      "revision": "previous",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 967234,
+          "ns_per_op": 1119.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1038.0
+        }
+      },
+      "rss_sha256": "f854c52b5a4e881736c11e29790e63e38d62f46276890a6845abfa31543413f3",
+      "started_unix_ns": 1790923722536693234,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "6004c5d04d30351c5195a68c3f9f5a6e916587bf4ed91bc8c317effd5806fa8b",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/previous-3.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "c95ca5f11a02395b81ac397bc4feecb421262e352f17206427479d01449d17ef",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923726877109198,
+      "max_rss_kib": 17196,
+      "pid": 2678594,
+      "repetition": 3,
+      "revision": "candidate",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 957613,
+          "ns_per_op": 1138.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1044.0
+        }
+      },
+      "rss_sha256": "5e3ce1eafb02a8d9abe3051276c2e30e13093fccf29f2af15597ad2cc2823f7f",
+      "started_unix_ns": 1790923724709645304,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "97b28d40db43831ef20ed95b46775b0b5d9c272fabf38650c4d90118b6eb35dd",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/candidate-3.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "c95ca5f11a02395b81ac397bc4feecb421262e352f17206427479d01449d17ef",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923729069340831,
+      "max_rss_kib": 13400,
+      "pid": 2678765,
+      "repetition": 4,
+      "revision": "candidate",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 970980,
+          "ns_per_op": 1124.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1058.0
+        }
+      },
+      "rss_sha256": "3f068d60bb18b332f7fd63d3658f884f1740a6fd49a88af20f3e1273f7a145fa",
+      "started_unix_ns": 1790923726886426031,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "317eadfef23372ff77b0b70133e0b90148a576e99a6e0de406f1d7d25adc5565",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/candidate-4.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "d434ece8962b252a1d8265d532191cc4081071b6314ef261701836e8c73b6a8a",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923731265425817,
+      "max_rss_kib": 13152,
+      "pid": 2678773,
+      "repetition": 4,
+      "revision": "previous",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 966396,
+          "ns_per_op": 1154.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1038.0
+        }
+      },
+      "rss_sha256": "bddae6609977f0abb8f57c571508a3045987d2ee2c799b36542b14494b0c24c2",
+      "started_unix_ns": 1790923729078752515,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "cabcbbab4d56bd45308393c7fc145a91fe5e7fedceda119f57ee6111408fe6d5",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/previous-4.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "d434ece8962b252a1d8265d532191cc4081071b6314ef261701836e8c73b6a8a",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923733439217532,
+      "max_rss_kib": 13728,
+      "pid": 2678845,
+      "repetition": 5,
+      "revision": "previous",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 957538,
+          "ns_per_op": 1117.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1051.0
+        }
+      },
+      "rss_sha256": "d19f126bba79fc47ddd40c0fa19da9db3258e3ef49a9d608d7d2b610c64860bb",
+      "started_unix_ns": 1790923731284779120,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "f89f4c367593cbc6f05e98f850e5391093f059cb2f276a0e027fbfdc48cf8c7f",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/previous-5.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-previous.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ],
+      "binary_sha256": "c95ca5f11a02395b81ac397bc4feecb421262e352f17206427479d01449d17ef",
+      "cwd": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48",
+      "environment": {
+        "GOENV": "off",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "1GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "LANG": "en_US.UTF-8",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "TMPDIR": "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/tmp",
+        "TREEDB_HOT_PATH_STATS": "1"
+      },
+      "exit_code": 0,
+      "finished_unix_ns": 1790923735640301642,
+      "max_rss_kib": 13400,
+      "pid": 2678853,
+      "repetition": 5,
+      "revision": "candidate",
+      "rows": {
+        "nil_dst": {
+          "allocations_per_op": 1,
+          "bytes_per_op": 512,
+          "iterations": 986868,
+          "ns_per_op": 1119.0
+        },
+        "reused_dst": {
+          "allocations_per_op": 0,
+          "bytes_per_op": 0,
+          "iterations": 1000000,
+          "ns_per_op": 1053.0
+        }
+      },
+      "rss_sha256": "533a1ffae274722f61e55ba86f02347fd5cb7f8336411276ec612f5aae17b357",
+      "started_unix_ns": 1790923733448917966,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "40edf668acc8d9259960f8ffba868217e6a0139abc3e526aba7a9417d477b09f",
+      "wrapper_argv": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/fallback-control-ab2-9ab-v1/candidate-5.rss",
+        "/mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-9ab02b48/bin/valuelog-candidate.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkFileReadAppendCompressedFallback$",
+        "-test.benchtime=1s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=3m"
+      ]
+    }
+  ],
+  "schema": "mmap-fallback-control-v1",
+  "summary": {
+    "nil_dst": {
+      "candidate_change_percent": 0.2680965147453085,
+      "medians": {
+        "candidate": 1122.0,
+        "previous": 1119.0
+      },
+      "samples": {
+        "candidate": [
+          1118.0,
+          1122.0,
+          1138.0,
+          1124.0,
+          1119.0
+        ],
+        "previous": [
+          1119.0,
+          1114.0,
+          1119.0,
+          1154.0,
+          1117.0
+        ]
+      }
+    },
+    "reused_dst": {
+      "candidate_change_percent": 1.5355086372360827,
+      "medians": {
+        "candidate": 1058.0,
+        "previous": 1042.0
+      },
+      "samples": {
+        "candidate": [
+          1059.0,
+          1112.0,
+          1044.0,
+          1058.0,
+          1053.0
+        ],
+        "previous": [
+          1043.0,
+          1042.0,
+          1038.0,
+          1038.0,
+          1051.0
+        ]
+      }
+    }
+  },
+  "timing_only": true
+}

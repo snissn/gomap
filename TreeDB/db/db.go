@@ -79,6 +79,7 @@ type StateToken struct {
 // AcquireSnapshot reads this single pointer so index, state, value-log manager,
 // and publication epoch always come from the same publish event.
 type snapshotView struct {
+	negativeFilter         *tree.NegativeFilter
 	idx                    *indexGen
 	state                  *DBState
 	vlogManager            *valuelog.Manager
@@ -1142,7 +1143,10 @@ type ValueLogOptions struct {
 }
 
 type Options struct {
-	Dir string
+	// NegativeLookupFilterBytes enables a fixed monotonic point-read filter.
+	// Zero disables it; valid enabled budgets are 8 bytes through 64 MiB.
+	NegativeLookupFilterBytes int
+	Dir                       string
 	// PhysicalSnapshotSideStoreCapture is registered by the owner of dictionary
 	// and template stores. A missing owner refuses deferred export of an existing
 	// side index. Only "dictdb" and "templatedb" names are admitted.
@@ -1658,12 +1662,23 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	if db == nil {
 		return nil
 	}
+	snap := db.snapPool.Get()
+	if !db.captureSnapshotWithValueLogPublicationLockHeld(snap) {
+		db.snapPool.Put(snap)
+		return nil
+	}
+	return snap
+}
+
+// captureSnapshotWithValueLogPublicationLockHeld is shared by fresh exported
+// handles and private one-shot reads. The caller owns the publication lock and
+// an inactive handle, and must release a successful capture with Snapshot.Close.
+func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
-		return nil
+		return false
 	}
-	snap := db.snapPool.Get()
 	if snap.registryShardHint == snapshotShardHintUnset {
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
@@ -1677,14 +1692,12 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 		db.snapshotAcquireRO[acqShard].Add(-1)
 	}()
 	if db.closing.Load() {
-		db.snapPool.Put(snap)
-		return nil
+		return false
 	}
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		db.snapPool.Put(snap)
-		return nil
+		return false
 	}
 	idx := view.idx
 	state := view.state
@@ -1693,8 +1706,7 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			db.snapPool.Put(snap)
-			return nil
+			return false
 		}
 		vm.Acquire(vlogSet)
 	}
@@ -1705,8 +1717,7 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 			if vlogNeedsPin && vm != nil {
 				_ = vm.Release(vlogSet)
 			}
-			db.snapPool.Put(snap)
-			return nil
+			return false
 		}
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
@@ -1768,11 +1779,12 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 			snap.treeRoot = 0
 		}
 	}
+	snap.tree.SetNegativeFilter(view.negativeFilter)
 	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
 	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
-	return snap
+	return true
 }
 
 // AcquireStableSnapshot pins the current index generation against online
@@ -1931,6 +1943,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
+		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
+	}
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
@@ -2542,6 +2557,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, fmt.Errorf("treedb: finalize command WAL replay: %w", err)
 	}
 
+	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
 		interval:    opts.PruneInterval,
@@ -3556,7 +3572,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		}
 		db.observeCommandWALCovered(previousApplied, nextMeta.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(idx, newState, db.valueLogManager)
+	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
 	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
@@ -3916,15 +3932,21 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if db == nil {
 		return ErrClosed
 	}
-	// Storage maintenance takes maintenanceMu before teardownMu. Preserve that
-	// order so leaf-generation GC cannot deadlock this cleanup path.
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
-	if err != nil || !pending {
-		return err
+	for {
+		db.maintenanceMu.Lock()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		if err == nil && pending {
+			err = db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
+		}
+		db.maintenanceMu.Unlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
 	}
-	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 }
 
 // PrepareCommandWALCoveredPrefixCleanup closes the recovery-covered physical
@@ -3935,9 +3957,18 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	if db == nil {
 		return false, ErrClosed
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	return db.prepareCommandWALCoveredPrefixCleanupLocked()
+	for {
+		db.maintenanceMu.Lock()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		db.maintenanceMu.Unlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return pending, err
+		}
+		if err := drain.Drain(); err != nil {
+			return false, err
+		}
+	}
 }
 
 func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
@@ -3995,9 +4026,18 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
-	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+	for {
+		db.teardownMu.RLock()
+		err := db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+		db.teardownMu.RUnlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
+	}
 }
 
 // checkpointTeardownPinned runs while the caller holds teardownMu.RLock.
@@ -4491,7 +4531,7 @@ func (db *DB) checkReadAdmissionLocked() error {
 	return nil
 }
 
-func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
+func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager, coverage ...*negativeRootCoverage) {
 	if db == nil {
 		return
 	}
@@ -4500,6 +4540,15 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		return
 	}
 	old := db.snapshotViewRO.Load()
+	var negativeFilter *tree.NegativeFilter
+	if old != nil && old.idx == idx && old.state != nil {
+		if old.state.CommitSeq == state.CommitSeq && old.state.RootPageID == state.RootPageID {
+			negativeFilter = old.negativeFilter
+		}
+		if len(coverage) == 1 && coverage[0].matches(old, idx, state) {
+			negativeFilter = coverage[0].filter
+		}
+	}
 	coherentRootChanged := old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID
 	publishEpoch := db.systemRootPublishEpoch.Load()
 	if coherentRootChanged {
@@ -4509,6 +4558,7 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
 	}
 	db.snapshotViewRO.Store(&snapshotView{
+		negativeFilter:         negativeFilter,
 		idx:                    idx,
 		state:                  state,
 		vlogManager:            vm,

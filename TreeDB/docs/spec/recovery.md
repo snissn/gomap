@@ -34,6 +34,12 @@ whole-segment GC. A live construction pin or changed post-plan frontier prevents
 deletion; referenced-empty corruption and uncertain/nonregular entries remain
 fail-closed. Explicit quarantine protects an empty file as well.
 
+Optional negative point lookup coverage is process-local. The main backend
+bootstraps it only after ordinary replay and replay finalizers finish; read-only
+opens may scan their selected root without replaying it. A bounded scan failure
+leaves exact reads available. Filter contents are never recovered from disk or
+used as durability evidence. See [point lookup coverage](contracts.md#251-optional-negative-point-lookup-coverage).
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.

@@ -3,6 +3,8 @@ package db
 import (
 	"errors"
 	"sync"
+
+	"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier"
 )
 
 type commandWALRawBarrier struct {
@@ -19,7 +21,9 @@ type commandWALRawBarrier struct {
 // raw KV publishes cannot create AppliedCommandLSN gaps. A caller takes
 // exclusive pre-raw admission before it acquires the command-WAL publish mutex;
 // hooks still run with that mutex held so existing staged publishers retain
-// their atomic raw-publish contract. A hook must not append command-WAL frames,
+// their atomic raw-publish contract. A higher-level drain that would wait for
+// foreground publication returns an internal PendingDrain handoff instead;
+// the boundary owner drops all its leases, drains, then reruns every hook. A hook must not append command-WAL frames,
 // acquire LockCommandWALStaging, or call a path that does either. The returned unregister
 // function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
@@ -91,12 +95,21 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 		hook := barrier.hook
 		barrier.wg.Add(1)
 		barrier.mu.Unlock()
-		func() {
+		err := func() error {
 			defer barrier.wg.Done()
-			if err := hook(); err != nil {
-				errs = append(errs, err)
-			}
+			return hook()
 		}()
+		if err != nil {
+			// Restart at the owning boundary before visiting later barriers.
+			// All barriers are rerun after the unlocked drain succeeds.
+			if commandWALPendingDrain(err) != nil {
+				if len(errs) != 0 {
+					return errors.Join(errs...)
+				}
+				return err
+			}
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -187,14 +200,39 @@ func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
 	if db == nil || !db.commandWAL {
 		return func() {}, nil
 	}
-	db.teardownMu.RLock()
-	db.commandWALRawAdmissionMu.Lock()
-	db.commandWALRawPublishMu.Lock()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	for {
+		db.teardownMu.RLock()
+		if db.closing.Load() {
+			db.teardownMu.RUnlock()
+			return nil, ErrClosed
+		}
+		db.commandWALRawAdmissionMu.Lock()
+		db.commandWALRawPublishMu.Lock()
+		if db.closing.Load() {
+			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+			return nil, ErrClosed
+		}
+		err := db.runCommandWALRawPublishBarriers()
+		if err == nil {
+			return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+		}
 		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-		return nil, err
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return nil, err
+		}
+		if err := drain.Drain(); err != nil {
+			return nil, err
+		}
 	}
-	return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+}
+
+func commandWALPendingDrain(err error) *commandwalbarrier.PendingDrain {
+	var drain *commandwalbarrier.PendingDrain
+	if errors.As(err, &drain) {
+		return drain
+	}
+	return nil
 }
 
 func (db *DB) unlockCommandWALRawPublishWithAdmissionAndTeardown() {

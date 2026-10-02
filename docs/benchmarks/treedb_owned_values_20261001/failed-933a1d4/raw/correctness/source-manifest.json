@@ -1,0 +1,25 @@
+{
+  "status": "provisional construction only; final qualification waits merged predecessor/freeze",
+  "candidate": "914df25890c522a69334b96e20ef9a65a8a05da2",
+  "base": "dc86c51e7f61de596affc3c788880686e00d4e09",
+  "changed_files": {
+    "TreeDB/docs/guides/typed-storage-performance.md": "562e103c105f8d0b6efe3f737a252fa286350aca11ae410ad0aef8530ca6d047",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "88b8a9baf644f1dbb1d0e37e6c3acb6286a725babb904309a09c1c1d8f5846c6",
+    "TreeDB/internal/valuelog/grouped_frame_cache.go": "f453ef5c72b6c2f2bf973e6a4d08fda1fdd85fcc2e876b029aa5a12c47004d5d",
+    "TreeDB/internal/valuelog/manager.go": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf",
+    "TreeDB/internal/valuelog/read_append_owned_test.go": "fd4116f126fb222e55344c43e154d8ca527e83b80188546abb2319e951bbe8ab",
+    "TreeDB/internal/valuelog/reader_mmap.go": "9d4189e1f0bebec5415bcf8a2b1611741ad3e6068804146c98888f2401b614ec",
+    "TreeDB/value_log_owned_bench_test.go": "c70a6492198daf5fe37aeb78ed33cfee91badebd19e823fc4373c9e79940e2f1",
+    "TreeDB/value_log_owned_route_test.go": "538bb8a6665d2a586184edc11b3fb1870070ef7ef062e6ccfdd796bd0beac642"
+  },
+  "tests": "Linux Go1.26.3 GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=2GiB; full valuelog race, focused GC, public reopen/GC/rewrite parity, focused constructor tests and vet passed. Original-base route/copy tests failed as expected. No final timing captured.",
+  "policy_files": {
+    "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "CONTRIBUTING.md": "a20ed8c10b32b4a0caed9d5b962e2bab654e268c9562871154d471c9dbec636e",
+    "TreeDB/docs/spec/contracts.md": "a7fbe987898626a0f2944e8465f81d7f2c11e7734aa72b3fd651434ac504aba7",
+    "TreeDB/docs/spec/write-path-and-durability.md": "fb1ab472727357b7f7870bbab60b1fcab7280c57cb36157ab3263d1e981fff40",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "88b8a9baf644f1dbb1d0e37e6c3acb6286a725babb904309a09c1c1d8f5846c6"
+  },
+  "constructor": "Nonqualifying100x two-core rehearsal. First old-base public validator failure retained; corrected cache hits allow either transport. Candidate internal and public constructors pass, public pointer1/inline0/map1/fallback0/cache1/CRC1. No timing interpretation."
+}

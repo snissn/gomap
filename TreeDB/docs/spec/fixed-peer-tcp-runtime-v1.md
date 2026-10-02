@@ -193,7 +193,11 @@ wire capability is introduced. TLS identity, group authorization, read proofs,
 framing and resource bounds remain enforced. Consensus and observational control
 operations remain available. `Close` waits for admitted request lifetimes for at
 most `RequestTimeout`, then atomically freezes admission, cancels remaining work
-and interrupts owned streams before provider shutdown. Forced transport close
+and interrupts owned streams before provider shutdown. After draining requests,
+it retires both outbound HTTP idle pools before shutting down the inbound HTTP
+server; unused authenticated self-dials must not keep that server alive. Idle-pool
+retirement leaves in-use connections untouched and does not extend the shutdown
+deadline or suppress shutdown errors. Forced transport close
 cancels immediately without waiting for handlers. Readiness obtains a fresh catalog
 fence and a leader ReadIndex proof for each locally hosted data group, and checks
 local durable/consensus applied progress. It is never a reusable read capability

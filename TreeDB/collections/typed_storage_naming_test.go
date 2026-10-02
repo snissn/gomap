@@ -617,7 +617,12 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_fold_prepare_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 14},
 	{path: "TreeDB/collections/typed_graph_immediate_encoded_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/collections/typed_source.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
-	{path: "TreeDB/collections/typed_upsert_group.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Group ingress and its execution owner enforce the existing compatibility
+	// write policy before assigning a command LSN.
+	{path: "TreeDB/collections/typed_upsert_group.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	// Prepared append/apply owners reuse the retained write-policy API; these
+	// names describe compatibility checks, not a new storage authority.
+	{path: "TreeDB/collections/command_wal_prepared_owner.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_fold.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/collections/typed_graph_projection_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/typed_graph_fold_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},

@@ -1,0 +1,10 @@
+=== RUN   TestNegativeFilterCurrentRootMetadataCoverage
+=== RUN   TestNegativeFilterCurrentRootMetadataCoverage/uncovered=false
+    negative_filter_test.go:281: current-root metadata lost coverage or revived an uncovered base
+=== RUN   TestNegativeFilterCurrentRootMetadataCoverage/uncovered=true
+--- FAIL: TestNegativeFilterCurrentRootMetadataCoverage (0.23s)
+    --- FAIL: TestNegativeFilterCurrentRootMetadataCoverage/uncovered=false (0.11s)
+    --- PASS: TestNegativeFilterCurrentRootMetadataCoverage/uncovered=true (0.12s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.235s
+FAIL
