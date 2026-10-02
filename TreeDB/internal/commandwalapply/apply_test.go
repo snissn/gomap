@@ -773,3 +773,152 @@ func nonCanonicalEmptyRawKVBatchPayload() []byte {
 	binary.LittleEndian.PutUint32(payload[6:10], 1)
 	return payload
 }
+
+func TestInheritedStagingGuardClaimAndCleanup(t *testing.T) {
+	for _, outcome := range []string{"finalize", "abort", "abandon", "invalid_frame", "unused"} {
+		t.Run(outcome, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			other, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = other.Close() }()
+			unlock := db.LockCommandWALStaging()
+			releases := 0
+			guard := NewStagingGuard(db, func() { releases++; unlock() })
+			defer guard.Release()
+			frame, err := TestNoopFrame()
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := Options{Staging: guard}
+			if _, _, err := Append(other, frame, ApplyMetadata{}, options); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("foreign claim=%v", err)
+			}
+			if releases != 0 {
+				t.Fatal("foreign claim released original owner's guard")
+			}
+			if outcome == "unused" {
+				guard.Release()
+			} else if outcome == "invalid_frame" {
+				if _, _, err := Append(db, LoweredFrame{}, ApplyMetadata{}, options); err == nil {
+					t.Fatal("invalid frame accepted")
+				}
+			} else {
+				handle, _, err := Append(db, frame, ApplyMetadata{}, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := Append(db, frame, ApplyMetadata{}, options); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+					t.Fatalf("second claim=%v", err)
+				}
+				if releases != 0 {
+					t.Fatal("reused claim released active handle")
+				}
+				Abort(other, handle)
+				if releases != 0 {
+					t.Fatal("foreign Abort released active handle")
+				}
+				if _, err := Finalize(other, handle, ApplyMetadata{}, Options{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+					t.Fatalf("foreign Finalize=%v", err)
+				}
+				if releases != 0 {
+					t.Fatal("foreign Finalize released active handle")
+				}
+				switch outcome {
+				case "finalize":
+					if _, err := Finalize(db, handle, ApplyMetadata{}, Options{}); err != nil {
+						t.Fatal(err)
+					}
+				case "abort":
+					Abort(db, handle)
+				case "abandon":
+					guard.Release()
+				}
+			}
+			guard.Release()
+			if releases != 1 {
+				t.Fatalf("releases=%d want 1", releases)
+			}
+			if _, _, err := Append(db, frame, ApplyMetadata{}, options); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("released claim=%v", err)
+			}
+			if outcome == "abort" || outcome == "abandon" {
+				if err := db.CheckCommandWALPublishReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+					t.Fatalf("readiness=%v", err)
+				}
+			} else {
+				if err := db.CheckCommandWALPublishReady(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestInheritedStagingAppendAvoidsGlobalAppendLockInversion(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	safeClose := false
+	defer func() {
+		if safeClose {
+			_ = db.Close()
+		}
+	}()
+	guard := NewStagingGuard(db, db.LockCommandWALStaging())
+	defer guard.Release()
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryDone := make(chan error, 1)
+	go func() {
+		handle, _, err := Append(db, frame, ApplyMetadata{}, Options{})
+		if err == nil {
+			_, err = Finalize(db, handle, ApplyMetadata{}, Options{})
+		}
+		ordinaryDone <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for applyAppendMu.TryLock() {
+		applyAppendMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("ordinary Append did not own global mutex")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	inheritedDone := make(chan error, 1)
+	go func() {
+		handle, _, err := Append(db, frame, ApplyMetadata{}, Options{Staging: guard})
+		if err == nil {
+			_, err = Finalize(db, handle, ApplyMetadata{}, Options{})
+		}
+		inheritedDone <- err
+	}()
+	select {
+	case err := <-inheritedDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("inherited Append waited on global mutex held by raw waiter")
+	}
+	select {
+	case err := <-ordinaryDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ordinary Append did not resume after transferred guard release")
+	}
+	safeClose = true
+	if applied, next := db.State().AppliedCommandLSN, db.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("coverage=%d/%d want 2/3", applied, next)
+	}
+}
