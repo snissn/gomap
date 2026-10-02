@@ -73,7 +73,11 @@ func TestVectorPartitionPrepareLocalWALPartialStageReplayV1(t *testing.T) {
 			})
 			var lsn uint64
 			err = c.WithPreparedCommandWALVectorPrepareV1(context.Background(), v, func(owner *CommandWALAdmittedCollection) error {
-				handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+				appendOptions, err := owner.CommandWALAppendOptions(true)
+				if err != nil {
+					return err
+				}
+				handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 				if err != nil {
 					return err
 				}
@@ -214,7 +218,11 @@ func TestVectorPartitionPrepareLocalWALRebuildReplayV1(t *testing.T) {
 	var lsn uint64
 	cut := errors.New("after actual rebuild Append")
 	err = c.WithPreparedCommandWALVectorPrepareV1(context.Background(), v, func(owner *CommandWALAdmittedCollection) error {
-		handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+		appendOptions, err := owner.CommandWALAppendOptions(true)
+		if err != nil {
+			return err
+		}
+		handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 		if err != nil {
 			return err
 		}

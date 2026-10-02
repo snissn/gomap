@@ -55,6 +55,9 @@ type LoweredFrame struct {
 // Options controls local command-WAL durability for this apply boundary.
 type Options struct {
 	Sync bool
+	// Staging transfers an already-held, same-DB staging guard from a
+	// prepared owner. Append must consume it without acquiring raw again.
+	Staging *StagingGuard
 }
 
 // Handle is the append token required to publish the same local command-WAL
@@ -63,7 +66,7 @@ type Handle struct {
 	db      *backenddb.DB
 	intent  *backenddb.CommandWALIntent
 	lsn     uint64
-	staging *stagingGuard
+	staging *StagingGuard
 }
 
 // LSN returns the local command-WAL sequence number assigned at append time.
@@ -172,45 +175,79 @@ func CollectionUpdateBatchByIDFrame(payload []byte) (LoweredFrame, error) {
 // Append validates and appends a lowered local command-WAL frame. It does not
 // publish roots or AppliedCommandLSN; callers must run the normal executor and
 // then call Finalize with the returned handle.
-func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options) (Handle, Result, error) {
-	if db == nil {
-		return Handle{}, Result{}, backenddb.ErrClosed
+func Append(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Options) (Handle, Result, error) {
+	if opts.Staging != nil {
+		return AppendWithStagingGuard(db, frame, meta, opts, opts.Staging)
 	}
-	if !db.CommandWALEnabled() {
-		return Handle{}, Result{}, fmt.Errorf("%w: command wal apply requires command_wal_v2", backenddb.ErrCommandWALUnsupported)
-	}
-	if err := validateLoweredFrame(frame); err != nil {
-		return Handle{}, Result{}, err
-	}
-	intent, err := db.NewCommandWALIntent(frame.Kind, frame.Scope, frame.PayloadFormat, frame.Payload)
+	intent, err := prepareAppendIntent(db, frame)
 	if err != nil {
 		return Handle{}, Result{}, err
-	}
-	if intent == nil {
-		return Handle{}, Result{}, fmt.Errorf("%w: command wal apply intent unavailable", backenddb.ErrCommandWALUnsupported)
 	}
 	applyAppendMu.Lock()
 	defer applyAppendMu.Unlock()
+	if err := checkContiguousAppendReady(db, appliedCommandLSN(db)); err != nil {
+		return Handle{}, Result{}, err
+	}
+	actualGuard, err := db.LockCommandWALStagingGuardWithBarriersV1()
+	if err != nil {
+		return Handle{}, Result{}, err
+	}
+	staging, err := NewStagingGuard(db, actualGuard)
+	if err != nil {
+		actualGuard.Release()
+		return Handle{}, Result{}, err
+	}
+	return appendIntentWithStagingGuard(db, intent, opts, staging)
+}
+
+// AppendWithStagingGuard consumes a prepared owner's actual staging lease.
+// Raw serializes the final continuity check and assignment. In particular, do
+// not acquire applyAppendMu here: ordinary Append takes it before waiting for
+// raw, so acquiring it under inherited raw would invert that order.
+func AppendWithStagingGuard(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options, staging *StagingGuard) (Handle, Result, error) {
+	if err := staging.claim(db); err != nil {
+		return Handle{}, Result{}, err
+	}
+	intent, err := prepareAppendIntent(db, frame)
+	if err != nil {
+		staging.Release()
+		return Handle{}, Result{}, err
+	}
+	return appendIntentWithStagingGuard(db, intent, opts, staging)
+}
+
+func prepareAppendIntent(db *backenddb.DB, frame LoweredFrame) (*backenddb.CommandWALIntent, error) {
+	if db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if !db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: command wal apply requires command_wal_v2", backenddb.ErrCommandWALUnsupported)
+	}
+	if err := validateLoweredFrame(frame); err != nil {
+		return nil, err
+	}
+	intent, err := db.NewCommandWALIntent(frame.Kind, frame.Scope, frame.PayloadFormat, frame.Payload)
+	if err != nil {
+		return nil, err
+	}
+	if intent == nil {
+		return nil, fmt.Errorf("%w: command wal apply intent unavailable", backenddb.ErrCommandWALUnsupported)
+	}
+	return intent, nil
+}
+
+func appendIntentWithStagingGuard(db *backenddb.DB, intent *backenddb.CommandWALIntent, opts Options, staging *StagingGuard) (Handle, Result, error) {
 	applied := appliedCommandLSN(db)
 	if err := checkContiguousAppendReady(db, applied); err != nil {
+		staging.Release()
 		return Handle{}, Result{}, err
 	}
-	actualGuard, err := db.LockCommandWALStagingGuardV1()
+	lsn, err := staging.capture.Append(intent, opts.Sync)
 	if err != nil {
+		staging.Release()
 		return Handle{}, Result{}, err
 	}
-	staging := newStagingGuard(actualGuard.Release)
-	staging.capture = actualGuard
-	applied = appliedCommandLSN(db)
-	if err := checkContiguousAppendReady(db, applied); err != nil {
-		staging.release()
-		return Handle{}, Result{}, err
-	}
-	lsn, err := actualGuard.Append(intent, opts.Sync)
-	if err != nil {
-		staging.release()
-		return Handle{}, Result{}, err
-	}
+	staging.setIntent(intent)
 	return Handle{db: db, intent: intent, lsn: lsn, staging: staging}, Result{
 		LSN:               lsn,
 		Status:            StatusLocallyWALRecoverable,
@@ -233,7 +270,7 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 		return Result{}, fmt.Errorf("%w: command wal apply finalize handle belongs to a different DB", backenddb.ErrCommandWALRejected)
 	}
 	if handle.staging != nil {
-		defer handle.staging.release()
+		defer handle.staging.Release()
 	}
 	if applied := appliedCommandLSN(db); applied >= handle.lsn {
 		return Result{
@@ -257,11 +294,11 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 // caller. If the frame is still beyond AppliedCommandLSN, the open DB handle is
 // poisoned so the next writer fails closed and reopen recovery owns the gap.
 func Abort(db *backenddb.DB, handle Handle) {
-	if handle.staging != nil {
-		defer handle.staging.release()
-	}
 	if db == nil || handle.db != db || handle.intent == nil || handle.lsn == 0 {
 		return
+	}
+	if handle.staging != nil {
+		defer handle.staging.Release()
 	}
 	if appliedCommandLSN(db) < handle.lsn {
 		db.MarkCommandWALIntentRecoveryRequired(handle.intent)
@@ -386,24 +423,69 @@ func validateCollectionUpdateBatchByIDFrame(frame LoweredFrame) error {
 
 var applyAppendMu sync.Mutex
 
-type stagingGuard struct {
+// StagingGuard owns the actual DB-minted staging lease. The prepared callback
+// may transfer it once to Append; Options copies share claim and release state.
+type StagingGuard struct {
+	db      *backenddb.DB
+	mu      sync.Mutex
+	claimed bool
+	active  bool
+	intent  *backenddb.CommandWALIntent
 	once    sync.Once
 	unlock  func()
 	capture *backenddb.CommandWALStagingGuardV1
 }
 
-func newStagingGuard(unlock func()) *stagingGuard {
-	if unlock == nil {
-		unlock = func() {}
+// NewStagingGuard adopts only a live, same-DB backend-minted staging guard.
+// The caller retains responsibility for Release if no Append occurs.
+func NewStagingGuard(db *backenddb.DB, actual *backenddb.CommandWALStagingGuardV1) (*StagingGuard, error) {
+	if err := actual.ClaimAppendOwnershipV1(db); err != nil {
+		return nil, err
 	}
-	return &stagingGuard{unlock: unlock}
+	return &StagingGuard{db: db, unlock: actual.Release, active: true, capture: actual}, nil
 }
 
-func (g *stagingGuard) release() {
+func (g *StagingGuard) claim(db *backenddb.DB) error {
+	if g == nil {
+		return fmt.Errorf("%w: command wal apply staging guard missing", backenddb.ErrCommandWALRejected)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if db == nil || g.db != db || !g.active || g.claimed {
+		return fmt.Errorf("%w: command wal apply staging guard is inactive, consumed, or belongs to a different DB", backenddb.ErrCommandWALRejected)
+	}
+	if err := g.capture.ValidateDBV1(db); err != nil {
+		return err
+	}
+	g.claimed = true
+	return nil
+}
+
+func (g *StagingGuard) setIntent(intent *backenddb.CommandWALIntent) {
+	g.mu.Lock()
+	g.intent = intent
+	g.mu.Unlock()
+}
+
+// Release is idempotent. An abandoned appended frame remains recovery-owned;
+// returning from the callback cannot make an uncovered frame safe to skip.
+func (g *StagingGuard) Release() {
 	if g == nil {
 		return
 	}
-	g.once.Do(g.unlock)
+	g.once.Do(func() {
+		g.mu.Lock()
+		g.active = false
+		intent := g.intent
+		unlock := g.unlock
+		g.mu.Unlock()
+		if intent != nil && appliedCommandLSN(g.db) < intent.AssignedLSN() {
+			g.db.MarkCommandWALIntentRecoveryRequired(intent)
+		}
+		if unlock != nil {
+			unlock()
+		}
+	})
 }
 
 func checkContiguousAppendReady(db *backenddb.DB, applied uint64) error {

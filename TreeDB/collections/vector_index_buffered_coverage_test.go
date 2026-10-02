@@ -813,7 +813,11 @@ func TestBufferedNativeCoveragePreparedOwnerDefaultAsyncThreshold(t *testing.T) 
 	safeClose = false
 	go func() {
 		done <- col.WithPreparedCommandWALMutation(func(owner *CommandWALAdmittedCollection) error {
-			handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+			appendOptions, err := owner.CommandWALAppendOptions(true)
+			if err != nil {
+				return err
+			}
+			handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 			if err != nil {
 				return err
 			}

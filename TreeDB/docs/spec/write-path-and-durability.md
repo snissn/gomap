@@ -340,8 +340,13 @@ The user-command WAL is a local crash-recovery log. Raft entries share typed
 command-envelope payloads; consensus ordering and local recoverability remain
 separate responsibilities. Raft collection executors establish prepared
 operation ownership before local append and retain it through apply and frame
-finalization or abort. Unassigned pending-drain handoffs release owned leases
-before draining and revalidate before assignment; queued requests never lend
+finalization or abort. Their already-drained staging and teardown guards remain
+held through the callback; callback-local Append Options transfer that same-DB
+capability once to the handle, without reacquiring raw or the global append
+mutex. Finalize or Abort releases it exactly once. Ordinary local Append runs
+registered raw-publish barriers before assignment, including catalog commands
+and published foreign reservations. Unassigned pending-drain handoffs release
+owned leases before draining and revalidate before assignment; queued requests never lend
 their leases to a worker. See the [collection command-WAL locking contract](../../../docs/contracts/LOCKING.md#collection-command-wal-ownership).
 
 ### 3.3 Optional negative lookup publication coverage
@@ -635,7 +640,11 @@ versions without backward-compatibility guarantees.
 
 The bounded vector prepare executor acquires its stable generation pin before
 raw admission. Its actual Append staging guard owns one teardown reader and
-the raw publication mutex through Finalize/Abort. DB-validated capture borrowers
+the raw publication mutex through Finalize/Abort. Prepared callbacks retain and
+transfer that DB-minted guard in Append Options without reacquiring raw or the
+global append mutex. Ordinary Append mints its typed guard after the existing
+public barriers drain, retaining the actual raw-admission release as well.
+DB-validated capture borrowers
 identify that live DB/intent guard; they never acquire or release another
 teardown reader. Producers finish before Finalize/Abort and cannot use a
 released or expired borrower. Capture admitted by Append can finish after Close

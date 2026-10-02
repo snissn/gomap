@@ -103,6 +103,9 @@ type preparedOwnerRealWALSeam struct {
 
 func (s *preparedOwnerRealWALSeam) Append(database *backenddb.DB, frame commandwalapply.LoweredFrame, meta commandwalapply.ApplyMetadata, options commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error) {
 	s.appends++
+	if options.Staging == nil {
+		return commandwalapply.Handle{}, commandwalapply.Result{}, fmt.Errorf("prepared Append lost inherited staging guard")
+	}
 	if database.CommandWALNextLSN() != s.expectedLSN || database.State().AppliedCommandLSN+1 != s.expectedLSN {
 		return commandwalapply.Handle{}, commandwalapply.Result{}, fmt.Errorf("pre-Append coverage is not contiguous")
 	}

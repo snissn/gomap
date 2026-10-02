@@ -63,7 +63,11 @@ func (h *Harness) applyVectorPrepareV1(entry raftentry.CommandEntryV1, meta Appl
 				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: vector prepare WAL payload: %v", err)
 			}
 			frame := commandwalapply.LoweredFrame{Class: commandwalapply.LoweredFrameClassCollectionVectorPrepareV1, Kind: commitlog.CommandKindCollectionVectorPrepareV1, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionVectorPrepareV1, Payload: payload}
-			handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
+			appendOptions, err := owner.CommandWALAppendOptions(meta.SyncLocalCommandWAL)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 			if err != nil {
 				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 			}

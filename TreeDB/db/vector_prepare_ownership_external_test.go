@@ -150,107 +150,123 @@ func TestVectorPrepareActualAppendMaintenanceOrderV1(t *testing.T) {
 // then borrow without another RLock. Borrower Release must not release Append,
 // while Finalize/Abort must invalidate every remaining borrower.
 func TestVectorPrepareActualAppendCaptureBorrowCloseV1(t *testing.T) {
-	for _, finish := range []string{"finalize", "abort"} {
-		t.Run(finish, func(t *testing.T) {
-			d := vectorPrepareOwnershipDBV1(t)
-			frame, err := commandwalapply.TestNoopFrame()
-			if err != nil {
-				t.Fatal(err)
-			}
-			handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer commandwalapply.Abort(d, handle)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			closeDone := make(chan error, 1)
-			go func() { closeDone <- d.Close() }()
-			if err := d.WaitVectorPrepareTeardownWriterForTestingV1(ctx); err != nil {
-				t.Fatal(err)
-			}
-			borrowed := make(chan *backenddb.StableResourceCaptureLease, 1)
-			borrowErr := make(chan error, 1)
-			go func() {
-				lease, err := handle.BorrowStableResourceCaptureLeaseV1()
+	for _, acquisition := range []string{"ordinary_barriers", "inherited_plain"} {
+		for _, finish := range []string{"finalize", "abort"} {
+			t.Run(acquisition+"/"+finish, func(t *testing.T) {
+				d := vectorPrepareOwnershipDBV1(t)
+				frame, err := commandwalapply.TestNoopFrame()
 				if err != nil {
-					borrowErr <- err
-					return
-				}
-				borrowed <- lease
-			}()
-			var lease *backenddb.StableResourceCaptureLease
-			select {
-			case lease = <-borrowed:
-			case err := <-borrowErr:
-				t.Fatal(err)
-			case <-ctx.Done():
-				t.Fatal("capture reacquired teardown behind Close")
-			}
-			if err := lease.ValidateCommandWALStagingCaptureV1(d, handle.CommandWALIntent()); err != nil {
-				t.Fatal(err)
-			}
-			other := vectorPrepareOwnershipDBV1(t)
-			if err := lease.ValidateDBV1(other); err == nil {
-				t.Fatal("capture accepted wrong DB")
-			}
-			foreign, err := other.NewCommandWALIntent(frame.Kind, frame.Scope, frame.PayloadFormat, frame.Payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := lease.ValidateCommandWALStagingCaptureV1(d, foreign); err == nil {
-				t.Fatal("capture accepted wrong intent")
-			}
-			if err := d.ValidateCommandWALReplayOperationV1(handle.CommandWALIntent()); err == nil {
-				t.Fatal("staging intent accepted as replay")
-			}
-			if err := other.Close(); err != nil {
-				t.Fatal(err)
-			}
-			lease.Release()
-			if err := lease.ValidateDBV1(d); err == nil {
-				t.Fatal("released borrower remained valid")
-			}
-			// The original staging ownership is still live after borrower Release.
-			live, err := handle.BorrowStableResourceCaptureLeaseV1()
-			if err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-closeDone:
-				t.Fatal("borrower released parent teardown")
-			default:
-			}
-			finished := make(chan error, 1)
-			go func() {
-				if finish == "abort" {
-					commandwalapply.Abort(d, handle)
-					finished <- nil
-					return
-				}
-				_, err := commandwalapply.Finalize(d, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
-				finished <- err
-			}()
-			select {
-			case err := <-finished:
-				if err != nil && !errors.Is(err, backenddb.ErrClosed) {
 					t.Fatal(err)
 				}
-			case <-ctx.Done():
-				t.Fatal("Finalize/Abort deadlocked behind Close")
-			}
-			if err := live.ValidateDBV1(d); err == nil {
-				t.Fatal("expired guard left borrower valid")
-			}
-			if _, err := handle.BorrowStableResourceCaptureLeaseV1(); err == nil {
-				t.Fatal("expired Append guard admitted capture")
-			}
-			live.Release()
-			select {
-			case <-closeDone:
-			case <-ctx.Done():
-				t.Fatal("Close retained expired staging guard")
-			}
-		})
+				appendOptions := commandwalapply.Options{Sync: true}
+				if acquisition == "inherited_plain" {
+					actual, err := d.LockCommandWALStagingGuardV1()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer actual.Release()
+					staging, err := commandwalapply.NewStagingGuard(d, actual)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer staging.Release()
+					appendOptions.Staging = staging
+				}
+				handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, appendOptions)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer commandwalapply.Abort(d, handle)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				closeDone := make(chan error, 1)
+				go func() { closeDone <- d.Close() }()
+				if err := d.WaitVectorPrepareTeardownWriterForTestingV1(ctx); err != nil {
+					t.Fatal(err)
+				}
+				borrowed := make(chan *backenddb.StableResourceCaptureLease, 1)
+				borrowErr := make(chan error, 1)
+				go func() {
+					lease, err := handle.BorrowStableResourceCaptureLeaseV1()
+					if err != nil {
+						borrowErr <- err
+						return
+					}
+					borrowed <- lease
+				}()
+				var lease *backenddb.StableResourceCaptureLease
+				select {
+				case lease = <-borrowed:
+				case err := <-borrowErr:
+					t.Fatal(err)
+				case <-ctx.Done():
+					t.Fatal("capture reacquired teardown behind Close")
+				}
+				if err := lease.ValidateCommandWALStagingCaptureV1(d, handle.CommandWALIntent()); err != nil {
+					t.Fatal(err)
+				}
+				other := vectorPrepareOwnershipDBV1(t)
+				if err := lease.ValidateDBV1(other); err == nil {
+					t.Fatal("capture accepted wrong DB")
+				}
+				foreign, err := other.NewCommandWALIntent(frame.Kind, frame.Scope, frame.PayloadFormat, frame.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := lease.ValidateCommandWALStagingCaptureV1(d, foreign); err == nil {
+					t.Fatal("capture accepted wrong intent")
+				}
+				if err := d.ValidateCommandWALReplayOperationV1(handle.CommandWALIntent()); err == nil {
+					t.Fatal("staging intent accepted as replay")
+				}
+				if err := other.Close(); err != nil {
+					t.Fatal(err)
+				}
+				lease.Release()
+				if err := lease.ValidateDBV1(d); err == nil {
+					t.Fatal("released borrower remained valid")
+				}
+				// The original staging ownership is still live after borrower Release.
+				live, err := handle.BorrowStableResourceCaptureLeaseV1()
+				if err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-closeDone:
+					t.Fatal("borrower released parent teardown")
+				default:
+				}
+				finished := make(chan error, 1)
+				go func() {
+					if finish == "abort" {
+						commandwalapply.Abort(d, handle)
+						finished <- nil
+						return
+					}
+					_, err := commandwalapply.Finalize(d, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+					finished <- err
+				}()
+				select {
+				case err := <-finished:
+					if err != nil && !errors.Is(err, backenddb.ErrClosed) {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal("Finalize/Abort deadlocked behind Close")
+				}
+				if err := live.ValidateDBV1(d); err == nil {
+					t.Fatal("expired guard left borrower valid")
+				}
+				if _, err := handle.BorrowStableResourceCaptureLeaseV1(); err == nil {
+					t.Fatal("expired Append guard admitted capture")
+				}
+				live.Release()
+				select {
+				case <-closeDone:
+				case <-ctx.Done():
+					t.Fatal("Close retained expired staging guard")
+				}
+			})
+		}
 	}
 }
