@@ -69,7 +69,11 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 					h.walApply.Abort(h.db, handle)
 				}
 			}()
-			handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
+			appendOptions, err := owner.CommandWALAppendOptions(meta.SyncLocalCommandWAL)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, appendOptions)
 			if err != nil {
 				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 			}

@@ -50,10 +50,18 @@ callback. An already assigned intent retains its append owner's guards.
 External append/apply callers, including Raft executors, use
 `WithPreparedCommandWALMutation` or `WithPreparedCommandWALSplitMutationV1`.
 These own schema, vector admission/coverage and mutation before append through
-apply and `Finalize` or `Abort`. The admitted handle is callback-local, and its
-appended frame must be finalized or aborted before the callback returns. Passing
+apply and `Finalize` or `Abort`. After draining, they retain the actual raw staging
+and teardown guards through the callback. `CommandWALAppendOptions` passes that
+same-DB owner capability in Append Options; Append consumes it once and transfers
+it to the existing handle. It must not reacquire raw or the global append mutex
+under inherited raw. Finalize or Abort releases staging exactly once; callback
+cleanup releases an unused guard and leaves any abandoned assigned frame
+recovery-owned. The admitted handle is callback-local, and its appended frame
+must be finalized or aborted before the callback returns. Passing
 an assigned intent directly to a collection operation does not establish this
-ownership contract.
+ownership contract. Ordinary local Append, including catalog and no-op callers,
+runs the existing raw-publish barriers before assignment to drain a foreign
+pending or published-reserved owner; prepared Append inherits its checked guard.
 
 See [write-path and durability](../../TreeDB/docs/spec/write-path-and-durability.md)
 for command-WAL visibility and recovery boundaries. Deterministic stale-owner,

@@ -3,7 +3,9 @@ package collections
 import (
 	"context"
 	"errors"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -13,6 +15,7 @@ import (
 type CommandWALAdmittedCollection struct {
 	collection *Collection
 	admission  *collectionCommandWALAdmission
+	staging    *commandwalapply.StagingGuard
 }
 
 // WithPreparedCommandWALMutation owns schema, vector coverage/admission and
@@ -62,8 +65,9 @@ func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), cover
 	if err != nil {
 		return err
 	}
-	unlockRaw()
-	owner := &CommandWALAdmittedCollection{collection: c, admission: admission}
+	staging := commandwalapply.NewStagingGuard(c.db, unlockRaw)
+	defer staging.Release()
+	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, staging: staging}
 	return apply(owner)
 }
 
@@ -72,6 +76,19 @@ func (owner *CommandWALAdmittedCollection) validate() error {
 		return errors.New("collections: prepared command WAL owner is no longer active")
 	}
 	return owner.collection.ensureWriteDomainOpen()
+}
+
+// CommandWALAppendOptions transfers this callback's already-drained staging
+// lease to the local append handle. Callers must pass these options to Append;
+// ordinary Append would recursively acquire the non-reentrant staging mutex.
+func (owner *CommandWALAdmittedCollection) CommandWALAppendOptions(sync bool) (commandwalapply.Options, error) {
+	if err := owner.validate(); err != nil {
+		return commandwalapply.Options{}, err
+	}
+	if owner.staging == nil {
+		return commandwalapply.Options{}, errors.New("collections: prepared command WAL staging guard is missing")
+	}
+	return commandwalapply.Options{Sync: sync, Staging: owner.staging}, nil
 }
 
 func (owner *CommandWALAdmittedCollection) Meta() CollectionMeta { return owner.collection.Meta() }
