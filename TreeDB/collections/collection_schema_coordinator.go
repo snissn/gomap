@@ -545,7 +545,7 @@ func (c *Collection) flushCollectionWriteDomainsWithVectorAdmissionLocked() erro
 		if domain == nil {
 			continue
 		}
-		collection := &Collection{db: c.db, writeDomain: domain}
+		collection := collectionForWriteDomainPublication(c.db, domain)
 		unlockMutation := lockCollectionDomainMutation(domain)
 		err := collection.flushBufferedWritesWithVectorAdmissionLocked()
 		unlockMutation.Unlock()
