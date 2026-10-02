@@ -37,7 +37,7 @@ if ! [[ "$BATCH_WRITE_BENCHTIME" =~ ^[1-9][0-9]*x$ ]]; then
   echo "BATCH_WRITE_BENCHTIME must be a positive Go benchmark iteration count" >&2
   exit 2
 fi
-for command in git go lscpu ps python3 realpath taskset sha256sum; do
+for command in git go lscpu ps python3 realpath taskset sha256sum timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "missing required command: $command" >&2
     exit 2
@@ -173,7 +173,7 @@ done
 
 # Hash the six actual benchmark executables while TMP_ROOT is still live. The
 # EXIT trap removes them only after the checker has emitted a verdict or error.
-python3 .github/scripts/check_mvcc_raw_path_gate.py \
+if python3 .github/scripts/check_mvcc_raw_path_gate.py \
   --baseline "$BASELINE_LOG" \
   --candidate "$CANDIDATE_LOG" \
   --baseline-sha "$BASELINE_SHA" \
@@ -189,6 +189,51 @@ python3 .github/scripts/check_mvcc_raw_path_gate.py \
   --max-bytes-regression-percent "$MAX_BYTES_REGRESSION_PERCENT" \
   --max-bytes-regression-absolute "$MAX_BYTES_REGRESSION_ABSOLUTE" \
   --json-output "$SUMMARY_JSON" \
-  --markdown-output "$SUMMARY_MD"
+  --markdown-output "$SUMMARY_MD"; then
+  gate_status=0
+else
+  gate_status=$?
+fi
+
+# Diagnose a changed-binary Iterator timing failure without replacing its samples
+# or verdict. Keep original executables before cleanup for CI-matched analysis.
+if ((gate_status != 0)) && python3 - "$SUMMARY_JSON" <<'PY_CHECK'
+import json, sys
+with open(sys.argv[1]) as source:
+    rows = json.load(source)["results"]
+sys.exit(0 if any(row["benchmark"] == "BenchmarkRepeatedIterator"
+                  and not row["timing_pass"] and not row["binary_equivalent"]
+                  for row in rows) else 1)
+PY_CHECK
+then
+  (
+    diagnostics="$OUT_DIR/iterator-diagnostics"
+    mkdir -p "$diagnostics" || exit 1
+    for revision in baseline candidate; do
+      binary="$TMP_ROOT/$revision-caching.test"
+      cp "$binary" "$diagnostics/$revision-caching.test" || exit 1
+      timeout --kill-after=5s 30s env GOWORK="$SCRIPT_GOWORK" go tool objdump -s \
+        'github.com/snissn/gomap/TreeDB/caching\.\(.*\)\.(Iterator|Close|beginForegroundRead|endForegroundRead|retainMemtableView|releaseMemtableView|ensureBackendRange|computeBackendRange)$|github.com/snissn/gomap/TreeDB/caching\.BenchmarkRepeatedIterator' \
+        "$binary" >"$diagnostics/$revision-hot-objdump.txt" 2>&1 || true
+    done
+    for sample in 1 2; do
+      if ((sample == 1)); then revisions='baseline candidate'; else revisions='candidate baseline'; fi
+      for revision in $revisions; do
+        binary="$diagnostics/$revision-caching.test"
+        profile="$diagnostics/$revision-$sample.cpu.pprof"
+        if taskset -c "$CPUSET" timeout --kill-after=5s 30s env GOMAXPROCS=1 "$binary" \
+          -test.run '^$' -test.bench "$CACHING_BENCH_REGEX" \
+          -test.benchmem -test.benchtime=2s -test.count=1 \
+          -test.cpuprofile="$profile" >"$diagnostics/$revision-$sample.txt" 2>&1; then
+          timeout --kill-after=5s 30s env GOWORK="$SCRIPT_GOWORK" go tool pprof -top -nodecount=40 \
+            "$binary" "$profile" >"$diagnostics/$revision-$sample-cpu-top.txt" 2>&1 || true
+        fi
+      done
+    done
+    (cd "$diagnostics" && sha256sum baseline-caching.test candidate-caching.test) \
+      >"$diagnostics/binary-sha256.txt"
+  ) || echo "Iterator diagnostics incomplete; original gate status preserved" >&2
+fi
 
 echo "mvcc raw-path gate artifacts: $OUT_DIR"
+exit "$gate_status"

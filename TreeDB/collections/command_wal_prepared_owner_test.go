@@ -714,3 +714,185 @@ func TestCollectionCommandWALOrdinaryAppendDrainsPublishedForeignReservation(t *
 		})
 	}
 }
+
+// Reacquiring prepared admission after a foreign drain must publish any local
+// prefix assigned while the owner's actual admission and mutation were absent.
+func TestCollectionCommandWALPreparedOwnerReflushesAfterForeignDrain(t *testing.T) {
+	for _, coveragePersistence := range []bool{false, true} {
+		t.Run(fmt.Sprintf("coverage_persistence_%t", coveragePersistence), func(t *testing.T) {
+			dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+				Name:    "users",
+				Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, BufferedIndexedWrites: true, BufferedIndexedWriteMaxDocuments: 100, DisableBufferedIndexedAsyncFlush: true},
+				Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+			})
+			d := openCollectionCommandWALDB(t, dir)
+			safeClose := true
+			defer func() {
+				if safeClose {
+					_ = d.Close()
+				}
+			}()
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name:    "foreign",
+				Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, BufferedIndexedWrites: true, BufferedIndexedWriteMaxDocuments: 100, DisableBufferedIndexedAsyncFlush: true},
+				Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := mgr.OpenCollection("foreign")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := foreign.Insert([]byte("f1"), []byte(`{"city":"hnl"}`)); err != nil {
+				t.Fatal(err)
+			}
+			foreign.writeDomain.mu.RLock()
+			foreignPending := collectionCommandWALDomainPendingLocked(foreign.writeDomain)
+			foreign.writeDomain.mu.RUnlock()
+			if !foreignPending {
+				t.Fatal("fixture did not retain a real foreign pending prefix")
+			}
+			interveningLSN := d.CommandWALNextLSN()
+			preparedLSN := interveningLSN + 1
+			payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{{ID: []byte("prepared"), Document: []byte(`{"city":"sea"}`)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame, err := commandwalapply.CollectionInsertBatchByIDFrame(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acquisitions := 0
+			var injectionErr error
+			acquire := func() func() {
+				acquisitions++
+				if acquisitions == 2 {
+					// Real foreign Drain has completed; both owner leases are
+					// absent. Use the ordinary public buffered indexed route.
+					if applied := d.State().AppliedCommandLSN; applied != interveningLSN-1 {
+						injectionErr = fmt.Errorf("foreign drain applied=%d want %d", applied, interveningLSN-1)
+					} else {
+						_, injectionErr = col.Insert([]byte("intervening"), []byte(`{"city":"bos"}`))
+					}
+					if injectionErr == nil {
+						col.writeDomain.mu.RLock()
+						pending := collectionCommandWALDomainPendingLocked(col.writeDomain)
+						col.writeDomain.mu.RUnlock()
+						if !pending || d.State().AppliedCommandLSN != interveningLSN-1 || d.CommandWALNextLSN() != preparedLSN {
+							injectionErr = errors.New("intervening indexed write did not retain its assigned unpublished prefix")
+						}
+					}
+				}
+				if !coveragePersistence {
+					return col.lockVectorIndexCoverageMutation()
+				}
+				releaseAdmission := col.lockNativeVectorAdmissionWrite()
+				releaseCoverage := col.lockVectorIndexCoveragePersistence()
+				return func() { releaseCoverage(); releaseAdmission() }
+			}
+			done := make(chan error, 1)
+			safeClose = false
+			go func() {
+				done <- col.withPreparedCommandWALMutation(acquire, coveragePersistence, func(owner *CommandWALAdmittedCollection) error {
+					if injectionErr != nil {
+						return injectionErr
+					}
+					if acquisitions != 2 {
+						return fmt.Errorf("admission acquisitions=%d want 2", acquisitions)
+					}
+					// Fail before assignment on old source rather than poison
+					// the DB to reproduce the known committed-prefix rejection.
+					if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != interveningLSN || next != preparedLSN {
+						return fmt.Errorf("prepared pre-Append prefix applied=%d next=%d want %d/%d", applied, next, interveningLSN, preparedLSN)
+					}
+					options, err := owner.CommandWALAppendOptions(true)
+					if err != nil {
+						return err
+					}
+					handle, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, options)
+					if err != nil {
+						return err
+					}
+					defer commandwalapply.Abort(d, handle)
+					if handle.LSN() != preparedLSN {
+						return fmt.Errorf("prepared LSN=%d want %d", handle.LSN(), preparedLSN)
+					}
+					if _, err := owner.InsertBatchWithCommandWALIntent([][]byte{[]byte("prepared")}, [][]byte{[]byte(`{"city":"sea"}`)}, false, handle.CommandWALIntent()); err != nil {
+						return err
+					}
+					_, err = commandwalapply.Finalize(d, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+					return err
+				})
+			}()
+			err = waitCollectionCommandWALErr(t, done, "prepared owner reflush after real foreign drain")
+			safeClose = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != preparedLSN || next != preparedLSN+1 {
+				t.Fatalf("finalized coverage=%d/%d want %d/%d", applied, next, preparedLSN, preparedLSN+1)
+			}
+			if err := d.CheckCommandWALPublishReady(); err != nil {
+				t.Fatal(err)
+			}
+			assertCollectionDocument(t, col, "intervening", `{"city":"bos"}`)
+			assertCollectionDocument(t, col, "prepared", `{"city":"sea"}`)
+			assertCollectionIndexIDs(t, col, "city", "bos", "intervening")
+			assertCollectionIndexIDs(t, col, "city", "sea", "prepared")
+			assertCollectionDocument(t, foreign, "f1", `{"city":"hnl"}`)
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			safeClose = false
+			var interveningFrames, preparedFrames int
+			for _, got := range collectionCommandWALFrames(t, dir) {
+				if got.LSN == interveningLSN {
+					interveningFrames++
+					if got.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+						t.Fatalf("intervening frame kind=%d", got.Kind)
+					}
+				}
+				if got.LSN == preparedLSN {
+					preparedFrames++
+					if got.Kind != commitlog.CommandKindCollectionInsertBatchByID || got.PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+						t.Fatalf("prepared frame kind/format=%d/%d", got.Kind, got.PayloadFormat)
+					}
+					decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(got.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if decoded.Collection != "users" || len(decoded.Documents) != 1 || string(decoded.Documents[0].ID) != "prepared" || string(decoded.Documents[0].Document) != `{"city":"sea"}` {
+						t.Fatalf("prepared WAL payload=%+v", decoded)
+					}
+				}
+			}
+			if interveningFrames != 1 || preparedFrames != 1 {
+				t.Fatalf("actual WAL frame counts=%d/%d want 1/1", interveningFrames, preparedFrames)
+			}
+			reopened := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopened.Close() }()
+			reopenMgr := NewCollectionManager(reopened)
+			col, err = reopenMgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err = reopenMgr.OpenCollection("foreign")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCollectionDocument(t, col, "intervening", `{"city":"bos"}`)
+			assertCollectionDocument(t, col, "prepared", `{"city":"sea"}`)
+			assertCollectionIndexIDs(t, col, "city", "bos", "intervening")
+			assertCollectionIndexIDs(t, col, "city", "sea", "prepared")
+			assertCollectionDocument(t, foreign, "f1", `{"city":"hnl"}`)
+			if applied, next := reopened.State().AppliedCommandLSN, reopened.CommandWALNextLSN(); applied != preparedLSN || next != preparedLSN+1 {
+				t.Fatalf("reopen coverage=%d/%d want %d/%d", applied, next, preparedLSN, preparedLSN+1)
+			}
+		})
+	}
+}
