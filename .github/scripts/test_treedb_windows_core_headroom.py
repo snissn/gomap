@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Contract checks for complete, bounded, weighted TreeDB CI sharding."""
 
+from collections import Counter
 from pathlib import Path
 import os
 import re
@@ -117,6 +118,73 @@ def weighted_shards(
 
 
 class TreeDBWeightedManifestTest(unittest.TestCase):
+    def test_race_rag_pin_preserves_fallback_and_matches_workflow_selector(self) -> None:
+        filename = "treedb_race_weighted_shards.tsv"
+        race = read_weights(filename, 3, {"package", "root", "caching", "db", "nativewire"})
+        rag = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
+        self.assertEqual(race.get(("package", rag)), (0, True))
+        before = {key: pin for key, pin in race.items() if key != ("package", rag)}
+        domain = sorted(item for kind, item in before if kind == "package")
+        domain.extend(("future-package-a", "future-package-b", "future-package-c"))
+        race_job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "race")
+        helper = re.search(
+            r"^          weighted_shard_file\(\) \{\n.*?^          \}",
+            race_job,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(helper, "missing race workflow selector")
+        script = helper.group() + '\nweighted_shard_file "$@"\n'
+        moved_from_one = False
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            before_file = tmp_dir / "before.tsv"
+            before_file.write_text(
+                "\n".join(
+                    line for line in (CI_DIR / filename).read_text().splitlines()
+                    if line.split("\t")[:3] != ["package", "0", rag]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            all_file = tmp_dir / "all.txt"
+            shard_file = tmp_dir / "shard.txt"
+            for position in range(len(domain) + 1):
+                with self.subTest(position=position):
+                    items = domain[:position] + [rag] + domain[position:]
+                    all_file.write_text("\n".join(items) + "\n", encoding="utf-8")
+                    assignments = []
+                    for weights_file, pins in (
+                        (before_file, before), (CI_DIR / filename, race)
+                    ):
+                        model = weighted_shards(items, "package", 3, pins)
+                        actual = []
+                        for shard in range(3):
+                            subprocess.run(
+                                [
+                                    "bash", "-c", script, "race-selector", "package",
+                                    str(shard), "3", str(weights_file), str(all_file),
+                                    str(shard_file),
+                                ],
+                                check=True, capture_output=True, text=True, timeout=5,
+                            )
+                            actual.append(shard_file.read_text().splitlines())
+                        self.assertEqual(actual, model)
+                        self.assertEqual(
+                            Counter(item for part in actual for item in part), Counter(items)
+                        )
+                        assignments.append({
+                            item: shard for shard, part in enumerate(actual) for item in part
+                        })
+                    old, new = assignments
+                    self.assertEqual(new[rag], 0)
+                    self.assertEqual(
+                        {item: shard for item, shard in old.items() if item != rag},
+                        {item: shard for item, shard in new.items() if item != rag},
+                    )
+                    moved_from_one |= old[rag] == 1
+        self.assertTrue(
+            moved_from_one, "fixture must exercise the observed shard 1 to 0 move"
+        )
+
     def test_manifests_are_valid_and_partition_pins_and_new_items_once(self) -> None:
         manifests = (
             (
