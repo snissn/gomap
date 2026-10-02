@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/page"
+
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -225,5 +227,71 @@ func TestFileReadAppend_MmapCacheAllocatesOnlyFinalOutput(t *testing.T) {
 		if allocs != 1 {
 			t.Fatalf("prefix length %d: allocations=%v want only final output allocation", len(prefix), allocs)
 		}
+	}
+}
+
+func TestFileRead_SealedDeadMappingCap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+	withMaxDeadMappings(t, 1)
+	readers := map[string]func(*File, page.ValuePtr) ([]byte, error){
+		"owned_append": func(f *File, p page.ValuePtr) ([]byte, error) {
+			return f.ReadAppend(p, true, []byte("prefix:"))
+		},
+		"unsafe": func(f *File, p page.ValuePtr) ([]byte, error) { return f.ReadUnsafe(p, true) },
+		"unsafe_to": func(f *File, p page.ValuePtr) ([]byte, error) {
+			out, _, err := f.ReadUnsafeTo(p, true, nil)
+			return out, err
+		},
+	}
+	for name, read := range readers {
+		t.Run(name, func(t *testing.T) {
+			MaxDeadMappings = 1
+			check := func(got []byte, err error, want []byte) {
+				t.Helper()
+				if name == "owned_append" {
+					want = append([]byte("prefix:"), want...)
+				}
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("read: %v", err)
+				}
+			}
+			// An existing complete mapping remains readable at the cap.
+			mapped, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+			mapped.manager = &Manager{files: map[uint32]*File{mapped.ID: mapped}}
+			mapped.remapToFileSize()
+			mapped.deadMappingsCount.Store(1)
+			got, err := read(mapped, ptrs[0])
+			check(got, err, want[0])
+			if mapped.mmapReadHits.Load() != 1 || mapped.mmapReadFallbackReadAt.Load() != 0 {
+				t.Fatal("complete mapping at cap did not serve initial hit")
+			}
+			// A stale mapping cannot grow at the cap: one miss, one fallback.
+			stale, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+			stale.manager = &Manager{files: map[uint32]*File{stale.ID: stale}}
+			stale.mmapData.Store([]byte{0})
+			stale.deadMappingsCount.Store(1)
+			got, err = read(stale, ptrs[0])
+			check(got, err, want[0])
+			if stale.mmapReadMissOutOfRange.Load() != 1 || stale.mmapReadFallbackReadAt.Load() != 1 || stale.ReadStats().RecordCRCChecks != 1 {
+				t.Fatalf("capped miss retried stale mapping: out-of-range=%d fallback=%d CRC=%d", stale.mmapReadMissOutOfRange.Load(), stale.mmapReadFallbackReadAt.Load(), stale.ReadStats().RecordCRCChecks)
+			}
+			if stale.tryEnableSealedLazyMmap() {
+				t.Fatal("capped stale mapping reported eligible")
+			}
+			if stale.sealedLazyMmapDenied.Load() || stale.sealedMapDeniedByCount.Load() != 0 || stale.sealedMapDeniedByBytes.Load() != 0 {
+				t.Fatal("dead-mapping cap changed manager-budget denial state")
+			}
+			// The guard reads the live cap; increasing it permits recovery.
+			MaxDeadMappings = 2
+			got, err = read(stale, ptrs[0])
+			check(got, err, want[0])
+			if stale.mmapReadHits.Load() != 1 || stale.mmapReadFallbackReadAt.Load() != 1 {
+				t.Fatal("cap increase did not recover mapped read")
+			}
+		})
 	}
 }

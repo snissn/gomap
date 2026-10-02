@@ -227,6 +227,12 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	if f.currentWritable.Load() && !f.currentWritablePersistentMmapEnabled() {
 		return false
 	}
+	// Callers already missed the current mapping. If retained unsafe views
+	// prevent growth, retrying that mapping cannot make this read succeed.
+	// Use the live cap so a configuration increase still permits recovery.
+	if data, _ := f.mmapData.Load().([]byte); data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		return false
+	}
 	if f.usesPersistentMmap() {
 		f.remapToFileSize()
 		data, _ := f.mmapData.Load().([]byte)
