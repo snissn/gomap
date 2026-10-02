@@ -199,28 +199,125 @@ func sparseCatalogPlacementV1(name string, group raftcluster.GroupID) raftplacem
 	return raftplacement.CollectionPlacementV1{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: name}, GroupID: group}
 }
 
-func sparseCatalogUnusedAddressV1(t testing.TB, configs []FixedPeerTCPConfigV1) string {
-	t.Helper()
+func fixedPeerFixtureUsedAddressesV1(configs []FixedPeerTCPConfigV1) map[string]bool {
 	used := make(map[string]bool)
 	for _, c := range configs {
 		used[c.ListenAddress] = true
 		for _, address := range c.RaftListen {
 			used[address] = true
 		}
+		for _, node := range c.Nodes {
+			used[node.Address] = true
+		}
+		for _, peer := range c.Catalog.Peers {
+			used[peer.Address] = true
+		}
+		for _, group := range c.Groups {
+			for _, peer := range group.Peers {
+				used[peer.Address] = true
+			}
+		}
+		if c.Vector != nil {
+			for _, address := range c.Vector.PublicAddresses {
+				used[address] = true
+			}
+			for _, peers := range c.Vector.ShardAddresses {
+				for _, address := range peers {
+					used[address] = true
+				}
+			}
+		}
 	}
-	for attempt := 0; attempt < 32; attempt++ {
+	return used
+}
+
+// Released ports may still be advertised by an unopened topology. Exclude its
+// full inventory and hold each candidate (including collisions) until the
+// entire extension has been allocated, as in the owner-replacement fixture.
+func fixedPeerFixtureUnusedAddressesV1(t testing.TB, configs []FixedPeerTCPConfigV1, count int) []string {
+	t.Helper()
+	used := fixedPeerFixtureUsedAddressesV1(configs)
+	var reserved []net.Listener
+	defer func() {
+		for _, listener := range reserved {
+			_ = listener.Close()
+		}
+	}()
+	addresses := make([]string, 0, count)
+	for len(addresses) < count {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
+		reserved = append(reserved, listener)
 		address := listener.Addr().String()
-		listener.Close()
 		if !used[address] {
-			return address
+			used[address] = true
+			addresses = append(addresses, address)
 		}
 	}
-	t.Fatal("could not allocate a distinct Raft endpoint")
-	return ""
+	return addresses
+}
+
+func sparseCatalogUnusedAddressV1(t testing.TB, configs []FixedPeerTCPConfigV1) string {
+	t.Helper()
+	return fixedPeerFixtureUnusedAddressesV1(t, configs, 1)[0]
+}
+
+func TestFixedPeerFixtureAddressInventoryV1(t *testing.T) {
+	// Use OS-selected endpoints, including advertisements absent from local
+	// listener maps and a second group's peer/shard addresses.
+	old := fixedPeerFixtureUnusedAddressesV1(t, nil, 10)
+	configs := []FixedPeerTCPConfigV1{{
+		ListenAddress: old[0], RaftListen: map[raftcluster.GroupID]string{"local": old[1]},
+		Nodes:   []FixedPeerTCPNodeV1{{ID: "remote", Address: old[2]}},
+		Catalog: FixedPeerTCPGroupV1{Peers: []raftcluster.Peer{{Address: old[3]}}},
+		Groups: []FixedPeerTCPGroupV1{
+			{ID: "a", Peers: []raftcluster.Peer{{Address: old[4]}}},
+			{ID: "b", Peers: []raftcluster.Peer{{Address: old[5]}}},
+		},
+		Vector: &FixedPeerTCPVectorConfigV1{
+			PublicAddresses: map[raftcluster.NodeID]string{"remote": old[6]},
+			ShardAddresses:  map[raftcluster.GroupID]map[raftcluster.NodeID]string{"a": {"remote": old[7]}, "b": {"remote": old[8]}},
+		},
+	}, {ListenAddress: old[9]}}
+	used := fixedPeerFixtureUsedAddressesV1(configs)
+	for _, address := range old {
+		if !used[address] {
+			t.Fatalf("advertised endpoint missing from exclusion inventory: %s", address)
+		}
+	}
+	for _, address := range fixedPeerFixtureUnusedAddressesV1(t, configs, 8) {
+		if used[address] {
+			t.Fatalf("reused advertised/selected endpoint: %s", address)
+		}
+		used[address] = true
+	}
+}
+
+func TestFixedPeerSourceFollowerFixtureInspectV1(t *testing.T) {
+	seed := newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t, []vectorPartitionLiveDocumentV1{
+		{id: "a", vector: []float32{1, 0}, home: 0},
+		{id: "b", vector: []float32{0, 1}, home: 2},
+	}, nil, [2]string{"group-b", "group-c"}, true, true)
+	t.Cleanup(func() {
+		if err := seed.database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	configs := fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, seed.manifest, seed.collection.MetaView(), 3)
+	configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
+	var shared string
+	for _, config := range configs {
+		identity, err := InspectFixedPeerTCPConfigV1(config)
+		if err != nil {
+			t.Fatalf("%s fixture inventory: %v", config.NodeID, err)
+		}
+		if shared != "" && identity.SharedSHA256 != shared {
+			t.Fatal("extension changed shared inventory between nodes")
+		}
+		shared = identity.SharedSHA256
+	}
 }
 
 func TestSparseCatalogConsumerRejectsTamperedRouteV1(t *testing.T) {
