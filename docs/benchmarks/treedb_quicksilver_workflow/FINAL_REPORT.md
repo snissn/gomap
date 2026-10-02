@@ -54,7 +54,7 @@ Retained evidence ledger (all hashes are SHA-256):
 | Host, exclusive grant, before/after observations | F primary packet, including boot/affinity/load/mount observations; shared host limitation below. |
 | All 160 captures and 320 retained/negative helper validations | primary 160-receipt.json, 309a4bd48b817e43f159b0b04d38cf316e30091441b597630876c76ef82c740c; serial ordered 160/160 PASS. |
 | Complete observations and five-value reduction | final 160-analysis.json, 55af559ee9661fb2a8ece99d325174b670d94ddbf6668572930cd8478c07c6df,12,166,133,391 bytes; complete metric support and review flags retained. |
-| Native fixture/CLI/oracles/API/GC/pins | Seven-launch native receipt 3516 ee 88 a 47 e 9 bc 444050 a 32 d 68 f 3 cf 13 cb 838 df 01 bafb 2 a 56 f 3 b 9 d 4477 be 82 b; all 7 PASS. |
+| Native fixture/CLI/oracles/API/GC/pins | Seven-launch native receipt 3516ee88a47e9bc444050a32d68f3cf13cb838df01bafb2a56f3b9d4477be82b; all 7 PASS. |
 | Historical diagnostics, actual binaries and source | Historical packets below retain distinct original/candidate identities and failed/noisy results. Source proof packet contains exact tracked original/control/final trees. |
 | Failed infrastructure/analysis/sealer packets | Historical failures plus native unused-module inventory failure, reducer v 1 hash-identity failure and initial seal missing-copy failure remain retained. Original failed DBs preserved locally, not repackaged or deleted. |
 | Durable publication | Release and per-packet member indexes below; issue closure waits for verified public assets and report merge. |
