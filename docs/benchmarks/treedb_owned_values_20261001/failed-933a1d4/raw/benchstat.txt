@@ -1,0 +1,193 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                          │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                          │                                        sec/op                                         │                               sec/op                                 vs base               │
+DBOwnedValueLogRoute-4                                                                               3.312µ ± ∞ ¹                                                          2.015µ ± ∞ ¹  -39.16% (p=0.008 n=5)
+DBValueLogGet/Get-4                                                                                  2.426µ ± ∞ ¹                                                          2.384µ ± ∞ ¹        ~ (p=0.802 n=5)
+DBValueLogGet/GetAppend-4                                                                            2.117µ ± ∞ ¹                                                          2.130µ ± ∞ ¹        ~ (p=0.183 n=5)
+geomean                                                                                              2.572µ                                                                2.171µ        -15.58%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                          B/s                                          │                                 B/s                                  vs base               │
+DBOwnedValueLogRoute-4                                                                           73.71Mi ± ∞ ¹                                                        121.15Mi ± ∞ ¹  +64.36% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                     cache_hits/op                                     │                              cache_hits/op                               vs base           │
+DBOwnedValueLogRoute-4                                                                             1.000 ± ∞ ¹                                                               1.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                     crc_checks/op                                     │                              crc_checks/op                               vs base           │
+DBOwnedValueLogRoute-4                                                                             1.000 ± ∞ ¹                                                               1.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                     fallbacks/op                                      │                            fallbacks/op                             vs base                │
+DBOwnedValueLogRoute-4                                                                             1.000 ± ∞ ¹                                                          0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                    retained_raw_B                                     │                             retained_raw_B                               vs base           │
+DBOwnedValueLogRoute-4                                                                            9.390M ± ∞ ¹                                                              9.390M ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                          │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                          │                                         B/op                                          │                                B/op                                 vs base                │
+DBOwnedValueLogRoute-4                                                                                827.0 ± ∞ ¹                                                          827.0 ± ∞ ¹       ~ (p=1.000 n=5) ²
+DBValueLogGet/Get-4                                                                                   268.0 ± ∞ ¹                                                          268.0 ± ∞ ¹       ~ (p=1.000 n=5)
+DBValueLogGet/GetAppend-4                                                                             0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+geomean                                                                                                         ³                                                                       +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                          │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                          │                                       allocs/op                                       │                             allocs/op                               vs base                │
+DBOwnedValueLogRoute-4                                                                                2.000 ± ∞ ¹                                                          2.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+DBValueLogGet/Get-4                                                                                   1.000 ± ∞ ¹                                                          1.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+DBValueLogGet/GetAppend-4                                                                             0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+geomean                                                                                                         ³                                                                       +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                     mmap_hits/op                                      │                               mmap_hits/op                                 vs base         │
+DBOwnedValueLogRoute-4                                                                             0.000 ± ∞ ¹                                                                 1.000 ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                    inline_hits/op                                     │                             inline_hits/op                               vs base           │
+DBOwnedValueLogRoute-4                                                                             0.000 ± ∞ ¹                                                               0.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                       mapped_B                                        │                              mapped_B                               vs base                │
+DBOwnedValueLogRoute-4                                                                            236.5k ± ∞ ¹                                                         873.6k ± ∞ ¹  +269.42% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                    pointer_hits/op                                    │                             pointer_hits/op                              vs base           │
+DBOwnedValueLogRoute-4                                                                             1.000 ± ∞ ¹                                                               1.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                     raw_budget_B                                      │                              raw_budget_B                                vs base           │
+DBOwnedValueLogRoute-4                                                                            67.11M ± ∞ ¹                                                              67.11M ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                       │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                       │                                   warm_heap_delta_B                                   │                             warm_heap_delta_B                              vs base         │
+DBOwnedValueLogRoute-4                                                                            13.09M ± ∞ ¹                                                                13.08M ± ∞ ¹  ~ (p=0.151 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+                                              │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                              │                                        sec/op                                         │                               sec/op                                 vs base               │
+FileReadAppendOwned/fallback-4                                                                                           64.93µ ± ∞ ¹                                                          64.29µ ± ∞ ¹   -0.99% (p=0.016 n=5)
+FileReadAppendOwned/mmap_decode-4                                                                                        64.81µ ± ∞ ¹                                                          63.61µ ± ∞ ¹        ~ (p=0.056 n=5)
+FileReadAppendOwned/mmap_cache-4                                                                                         6.373µ ± ∞ ¹                                                          3.091µ ± ∞ ¹  -51.50% (p=0.008 n=5)
+FileReadAppendOwned/cold_open_map-4                                                                                      84.90µ ± ∞ ¹                                                          87.65µ ± ∞ ¹        ~ (p=0.095 n=5)
+FileReadAppendCompressedFallback/nil_dst-4                                                                               1.097µ ± ∞ ¹                                                          1.231µ ± ∞ ¹  +12.22% (p=0.008 n=5)
+FileReadAppendCompressedFallback/reused_dst-4                                                                            1.040µ ± ∞ ¹                                                          1.153µ ± ∞ ¹  +10.87% (p=0.008 n=5)
+ValueLogRandomReadGroupedFrame_ReadUnsafeTo-4                                                                            98.61n ± ∞ ¹                                                         101.40n ± ∞ ¹        ~ (p=0.167 n=5)
+geomean                                                                                                                  5.924µ                                                                5.536µ         -6.55%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                  │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                  │                                          B/s                                          │                                B/s                                  vs base                │
+FileReadAppendOwned/fallback-4                                                                              481.3Mi ± ∞ ¹                                                        486.1Mi ± ∞ ¹    +1.00% (p=0.016 n=5)
+FileReadAppendOwned/mmap_decode-4                                                                           482.2Mi ± ∞ ¹                                                        491.3Mi ± ∞ ¹         ~ (p=0.056 n=5)
+FileReadAppendOwned/mmap_cache-4                                                                            4.789Gi ± ∞ ¹                                                        9.872Gi ± ∞ ¹  +106.16% (p=0.008 n=5)
+geomean                                                                                                     1.020Gi                                                              1.310Gi         +28.50%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                  │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                  │                                     cache_hits/op                                     │                           cache_hits/op                             vs base                │
+FileReadAppendOwned/fallback-4                                                                                0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_decode-4                                                                             0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                              1.000 ± ∞ ¹                                                          1.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+geomean                                                                                                                 ³                                                                       +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                  │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                  │                                     crc_checks/op                                     │                           crc_checks/op                             vs base                │
+FileReadAppendOwned/fallback-4                                                                                1.000 ± ∞ ¹                                                          1.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_decode-4                                                                             1.000 ± ∞ ¹                                                          1.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                              1.000 ± ∞ ¹                                                          1.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+geomean                                                                                                       1.000                                                                1.000        +0.00%
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                                    │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                    │                                     fallbacks/op                                      │                          fallbacks/op                           vs base                    │
+FileReadAppendOwned/fallback-4                                                                                  1.000 ± ∞ ¹                                                      1.000 ± ∞ ¹         ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_decode-4                                                                               0.000 ± ∞ ¹                                                      0.000 ± ∞ ¹         ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                                0.000 ± ∞ ¹                                                      0.000 ± ∞ ¹         ~ (p=1.000 n=5) ²
+FileReadAppendOwned/cold_open_map-4                                                                             1.000 ± ∞ ¹                                                      0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+geomean                                                                                                                   ³                                                                   ?                      ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                                  │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                  │                                    retained_raw_B                                     │                           retained_raw_B                            vs base                │
+FileReadAppendOwned/fallback-4                                                                                0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_decode-4                                                                             0.000 ± ∞ ¹                                                          0.000 ± ∞ ¹       ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                             262.1k ± ∞ ¹                                                         262.1k ± ∞ ¹       ~ (p=1.000 n=5) ²
+geomean                                                                                                                 ³                                                                       +0.00%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                              │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                              │                                         B/op                                          │                               B/op                                 vs base                 │
+FileReadAppendOwned/fallback-4                                                                                          32.00Ki ± ∞ ¹                                                       32.00Ki ± ∞ ¹   -0.01% (p=0.008 n=5)
+FileReadAppendOwned/mmap_decode-4                                                                                       32.00Ki ± ∞ ¹                                                       32.00Ki ± ∞ ¹        ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                                        64.00Ki ± ∞ ¹                                                       32.00Ki ± ∞ ¹  -50.00% (p=0.008 n=5)
+FileReadAppendOwned/cold_open_map-4                                                                                     292.2Ki ± ∞ ¹                                                       292.3Ki ± ∞ ¹   +0.05% (p=0.008 n=5)
+FileReadAppendCompressedFallback/nil_dst-4                                                                                512.0 ± ∞ ¹                                                         512.0 ± ∞ ¹        ~ (p=1.000 n=5) ²
+FileReadAppendCompressedFallback/reused_dst-4                                                                             0.000 ± ∞ ¹                                                         0.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+ValueLogRandomReadGroupedFrame_ReadUnsafeTo-4                                                                             0.000 ± ∞ ¹                                                         0.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+geomean                                                                                                                             ³                                                                       -9.42%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                              │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                              │                                       allocs/op                                       │                             allocs/op                              vs base                 │
+FileReadAppendOwned/fallback-4                                                                                            1.000 ± ∞ ¹                                                         1.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_decode-4                                                                                         1.000 ± ∞ ¹                                                         1.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+FileReadAppendOwned/mmap_cache-4                                                                                          2.000 ± ∞ ¹                                                         1.000 ± ∞ ¹  -50.00% (p=0.008 n=5)
+FileReadAppendOwned/cold_open_map-4                                                                                       13.00 ± ∞ ¹                                                         15.00 ± ∞ ¹  +15.38% (p=0.008 n=5)
+FileReadAppendCompressedFallback/nil_dst-4                                                                                1.000 ± ∞ ¹                                                         1.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+FileReadAppendCompressedFallback/reused_dst-4                                                                             0.000 ± ∞ ¹                                                         0.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+ValueLogRandomReadGroupedFrame_ReadUnsafeTo-4                                                                             0.000 ± ∞ ¹                                                         0.000 ± ∞ ¹        ~ (p=1.000 n=5) ²
+geomean                                                                                                                             ³                                                                       -7.56%               ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                    │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                    │                                    cache_stores/op                                    │                             cache_stores/op                              vs base           │
+FileReadAppendOwned/cold_open_map-4                                                                             1.000 ± ∞ ¹                                                               1.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                                    │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/base-all.txt │ /mnt/fast4tb/treedb-quicksilver-4891-values-20261001/final-a217ee3b/logs/candidate-all.txt │
+                                    │                                     mmap_hits/op                                      │                               mmap_hits/op                                 vs base         │
+FileReadAppendOwned/cold_open_map-4                                                                             0.000 ± ∞ ¹                                                                 1.000 ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
