@@ -28,6 +28,8 @@ var leafRefPageScratchPool = sync.Pool{
 }
 
 type ReadPathStats struct {
+	PointDescentsTotal         uint64
+	NegativeRejectsTotal       uint64
 	GetAppendInlineHitsTotal   uint64
 	GetAppendInlineBytesTotal  uint64
 	GetAppendPointerHitsTotal  uint64
@@ -56,6 +58,8 @@ const (
 	maxTraversalDepth = 50
 )
 
+var treePointDescentsTotal atomic.Uint64
+var treeNegativeRejectsTotal atomic.Uint64
 var treeGetAppendInlineHitsTotal atomic.Uint64
 var treeGetAppendInlineBytesTotal atomic.Uint64
 var treeGetAppendPointerHitsTotal atomic.Uint64
@@ -72,6 +76,8 @@ var treeGetManyEmptyValue = []byte{}
 
 func ReadPathStatsSnapshot() ReadPathStats {
 	return ReadPathStats{
+		PointDescentsTotal:         treePointDescentsTotal.Load(),
+		NegativeRejectsTotal:       treeNegativeRejectsTotal.Load(),
 		GetAppendInlineHitsTotal:   treeGetAppendInlineHitsTotal.Load(),
 		GetAppendInlineBytesTotal:  treeGetAppendInlineBytesTotal.Load(),
 		GetAppendPointerHitsTotal:  treeGetAppendPointerHitsTotal.Load(),
@@ -269,6 +275,7 @@ func slabReadChecksumEnabled(sr SlabReader) bool {
 }
 
 type Tree struct {
+	negativeFilter      *NegativeFilter
 	pager               *pager.Pager
 	slabReader          SlabReader
 	slabAppender        slabUnsafeAppender
@@ -341,6 +348,7 @@ func NewWithPageLimit(p *pager.Pager, sr SlabReader, root, totalPages uint64) *T
 
 // Reset re-initializes the tree with new parameters for reuse.
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
+	t.negativeFilter = nil
 	t.pager = p
 	t.pageLimit = 0
 	t.slabReader = sr
@@ -410,6 +418,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 
 // SetRoot updates the root page ID.
 func (t *Tree) SetRoot(root uint64) {
+	t.negativeFilter = nil
 	t.rootPageID = root
 }
 
@@ -560,6 +569,9 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
+	if t.pointDefinitelyAbsent(key) {
+		return node.LeafEntry{}, ErrKeyNotFound
+	}
 	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
@@ -636,6 +648,9 @@ func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
 }
 
 func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool, error) {
+	if t.pointDefinitelyAbsent(key) {
+		return nil, page.ValuePtr{}, 0, 0, false, ErrKeyNotFound
+	}
 	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
@@ -1336,6 +1351,9 @@ func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildR
 	if t == nil {
 		return page.ChildRef{}, false, errors.New("missing tree")
 	}
+	if t.pointDefinitelyAbsent(key) {
+		return page.ChildRef{}, false, ErrKeyNotFound
+	}
 	currRef := page.PageChildRef(t.rootPageID)
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		if currRef.Kind == page.ChildRefLeafLog {
@@ -1605,6 +1623,9 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
+	if t.pointDefinitelyAbsent(key) {
+		return false, nil
+	}
 	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {

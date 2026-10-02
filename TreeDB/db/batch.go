@@ -432,6 +432,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		hook()
 	}
 	entries, ranges := b.batch.ApplyPlan()
+	negativeCoverage := b.db.prepareNegativeCoverage(idx, baseSeq, rootID, newRoot, entries)
 	recordVacuumMutation := func() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
@@ -566,7 +567,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -591,6 +592,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.releaseRootSerialization = releaseRootSerialization
 		opts.recordVacuumMutation = recordVacuumMutation
 		opts.conditionalMutation = conditionalMutation
+		opts.negativeCoverage = negativeCoverage
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu only when the frame remains
 		// unapplied. An accepted candidate already made the LSN visible even when
@@ -740,6 +742,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		return err
 	}
 	entries, ranges := b.batch.ApplyPlan()
+	negativeCoverage := b.db.prepareNegativeCoverage(idx, baseSeq, rootID, newRoot, entries)
 	recordVacuumMutation := func() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
@@ -786,7 +789,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -810,6 +813,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		opts.releaseRootSerialization = releaseRootSerialization
 		opts.recordVacuumMutation = recordVacuumMutation
 		opts.conditionalMutation = conditionalMutation
+		opts.negativeCoverage = negativeCoverage
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)

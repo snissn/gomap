@@ -57,9 +57,10 @@ type rootPublicationVisibleMemberV1 struct {
 // visibility boundary. Preparation resolves the value-log set and leaf view;
 // activate performs only bounded in-memory swaps and bookkeeping.
 type rootPublicationVisibleInstallV1 struct {
-	db   *DB
-	idx  *indexGen
-	next page.MetaPageBody
+	negativeCoverage *negativeRootCoverage
+	db               *DB
+	idx              *indexGen
+	next             page.MetaPageBody
 
 	post                        finalizeCommitPost
 	vlogRefCounts               *candidateValueLogRefCountsV1
@@ -352,7 +353,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	opts finalizeCommitOptions,
 ) (*rootPublicationVisibleInstallV1, error) {
 	install := &rootPublicationVisibleInstallV1{
-		db: db, idx: idx, next: next, post: post,
+		db: db, idx: idx, next: next, post: post, negativeCoverage: opts.negativeCoverage,
 		commandWALPublish:           opts.commandWALPublish,
 		skipConditionalRootConflict: opts.skipConditionalRootConflict,
 		oldUserRootID:               oldUserRootID,
@@ -482,7 +483,7 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		}
 		db.observeCommandWALCovered(previousApplied, install.next.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(install.idx, newState, db.valueLogManager)
+	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.negativeCoverage)
 	db.mu.Unlock()
 	install.valueLogSet = nil
 	install.activated = true

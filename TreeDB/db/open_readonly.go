@@ -196,6 +196,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	db.publishSnapshotView(gen, initialState, vm)
 
 	// No WAL replay, no background workers in read-only mode.
+	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
 	return db, nil
 }
 
@@ -358,6 +359,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
 
+	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
 	return db, nil
 }
 
