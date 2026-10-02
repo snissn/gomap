@@ -1,0 +1,16 @@
+[
+  {
+    "name": "base",
+    "head": "784b0170f228f1d617727c49cee9606348b76d9c",
+    "archive": "/Users/michaelseiler/dev/snissn/gomap/tmp/treedb-quicksilver-graph-20261001/negative-741-iterator-repro-inputs/base.tar.gz",
+    "sha256": "f5b037453f2d5e972ab617017ddd9ec0b903d4bfb919d0cb53d8f7ed6a52e346",
+    "bytes": 65647702
+  },
+  {
+    "name": "candidate",
+    "head": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+    "archive": "/Users/michaelseiler/dev/snissn/gomap/tmp/treedb-quicksilver-graph-20261001/negative-741-iterator-repro-inputs/candidate.tar.gz",
+    "sha256": "a007e81d406a7d617b84542b61eb2a5ffd17f1c802ee71d6726ffb54f55aa3ad",
+    "bytes": 66579611
+  }
+]
