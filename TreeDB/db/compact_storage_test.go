@@ -1300,6 +1300,14 @@ func TestCompactStorageReclaimsCoalescedSupersededValueLogDependency(t *testing.
 	}
 	registerTestValueLogProducer(t, dir, path2, id2)
 
+	// Keep the intermediate root non-selectable even if the publication timer
+	// fires between the ordinary write and delete.
+	builder, err := db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		t.Fatalf("acquire publication builder: %v", err)
+	}
+	defer builder.Release()
+
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
@@ -1322,6 +1330,8 @@ func TestCompactStorageReclaimsCoalescedSupersededValueLogDependency(t *testing.
 	if err := db.Delete([]byte("stale")); err != nil {
 		t.Fatalf("delete stale: %v", err)
 	}
+
+	builder.Release()
 
 	stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{})
 	if err != nil {
