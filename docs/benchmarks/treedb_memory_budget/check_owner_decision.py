@@ -114,7 +114,7 @@ def main():
                         ('postCheckpointAppendOnlyMemLeaseKeep','8'),('postFlushAppendOnlyMemLeaseKeep','24')]:
         assert re.search(r'\b'+name+r'\s*=\s*'+re.escape(value)+r'\b' if value.isdigit() else
                          r'\b'+name+r'\s*=\s*'+re.escape(value), caching), name
-    print('PASS: pinned analyses/reviews; 20×3 owner/placement and 7×5×2 trial tables; local links; existing owner policy')
+    print('PASS: pinned analyses/reviews; 20x3 owner/placement and 7x5x2 trial tables; local links; existing owner policy')
 
 if __name__ == '__main__':
     main()
