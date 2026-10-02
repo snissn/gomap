@@ -305,3 +305,23 @@ bash docs/benchmarks/treedb_owned_values_20261001/qualify.sh FROZEN_CAPTURE_DIR
 It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
 and source/fixture hash inventories. These are standalone artifacts, not
 unified-bench profile-dir output or benchprof inputs.
+
+### Main-cache memory/placement workflow
+
+`BenchmarkMemoryBudgetWorkflow` is a fixed public load/checkpoint/read/GC/update/
+reopen workflow. Its dedicated capture freezes existing main leaf/frame cache
+limits in five 64 MiB combined configured-budget splits, with two value sizes
+and pointer thresholds. It records phase allocations, full Stats owners,
+heap/RSS/mapping observations and filename-level logical storage bytes.
+
+```sh
+GOWORK=off go test ./TreeDB -run '^TestMemoryBudgetFixture$' -count=1
+python3 scripts/treedb_memory_budget_capture.py self-check
+```
+
+Use the [memory-budget runbook](../../docs/benchmarks/treedb_memory_budget/README.md)
+for the prepare/run/validate commands and external source/overlay/binary freeze.
+An 8,192-key pilot is unretained; full cells use 250,000 keys in fresh processes
+and wait for the reviewed harness to land. Configured cache bytes are not equal
+physical RAM. These standalone package benchmark packets/logs are not
+unified-bench profile-dir artifacts or benchprof inputs.
