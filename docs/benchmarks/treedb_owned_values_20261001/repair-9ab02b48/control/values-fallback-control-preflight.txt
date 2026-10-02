@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "freeze_sha256": "28c71153df2362a6e0990955fc3f4d752a77c29ba31df96b2b5a9eee75b310da",
+  "inputs": 108,
+  "sources": {
+    "base": {
+      "files": 4912,
+      "inventory_sha256": "ed39c6a57a12bcf684f3d4f043de3bf31e40dbbdac31d92b275eeb6be933e680"
+    },
+    "previous": {
+      "files": 5089,
+      "inventory_sha256": "8a01b49c78b70e2652190cbb06a3b9660ad1e86b597f334543598abd419fd03d"
+    },
+    "candidate": {
+      "files": 5090,
+      "inventory_sha256": "a92296ec1472e4cc8bf0b9ed5dc878011733547175691ccded3796e1933081eb"
+    }
+  },
+  "script_sha256": "f8a10510e435de5afbc2e8d1c3547d41e066e283667ced42ebe60000a2fc319f",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65"
+}
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 0  0 8707672 1281512 1523068 23539892    1    2   157   241    0    0  4  1 94  1  0
+ 0  0 8707672 1282768 1523068 23540908    0    0     0     8 9756 24289  1  1 99  0  0
+

@@ -99,6 +99,15 @@ asynchronous dictionary training can change their stored layout. The
 [retained #4891 packet](../../../docs/benchmarks/treedb_owned_values_20261001/README.md)
 records sources, fixture hashes, repetitions and memory limits. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
 
+The [final mmap publication repair packet](../../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md)
+binds runtime 9ab and the unchanged read/fixture blobs after main integration.
+Its ordinary pointer Get median improves 3098→1928 ns while allocations remain
+315 B/op and integer 1 alloc/op. It explicitly accepts the measured capped nil
+fallback +55 ns/+5.04% and OS-warm lifecycle +7.32% tradeoffs; the separate exact
+ab2→9ab control cannot erase those base comparisons. Integer allocation fields
+and logical raw-cache counters do not prove exact allocation counts or physical
+memory reductions.
+
 ```sh
 GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
   -bench '^BenchmarkFileReadAppendOwned$' -benchmem -count 5

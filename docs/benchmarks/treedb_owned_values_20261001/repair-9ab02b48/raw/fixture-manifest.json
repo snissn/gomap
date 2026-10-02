@@ -1,0 +1,79 @@
+{
+  "source_commit": "a217ee3b2ee68918905bc5357faa0e57775c22a6",
+  "constructor": "openSnapshotValueLogBenchDB/checkpoint/close/reopen/all-value-verify/checkedclose/export",
+  "restore": "CopyFS; RebindDurableRootSnapshotLayoutV1 side stores first then maindb with sideRoot; private physical identity fields only",
+  "key_count": 32768,
+  "value_bytes": 256,
+  "file_count": 17,
+  "total_bytes": 5659493,
+  "files": {
+    "dictdb/LOCK": {
+      "bytes": 12,
+      "sha256": "48f544f08546b4afcb9d8f91868d9ff93bad5ff2b76ffbe6216754f89a7304be"
+    },
+    "dictdb/format.json": {
+      "bytes": 332,
+      "sha256": "79d7e4efc64fa3e2adbeb84263b25ac44d0bb7c06abf810413dc7040e3463e20"
+    },
+    "dictdb/index.db": {
+      "bytes": 524288,
+      "sha256": "3dc9a3fbec4c049b0c5d47e3fb423b484b3f851ef35707999cb67d790e9b8860"
+    },
+    "dictdb/value_vlog/value-l0-000001.log": {
+      "bytes": 65584,
+      "sha256": "6a05763ec3b104dbb69945c03aa37d8551a273cc22d88894bc04947d1623d5c6"
+    },
+    "dictdb/vlog_ref_counts.meta": {
+      "bytes": 40,
+      "sha256": "a6fe9ed7295af93fdb938faf95a5dd6b23702a5b4ae964950b4896db3357ba67"
+    },
+    "maindb/LOCK": {
+      "bytes": 12,
+      "sha256": "48f544f08546b4afcb9d8f91868d9ff93bad5ff2b76ffbe6216754f89a7304be"
+    },
+    "maindb/format.json": {
+      "bytes": 430,
+      "sha256": "410b8051787f819e91fd9cecb3ef625a6e4c78c9f150e54d0c85d9f257e50706"
+    },
+    "maindb/index.db": {
+      "bytes": 4194304,
+      "sha256": "52d880fc78bca3749fa92061686317e829ad4ac15c4d624fd3bded40dc1207c3"
+    },
+    "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+      "bytes": 253,
+      "sha256": "d00bed249660acde6a02d3452f8e09c26e2049b46156d4994b17e9ce19d8c104"
+    },
+    "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+      "bytes": 301,
+      "sha256": "dc545ff36f0ac4ab5c90351cdffca6461e8b06dd436926e73b2626253510dac6"
+    },
+    "maindb/leaf_vlog/manifest.json": {
+      "bytes": 301,
+      "sha256": "dc545ff36f0ac4ab5c90351cdffca6461e8b06dd436926e73b2626253510dac6"
+    },
+    "maindb/leaf_vlog/value-l255-000001.log": {
+      "bytes": 236469,
+      "sha256": "e35acc800e24b73a11b89a95c59b812ee4ee9f42a085b20b8d1e0919528d5b87"
+    },
+    "maindb/value_vlog/value-l0-000001.log": {
+      "bytes": 218775,
+      "sha256": "61e69e14a40ac0923bf85ed340773a25c24c71afdc6b30715c167b550eab907c"
+    },
+    "maindb/value_vlog/value-l1-000001.log": {
+      "bytes": 209158,
+      "sha256": "7602a003b00f8c68baabb50b9bbc8ff2164bcc68cf8d180ce4eb10ad2b85f7c1"
+    },
+    "maindb/value_vlog/value-l2-000001.log": {
+      "bytes": 209158,
+      "sha256": "655558dd8da5110f6b0520ae5dc2d8f442bf5d121e27a37b549b3f451e70b640"
+    },
+    "maindb/vlog_ref_counts.meta": {
+      "bytes": 64,
+      "sha256": "2f389b1984af4b23a9e9ef264e4ce7a43ef7f22fb536cbb20b521a7cca03b4f8"
+    },
+    "maindb/wal/command-wal-journal-owner.lock": {
+      "bytes": 12,
+      "sha256": "48f544f08546b4afcb9d8f91868d9ff93bad5ff2b76ffbe6216754f89a7304be"
+    }
+  }
+}
