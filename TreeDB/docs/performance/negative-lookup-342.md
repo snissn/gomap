@@ -15,7 +15,11 @@ snapshot retained across later updates of the same payload size and entropy.
 Setup verifies actual coverage on the captured backend trees after checkpoint
 and updates; an enabled fixture that silently falls back to exact fails before
 timing. Reported filter bytes come from active storage, not the configured
-budget. Benchmark setup, checkpoint and warming are outside timing. Default checksum verification stays enabled.
+budget. Setup regenerates one expected payload buffer and checks every byte of
+all 8192 original values, plus absence of every interleaved miss. Benchmark
+setup, checkpoint and warming are outside timing. Default checksum verification
+stays enabled. This 8192-key, 500ms matrix is bounded PR qualification; a larger
+authoritative campaign waits for the graph's landed qualification harness.
 
 `BenchmarkNegativeLookupUpdate` measures ordinary cached 64-key batch `WriteSync`
 selection and acknowledgement separately from `WriteSyncCheckpoint`, which also

@@ -121,6 +121,36 @@ func TestNegativeLookupQualificationFixture(t *testing.T) {
 					t.Error(err)
 				}
 			})
+			// Same-length corruption in the last original key must fail the full
+			// constructor check; warming nonempty values alone cannot detect it.
+			last := keys[len(keys)-1]
+			value, err := d.Get(last)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value[len(value)-1] ^= 1
+			if err := d.Set(last, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyNegativeLookupBenchFixture(d, keys, misses, payload); err == nil {
+				t.Fatal("constructor accepted same-length payload corruption")
+			}
+			value[len(value)-1] ^= 1
+			if err := d.Set(last, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Set(misses[0], []byte("unexpected")); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyNegativeLookupBenchFixture(d, keys, misses, payload); err == nil {
+				t.Fatal("constructor accepted present interleaved miss")
+			}
+			if err := d.Delete(misses[0]); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
 			t.Logf("payload=%s enabled=%v", payload, enabled)
 			logNegativeLookupStage(t, d, "initialLoadCheckpoint")
 			old := d.AcquireSnapshot()
