@@ -334,3 +334,10 @@ An 8,192-key pilot is unretained; full cells use 250,000 keys in fresh processes
 and wait for the reviewed harness to land. Configured cache bytes are not equal
 physical RAM. These standalone package benchmark packets/logs are not
 unified-bench profile-dir artifacts or benchprof inputs.
+
+## Canonical Quicksilver workflow
+
+The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
+uses explicit public read/update phases and a package-build freeze. Its optional
+standalone Go profiles use `go tool pprof`; their names/JSON/raw logs are not
+benchprof or unified-bench profile-dir artifacts.
