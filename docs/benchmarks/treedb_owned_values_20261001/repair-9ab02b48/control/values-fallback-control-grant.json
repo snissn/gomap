@@ -1,0 +1,8 @@
+{
+  "owner": "/root",
+  "grant": "root-values-fallback-ab2-9ab-20261002T0648-exclusive",
+  "scope": "10 fresh processes/20 cells, frozen ab2/9ab capped fallback only",
+  "source_freeze_sha256": "28c71153df2362a6e0990955fc3f4d752a77c29ba31df96b2b5a9eee75b310da",
+  "control_script_sha256": "f8a10510e435de5afbc2e8d1c3547d41e066e283667ced42ebe60000a2fc319f",
+  "no_compile_or_source_write": true
+}

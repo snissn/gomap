@@ -1,0 +1,80 @@
+{
+  "reviewed_predecessor": "5d4ea863da0d065adca2880b7e47aa54c0053ade",
+  "merged_main": "a68a84c7195e0c5d8c339343a385b40acf818d03",
+  "validated_owned_commit": "8eec0970c000a7cd4ebe801b7fe8f0ef130cdc2f",
+  "synchronized_head": "a95ffc65cf4020b41cdbf90774473a6a469d0215",
+  "merged_predecessor_diff": [
+    "TreeDB/docs/guides/typed-storage-performance.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/internal/valuelog/reader.go",
+    "TreeDB/internal/valuelog/reader_decode_reuse_test.go",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "docs/benchmarks/treedb_decode_reuse_20261001/README.md",
+    "docs/benchmarks/treedb_decode_reuse_20261001/public_harness.go.txt",
+    "docs/benchmarks/treedb_decode_reuse_20261001/qualification.txt"
+  ],
+  "owned_paths": [
+    "TreeDB/README.md",
+    "TreeDB/db/api.go",
+    "TreeDB/db/batch.go",
+    "TreeDB/db/command_wal_publish.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/negative_filter.go",
+    "TreeDB/db/negative_filter_bench_test.go",
+    "TreeDB/db/negative_filter_test.go",
+    "TreeDB/db/open_readonly.go",
+    "TreeDB/db/pools.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/root_publication_build_group.go",
+    "TreeDB/db/vacuum_collection_publication_guard_test.go",
+    "TreeDB/docs/performance/negative-lookup-342.md",
+    "TreeDB/docs/spec/contracts.md",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/docs/spec/write-path-and-durability.md",
+    "TreeDB/negative_lookup_bench_test.go",
+    "TreeDB/negative_lookup_test.go",
+    "TreeDB/public.go",
+    "TreeDB/side_store_lookups.go",
+    "TreeDB/tree/negative_filter.go",
+    "TreeDB/tree/negative_filter_bench_test.go",
+    "TreeDB/tree/negative_filter_test.go",
+    "TreeDB/tree/tree.go"
+  ],
+  "shared_blob_equalities": {
+    "TreeDB/db/api.go": {
+      "reviewed_blob": "61457387c6a91ad3af526e8827713e2b6843a340",
+      "merged_blob": "61457387c6a91ad3af526e8827713e2b6843a340"
+    },
+    "TreeDB/db/db.go": {
+      "reviewed_blob": "535aaf992adf910d81555c84dd5e17e8c3155dff",
+      "merged_blob": "535aaf992adf910d81555c84dd5e17e8c3155dff"
+    },
+    "TreeDB/db/pools.go": {
+      "reviewed_blob": "8b910ccaa9751fd91a06020d544fc02841c2dc0e",
+      "merged_blob": "8b910ccaa9751fd91a06020d544fc02841c2dc0e"
+    },
+    "TreeDB/db/one_shot_read_test.go": {
+      "reviewed_blob": "b1cdbf566b5c4122fffab052ecdc118e334b5036",
+      "merged_blob": "b1cdbf566b5c4122fffab052ecdc118e334b5036"
+    },
+    "TreeDB/snapshot_read_bench_test.go": {
+      "reviewed_blob": "6a8e39a1e233b7c6f2276241321ffc698b6adc6a",
+      "merged_blob": "6a8e39a1e233b7c6f2276241321ffc698b6adc6a"
+    },
+    "AGENTS.md": {
+      "reviewed_blob": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+      "merged_blob": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2"
+    },
+    "TreeDB/AGENTS.md": {
+      "reviewed_blob": "13811b724a980dddad76b3e4c12b6403214b8069",
+      "merged_blob": "13811b724a980dddad76b3e4c12b6403214b8069"
+    },
+    "CONTRIBUTING.md": {
+      "reviewed_blob": "567ad3164e25ac1d333ece2a9bf843bc4e8e8190",
+      "merged_blob": "567ad3164e25ac1d333ece2a9bf843bc4e8e8190"
+    }
+  },
+  "owned_blobs_preserved": true,
+  "path_overlap": []
+}

@@ -263,7 +263,9 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 - Only the raw tree attached to a coherent captured main-root view may reject a
   point key. Existing index identity and base/candidate root and commit-sequence
   coordinates prove publication coverage. Arbitrary roots, range/prefix scans
-  and successor searches retain exact lookup.
+  and successor searches retain exact lookup. Raw tree `Reset` and `SetRoot`
+  clear prior coverage; attaching coverage again requires an explicit complete
+  filter for the selected root.
 - Every normalized point mutation key, including deletes and every intermediate
   grouped batch, enters the filter before its root becomes visible. Abandoned
   writes may leave bits set. Bits never clear, resize or rebuild per commit.

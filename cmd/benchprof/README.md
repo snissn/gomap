@@ -306,14 +306,21 @@ It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
 and source/fixture hash inventories. These are standalone artifacts, not
 unified-bench profile-dir output or benchprof inputs.
 
-## TreeDB algorithm-work package harness
+The final shared mmap publication repair has a separate
+[95-cell qualification and 20-cell repair control](../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md).
+It adds `BenchmarkOwnedMmapBudgetDenied512` and
+`BenchmarkOwnedMmapConcurrentFirstAdmission` in an identical test-only overlay.
+Retained stdout, stderr and time-v RSS are separate streams; source/binary/fixture
+hashes and successful process statuses are checked. Prepare a new reviewed
+freeze following that packet, then run:
 
-`BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany` emit ordinary
-Go benchmark output and JSON diagnostic packets, as documented in
-[`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
-Their package-test profiles and counter-only overlays are not benchprof inputs.
-The dedicated `capture.py prepare|capture|validate` flow emits `freeze.json`,
-`execution.json`, `parsed.json`, and separately hashed stdout/stderr logs.
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/inputs/qualify-mmap-repair.sh NEW_FROZEN_CAPTURE_DIR
+```
+
+Ordinary pointer Get improves in that bounded comparison; capped nil fallback
+and OS-warm first-map lifecycle costs increase and remain explicitly disclosed.
+The earlier packet retains its original source identities.
 
 ### Main-cache memory/placement workflow
 
@@ -334,6 +341,15 @@ An 8,192-key pilot is unretained; full cells use 250,000 keys in fresh processes
 and wait for the reviewed harness to land. Configured cache bytes are not equal
 physical RAM. These standalone package benchmark packets/logs are not
 unified-bench profile-dir artifacts or benchprof inputs.
+
+## TreeDB algorithm-work package harness
+
+`BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany` emit ordinary
+Go benchmark output and JSON diagnostic packets, as documented in
+[`docs/benchmarks/treedb_algorithm_work_20261001`](../../docs/benchmarks/treedb_algorithm_work_20261001/README.md).
+Their package-test profiles and counter-only overlays are not benchprof inputs.
+The dedicated `capture.py prepare|capture|validate` flow emits `freeze.json`,
+`execution.json`, `parsed.json`, and separately hashed stdout/stderr logs.
 
 ## Canonical Quicksilver workflow
 

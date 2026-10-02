@@ -1,0 +1,23 @@
+{
+  "TreeDB/internal/valuelog/mmap_qualification_overlay_test.go": {
+    "before": null,
+    "after": {
+      "bytes": 9203,
+      "sha256": "cee23798dae5f5331ca9f68020bd03cd5cd839ddc784accacdfa366860e8e539"
+    }
+  },
+  "TreeDB/internal/valuelog/read_append_owned_bench_overlay_test.go": {
+    "before": null,
+    "after": {
+      "bytes": 4243,
+      "sha256": "e5be45f9b3ffb9bfd149c134560f091b960a75b098d7504580ff1dfb5e2c65aa"
+    }
+  },
+  "TreeDB/value_log_owned_bench_test.go": {
+    "before": null,
+    "after": {
+      "bytes": 6250,
+      "sha256": "75e72ffddf82bcf884cbfcbbab09762c865839d9d1edf0104717b1d23cf7550e"
+    }
+  }
+}

@@ -2,7 +2,9 @@
 
 This packet covers 8192 persisted keys and 500ms read samples. It qualifies the
 PR's bounded workload; the authoritative larger campaign waits for landed graph
-node H. The first timed packet is retained as incomplete infrastructure evidence.
+node H. The [full results and immutable raw packet](results.md) record the
+complete 36-process capture. The first timed packet remains incomplete
+infrastructure evidence.
 
 The constructor checks every byte of every original value by regenerating one
 256-byte or 4096-byte expected buffer, checks all interleaved misses, and requires
@@ -69,12 +71,11 @@ digests. This preserves testing's name/result framing without silencing product
 diagnostics. The original mixed-stream capture stopped at updates-1 and remains
 an incomplete infrastructure packet; no successful fragments are spliced.
 Source, executable script and binary identities are verified before and after
-preparation and capture. The parser
-requires every exact case once in each expected process, successful completion,
+preparation and capture. The parser requires every exact case once in each expected process, successful completion,
 finite timing/allocation metrics, actual enabled storage, key counts, checkpoint
 publication counts, fixed-memory probes and separate diagnostic counters. It
 rejects partial captures, altered logs or binaries, duplicate cases, wrong
 commands and source/script changes. Parsing verifies evidence completeness;
-it does not accept a performance regression or substitute theoretical false positives for measured
-speed. Interpret medians, spread, allocations, enabled hit/update costs, seed
+it does not accept a performance regression or substitute theoretical false
+positives for measured speed. Interpret medians, spread, allocations, enabled hit/update costs, seed
 variation and shared-host limits before readiness handoff.

@@ -48,8 +48,6 @@ func AlgorithmWorkEnd() (uint64, uint64) {
 diagnostic = output / "diagnostic_test.go"
 diagnostic.write_text('''package treedb
 import (
- "encoding/binary"
- "fmt"
  "os"
  "testing"
  "github.com/snissn/gomap/TreeDB/tree"
@@ -64,13 +62,8 @@ func TestAlgorithmWorkInternalVisits(t *testing.T) {
   for _,view:=range []bool{false,true} {
    var total, union uint64
    for _,batch:=range algorithmBatches(keys,shape) {
-    consume:=func(_ int,key,value []byte,found bool)error {
-     physical:=int(binary.BigEndian.Uint64(key[24:]));if physical%2==1 {if found || value!=nil {return fmt.Errorf("missing found")};return nil}
-     if !found || !algorithmValid(value,physical/2,0) {return fmt.Errorf("invalid value")};return nil
-    }
     tree.AlgorithmWorkBegin()
-    var err error
-    if view {err=d.GetManyView(batch,consume)} else { var out [][]byte; out,err=d.GetMany(batch);if err==nil {if len(out)!=len(batch) {t.Fatal("output count")};for i,value:=range out {if err=consume(i,batch[i],value,value!=nil);err!=nil {break}}} }
+    err:=algorithmGetManyValidated(d,batch,view)
     visits,unique:=tree.AlgorithmWorkEnd()
     if err!=nil || visits==0 || unique==0 || unique>visits {t.Fatal("invalid diagnostic",err,visits,unique)}
     total+=visits;union+=unique
