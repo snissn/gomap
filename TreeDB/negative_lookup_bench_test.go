@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -172,12 +173,33 @@ func openNegativeLookupBench(b testing.TB, payload string, enabled bool) (*DB, [
 		b.Fatal(e)
 	}
 	negativeLookupBenchActiveBytes(b, d, enabled)
-	for _, key := range keys {
-		if v, e := d.Get(key); e != nil || len(v) == 0 {
-			b.Fatal(e)
-		}
+	if err := verifyNegativeLookupBenchFixture(d, keys, misses, payload); err != nil {
+		b.Fatal(err)
 	}
 	return d, keys, misses
+}
+
+func verifyNegativeLookupBenchFixture(d *DB, keys, misses [][]byte, payload string) error {
+	// Regenerate the original payload into one buffer; no expected-value corpus
+	// is retained alongside the fixture. Validate every byte and interleaved miss
+	// before any route can enter its timer.
+	expected := bytes.Repeat([]byte{'v'}, 256)
+	if payload == "random4096" {
+		expected = make([]byte, 4096)
+	}
+	rng := rand.New(rand.NewSource(342))
+	for i, key := range keys {
+		if payload == "random4096" {
+			rng.Read(expected)
+		}
+		if v, e := d.Get(key); e != nil || !bytes.Equal(v, expected) {
+			return fmt.Errorf("fixture key %d payload mismatch: %v", i, e)
+		}
+		if v, e := d.Get(misses[i]); e != nil || v != nil {
+			return fmt.Errorf("fixture interleaved miss %d was not absent: %v", i, e)
+		}
+	}
+	return nil
 }
 
 func negativeLookupBenchSnapshotFilter(tb testing.TB, snapshot Snapshot) uintptr {
