@@ -64,7 +64,7 @@ func TestSnapshotStreamingDoesNotHoldApplyForWholeArchiveV1(t *testing.T) {
 	var enterOnce, releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock() // Always unblock archive before provider/FSM teardown.
-	raftSnapshotBeforeCopyForTest = func() { enterOnce.Do(func() { close(entered) }); <-release }
+	raftSnapshotBeforeCopyForTest = func(context.Context) { enterOnce.Do(func() { close(entered) }); <-release }
 	defer func() { raftSnapshotBeforeCopyForTest = nil }()
 	snapshotDone := make(chan error, 1)
 	go func() { _, err := provider.Snapshot(ctx); snapshotDone <- err }()

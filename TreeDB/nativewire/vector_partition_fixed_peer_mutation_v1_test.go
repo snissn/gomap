@@ -332,6 +332,13 @@ func fixedPeerVectorReadyWithSourcePlacementAuthV1(t testing.TB, ctx context.Con
 	for i := range configs {
 		processes[i] = fixedPeerStartTestProcessV1(t, configs[i])
 	}
+	// Stop callers before their authority peers. LIFO child cleanup otherwise
+	// stops the catalog leader while the target leader still owns control sockets.
+	t.Cleanup(func() {
+		for _, process := range processes {
+			process.stop(t)
+		}
+	})
 	client, err := NewFixedPeerTCPClientV1(configs[0])
 	if err != nil {
 		t.Fatal(err)
