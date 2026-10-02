@@ -300,6 +300,11 @@ func TestFixedPeerSourceFollowerFixtureInspectV1(t *testing.T) {
 		{id: "a", vector: []float32{1, 0}, home: 0},
 		{id: "b", vector: []float32{0, 1}, home: 2},
 	}, nil, [2]string{"group-b", "group-c"}, true, true)
+	t.Cleanup(func() {
+		if err := seed.database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	configs := fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, seed.manifest, seed.collection.MetaView(), 3)
 	configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
 	var shared string
