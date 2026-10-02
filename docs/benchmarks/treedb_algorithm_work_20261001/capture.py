@@ -61,6 +61,21 @@ def digest(path):
     return hashed.hexdigest()
 
 
+def load_freeze(prepared, expected, pilot):
+    raw = (prepared / 'freeze.json').read_bytes()
+    actual = hashlib.sha256(raw).hexdigest()
+    if (not pilot and not expected) or (expected is not None and expected != actual):
+        raise ValueError('missing/changed external preparation freeze')
+    freeze = json.loads(raw)
+    if freeze.get('complete') is not True:
+        raise ValueError('incomplete preparation freeze')
+    frozen_identity(freeze)
+    capture_environment(freeze, prepared, pilot, False)
+    if not isinstance(freeze.get('binary_sha256'), str) or not re.fullmatch('[0-9a-f]{64}', freeze['binary_sha256']):
+        raise ValueError('invalid prepared binary identity')
+    return freeze, actual
+
+
 def query(command, root, env):
     return subprocess.check_output(command, cwd=root, env=env, text=True)
 
@@ -207,11 +222,14 @@ def execution_command(family, binary):
     return [str(binary), '-test.run=^$', '-test.bench=^BenchmarkAlgorithm' + benchmark + '$', '-test.benchtime=' + ('1x' if family == 'writes' else '1000x'), '-test.count=1', '-test.benchmem', '-test.v', '-test.timeout=30m']
 
 
-def validate_capture(output, freeze):
+def validate_capture(output, expected):
     record = json.loads((output / 'execution.json').read_text())
-    if not record.get('complete') or record.get('returncode') != 0 or record.get('source_before') != record.get('source_after'):
+    if any(type(record.get(k)) is not bool for k in ('pilot', 'small_flush')):
+        raise ValueError('invalid recorded capture mode')
+    freeze, freeze_sha256 = load_freeze(Path(record['prepared']), expected, record['pilot'])
+    if record.get('complete') is not True or record.get('returncode') != 0 or record.get('source_before') != record.get('source_after'):
         raise ValueError('failed/incomplete/source-changed capture')
-    if record.get('freeze_sha256') != digest(Path(record['prepared']) / 'freeze.json'):
+    if record.get('freeze_sha256') != freeze_sha256:
         raise ValueError('changed external freeze')
     if record.get('binary_sha256') != freeze['binary_sha256']:
         raise ValueError('wrong binary identity')
@@ -234,6 +252,7 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--prepared')
+    parser.add_argument('--freeze-sha256', help='preparation SHA preserved independently before capture; required for full runs')
     parser.add_argument('--grant')
     parser.add_argument('--family', choices=('writes', 'many', 'internal'), default='writes')
     parser.add_argument('--overlay', help='counter-only overlay.json; separate prepared diagnostic binary')
@@ -242,30 +261,29 @@ def main():
     args = parser.parse_args()
     if args.mode == 'validate':
         output = Path(args.output).resolve()
-        record = json.loads((output / 'execution.json').read_text())
-        freeze = json.loads((Path(record['prepared']) / 'freeze.json').read_text())
-        validate_capture(output, freeze)
-        print('Validated immutable raw capture')
+        validate_capture(output, args.freeze_sha256)
+        print('Validated retained artifacts against preparation freeze')
         return
     if args.mode == 'capture' and (not args.prepared or not args.grant):
         parser.error('capture requires a prepared binary and coordinator exclusive grant')
     if bool(args.overlay) != (args.family == 'internal'):
         parser.error('internal family requires its overlay; timed families forbid overlays')
+    if args.mode == 'capture':
+        prepared = Path(args.prepared).resolve()
+        freeze, freeze_sha256 = load_freeze(prepared, args.freeze_sha256, args.pilot)
     root, output = Path(args.source).resolve(), Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = normalized_environment(os.environ)
-    go = str(Path(env.get('GOROOT') or subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip()) / 'bin/go')
+    go = str(Path(env.get('GOROOT') or subprocess.check_output(['go', 'env', 'GOROOT'], env=env, text=True).strip()) / 'bin/go')
     overlay = Path(args.overlay).resolve() if args.overlay else None
     before = identity(root, go, env, overlay)
-    freeze = dict(before, source=str(root), environment=dict(env), complete=False)
     if args.mode == 'prepare':
+        freeze = dict(before, source=str(root), environment=dict(env), complete=False)
         binary = output / 'algorithm-work.test'
         command = [go, 'test', *(['-overlay=' + str(overlay)] if overlay else []), '-c', '-o', str(binary), './TreeDB']
     else:
-        prepared = Path(args.prepared).resolve()
-        freeze = json.loads((prepared / 'freeze.json').read_text())
         binary = prepared / 'algorithm-work.test'
-        if (not freeze.get('complete') or frozen_identity(freeze) != before
+        if (frozen_identity(freeze) != before
                 or freeze.get('environment') != env
                 or digest(binary) != freeze['binary_sha256']):
             raise ValueError('source/dependency/toolchain/binary changed since preparation')
@@ -274,7 +292,7 @@ def main():
     record = dict(command=command, environment=dict(env), source_before=before, grant=args.grant,
                   pilot=args.pilot, small_flush=args.small_flush, family=args.family, complete=False)
     if args.mode == 'capture':
-        record.update(prepared=str(prepared), freeze_sha256=digest(prepared / 'freeze.json'))
+        record.update(prepared=str(prepared), freeze_sha256=freeze_sha256)
     packet = output / 'execution.json'
     packet.write_text(json.dumps(record, indent=2) + '\n')
     with (output / 'stdout.log').open('x') as stdout, (output / 'stderr.log').open('x') as stderr:
@@ -300,7 +318,14 @@ def main():
     record.update(source_after=after, binary_sha256=digest(binary), complete=True)
     packet.write_text(json.dumps(record, indent=2) + '\n')
     if args.mode == 'capture':
-        validate_capture(output, freeze)
+        try:
+            validate_capture(output, args.freeze_sha256)
+        except Exception:
+            record['complete'] = False
+            packet.write_text(json.dumps(record, indent=2) + '\n')
+            raise
+    else:
+        print('Preparation freeze SHA256: ' + digest(output / 'freeze.json'))
     for name in ('stdout.log', 'stderr.log', 'execution.json'):
         (output / name).chmod(0o444)
     print('Complete preparation; no timing' if args.mode == 'prepare' else 'Complete capture; raw streams retained separately')
