@@ -36,7 +36,9 @@ The script records original source SHA-256/Git blob, runtime HEAD/TreeDB tree, a
 
 Process environments admit only known build/path inputs. Runtime settings are normalized and frozen: GOGC=100, GODEBUG empty, GOMAXPROCS=2, GOMEMLIMIT=2GiB, GOTRACEBACK=single and GORACE empty. Arbitrary inherited variables/secrets and TREEDB overrides do not cross the process boundary. Revalidation requires the complete eight-field source identity exactly equal to the external freeze, including nonempty input/module/build-environment inventories; empty or subset identities fail closed.
 
-Each process writes exclusively created `stdout.log` and `stderr.log`, then records their independent hashes, exact command/environment and exit status in `execution.json`. JSON and benchmark rows are parsed only from stdout; engine stderr is retained without repair or splicing. A failed process or validation leaves an incomplete packet and both raw streams. Completed raw logs/records are made read-only and can be revalidated against their hashes; permissions do not replace hashes. Eight write cells require eight unique control packets, exact fixture/ack/checkpoint counts, complete stride samples, monotonic required work counters, and checked closure. Twelve batch cells require 1,000 public calls of 64 inputs each. Twelve independent internal diagnostic cells require all 128 batches and consistent actual/union/repeated visit counts. These checks establish packet completeness, not sample precision or noise acceptance. Synthetic records in `test_capture.py` are gate tests, never measured evidence.
+Preparation prints its complete freeze's SHA-256. Preserve that digest independently in the coordinator's preparation record before collection, then pass it with `--freeze-sha256` to each retained capture and independent validation. Both paths hash and parse the same freeze bytes through one loader, require a complete freeze, and reject a changed digest. Capture checks the anchor before launching and again after execution. Explicit unretained pilots may omit it; a supplied pilot digest must match. Validation uses the recorded boolean pilot mode, so a CLI `--pilot` cannot exempt a retained capture.
+
+Each process writes exclusively created `stdout.log` and `stderr.log`, then records their independent hashes, exact command/environment and exit status in `execution.json`. JSON and benchmark rows are parsed only from stdout; engine stderr is retained without repair or splicing. A failed process or validation leaves an incomplete packet and both raw streams. Completed raw logs/records are made read-only and can be revalidated against their hashes; permissions do not replace hashes. Independent validation checks retained artifact consistency with the trusted preparation freeze; it does not inspect current source/binary files or authenticate preparation raw logs. Preserve preparation and completed run/archive hashes independently in the campaign manifest. Eight write cells require eight unique control packets, exact fixture/ack/checkpoint counts, complete stride samples, monotonic required work counters, and checked closure. Twelve batch cells require 1,000 public calls of 64 inputs each. Twelve independent internal diagnostic cells require all 128 batches and consistent actual/union/repeated visit counts. These checks establish packet completeness, not sample precision or noise acceptance. Synthetic records in `test_capture.py` are gate tests, never measured evidence.
 
 ## Reproduction
 
@@ -59,15 +61,18 @@ CAPTURE=docs/benchmarks/treedb_algorithm_work_20261001/capture.py
 # Pin the actual toolchain; the helper disables automatic toolchain downloads.
 export GOROOT=/home/mikers/.gvm/gos/go1.26.3
 python3 "$CAPTURE" prepare --source "$PWD" --output /tmp/algorithm-prepared
-python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-writes-r1 --family writes --grant COORDINATOR_EXCLUSIVE_GRANT
-python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-many-r1 --family many --grant COORDINATOR_EXCLUSIVE_GRANT
-python3 "$CAPTURE" validate --source "$PWD" --output /tmp/algorithm-writes-r1
+# Set NORMAL_FREEZE_SHA to the digest preserved at preparation, not a later rehash.
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-writes-r1 --family writes --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-many-r1 --family many --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+python3 "$CAPTURE" validate --source "$PWD" --output /tmp/algorithm-writes-r1 --freeze-sha256 "$NORMAL_FREEZE_SHA"
 # Add --pilot for an explicitly unretained 8k qualification;
 # add --small-flush only for the separate 1 MiB write cohort.
 
 # Diagnostic binary is prepared independently and never used for timing.
 python3 "$CAPTURE" prepare --source "$PWD" --output /tmp/algorithm-counter-prepared --family internal --overlay /tmp/algorithm-overlay/overlay.json
-python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-counter-prepared --output /tmp/algorithm-counters --family internal --overlay /tmp/algorithm-overlay/overlay.json --grant COORDINATOR_EXCLUSIVE_GRANT
+# Independently preserve this diagnostic preparation's distinct COUNTER_FREEZE_SHA.
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-counter-prepared --output /tmp/algorithm-counters --family internal --overlay /tmp/algorithm-overlay/overlay.json --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$COUNTER_FREEZE_SHA"
+python3 "$CAPTURE" validate --source "$PWD" --output /tmp/algorithm-counters --freeze-sha256 "$COUNTER_FREEZE_SHA"
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s docs/benchmarks/treedb_algorithm_work_20261001 -p test_capture.py -v
 ```
