@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 
 // Three internal levels mix legacy page IDs, base-delta IDs and leaf-log refs.
 func sharedGetManyFixture(t testing.TB) (*Tree, *statefulLeafLogPageReader, [][]byte, map[string][]byte) {
+	return sharedGetManyFixturePrefix(t, "")
+}
+
+func sharedGetManyFixturePrefix(t testing.TB, prefix string) (*Tree, *statefulLeafLogPageReader, [][]byte, map[string][]byte) {
 	t.Helper()
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 	if err != nil {
@@ -45,7 +50,7 @@ func sharedGetManyFixture(t testing.TB) (*Tree, *statefulLeafLogPageReader, [][]
 			if k == 7 {
 				continue
 			}
-			key := []byte(fmt.Sprintf("k%03d", k))
+			key := []byte(prefix + fmt.Sprintf("k%03d", k))
 			val := []byte(fmt.Sprintf("value-%03d", k))
 			flags := byte(node.FlagInline)
 			ptr := page.ValuePtr{}
@@ -81,7 +86,7 @@ func sharedGetManyFixture(t testing.TB) (*Tree, *statefulLeafLogPageReader, [][]
 		b := node.NewBuilderWithOptions(data, page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: i < 3})
 		b.SetPageID(root + uint64(i))
 		if i == 0 {
-			b.SetInternalFenceBounds([]byte("k000"), []byte("k128"))
+			b.SetInternalFenceBounds([]byte(prefix+"k000"), []byte(prefix+"k128"))
 		}
 		for j := 0; j < 2; j++ {
 			var ref page.ChildRef
@@ -97,7 +102,7 @@ func sharedGetManyFixture(t testing.TB) (*Tree, *statefulLeafLogPageReader, [][]
 				ref = refs[(i-3)*2+j]
 				first = (i-3)*32 + j*16
 			}
-			key := []byte(fmt.Sprintf("k%03d", first))
+			key := []byte(prefix + fmt.Sprintf("k%03d", first))
 			if i < 3 {
 				err = b.AddInternalChild(key, ref.Page)
 			} else {
@@ -112,9 +117,9 @@ func sharedGetManyFixture(t testing.TB) (*Tree, *statefulLeafLogPageReader, [][]
 	tr := New(p, reader, root)
 	keys := make([][]byte, 0, 72)
 	for i := 0; i < 64; i++ {
-		keys = append(keys, []byte(fmt.Sprintf("k%03d", (i*37)%128)))
+		keys = append(keys, []byte(prefix+fmt.Sprintf("k%03d", (i*37)%128)))
 	}
-	keys = append(keys, []byte("k000"), []byte("k004"), []byte("k005"), []byte("k007"), []byte("j999"), []byte("k128"), []byte("k037"), []byte("k037"))
+	keys = append(keys, []byte(prefix+"k000"), []byte(prefix+"k004"), []byte(prefix+"k005"), []byte(prefix+"k007"), []byte(prefix+"j999"), []byte(prefix+"k128"), []byte(prefix+"k037"), []byte(prefix+"k037"))
 	return tr, reader, keys, want
 }
 
@@ -323,5 +328,65 @@ func TestTreeGetManySharedTraversalFirstChild(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTreeGetManySharedTraversalDirectoryErrors(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty=%v", empty), func(t *testing.T) {
+			tr, reader, keys, _ := sharedGetManyFixture(t)
+			data, err := tr.pager.GetForWrite(tr.rootPageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := node.NewBuilder(data, page.PageTypeInternal)
+			b.SetPageID(tr.rootPageID)
+			if !empty {
+				for i := 0; i < 2; i++ {
+					if err := b.AddInternalChild([]byte(fmt.Sprintf("k%03d", i*64)), tr.rootPageID+uint64(i+1)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			b.FinishNoNode()
+			if !empty {
+				binary.LittleEndian.PutUint16(data[node.NodeHeaderSize+node.DirectoryEntrySize:], 0)
+				node.NewNode(data).UpdateChecksum()
+			}
+			calls := 0
+			err = tr.GetManyView(keys, func(int, []byte, []byte, bool) error { calls++; return nil })
+			if !errors.Is(err, node.ErrCorruptedNode) || calls != 0 || reader.views != 0 {
+				t.Fatal(err, calls, reader.views)
+			}
+			if _, err := tr.GetManyAppend(keys, make([][]byte, len(keys)), nil); !errors.Is(err, node.ErrCorruptedNode) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestTreeGetManySharedTraversalLongPrefix(t *testing.T) {
+	tr, reader, keys, want := sharedGetManyFixturePrefix(t, strings.Repeat("shared-prefix-", 16))
+	out := make([][]byte, len(keys))
+	if _, err := tr.GetManyAppend(keys, out, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range keys {
+		value, found := want[string(key)]
+		if !bytes.Equal(out[i], value) || (out[i] != nil) != found {
+			t.Fatal(i, out[i], value, found)
+		}
+	}
+	if err := tr.GetManyView(keys, func(i int, key, value []byte, found bool) error {
+		expected, ok := want[string(keys[i])]
+		if !bytes.Equal(key, keys[i]) || !bytes.Equal(value, expected) || found != ok || (value != nil) != found {
+			t.Fatal(i, key, value, found)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if reader.views != 16 || reader.releases != 16 {
+		t.Fatal(reader.views, reader.releases)
 	}
 }
