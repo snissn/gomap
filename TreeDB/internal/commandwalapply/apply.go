@@ -33,6 +33,7 @@ const (
 	LoweredFrameClassCollectionDeleteBatchByID
 	LoweredFrameClassCollectionUpdateBatchByID
 	LoweredFrameClassCollectionSplitVectorInsertV1
+	LoweredFrameClassCollectionVectorPrepareV1
 )
 
 // ApplyMetadata is the explicit metadata slot future R3a apply code will carry
@@ -194,13 +195,18 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 	if err := checkContiguousAppendReady(db, applied); err != nil {
 		return Handle{}, Result{}, err
 	}
-	staging := newStagingGuard(db.LockCommandWALStaging())
+	actualGuard, err := db.LockCommandWALStagingGuardV1()
+	if err != nil {
+		return Handle{}, Result{}, err
+	}
+	staging := newStagingGuard(actualGuard.Release)
+	staging.capture = actualGuard
 	applied = appliedCommandLSN(db)
 	if err := checkContiguousAppendReady(db, applied); err != nil {
 		staging.release()
 		return Handle{}, Result{}, err
 	}
-	lsn, err := db.AppendStagedCommandWALIntent(intent, opts.Sync)
+	lsn, err := actualGuard.Append(intent, opts.Sync)
 	if err != nil {
 		staging.release()
 		return Handle{}, Result{}, err
@@ -284,6 +290,15 @@ func validateLoweredFrame(frame LoweredFrame) error {
 		return validateCollectionDeleteBatchByIDFrame(frame)
 	case LoweredFrameClassCollectionUpdateBatchByID:
 		return validateCollectionUpdateBatchByIDFrame(frame)
+	case LoweredFrameClassCollectionVectorPrepareV1:
+		if frame.Kind != commitlog.CommandKindCollectionVectorPrepareV1 || frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionVectorPrepareV1 {
+			return fmt.Errorf("%w: vector prepare frame identity", backenddb.ErrCommandWALUnsupported)
+		}
+		v, err := commitlog.DecodeVectorPreparePayloadV1(frame.Payload)
+		if err != nil || v.Term == 0 || v.IndexPosition == 0 || v.CommandDigest == "" {
+			return fmt.Errorf("%w: vector prepare frame metadata: %v", backenddb.ErrCommandWALRejected, err)
+		}
+		return nil
 	case LoweredFrameClassCollectionSplitVectorInsertV1:
 		if frame.Kind != commitlog.CommandKindCollectionSplitVectorInsertV1 ||
 			frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionSplitVectorInsertV1 {
@@ -372,8 +387,9 @@ func validateCollectionUpdateBatchByIDFrame(frame LoweredFrame) error {
 var applyAppendMu sync.Mutex
 
 type stagingGuard struct {
-	once   sync.Once
-	unlock func()
+	once    sync.Once
+	unlock  func()
+	capture *backenddb.CommandWALStagingGuardV1
 }
 
 func newStagingGuard(unlock func()) *stagingGuard {
@@ -406,4 +422,13 @@ func appliedCommandLSN(db *backenddb.DB) uint64 {
 		return state.AppliedCommandLSN
 	}
 	return 0
+}
+
+// BorrowStableResourceCaptureLeaseV1 borrows the actual Append guard. The
+// callback must finish capture before Finalize/Abort expires that ownership.
+func (h Handle) BorrowStableResourceCaptureLeaseV1() (*backenddb.StableResourceCaptureLease, error) {
+	if h.db == nil || h.intent == nil || h.lsn == 0 || h.staging == nil || h.staging.capture == nil {
+		return nil, backenddb.ErrCommandWALRejected
+	}
+	return h.staging.capture.BorrowStableResourceCaptureLeaseV1(h.db, h.intent)
 }

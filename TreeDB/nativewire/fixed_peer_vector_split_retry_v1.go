@@ -19,10 +19,10 @@ type fixedPeerSplitRetryV1 struct {
 // Start after successful construction; cancel and join before closing the
 // collection DB.
 func (r *FixedPeerTCPRuntimeV1) startSplitVectorRetryV1() {
-	if r == nil || r.vector == nil || r.client == nil || r.client.peerTransport == nil || r.config.Vector == nil || r.config.Credentials == nil {
+	if r == nil || r.vector == nil || r.client == nil || r.client.peerTransport == nil || r.servingVectorConfigV1() == nil || r.config.Credentials == nil {
 		return
 	}
-	vector := r.config.Vector
+	vector := r.servingVectorConfigV1()
 	resolved, err := raftplacement.Validate(vector.Catalog)
 	if err != nil || vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || vector.Identity.SourceFormat != 0 {
 		return
@@ -78,13 +78,13 @@ func (r *FixedPeerTCPRuntimeV1) stopSplitVectorRetryV1() {
 }
 
 func (r *FixedPeerTCPRuntimeV1) retrySplitVectorPendingV1(ctx context.Context) error {
-	if r == nil || r.vector == nil || r.config.Vector == nil || r.vector.collection == nil || r.draining.Load() || r.closed.Load() {
+	if r == nil || r.vector == nil || r.servingVectorConfigV1() == nil || r.vector.collection == nil || r.draining.Load() || r.closed.Load() {
 		return ErrFixedPeerVectorUnavailableV1
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	vector := r.config.Vector
+	vector := r.servingVectorConfigV1()
 	// Start eligibility already binds this runtime-owned fixed source/target
 	// identity. An empty durable slot needs no authority RPC, byte reservation
 	// or mutation lock. Local DB identity remains a guard, never future authority.

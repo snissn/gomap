@@ -2823,7 +2823,7 @@ func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.
 		t.Fatalf("OpenCollection users after create: %v", err)
 	}
 	applied := created.Meta()
-	if got, want := encodeCollectionMeta(meta), encodeCollectionMeta(applied); !bytes.Equal(got, want) {
+	if got, want := mustEncodeCollectionMeta(meta), mustEncodeCollectionMeta(applied); !bytes.Equal(got, want) {
 		t.Fatalf("create response meta=%+v want applied catalog meta=%+v", meta, applied)
 	}
 	if ack, ok, err := responseMetaAckPolicy(createResponse); err != nil || !ok || ack != AckRaftCommitted {
@@ -3895,7 +3895,7 @@ func raftClusterCreateCollectionSectionsWithMeta(meta collections.CollectionMeta
 	sections := []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-create-" + meta.Name)},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
-		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(meta)},
+		{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)},
 	}
 	if ack != 0 {
 		sections = append(sections, ackSection(ack))

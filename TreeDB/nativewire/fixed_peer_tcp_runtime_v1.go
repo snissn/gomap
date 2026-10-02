@@ -127,20 +127,21 @@ type fixedPeerDataV1 struct {
 }
 
 type FixedPeerTCPRuntimeV1 struct {
-	groupsMu      sync.RWMutex
-	closeMu       sync.Mutex
-	diagnostics   chan struct{}
-	draining      atomic.Bool
-	closed        atomic.Bool
-	config        FixedPeerTCPConfigV1
-	client        *FixedPeerTCPClientV1
-	authority     *raftplacement.CatalogMetaAuthorityV1
-	meta          *raftcluster.CatalogMetaRaftProviderV1
-	data          map[raftcluster.GroupID]*fixedPeerDataV1
-	local, routed *raftcluster.GroupRoutedSubmitter
-	localRegistry raftcluster.GroupSubmitterRegistryV1
-	vector        *fixedPeerVectorRuntimeV1
-	transports    []interface {
+	groupsMu       sync.RWMutex
+	closeMu        sync.Mutex
+	diagnostics    chan struct{}
+	draining       atomic.Bool
+	closed         atomic.Bool
+	config         FixedPeerTCPConfigV1
+	client         *FixedPeerTCPClientV1
+	authority      *raftplacement.CatalogMetaAuthorityV1
+	meta           *raftcluster.CatalogMetaRaftProviderV1
+	data           map[raftcluster.GroupID]*fixedPeerDataV1
+	local, routed  *raftcluster.GroupRoutedSubmitter
+	localRegistry  raftcluster.GroupSubmitterRegistryV1
+	vector         *fixedPeerVectorRuntimeV1
+	preparedVector *FixedPeerTCPVectorConfigV1
+	transports     []interface {
 		Close() error
 		CloseStreams()
 	}
@@ -586,7 +587,13 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		r.listener = &peerSecureListenerV1{Listener: r.listener, security: client.security, admission: client.peerTransport.admission, scope: "control"}
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
-	if r.config.Vector != nil && !fixedPeerImmutableVectorStandbyV1(r.config) {
+	if r.config.VectorInitialization != nil {
+		r.preparedVector, err = r.derivePreparedVectorInitializationV1(context.Background())
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if r.servingVectorConfigV1() != nil && !fixedPeerImmutableVectorStandbyV1(r.config) {
 		r.vector, err = openFixedPeerVectorRuntimeV1(r)
 		if err != nil {
 			return fail(err)
@@ -720,7 +727,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV1, error) {
 	s := FixedPeerTCPStatusV1{NodeID: r.config.NodeID, ClusterID: r.config.ClusterID, ConfigDigest: r.client.digest, CatalogRole: "consumer", RecoveryState: "new", Address: r.client.addresses[r.config.NodeID]}
 	if r.config.VectorInitialization != nil {
-		s.VectorPhase = FixedPeerVectorPhaseInitializingV1
+		s.VectorPhase = r.vectorInitializationPhaseV1()
 	}
 	if r.client.peerTransport != nil {
 		resources := r.client.peerTransport.ResourceStatsV1()
@@ -919,6 +926,7 @@ type fixedPeerReplyV1 struct {
 	VectorReady          *raftplacement.VectorPartitionLifecycleGroupReadyV1 `json:",omitempty"`
 	VectorCatalog        *raftplacement.VectorPartitionLifecycleRecordV1     `json:",omitempty"`
 	VectorSource         *fixedPeerVectorSourceAttestationV1                 `json:",omitempty"`
+	VectorPreparation    *fixedPeerVectorPrepareStatusV1                     `json:",omitempty"`
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -988,7 +996,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		requests = r.forwards
 	case "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
 		requests = r.proofs
-	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/vector-prepare-status", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -1126,11 +1134,13 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		response, applyErr := r.applyVectorInsertV1(ctx, *body.VectorInsert)
 		reply.VectorInsert, err = &response, applyErr
+	case "/v1/vector-prepare-status":
+		reply.VectorPreparation, err = r.vectorPrepareStatusV1(ctx)
 	case "/v1/vector-lifecycle":
 		switch {
 		case body.VectorLifecycle == nil:
 			// The empty-body singleton operation retains its D1 behavior.
-			if r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+			if r.servingVectorConfigV1() == nil || r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 				err = ErrFixedPeerVectorUnavailableV1
 				return
 			}
@@ -1251,7 +1261,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// exactly one data group, so source/project cross distinct clients, and
 	// proof handlers only issue leaf reads on readHTTP.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "vector-prepare-status" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

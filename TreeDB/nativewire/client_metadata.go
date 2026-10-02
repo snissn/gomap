@@ -47,7 +47,11 @@ func (c *Client) CreateCollection(ctx context.Context, meta collections.Collecti
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	req := append(guard, iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(meta)})
+	encoded, err := encodeCollectionMeta(meta)
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	req := append(guard, iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encoded})
 	sections, err := c.commandSections(ctx, iwire.CommandCreateCollection, req...)
 	if err != nil {
 		c.clearCatalogVersionOnMismatch(err)

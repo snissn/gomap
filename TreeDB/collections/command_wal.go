@@ -30,6 +30,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionSplitVectorInsertV1, replaySplitVectorInsertCommandWALV1)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionVectorPrepareV1, replayVectorPrepareCommandWALV1)
 	})
 }
 

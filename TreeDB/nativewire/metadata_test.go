@@ -282,7 +282,7 @@ func TestDecodeCollectionMetaRejectsInvalidScalarU8Calibration2842(t *testing.T)
 			meta := base
 			meta.VectorIndexes = append([]collections.VectorIndexDefinition(nil), base.VectorIndexes...)
 			meta.VectorIndexes[0].QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{tt.q}
-			_, err := decodeCollectionMeta(encodeCollectionMeta(meta))
+			_, err := decodeCollectionMeta(mustEncodeCollectionMeta(meta))
 			if nativeCodeOf(err) != iwire.ErrInvalidCommand || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command containing %q", err, nativeCodeOf(err), tt.want)
 			}
@@ -418,13 +418,13 @@ func TestMetadataCatalogGuard(t *testing.T) {
 
 	version := clientCatalogVersion(t, client, ctx)
 	createStaleReq := append(replicatedTestGuard("create_collection_stale", version+1),
-		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
+		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
 	)
 	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createStaleReq...); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
 		t.Fatalf("CreateCollection stale guard err=%v want catalog mismatch", err)
 	}
 	createReq := append(replicatedTestGuard("create_collection", version),
-		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
+		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
 	)
 	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createReq...); err != nil {
 		t.Fatalf("CreateCollection guarded: %v", err)
@@ -979,4 +979,13 @@ func mustCommandBody(t *testing.T, commandID iwire.CommandID, sections ...iwire.
 		t.Fatalf("append command body: %v", err)
 	}
 	return body
+}
+
+// Test fixtures explicitly require an encodable metadata image.
+func mustEncodeCollectionMeta(meta collections.CollectionMeta) []byte {
+	raw, err := encodeCollectionMeta(meta)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
@@ -177,6 +178,26 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 				}
 				writeLogicalDigestField(h, name, value)
 			}
+		}
+		definitions := append([]collections.VectorIndexDefinition(nil), meta.VectorIndexes...)
+		sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
+		for _, definition := range definitions {
+			completion, present, err := collection.VectorPartitionPrepareCompletionV1(definition.Name)
+			if err != nil {
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			if !present {
+				continue
+			}
+			writeLogicalDigestField(h, "collection-vector-prepare-index", []byte(definition.Name))
+			// Actual committed identity plus refs-independent output belongs to
+			// logical convergence. Local READY/manifest physical digests do not.
+			payload, err := commitlog.EncodeVectorPreparePayloadV1(completion.Command)
+			if err != nil {
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			writeLogicalDigestField(h, "collection-vector-prepare-command", payload)
+			writeLogicalDigestField(h, "collection-vector-prepare-assets", []byte(completion.AssetSetDigest))
 		}
 		writeLogicalDigestU64(h, "collection-document-count", count)
 		var documentScratch []byte

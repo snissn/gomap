@@ -18,11 +18,11 @@ const (
 // as a serving lease. BUILD/source capture and the router remain catalog voters.
 func (r *FixedPeerTCPRuntimeV1) immutableVectorCatalogConsumerV1() bool {
 	if r == nil || r.meta != nil || r.authority != nil || r.client == nil || r.client.security == nil ||
-		r.vector == nil || r.config.Vector == nil || r.config.NodeID == r.config.Vector.RouterNodeID ||
-		r.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		r.vector == nil || r.servingVectorConfigV1() == nil || r.config.NodeID == r.servingVectorConfigV1().RouterNodeID ||
+		r.servingVectorConfigV1().Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return false
 	}
-	return slices.Contains(fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement), r.vector.dataGroup) && r.data[r.vector.dataGroup] != nil
+	return slices.Contains(fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement), r.vector.dataGroup) && r.data[r.vector.dataGroup] != nil
 }
 
 func (r *FixedPeerTCPRuntimeV1) consumerImmutableVectorCatalogV1(ctx context.Context, action fixedPeerVectorLifecycleActionV1) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error) {
@@ -44,11 +44,11 @@ func (r *FixedPeerTCPRuntimeV1) consumerImmutableVectorCatalogV1(ctx context.Con
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateImmutableVectorCatalogDecisionV1(status raftplacement.CatalogMetaStatusV1, record raftplacement.VectorPartitionLifecycleRecordV1, action fixedPeerVectorLifecycleActionV1) error {
-	if r == nil || r.config.Vector == nil {
+	if r == nil || r.servingVectorConfigV1() == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
-	identity := r.config.Vector.Identity
-	owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
+	identity := r.servingVectorConfigV1().Identity
+	owners := fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement)
 	if identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || status.AppliedIndex == 0 ||
 		status.Epoch != identity.Index.CatalogEpoch || status.Digest != identity.Index.CatalogDigest ||
 		record.Identity != identity || record.Aborted || record.InvalidationEpoch != 0 ||
@@ -73,7 +73,7 @@ func (r *FixedPeerTCPRuntimeV1) validateImmutableVectorCatalogDecisionV1(status 
 // consume the bounded read pool held by its caller.
 func (r *FixedPeerTCPRuntimeV1) localImmutableVectorCatalogV1(ctx context.Context, action fixedPeerVectorLifecycleActionV1) (raftplacement.CatalogMetaStatusV1, raftplacement.VectorPartitionLifecycleRecordV1, error) {
 	var zero raftplacement.VectorPartitionLifecycleRecordV1
-	if r == nil || r.config.Vector == nil || r.meta == nil || r.authority == nil ||
+	if r == nil || r.servingVectorConfigV1() == nil || r.meta == nil || r.authority == nil ||
 		r.client == nil || r.client.security == nil || (action != fixedPeerVectorCatalogStageV1 && action != fixedPeerVectorCatalogActiveV1) {
 		return raftplacement.CatalogMetaStatusV1{}, zero, ErrFixedPeerVectorUnavailableV1
 	}
@@ -81,7 +81,7 @@ func (r *FixedPeerTCPRuntimeV1) localImmutableVectorCatalogV1(ctx context.Contex
 	if err != nil {
 		return before, zero, err
 	}
-	identity := r.config.Vector.Identity
+	identity := r.servingVectorConfigV1().Identity
 	var record raftplacement.VectorPartitionLifecycleRecordV1
 	if action == fixedPeerVectorCatalogActiveV1 {
 		snapshot, err := r.authority.VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(ctx, before.AppliedIndex,
@@ -113,15 +113,15 @@ func (r *FixedPeerTCPRuntimeV1) localImmutableVectorCatalogV1(ctx context.Contex
 }
 
 func (r *FixedPeerTCPRuntimeV1) ValidateVectorPartitionGenerationSearchV1(ctx context.Context, collection raftplacement.CollectionRefV1, index string, generation uint64, definition string, sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount uint64) (string, error) {
-	if r == nil || r.config.Vector == nil {
+	if r == nil || r.servingVectorConfigV1() == nil {
 		return "", ErrFixedPeerVectorUnavailableV1
 	}
-	i := r.config.Vector.Identity
+	i := r.servingVectorConfigV1().Identity
 	if collection != i.Index.Collection || index != i.Index.IndexName || generation != i.Generation || definition != i.Index.IndexDefinitionDigest ||
 		sourceGeneration != i.Source.Generation || sourceChecksum != i.Source.Checksum || sourceSchemaHash != i.Source.SchemaHash || sourceRowCount != i.Source.RowCount {
 		return "", ErrFixedPeerVectorProofStaleV1
 	}
-	record, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement))
+	record, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement))
 	return record.ReadySetDigest, err
 }
 

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -72,6 +73,10 @@ func cloneFixedPeerVectorConfigV1(input *FixedPeerTCPVectorConfigV1) *FixedPeerT
 	v.Manifest.OverlapMemberships = slices.Clone(v.Manifest.OverlapMemberships)
 	v.Manifest.Representatives = slices.Clone(v.Manifest.Representatives)
 	v.Manifest.Assets = slices.Clone(v.Manifest.Assets)
+	if v.Manifest.PrepareOrigin != nil {
+		origin := *v.Manifest.PrepareOrigin
+		v.Manifest.PrepareOrigin = &origin
+	}
 	if v.Manifest.PagedRootV2 != nil {
 		paged := *v.Manifest.PagedRootV2
 		paged.SourceOwners = slices.Clone(paged.SourceOwners)
@@ -121,6 +126,7 @@ type fixedPeerVectorRuntimeV1 struct {
 	manager    *collections.CollectionManager
 	collection *collections.Collection
 	dataGroup  raftcluster.GroupID
+	boundDB    *backenddb.DB
 	listener   net.Listener
 	server     *Server
 	topology   *VectorPartitionProductionTopologyV1
@@ -152,8 +158,8 @@ func (b fixedPeerVectorBuilderV1) BuildAndStageVectorPartitionGroupV1(_ context.
 type fixedPeerVectorBackendV1 struct{ runtime *fixedPeerVectorRuntimeV1 }
 
 func (b *fixedPeerVectorBackendV1) immutableMutationRefusalV1() error {
-	if b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.config.Vector != nil &&
-		b.runtime.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.servingVectorConfigV1() != nil &&
+		b.runtime.parent.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
 	return nil
@@ -204,14 +210,14 @@ func (b *fixedPeerVectorBackendV1) RegisterVectorPartitionV1(ctx context.Context
 }
 
 func (b *fixedPeerVectorBackendV1) immutableOwnerV1() bool {
-	return b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.config.Vector != nil &&
-		b.runtime.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) &&
-		b.runtime.parent.config.NodeID != b.runtime.parent.config.Vector.RouterNodeID
+	return b != nil && b.runtime != nil && b.runtime.parent != nil && b.runtime.parent.servingVectorConfigV1() != nil &&
+		b.runtime.parent.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) &&
+		b.runtime.parent.config.NodeID != b.runtime.parent.servingVectorConfigV1().RouterNodeID
 }
 
 func (b *fixedPeerVectorBackendV1) GenerationStatusV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if b.immutableOwnerV1() {
-		vector := b.runtime.parent.config.Vector
+		vector := b.runtime.parent.servingVectorConfigV1()
 		if id.Index != vector.Identity.Index.IndexName || id.Generation != vector.Identity.Generation {
 			return public.GenerationStatusV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: ErrFixedPeerVectorProofStaleV1}
 		}
@@ -303,7 +309,7 @@ func (b *fixedPeerVectorBackendV1) VectorPartitionCleanupEligibilityV1(ctx conte
 
 func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (public.OperationsHealthV1, error) {
 	if b.immutableOwnerV1() {
-		vector := b.runtime.parent.config.Vector
+		vector := b.runtime.parent.servingVectorConfigV1()
 		id := public.GenerationIDV1{Index: vector.Identity.Index.IndexName, Generation: vector.Identity.Generation}
 		topology, _, guard, err := b.runtime.observeImmutableTopologyV1(raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceOperationsHealthV1))
 		if err != nil {
@@ -328,7 +334,7 @@ func (b *fixedPeerVectorBackendV1) OperationsHealthV1(ctx context.Context) (publ
 	}
 	backend, err := b.backend(ctx)
 	if err != nil {
-		return public.OperationsHealthV1{Generation: public.GenerationIDV1{Index: b.runtime.parent.config.Vector.Manifest.IndexName, Generation: b.runtime.parent.config.Vector.Manifest.Generation}, Reason: "authority_unavailable"}, err
+		return public.OperationsHealthV1{Generation: public.GenerationIDV1{Index: b.runtime.parent.servingVectorConfigV1().Manifest.IndexName, Generation: b.runtime.parent.servingVectorConfigV1().Manifest.Generation}, Reason: "authority_unavailable"}, err
 	}
 	return backend.OperationsHealthV1(ctx)
 }
@@ -341,7 +347,7 @@ func (r *fixedPeerVectorRuntimeV1) Close() error {
 		r.initMu.Lock()
 		r.closed.Store(true)
 		topology, source, cancel, done := r.topology, r.source, r.initCancel, r.initDone
-		if r.parent != nil && r.parent.config.Vector != nil && r.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		if r.parent != nil && r.parent.servingVectorConfigV1() != nil && r.parent.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 			r.collection, r.topology, r.source, r.backend, r.servingGuard = nil, nil, nil, nil, nil
 		}
 		r.initMu.Unlock()
@@ -394,7 +400,7 @@ func (r *fixedPeerVectorRuntimeV1) start() {
 }
 
 func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVectorRuntimeV1, error) {
-	if parent == nil || parent.config.Vector == nil {
+	if parent == nil || parent.servingVectorConfigV1() == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
 	var group raftcluster.GroupID
@@ -410,31 +416,39 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 	if data == nil || data.db == nil {
 		return nil, errors.New("nativewire: fixed-peer vector runtime requires one local data store")
 	}
-	manager := collections.NewCollectionManager(data.db)
+	database := data.db
+	if parent.preparedVector != nil {
+		_, current, err := data.fsm.OpenCollectionForRaftSourceFromCurrentDBV1(context.Background(), raftcluster.AppliedIndexReadBarrier{NodeID: parent.config.NodeID, GroupID: group, MinAppliedIndex: parent.preparedVector.IndexedThrough}, parent.preparedVector.Collection.Collection)
+		if err != nil {
+			return nil, err
+		}
+		database = current
+	}
+	manager := collections.NewCollectionManager(database)
 	var collection *collections.Collection
 	var prepared collections.VectorPartitionManifestV1
-	if parent.config.Vector.Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if parent.servingVectorConfigV1().Identity.Immutable == (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		// Mutable D1 still requires its complete local source before advertising
 		// the public listener. An immutable owner may have only hosted assets;
 		// its lazy backend must prove scoped state against ACTIVE catalog authority.
 		var err error
-		collection, err = manager.OpenCollection(parent.config.Vector.Collection.Collection)
+		collection, err = manager.OpenCollection(parent.servingVectorConfigV1().Collection.Collection)
 		if err != nil {
 			return nil, fmt.Errorf("nativewire: open fixed-peer vector collection: %w", err)
 		}
 		if !collections.VectorPartitionLiveDocumentProofSupportedV1(collection.MetaView()) {
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, ErrFixedPeerVectorDocumentV1)
 		}
-		prepared, err = collection.PreparedVectorPartitionManifestWithContextV1(context.Background(), parent.config.Vector.Manifest.IndexName, parent.config.Vector.Manifest.Generation)
+		prepared, err = collection.PreparedVectorPartitionManifestWithContextV1(context.Background(), parent.servingVectorConfigV1().Manifest.IndexName, parent.servingVectorConfigV1().Manifest.Generation)
 		if err != nil {
 			// A committed document may advance the immutable source. Only the
 			// exact persisted live carrier can authorize validation-only recovery.
-			if _, recoveryErr := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(context.Background(), parent.config.Vector.Manifest); recoveryErr != nil {
+			if _, recoveryErr := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(context.Background(), parent.servingVectorConfigV1().Manifest); recoveryErr != nil {
 				return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err, recoveryErr)
 			}
-			prepared = parent.config.Vector.Manifest
+			prepared = parent.servingVectorConfigV1().Manifest
 		}
-		if !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.config.Vector.Manifest) {
+		if !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.servingVectorConfigV1().Manifest) {
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("prepared vector manifest mismatch"))
 		}
 	}
@@ -451,11 +465,11 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("validate vector live binding: %w", err))
 		}
 	}
-	listener, err := net.Listen("tcp", parent.config.Vector.PublicAddresses[parent.config.NodeID])
+	listener, err := net.Listen("tcp", parent.servingVectorConfigV1().PublicAddresses[parent.config.NodeID])
 	if err != nil {
 		return nil, err
 	}
-	runtime := &fixedPeerVectorRuntimeV1{parent: parent, manager: manager, collection: collection, dataGroup: group, listener: listener}
+	runtime := &fixedPeerVectorRuntimeV1{parent: parent, manager: manager, collection: collection, dataGroup: group, boundDB: database, listener: listener}
 	lazy := &fixedPeerVectorBackendV1{runtime: runtime}
 	service, err := public.NewServiceV1(lazy)
 	if err != nil {
@@ -530,10 +544,13 @@ func (r *fixedPeerVectorRuntimeV1) finishInitializationV1(done chan struct{}, ca
 }
 
 func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
-	if r == nil || r.parent == nil || r.parent.config.Vector == nil {
+	if r == nil || r.parent == nil || r.parent.servingVectorConfigV1() == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
 	}
-	if r.parent.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if err := r.parent.requirePreparedVectorCatalogV1(); err != nil {
+		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+	}
+	if r.parent.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return r.ensureImmutableBackendV1(ctx)
 	}
 	if r.collection == nil {
@@ -576,7 +593,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		return backend, nil
 	}
 
-	vector := r.parent.config.Vector
+	vector := r.parent.servingVectorConfigV1()
 	resolved, err := raftplacement.Validate(vector.Catalog)
 	if err != nil {
 		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
@@ -627,19 +644,22 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 	nodeEndpoints := make(map[raftcluster.GroupID]map[raftcluster.NodeID]string, len(owners))
 	for _, groupID := range owners {
 		group, ok := resolved.Group(groupID)
-		if !ok || group.LeaderHint == "" || vector.ShardAddresses[groupID][group.LeaderHint] == "" {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("owner group %q has no configured leader endpoint", groupID))
+		nodeID := group.LeaderHint
+		if r.dataGroup == groupID {
+			// A local owner serves through its own proved ReadIndex source; the
+			// initialization catalog need not contain a historical leader hint.
+			nodeID = r.parent.config.NodeID
 		}
-		endpoints[groupID] = vector.ShardAddresses[groupID][group.LeaderHint]
+		if !ok || nodeID == "" || vector.ShardAddresses[groupID][nodeID] == "" {
+			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("owner group %q has no configured serving endpoint", groupID))
+		}
+		endpoints[groupID] = vector.ShardAddresses[groupID][nodeID]
 		nodeEndpoints[groupID] = make(map[raftcluster.NodeID]string, len(vector.ShardAddresses[groupID]))
 		for node, endpoint := range vector.ShardAddresses[groupID] {
 			if group, ok := resolved.Group(groupID); !ok || !slices.Contains(group.Members, node) {
 				continue
 			}
 			nodeEndpoints[groupID][node] = endpoint
-		}
-		if r.dataGroup == groupID {
-			endpoints[groupID] = vector.ShardAddresses[groupID][r.parent.config.NodeID]
 		}
 	}
 
@@ -675,6 +695,9 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		if serviceErr != nil {
 			_ = source.Close()
 			return nil, serviceErr
+		}
+		if r.parent.preparedVector != nil {
+			shardService.postSearchGuard = r.parent.requirePreparedVectorCurrentDBV1
 		}
 		shardListener, err = net.Listen("tcp", vector.ShardAddresses[owner][r.parent.config.NodeID])
 		if err != nil {
@@ -738,27 +761,35 @@ func fixedPeerVectorLifecycleSpecV1(vector *FixedPeerTCPVectorConfigV1) ([]raftc
 }
 
 func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleLeaderV1(ctx context.Context) (raftplacement.CatalogMetaStatusV1, error) {
-	if r == nil || r.vector == nil || r.meta == nil || r.config.Vector == nil {
+	if r == nil || r.vector == nil || r.meta == nil || r.servingVectorConfigV1() == nil {
 		return raftplacement.CatalogMetaStatusV1{}, ErrFixedPeerVectorUnavailableV1
+	}
+	if err := r.requirePreparedVectorCatalogV1(); err != nil {
+		return raftplacement.CatalogMetaStatusV1{}, err
 	}
 	status := r.meta.RuntimeStatusV1()
 	if status.State != "Leader" || status.LeaderID != r.config.NodeID {
 		return raftplacement.CatalogMetaStatusV1{}, raftcluster.ErrNotLeader
 	}
-	owners, ready, err := fixedPeerVectorLifecycleSpecV1(r.config.Vector)
+	if r.config.VectorInitialization != nil {
+		if err := r.validatePreparedVectorAllVotersV1(ctx); err != nil {
+			return raftplacement.CatalogMetaStatusV1{}, err
+		}
+	}
+	owners, ready, err := fixedPeerVectorLifecycleSpecV1(r.servingVectorConfigV1())
 	if err != nil {
 		return raftplacement.CatalogMetaStatusV1{}, err
 	}
 	lifecycle := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.authority, Committer: r.meta}
-	record, err := lifecycle.BeginBuildV1(ctx, r.config.Vector.Identity, owners, 0, 1)
+	record, err := lifecycle.BeginBuildV1(ctx, r.servingVectorConfigV1().Identity, owners, 0, 1)
 	if err == nil && (record.State == raftplacement.VectorPartitionLifecycleBuildingV1 || record.State == raftplacement.VectorPartitionLifecycleStagedV1) {
-		record, err = lifecycle.RecordGroupReadyV1(ctx, r.config.Vector.Identity, ready)
+		record, err = lifecycle.RecordGroupReadyV1(ctx, r.servingVectorConfigV1().Identity, ready)
 	}
 	if err == nil && record.State == raftplacement.VectorPartitionLifecycleStagedV1 {
-		record, err = lifecycle.PrepareV1(ctx, r.config.Vector.Identity)
+		record, err = lifecycle.PrepareV1(ctx, r.servingVectorConfigV1().Identity)
 	}
 	if err == nil && record.State == raftplacement.VectorPartitionLifecyclePreparedV1 {
-		record, err = lifecycle.ActivateV1(ctx, r.config.Vector.Identity)
+		record, err = lifecycle.ActivateV1(ctx, r.servingVectorConfigV1().Identity)
 	}
 	if err != nil {
 		return raftplacement.CatalogMetaStatusV1{}, err
@@ -774,6 +805,9 @@ func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleLeaderV1(ctx context.Contex
 }
 
 func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleV1(ctx context.Context) error {
+	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+		return err
+	}
 	if r == nil || r.vector == nil {
 		return ErrFixedPeerVectorUnavailableV1
 	}
@@ -1071,17 +1105,26 @@ func fixedPeerImmutableVectorStandbyV1(config FixedPeerTCPConfigV1) bool {
 // searchVectorPartitionStrictV1 keeps mutable search on the single owner whose
 // Raft barrier and fresh live pin authorize it. Immutable search is coordinated
 // at the public ingress and may dispatch to several independently hosted owners.
-func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil {
+func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (response public.SearchResponseV1, resultErr error) {
+	defer func() {
+		if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+			response = public.SearchResponseV1{}
+			resultErr = publicBackendErrorV1(err)
+		}
+	}()
+	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(err)
+	}
+	if r == nil || r.vector == nil || r.servingVectorConfigV1() == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
-	if r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		if len(request.VisibilityToken) != 0 {
 			if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
 				return public.SearchResponseV1{}, publicBackendErrorV1(err)
 			}
 		}
-		if r.config.NodeID != r.config.Vector.RouterNodeID {
+		if r.config.NodeID != r.servingVectorConfigV1().RouterNodeID {
 			// Owners expose status and the authenticated shard listener, but do not
 			// host the router asset required by public strict search.
 			return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
@@ -1103,7 +1146,7 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		}
 		// The ACTIVE grant checked on entry can be invalidated while remote
 		// owners search. Fence it again before exposing any merged result.
-		if _, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)); err != nil {
+		if _, err := r.immutableActiveVectorRecordV1(ctx, fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement)); err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
 		if err := guard(); err != nil {
@@ -1111,7 +1154,7 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		}
 		return response, nil
 	}
-	owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
+	owners := fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement)
 	if len(owners) != 1 {
 		return public.SearchResponseV1{}, publicBackendErrorV1(errors.New("fixed-peer strict search requires exactly one owner group"))
 	}
@@ -1184,12 +1227,12 @@ func fixedPeerVectorPublicErrorV1(err error) error {
 // configured owner leader. The receiving owner repeats the complete proof
 // validation inside its serialized preflight-to-consensus boundary.
 func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
+	if r == nil || r.vector == nil || r.servingVectorConfigV1() == nil || r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) || request.OwnerGroup == "" {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
 	routeGroup := request.OwnerGroup
 	if r.authority != nil {
-		source, err := r.authority.RouteDocumentToken(ctx, request.CatalogProof, r.config.Vector.Collection, raftplacement.DocumentIDTokenV1(request.Request.ID))
+		source, err := r.authority.RouteDocumentToken(ctx, request.CatalogProof, r.servingVectorConfigV1().Collection, raftplacement.DocumentIDTokenV1(request.Request.ID))
 		if err != nil {
 			return public.InsertResponseV1{}, err
 		}
@@ -1228,7 +1271,10 @@ func (r *FixedPeerTCPRuntimeV1) SubmitVectorPartitionInsertV1(ctx context.Contex
 }
 
 func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+		return public.InsertResponseV1{}, err
+	}
+	if r == nil || r.vector == nil || r.servingVectorConfigV1() == nil || r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
 	if request.SourceGroup != "" {
@@ -1258,7 +1304,7 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if err != nil {
 		return public.InsertResponseV1{}, err
 	}
-	entry, key, err := fixedPeerVectorInsertEntryV1(r.config.Vector.Collection.Collection, format, catalogVersion, request)
+	entry, key, err := fixedPeerVectorInsertEntryV1(r.servingVectorConfigV1().Collection.Collection, format, catalogVersion, request)
 	if err != nil {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorDocumentV1, err)
 	}
@@ -1278,7 +1324,7 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if !ok {
 		return public.InsertResponseV1{}, ErrFixedPeerVectorUnavailableV1
 	}
-	resolved, err := raftplacement.Validate(r.config.Vector.Catalog)
+	resolved, err := raftplacement.Validate(r.servingVectorConfigV1().Catalog)
 	if err != nil {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
 	}
@@ -1294,9 +1340,9 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 		RequestID:                 binary.BigEndian.Uint64(key[:8]),
 		AckPolicy:                 iwire.AckRaftCommitted,
 		ClusterRouteKnown:         true,
-		ClusterRouteDatabase:      r.config.Vector.Collection.Database,
-		ClusterRouteCatalog:       r.config.Vector.Collection.Catalog,
-		ClusterRouteCollection:    r.config.Vector.Collection.Collection,
+		ClusterRouteDatabase:      r.servingVectorConfigV1().Collection.Database,
+		ClusterRouteCatalog:       r.servingVectorConfigV1().Collection.Catalog,
+		ClusterRouteCollection:    r.servingVectorConfigV1().Collection.Collection,
 		ClusterRouteShape:         "vector_partition_exact_id",
 		ClusterRouteGroupID:       string(request.OwnerGroup),
 		ClusterRouteMembers:       members,
@@ -1328,7 +1374,7 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if err != nil || ownerStatus.State != "Leader" || ownerStatus.LeaderID != r.config.NodeID || ownerStatus.RaftAppliedIndex < result.CommittedEntry.Index {
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err, errors.New("owner apply proof is incomplete")))
 	}
-	live, err := r.vector.collection.ProveVectorPartitionLiveDocumentV1(ctx, r.config.Vector.Manifest, request.Request.ID, request.Request.Document)
+	live, err := r.vector.collection.ProveVectorPartitionLiveDocumentV1(ctx, r.servingVectorConfigV1().Manifest, request.Request.ID, request.Request.Document)
 	if err != nil {
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
 	}
@@ -1377,7 +1423,7 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if err := public.ValidateInsertRequestV1(ctx, request.Request); err != nil {
 		return err
 	}
-	vector := r.config.Vector
+	vector := r.servingVectorConfigV1()
 	if vector == nil || r.vector == nil || vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) ||
 		r.vector.collection == nil || request.Identity != vector.Identity ||
 		request.Request.Generation.Index != vector.Identity.Index.IndexName || request.Request.Generation.Generation != vector.Identity.Generation ||

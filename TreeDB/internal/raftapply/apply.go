@@ -91,11 +91,14 @@ func (defaultCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply
 // stores, and the command-WAL seam. Nil stores are allowed for early tests but
 // mean duplicates/progress cannot be durably recorded.
 type Options struct {
-	DecodeLimits        nativewire.Limits
-	ProgressStore       ApplyProgressStore
-	ResultStore         ApplyResultStore
-	CommandWALApplySeam CommandWALApplySeam
-	FaultInjector       FaultInjector
+	// VectorPrepareStorageOwner is an optional callback-scoped capability minted
+	// before the applying FSM mutex. Only vector prepare borrows it.
+	VectorPrepareStorageOwner *collections.VectorPrepareStorageOwnerV1
+	DecodeLimits              nativewire.Limits
+	ProgressStore             ApplyProgressStore
+	ResultStore               ApplyResultStore
+	CommandWALApplySeam       CommandWALApplySeam
+	FaultInjector             FaultInjector
 }
 
 // Harness applies committed deterministic entry bytes to one local DB handle.
@@ -231,6 +234,9 @@ func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 			return PreflightResultV1{}, err
 		}
 		return PreflightResultV1{}, nil
+	case nativewire.CommandVectorPrepareV1:
+		_, _, err := h.preflightVectorPrepareV1(entry, meta)
+		return PreflightResultV1{}, err
 	case nativewire.CommandSplitVectorInsertV1:
 		_, _, err := h.preflightSplitVectorInsertV1(entry, meta)
 		return PreflightResultV1{}, err
@@ -402,6 +408,8 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	var result raftentry.ApplyResultV1
 	switch entry.Target.CommandID {
+	case nativewire.CommandVectorPrepareV1:
+		result, err = h.applyVectorPrepareV1(entry, meta)
 	case nativewire.CommandSplitVectorInsertV1:
 		result, err = h.applySplitVectorInsertV1(entry, meta)
 	case nativewire.CommandCreateCollection:

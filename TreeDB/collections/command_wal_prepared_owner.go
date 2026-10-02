@@ -11,8 +11,13 @@ import (
 // It refers to the original collection and actual operation-owned locks. The
 // callback must finalize or abort its appended frame before returning.
 type CommandWALAdmittedCollection struct {
-	collection *Collection
-	admission  *collectionCommandWALAdmission
+	collection           *Collection
+	admission            *collectionCommandWALAdmission
+	partitionStorageHeld bool
+	preparation          *VectorPartitionPrepareCompletionV1
+	partitionSourcePin   *backenddb.Snapshot
+	partitionCapture     *backenddb.StableResourceCaptureLease
+	replayOperation      *backenddb.CommandWALIntent
 }
 
 // WithPreparedCommandWALMutation owns schema, vector coverage/admission and
@@ -23,6 +28,9 @@ func (c *Collection) WithPreparedCommandWALMutation(apply func(*CommandWALAdmitt
 }
 
 func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), coveragePersistence bool, apply func(*CommandWALAdmittedCollection) error) error {
+	return c.withPreparedCommandWALMutationAndReplayIntent(acquire, coveragePersistence, nil, apply)
+}
+func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func() func(), coveragePersistence bool, replay *backenddb.CommandWALIntent, apply func(*CommandWALAdmittedCollection) error) error {
 	if c == nil {
 		return errCollectionNil
 	}
@@ -49,7 +57,13 @@ func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), cover
 		return err
 	}
 	var err error
-	if coveragePersistence {
+	_, fromReplay := replay.ReplayAssignedLSN()
+	if fromReplay {
+		if err := c.db.ValidateCommandWALReplayOperationV1(replay); err != nil {
+			return err
+		}
+		err = c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true)
+	} else if coveragePersistence {
 		err = c.flushBufferedWritesWithCoverageLocked()
 	} else {
 		err = c.flushBufferedWritesWithVectorAdmissionLocked()
@@ -57,18 +71,25 @@ func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), cover
 	if err != nil {
 		return err
 	}
-	unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, nil)
-	if err != nil {
-		return err
+	if !fromReplay {
+		unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, nil)
+		if err != nil {
+			return err
+		}
+		unlockRaw()
 	}
-	unlockRaw()
-	owner := &CommandWALAdmittedCollection{collection: c, admission: admission}
+	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
 	return apply(owner)
 }
 
 func (owner *CommandWALAdmittedCollection) validate() error {
 	if owner == nil || owner.collection == nil || owner.admission == nil || owner.admission.release == nil || owner.admission.mutationLocked == nil || !*owner.admission.mutationLocked {
 		return errors.New("collections: prepared command WAL owner is no longer active")
+	}
+	if owner.replayOperation != nil {
+		if err := owner.collection.db.ValidateCommandWALReplayOperationV1(owner.replayOperation); err != nil {
+			return err
+		}
 	}
 	return owner.collection.ensureWriteDomainOpen()
 }

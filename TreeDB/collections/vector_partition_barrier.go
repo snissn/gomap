@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // VectorPartitionStorageBarrierV1 serializes durable vector-partition
@@ -127,4 +129,124 @@ func tryVectorPartitionStorageBarrier(root string) (func(), bool) {
 		vectorPartitionStorageBarriersV1.Unlock()
 		return nil, false
 	}
+}
+
+// VectorPrepareStableCaptureV1 pins the genuine DB generation before waiting
+// for the root storage barrier. Copies share the same retirement state.
+type VectorPrepareStableCaptureV1 struct {
+	state *vectorPrepareStableCaptureStateV1
+}
+type vectorPrepareStableCaptureStateV1 struct {
+	mu   sync.Mutex
+	db   *backenddb.DB
+	root string
+	pin  *backenddb.Snapshot
+}
+
+// VectorPrepareStorageOwnerV1 is borrowed only during WithStorageBarrierV1.
+// Copies share callback expiry; retaining a pointer never extends authority.
+type VectorPrepareStorageOwnerV1 struct {
+	state *vectorPrepareStorageOwnerStateV1
+}
+type vectorPrepareStorageOwnerStateV1 struct {
+	mu     sync.Mutex
+	db     *backenddb.DB
+	root   string
+	pin    *backenddb.Snapshot
+	active bool
+}
+
+func AcquireVectorPrepareStableCaptureV1(db *backenddb.DB) (*VectorPrepareStableCaptureV1, error) {
+	if db == nil {
+		return nil, errCollectionDBNil
+	}
+	root, err := canonicalVectorPartitionStorageRootV1(db.Dir())
+	if err != nil {
+		return nil, err
+	}
+	pin := db.AcquireStableSnapshot()
+	if pin == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return &VectorPrepareStableCaptureV1{state: &vectorPrepareStableCaptureStateV1{db: db, root: root, pin: pin}}, nil
+}
+
+// Close waits for an active callback and retires the snapshot once.
+func (capture *VectorPrepareStableCaptureV1) Close() {
+	if capture == nil || capture.state == nil {
+		return
+	}
+	state := capture.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.pin != nil {
+		state.pin.Close()
+		state.pin = nil
+	}
+}
+
+func (capture *VectorPrepareStableCaptureV1) WithStorageBarrierV1(ctx context.Context, fn func(*VectorPrepareStorageOwnerV1) error) error {
+	if capture == nil || capture.state == nil || fn == nil {
+		return errors.New("collections: vector prepare capture unavailable")
+	}
+	state := capture.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.pin == nil {
+		return errors.New("collections: vector prepare capture expired")
+	}
+	root, err := canonicalVectorPartitionStorageRootV1(state.db.Dir())
+	if err != nil || root != state.root {
+		return errors.New("collections: vector prepare capture root changed")
+	}
+	return WithVectorPartitionStorageBarrierWithContextV1(ctx, state.root, func() error {
+		ownerState := &vectorPrepareStorageOwnerStateV1{db: state.db, root: state.root, pin: state.pin, active: true}
+		owner := &VectorPrepareStorageOwnerV1{state: ownerState}
+		defer func() {
+			ownerState.mu.Lock()
+			ownerState.active = false
+			ownerState.pin = nil
+			ownerState.mu.Unlock()
+		}()
+		return fn(owner)
+	})
+}
+
+// ValidateDBV1 checks identity without exposing the snapshot. The collection
+// executor additionally holds the owner mutex throughout each borrowed use.
+func (owner *VectorPrepareStorageOwnerV1) ValidateDBV1(db *backenddb.DB) error {
+	if owner == nil || owner.state == nil {
+		return errors.New("collections: vector prepare storage owner unavailable")
+	}
+	state := owner.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.validateDBV1(db)
+}
+
+func (state *vectorPrepareStorageOwnerStateV1) validateDBV1(db *backenddb.DB) error {
+	if !state.active || state.pin == nil {
+		return errors.New("collections: vector prepare storage owner expired")
+	}
+	if db == nil || db != state.db {
+		return errors.New("collections: vector prepare storage owner DB mismatch")
+	}
+	root, err := canonicalVectorPartitionStorageRootV1(db.Dir())
+	if err != nil || root != state.root {
+		return errors.New("collections: vector prepare storage owner root mismatch")
+	}
+	return nil
+}
+
+func (owner *VectorPrepareStorageOwnerV1) withDBV1(db *backenddb.DB, fn func(*backenddb.Snapshot) error) error {
+	if owner == nil || owner.state == nil {
+		return errors.New("collections: vector prepare storage owner unavailable")
+	}
+	state := owner.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if err := state.validateDBV1(db); err != nil {
+		return err
+	}
+	return fn(state.pin)
 }

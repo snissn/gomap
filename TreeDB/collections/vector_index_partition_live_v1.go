@@ -1780,7 +1780,17 @@ func (c *Collection) vectorPartitionLiveCurrentStateV1(ctx context.Context, inde
 	return source, documentGeneration, state, ctx.Err()
 }
 
-func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1, replay *backenddb.CommandWALIntent) error {
+func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1, replay *backenddb.CommandWALIntent, owners ...*CommandWALAdmittedCollection) error {
+	var owner *CommandWALAdmittedCollection
+	if len(owners) != 0 {
+		owner = owners[0]
+	}
+	if owner != nil {
+		if err := owner.validate(); err != nil {
+			return err
+		}
+	}
+
 	if c == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -1794,8 +1804,10 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 	// Mutations take native-vector admission before loading/reconciling runtime
 	// state. Use the same order and hold exclusive admission until a new binding
 	// is durably published and marked admitted.
-	unlockAdmission := c.lockNativeVectorAdmissionWrite()
-	defer unlockAdmission()
+	if owner == nil {
+		unlockAdmission := c.lockNativeVectorAdmissionWrite()
+		defer unlockAdmission()
+	}
 	unlockLoad := c.lockNativeVectorIndexLoad()
 	if replay == nil && c.vectorPartitionLiveWarmBindingCurrentV1(manifest) {
 		unlockLoad()
@@ -1803,8 +1815,10 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 	}
 
 	idx, needsBindingPublication, err := func() (*VectorIndex, bool, error) {
-		unlockMutation := c.lockMutation()
-		defer unlockMutation.Unlock()
+		if owner == nil {
+			unlockMutation := c.lockMutation()
+			defer unlockMutation.Unlock()
+		}
 		if idx := c.registeredVectorIndex(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
 			if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 				return nil, false, err
@@ -1870,7 +1884,17 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			}
 		}
 
-		router, status, err := c.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+		var router *VectorPartitionRouterV1
+		var status VectorPartitionRouterOpenStatusV1
+		if owner != nil {
+			if !owner.partitionStorageHeld {
+				return nil, false, errors.New("collections: missing prepare storage barrier")
+			}
+			router, err = c.openVectorPartitionRouterManifestWithContextV1(ctx, manifest)
+			status.Generation = manifest.Generation
+		} else {
+			router, status, err = c.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+		}
 		if err != nil {
 			return nil, false, err
 		}
@@ -1910,6 +1934,12 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		return err
 	}
 	if needsBindingPublication {
+		if owner != nil && owner.preparation != nil {
+			idx.mu.Lock()
+			idx.partitionPreparation = owner.preparation
+			idx.dirtyMeta = true
+			idx.mu.Unlock()
+		}
 		rollbackRegistration := c.registeredVectorIndex(manifest.IndexName) == nil
 		if rollbackRegistration {
 			c.registerVectorIndexCurrentCatalog(idx)
@@ -1920,7 +1950,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			}()
 		}
 		runVectorPartitionLiveBeforeBindingPublicationHookForTest()
-		_, err := idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay)
+		_, err := idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay, owner)
 		if err != nil {
 			return err
 		}

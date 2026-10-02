@@ -186,6 +186,17 @@ untagged order:
 5. counted physical-pack placement, disjoint-membership, overlap-membership,
    representative-membership, and partition-asset lists, in that order.
 
+The bounded fixed-layout prepare checkpoint adds wire schema `8` only when
+`PrepareOrigin` is present. It is the schema-6 sequence above followed by the
+actual committed Raft term (`uint64`), index (`uint64`), and canonical lowercase
+SHA-256 command digest (`uint32` length plus UTF-8 bytes). All three are required,
+nonzero or nonempty, and included in the canonical integrity digest. This
+origin is supported only for one inline physical partition and at most 512
+source rows. It authenticates reuse of a command-owned staged BUILD/READY
+manifest; it is not applied progress or a substitute for a covered durable FSM
+result. Existing nil-origin manifests retain schema 6 byte-for-byte, including
+their integrity digest. Paged schema 7 cannot carry this origin.
+
 The draft #4808 paged codec adds wire schema `7` under the same magic. Its
 header is magic, `uint32(7)`, and a big-endian `uint32` payload byte length;
 the remaining bytes are one canonical JSON `VectorPartitionManifestV1`
@@ -3884,3 +3895,22 @@ Whole-SYSTEM reconstruction preserves those pointers. Command kind 106 / payload
 binaries need not accept this added format; no migration support is promised.
 See [the split insert contract](vector-partition-split-source-insert-v1.md) for
 the fixed lifetime capacity and local-WAL versus consensus trust boundary.
+
+### Nativewire collection metadata physical schema (version 6)
+
+Collection metadata without ColumnStore retains the exact version-5 encoding,
+including its existing vector-index and calibration field sequence.
+Metadata with a physical column configuration uses version 6: the complete
+version-5 field sequence (with version set to 6), then one unsigned-varint length
+and that many UTF-8 JSON bytes encoding ColumnStoreConfig. JSON and normalized
+JSON are each limited to 16 KiB; the schema declares 1 through 32 columns.
+These are bounded wire checkpoint limits, not storage-engine column limits.
+
+The shared collections decoder rejects unknown fields, trailing JSON, disabled
+or invalid schemas, and invalid ownership/types/dimensions/manager configuration.
+It uses the existing collection normalization/defaults on every wire path.
+Create validation additionally rejects caller-supplied active/recovery manifests,
+recovery applied LSN and physical mutation count before real Raft Append.
+Metadata responses retain those legitimate durable fields. Encoding errors
+propagate through existing client/server error returns. No collection-owned
+local WAL encoding, immutable initialization intent or configuration marker changes.

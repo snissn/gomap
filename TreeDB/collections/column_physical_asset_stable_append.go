@@ -119,3 +119,36 @@ func AppendColumnPhysicalAssetsWithStableResources(
 	}
 	return refs, resources, nil
 }
+
+// appendFreshColumnPhysicalAssetsWithStableResources creates one manager-owned
+// O_EXCL output. An interrupted, unpublished output is never reopened, adopted,
+// truncated, or reused by a later prepare attempt.
+func appendFreshColumnPhysicalAssetsWithStableResources(root string, cfg ColumnStoreConfig, items []StableColumnPhysicalAssetAppend, registry *rootpublication.IdentityPinRegistry, recovery StableResourceCaptureRecoveryRetainer) ([]ColumnAssetRef, *rootpublication.StableResourceSet, error) {
+	if registry == nil || recovery == nil || len(items) == 0 {
+		return nil, nil, errors.New("collections: incomplete fresh asset append authority")
+	}
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry, recovery)
+	appender, err := session.freshAppender()
+	if err != nil {
+		return nil, nil, errors.Join(err, session.abort())
+	}
+	internal := make([]columnPhysicalAssetAppendItem, len(items))
+	for i, item := range items {
+		if item.FileID != 0 {
+			return nil, nil, errors.Join(errors.New("collections: fresh prepare cannot select a foreign file"), session.abort())
+		}
+		internal[i] = columnPhysicalAssetAppendItem{payload: item.Payload, kind: item.Kind, generation: item.Generation, partID: item.PartID}
+	}
+	refs, err := appender.appendKinds(internal)
+	if err != nil {
+		return nil, nil, errors.Join(err, session.abort())
+	}
+	prepared := make([]ColumnPreparedAsset, len(refs))
+	for i, ref := range refs {
+		prepared[i] = ColumnPreparedAsset{Ref: ref, Bytes: ref.Length}
+	}
+	_, resources, err := session.closeWithStableResourcesValidated(func(captured *rootpublication.StableResourceSet) error {
+		return validateStableColumnResourcesMatchPrepared(prepared, captured)
+	})
+	return refs, resources, err
+}

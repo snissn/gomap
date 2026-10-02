@@ -240,7 +240,10 @@ func reconcileColumnGraphBuildTiming(timing *ColumnGraphBuildTiming) {
 	timing.Total = max(timing.Total, timing.Snapshot+timing.RowExtraction+timing.AdjacencyBuild+timing.LocalityRemap+timing.Publication)
 }
 
-func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (status VectorIndexStatus, err error) {
+func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+	return c.rebuildVectorIndexWithCommandWALIntentAndOwner(name, replay, nil)
+}
+func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string, replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (status VectorIndexStatus, err error) {
 	started := time.Now()
 	var timing ColumnGraphBuildTiming
 	if err := ValidateIndexName(name); err != nil {
@@ -252,8 +255,17 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
+	if owner != nil {
+		if err := owner.validate(); err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if owner.collection != c {
+			return VectorIndexStatus{}, errors.New("collections: foreign rebuild owner")
+		}
+	} else {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+	}
 	var unlockRawPublish func()
 	defer func() {
 		if unlockRawPublish != nil {
@@ -288,6 +300,12 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	// Pin the index generation before taking raw or mutation: stable capture
 	// briefly takes maintenanceMu, which maintenance itself takes before raw.
 	var sourcePin *backenddb.Snapshot
+	if owner != nil {
+		sourcePin = owner.partitionSourcePin
+		if sourcePin == nil {
+			return VectorIndexStatus{}, errors.New("collections: prepare rebuild lacks pre-raw generation pin")
+		}
+	}
 	if publicHandoff {
 		sourcePin = c.db.AcquireStableSnapshot()
 		if sourcePin == nil {
@@ -297,10 +315,14 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		if err := acquirePublicationMutation(); err != nil {
 			return VectorIndexStatus{}, err
 		}
-	} else {
+	} else if owner == nil {
 		unlockMutation = c.lockMutation()
 	}
-	if err := c.flushBufferedWritesWithRawPublishState(publicHandoff || heldRaw); err != nil {
+	flush := func() error { return c.flushBufferedWritesWithRawPublishState(publicHandoff || heldRaw) }
+	if owner != nil {
+		flush = func() error { return c.flushBufferedWritesWithRawPublishStateAndCoverage(heldRaw, true, true) }
+	}
+	if err := flush(); err != nil {
 		return VectorIndexStatus{}, err
 	}
 

@@ -15,7 +15,7 @@ import (
 type CollectionHandle uint64
 
 const (
-	collectionMetaWireVersion          = 5
+	collectionMetaWireVersion          = 6
 	maxCollectionMetaIndexDefinitions  = 1 << 16
 	minEncodedIndexDefinitionLen       = 6
 	minEncodedVectorIndexDefinitionLen = 7
@@ -51,8 +51,18 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 	return binary.AppendUvarint(dst, uint64(handle))
 }
 
-func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, collectionMetaWireVersion)
+func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
+	version := uint64(5)
+	var columnSchema []byte
+	if meta.Options.ColumnStore != nil {
+		var err error
+		columnSchema, err = collections.EncodeColumnStoreWireConfigV1(meta.Name, meta.Options.ColumnStore, false)
+		if err != nil {
+			return nil, invalidMetadata("%v", err)
+		}
+		version = 6
+	}
+	dst := binary.AppendUvarint(nil, version)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -72,9 +82,12 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	}
 	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
 	for _, def := range meta.VectorIndexes {
-		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, collectionMetaWireVersion)
+		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, version)
 	}
-	return dst
+	if version >= 6 {
+		dst = appendString(dst, string(columnSchema))
+	}
+	return dst, nil
 }
 
 func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
@@ -222,6 +235,16 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 			}
 			meta.VectorIndexes = append(meta.VectorIndexes, def)
 			off = next
+		}
+	}
+	if version >= 6 {
+		raw, err := readString(src, &off)
+		if err != nil {
+			return collections.CollectionMeta{}, err
+		}
+		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(name, []byte(raw), false)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
 	}
 	if off != len(src) {
@@ -527,12 +550,16 @@ func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectio
 	return def, off, nil
 }
 
-func encodeCollectionMetaVector(metas []collections.CollectionMeta) []byte {
+func encodeCollectionMetaVector(metas []collections.CollectionMeta) ([]byte, error) {
 	items := make([][]byte, len(metas))
 	for i := range metas {
-		items[i] = encodeCollectionMeta(metas[i])
+		var err error
+		items[i], err = encodeCollectionMeta(metas[i])
+		if err != nil {
+			return nil, err
+		}
 	}
-	return iwire.AppendByteVector(nil, items...)
+	return iwire.AppendByteVector(nil, items...), nil
 }
 
 func decodeCollectionMetaVector(src []byte, limits iwire.Limits) ([]collections.CollectionMeta, error) {
@@ -958,7 +985,8 @@ func (s *Server) catalogMetadataFingerprint() ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return encodeCollectionMetaVector(metas), true
+	encoded, err := encodeCollectionMetaVector(metas)
+	return encoded, err == nil
 }
 
 func (s *Server) bumpCatalogVersionIfCatalogMetadataChanged(before []byte, beforeOK bool) {
@@ -1287,6 +1315,16 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 	for _, def := range meta.Indexes {
 		if err := normalizeClientIndexDefinition(def); err != nil {
 			return collections.CollectionMeta{}, err
+		}
+	}
+	if meta.Options.ColumnStore != nil {
+		raw, err := collections.EncodeColumnStoreWireConfigV1(meta.Name, meta.Options.ColumnStore, true)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(meta.Name, raw, true)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
 	}
 	return meta, nil

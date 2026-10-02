@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -2573,7 +2574,7 @@ func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorParti
 	})
 }
 
-func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1, boundedEvidence bool, ownerFileIDs map[string]uint32) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1, boundedEvidence bool, ownerFileIDs map[string]uint32, owned ...vectorPartitionMaterializeOwnerV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	if err := manifest.requireInlineRuntimeV1(); err != nil {
 		return nil, nil, err
 	}
@@ -2890,12 +2891,27 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			partitions[i] = partition
 		}
 	}
-	lease, err := c.db.AcquireStableResourceCaptureLease()
+	var lease *backenddb.StableResourceCaptureLease
+	var releaseCapture func()
+	if len(owned) != 0 && owned[0].owner != nil {
+		lease, releaseCapture, err = owned[0].owner.vectorPrepareCaptureLeaseV1()
+	} else {
+		lease, err = c.db.AcquireStableResourceCaptureLease()
+		if lease != nil {
+			releaseCapture = lease.Release
+		}
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("retained variant capture lease: %w", err)
 	}
-	defer lease.Release()
-	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, fileID, items, c.db.StableResourceIdentityPinRegistry(), lease)
+	defer releaseCapture()
+	var refs []ColumnAssetRef
+	var resources *rootpublication.StableResourceSet
+	if len(owned) != 0 && owned[0].fresh {
+		refs, resources, err = appendFreshColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, items, c.db.StableResourceIdentityPinRegistry(), lease)
+	} else {
+		refs, resources, err = AppendColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, fileID, items, c.db.StableResourceIdentityPinRegistry(), lease)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("retained variant append packs: %w", err)
 	}
@@ -3889,4 +3905,10 @@ func vectorPartitionSourceAdjacencyV1(reader *columnVectorGraphPhysicalRowReader
 		return append([]uint32(nil), legacy...), nil
 	}
 	return nil, errors.New("authoritative source adjacency unavailable")
+}
+
+// Private prepare-only option; ordinary public builders retain admission.
+type vectorPartitionMaterializeOwnerV1 struct {
+	fresh bool
+	owner *CommandWALAdmittedCollection
 }

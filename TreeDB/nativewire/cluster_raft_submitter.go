@@ -269,7 +269,7 @@ func raftClusterCreateCollectionResponseMeta(entry raftentry.CommandEntryV1, man
 	if err != nil {
 		return nil, protocolError(iwire.ErrInternal, "raft cluster submitter applied create_collection but collection %q is not readable: %v", meta.Name, err)
 	}
-	return encodeCollectionMeta(collection.Meta()), nil
+	return encodeCollectionMeta(collection.Meta())
 }
 
 func raftClusterMatchedAndAffectedCounts(result raftentry.ApplyResultV1) (int, int, error) {

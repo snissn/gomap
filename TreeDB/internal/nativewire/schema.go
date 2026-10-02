@@ -367,6 +367,15 @@ func validSchemaSectionID(id SectionID) bool {
 func v1CommandSchemas() []CommandSchema {
 	return []CommandSchema{
 		{
+			ID: CommandVectorPrepareV1, Version: 1, Name: "vector_prepare_v1",
+			Kind: CommandKindMutation, Replicated: true, RequiresIdempotency: true, RequiresCatalogGuard: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
+				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionVectorPrepareV1, Name: "vector_prepare", Required: true, Deterministic: true},
+			},
+		},
+		{
 			ID: CommandSplitVectorInsertV1, Version: 1, Name: "split_vector_insert_v1",
 			Kind: CommandKindMutation, Replicated: true, RequiresIdempotency: true, RequiresCatalogGuard: true,
 			Sections: []SectionRule{

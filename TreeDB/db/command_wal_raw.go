@@ -207,6 +207,7 @@ func (db *DB) commandWALJournalUnavailableError() error {
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
 // higher-level deterministic command executors such as collections.
 type CommandWALIntent struct {
+	replayDB      *DB // Exact startup callback owner; never persisted.
 	inner         commandWALBatchIntent
 	publishTiming *CommandWALPublishTiming
 }
@@ -1166,7 +1167,9 @@ func (db *DB) NewCommandWALReplayIntent(env commitlog.CommandEnvelope) (*Command
 	if err := checkCommandWALReplayFrameActive(env.LSN, activeLSN, activeToken); err != nil {
 		return nil, err
 	}
-	return newCommandWALReplayIntent(env, activeToken), nil
+	intent := newCommandWALReplayIntent(env, activeToken)
+	intent.replayDB = db
+	return intent, nil
 }
 
 func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) error {
@@ -2949,4 +2952,17 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		lsn:          env.LSN,
 		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
 	}, maxEntryRevision)
+}
+
+// ValidateCommandWALReplayOperationV1 authenticates callback-scoped startup
+// replay using its real assigned LSN and DB-minted token. It confers no raw or
+// teardown ownership; replay publications use their ordinary unheld-raw paths.
+func (db *DB) ValidateCommandWALReplayOperationV1(intent *CommandWALIntent) error {
+	if db == nil {
+		return ErrClosed
+	}
+	if intent == nil || intent.replayDB != db || !intent.inner.fromReplay || intent.inner.lsn == 0 || intent.inner.staged {
+		return ErrCommandWALRejected
+	}
+	return db.checkCommandWALReplayIntentActive(&intent.inner)
 }
