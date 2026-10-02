@@ -31,6 +31,14 @@ budgets as view reads. Current writable segments without persistent mapping,
 mapping denials, unsupported platforms and unavailable mapped ranges retain the
 existing file-read fallback. Mapped hits do not re-enter lazy-map admission.
 
+Managed remaps hold the manager lock before the file remap lock through actual
+file-size admission and mapping publication. They recheck the registered handle
+and current/sealed state under those locks; only sealed files face the sealed
+budgets. Dead-cap and unchanged-denial misses can return before locking, with
+an authoritative recheck on attempts that proceed. Increased limits allow a
+retry. A failed new mmap preserves the old mapping, already borrowed views and
+retained-mapping accounting; retirement occurs only after a successful map.
+
 Compressed grouped owned reads may admit decoded frames under the existing
 entry, raw-size and manager-wide byte limits. A hit copies the selected bytes
 directly into the final owned destination while holding the cache slot read

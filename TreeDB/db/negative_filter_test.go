@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -567,6 +568,9 @@ func TestNegativeFilterIndexReplacementOldSnapshotAndGuardRelease(t *testing.T) 
 	}
 	if !field.IsNil() {
 		t.Fatal("pooled guard retained filter")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("guard release verified; online vacuum unsupported on Windows")
 	}
 	if err := d.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatal(err)

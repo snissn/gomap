@@ -1,0 +1,10 @@
+SYNTHETIC valid complete matrix: PASS: 95 cells, 40 fresh-process RSS observations; exact route/residency gates verified
+SYNTHETIC rejected: wrong transport
+SYNTHETIC rejected: unexpected benchmark
+SYNTHETIC rejected: duplicate row
+SYNTHETIC rejected: wrong CPU suffix
+SYNTHETIC rejected: nonfinite time
+SYNTHETIC rejected: redundant owned allocation
+SYNTHETIC rejected: process failure
+SYNTHETIC rejected: zero RSS
+All parser-only checks PASS. No runtime/performance evidence.

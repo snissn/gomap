@@ -208,6 +208,8 @@ def validate(directory):
         log = directory / (job['id'] + '.log')
         if digest(log) != record.get('log_sha256'):
             raise ValueError(f"changed raw log {job['id']}")
+        if digest(directory / (job['id'] + '.stderr.log')) != record.get('stderr_sha256'):
+            raise ValueError(f"changed/missing diagnostic log {job['id']}")
         parsed.append(dict(job=job, rows=parse_log(log.read_text(), job)))
     performance = sum(len(p['rows']) for p in parsed if not p['job']['counters'])
     diagnostic = sum(len(p['rows']) for p in parsed if p['job']['counters'])

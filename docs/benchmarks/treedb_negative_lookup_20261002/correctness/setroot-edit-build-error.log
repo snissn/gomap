@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/tree [github.com/snissn/gomap/TreeDB/tree.test]
+TreeDB/tree/tree.go:425:46: syntax error: unexpected name bool at end of statement
+FAIL	github.com/snissn/gomap/TreeDB/tree [build failed]
+FAIL

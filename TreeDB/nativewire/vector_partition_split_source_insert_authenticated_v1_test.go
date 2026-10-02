@@ -147,9 +147,14 @@ func TestAuthenticatedSplitSourceInsertCanonicalCapacityAndVisibilityV1(t *testi
 	}
 }
 
-type splitInsertRoundTripperV1 func(*http.Request) (*http.Response, error)
+type splitInsertRoundTripperV1 struct {
+	*http.Transport // preserve CloseIdleConnections ownership through interception
+	roundTrip       func(*http.Request) (*http.Response, error)
+}
 
-func (f splitInsertRoundTripperV1) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func (f splitInsertRoundTripperV1) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f.roundTrip(r)
+}
 
 // This is deterministic graceful source leader loss/reopen, not SIGKILL or
 // power-loss certification. The intercepted real authenticated HTTP request
@@ -174,8 +179,8 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 		s, e := source.Status(ctx)
 		return e == nil && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
 	})
-	base := source.client.http.Transport
-	baseRead := source.client.readHTTP.Transport
+	base := source.client.http.Transport.(*http.Transport)
+	baseRead := source.client.readHTTP.Transport.(*http.Transport)
 	arrived := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -185,7 +190,7 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 	var outbound atomic.Uint64
 	// Install only while no source intent/client mutation exists. The owned
 	// retry loop's empty-slot path cannot touch either shared HTTP transport.
-	source.client.http.Transport = splitInsertRoundTripperV1(func(request *http.Request) (*http.Response, error) {
+	source.client.http.Transport = splitInsertRoundTripperV1{Transport: base, roundTrip: func(request *http.Request) (*http.Response, error) {
 		outbound.Add(1)
 		if request.URL.Path == "/v1/vector-split-project" {
 			once.Do(func() { close(arrived) })
@@ -197,11 +202,11 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 			}
 		}
 		return base.RoundTrip(request)
-	})
-	source.client.readHTTP.Transport = splitInsertRoundTripperV1(func(request *http.Request) (*http.Response, error) {
+	}}
+	source.client.readHTTP.Transport = splitInsertRoundTripperV1{Transport: baseRead, roundTrip: func(request *http.Request) (*http.Response, error) {
 		outbound.Add(1)
 		return baseRead.RoundTrip(request)
-	})
+	}}
 	before := outbound.Load()
 	for i := 0; i < 3; i++ {
 		if err := source.retrySplitVectorPendingV1(ctx); err != nil {

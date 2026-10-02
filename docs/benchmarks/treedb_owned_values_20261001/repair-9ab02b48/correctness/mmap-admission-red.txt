@@ -1,0 +1,16 @@
+--- FAIL: TestMmapAdmission_RechecksBeforePublication (0.03s)
+    --- FAIL: TestMmapAdmission_RechecksBeforePublication/a/count (0.01s)
+        mmap_admission_test.go:80: admission overshot budget: mapped A=368 B=368 file=368
+    --- FAIL: TestMmapAdmission_RechecksBeforePublication/a/bytes (0.01s)
+        mmap_admission_test.go:80: admission overshot budget: mapped A=368 B=368 file=368
+    --- FAIL: TestMmapAdmission_RechecksBeforePublication/v/count (0.01s)
+        mmap_admission_test.go:80: admission overshot budget: mapped A=368 B=368 file=368
+    --- FAIL: TestMmapAdmission_RechecksBeforePublication/v/bytes (0.01s)
+        mmap_admission_test.go:80: admission overshot budget: mapped A=368 B=368 file=368
+--- FAIL: TestMmapAdmission_SealedRangeGrowthUsesActualSize (0.00s)
+    mmap_admission_test.go:120: direct safe range refresh bypassed sealed byte budget
+--- FAIL: TestMmapAdmission_FailedMappingPreservesOldView (0.00s)
+    mmap_admission_test.go:161: failed mmap retired or changed the live unsafe mapping
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.556s
+FAIL
