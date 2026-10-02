@@ -68,6 +68,11 @@ all three acknowledgment LSNs and a strictly outstanding final prefix; reopen
 validates all 3,000 distinct updates over 4,096 keys plus every unaffected value
 and interleaved miss. This proves process-crash replay, not power-loss durability.
 
+The [retained snapshot decision](SNAPSHOT_DECISION.md) preserves existing defaults:
+inline/CP1 shows checkpoint-only physical-work benefits, with its sampled read
+p99.9 guard unresolved. It includes all eight eligibility cells, three matched
+rounds, failed controls, provenance and reproducible decision arithmetic.
+
 ## Measurements and units
 
 Go `ns/op` is one complete fixed-work write interval including stopping/joining the reader after the final checkpoint. `updates/s` and `reads/s` use that same interval. The reader measures ordinary owned `Get`, checks all bytes outside each individual read timer, and samples every 16th completed read across the entire interval. Full read count/max and sample count/stride are retained. Sample overflow fails closed instead of truncating the end. p99/p99.9 are sampled owned-read latencies; disclose sample support and do not claim precise p99.9 from tiny pilots. Full-value validation and reader scheduling influence workflow throughput. A single reader is a bounded workload, not a capacity claim.
