@@ -1,0 +1,6 @@
+{
+  "runtime": "933a1d4ec57f6715f2fb746fdc57136a7ddc89a6",
+  "purpose": "One untimed100000call hotallocation delta; diagnostic harness only, no throughput gate",
+  "harness_sha256": "ba8d5b686fe4eb019c5112d3a36b05fdad325f2596ee3cc7325754082b849085",
+  "before_after": "GCd allocs snapshots before hot loop and after, subtract cumulative before profile; first calibrationN1 snapshots overwritten by finalN100000"
+}

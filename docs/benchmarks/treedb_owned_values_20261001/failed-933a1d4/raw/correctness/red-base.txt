@@ -1,0 +1,7 @@
+--- FAIL: TestFileReadAppend_SealedLazyMmapAndOwnedCacheAdmission (0.01s)
+    read_append_owned_test.go:25: owned read did not select lazy mmap: hits=0 fallbacks=1
+--- FAIL: TestFileReadAppend_MmapCacheAllocatesOnlyFinalOutput (0.01s)
+    read_append_owned_test.go:56: prefix length 0: allocations=2 want only final output allocation
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.018s
+FAIL

@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkOwnedMmapBudgetDenied512
+BenchmarkOwnedMmapBudgetDenied512/reused_false
+    mmap_qualification_overlay_test.go:109: checked512B memoized denial, one CRC/cache/fallback per read, raw8192B
+    mmap_qualification_overlay_test.go:110: untimed constructor probe
+--- SKIP: BenchmarkOwnedMmapBudgetDenied512/reused_false
+BenchmarkOwnedMmapBudgetDenied512/reused_true
+    mmap_qualification_overlay_test.go:109: checked512B memoized denial, one CRC/cache/fallback per read, raw8192B
+    mmap_qualification_overlay_test.go:110: untimed constructor probe
+--- SKIP: BenchmarkOwnedMmapBudgetDenied512/reused_true
+PASS

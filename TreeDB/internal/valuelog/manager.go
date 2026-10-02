@@ -464,6 +464,14 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK in
 	return cache.readTo(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen, subIndex, dst, f)
 }
 
+func (f *File) groupedFrameCacheReadAppend(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
+	if f == nil || f.closed.Load() {
+		return nil, false, nil, false
+	}
+	cache := f.groupedFrameCache.Load()
+	return cache.readAppendTo(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen, subIndex, dst, true, f)
+}
+
 func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
 	if f == nil || f.closed.Load() {
 		return false
@@ -993,6 +1001,12 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, err
+	}
+	if !f.usesPersistentMmap() && f.tryEnableSealedLazyMmap() {
+		if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+			f.mmapReadHits.Add(1)
+			return val, err
+		}
 	}
 	if verifyCRC {
 		if val, usedDst, err, ok := f.readGroupedCompressedFromFileToVerify(ptr, true, dst[len(dst):cap(dst)]); ok {

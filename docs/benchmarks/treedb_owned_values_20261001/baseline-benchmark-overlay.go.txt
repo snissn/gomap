@@ -1,0 +1,110 @@
+package valuelog
+
+import ("bytes";"runtime";"testing";templ "github.com/snissn/gomap/TreeDB/template")
+
+func BenchmarkFileReadAppendOwned(b *testing.B) {
+	if runtime.GOOS == "windows" {
+		b.Skip("mmap not supported on windows")
+	}
+	for _, mode := range []string{"fallback", "mmap_decode", "mmap_cache"} {
+		b.Run(mode, func(b *testing.B) {
+			f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(b)
+			if mode != "fallback" {
+				f.remapToFileSize()
+			} else {
+				// Prevent asynchronous remap from turning the fallback row into
+				// a mapped read during warmup or measurement.
+				mapped := []byte{0}
+				f.mmapData.Store(mapped)
+				f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+			}
+			if mode == "mmap_cache" {
+				f.setGroupedFrameCacheEntries(4)
+				f.setGroupedFrameCacheMaxBytes(int64(len(want) * len(want[0])))
+			} else {
+				f.setGroupedFrameCacheEntries(0)
+			}
+			// Pre-admit through the existing reusable-destination path on both
+			// revisions. The cache row isolates owned-copy cost from admission.
+			dst := make([]byte, 0, len(want[0]))
+			for i, ptr := range ptrs {
+				got, err := f.ReadAppend(ptr, true, dst[:0])
+				if err != nil || !bytes.Equal(got, want[i]) {
+					b.Fatalf("fixture validation: %v", err)
+				}
+			}
+			before := f.ReadStats()
+			cacheBefore := f.ensureGroupedFrameCache().stats()
+			fallbackBefore := f.mmapReadFallbackReadAt.Load()
+			mappedBefore := f.mmapReadHits.Load()
+			if mode == "mmap_cache" && cacheBefore.RetainedBytes != uint64(len(want)*len(want[0])) {
+				b.Fatalf("pre-admitted cache residency: %+v", cacheBefore)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(want[0])))
+			b.ResetTimer()
+			for i := range b.N {
+				got, err := f.ReadAppend(ptrs[i%len(ptrs)], true, nil)
+				if err != nil || len(got) != len(want[0]) {
+					b.Fatalf("owned append: %v", err)
+				}
+			}
+			b.StopTimer()
+			st := f.ensureGroupedFrameCache().stats()
+			wantFallback, wantMapped, wantHits := uint64(0), uint64(b.N), uint64(0)
+			if mode == "fallback" {
+				wantFallback, wantMapped = uint64(b.N), 0
+			}
+			if mode == "mmap_cache" {
+				wantHits = uint64(b.N)
+			}
+			if f.mmapReadFallbackReadAt.Load()-fallbackBefore != wantFallback || f.mmapReadHits.Load()-mappedBefore != wantMapped || st.Hits-cacheBefore.Hits != wantHits || f.ReadStats().RecordCRCChecks-before.RecordCRCChecks != uint64(b.N) {
+				b.Fatalf("row %s route mismatch", mode)
+			}
+			b.ReportMetric(float64(st.Hits-cacheBefore.Hits)/float64(b.N), "cache_hits/op")
+			b.ReportMetric(float64(f.mmapReadFallbackReadAt.Load()-fallbackBefore)/float64(b.N), "fallbacks/op")
+			b.ReportMetric(float64(f.ReadStats().RecordCRCChecks-before.RecordCRCChecks)/float64(b.N), "crc_checks/op")
+			b.ReportMetric(float64(st.RetainedBytes), "retained_raw_B")
+		})
+	}
+	b.Run("cold_open_map", func(b *testing.B) {
+		fixture, ptrs, want := openGroupedCompressedFileReadFallbackFixture(b)
+		for i, ptr := range ptrs {
+			got, err := fixture.ReadAppend(ptr, true, nil)
+			if err != nil || !bytes.Equal(got, want[i]) {
+				b.Fatalf("fixture validation: %v", err)
+			}
+		}
+		var mapped, fallback, stores uint64
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			f, err := openFile(fixture.Path, fixture.ID, nil, nil, templ.DecodeOptions{}, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			f.manager = &Manager{files: map[uint32]*File{f.ID: f}}
+			f.setGroupedFrameCacheEntries(4)
+			f.setGroupedFrameCacheMaxBytes(int64(len(want) * len(want[0])))
+			got, err := f.ReadAppend(ptrs[0], true, nil)
+			if err != nil || len(got) != len(want[0]) {
+				b.Fatalf("cold owned append: %v", err)
+			}
+			st := f.ensureGroupedFrameCache().stats()
+			if f.mmapReadHits.Load()+f.mmapReadFallbackReadAt.Load() != 1 || st.RetainedBytes > st.BudgetBytes || f.ReadStats().RecordCRCChecks != 1 {
+				b.Fatal("cold route or budget mismatch")
+			}
+			mapped += f.mmapReadHits.Load()
+			fallback += f.mmapReadFallbackReadAt.Load()
+			stores += st.Stores
+			if err := f.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		b.ReportMetric(float64(mapped)/float64(b.N), "mmap_hits/op")
+		b.ReportMetric(float64(fallback)/float64(b.N), "fallbacks/op")
+		b.ReportMetric(float64(stores)/float64(b.N), "cache_stores/op")
+	})
+}
+

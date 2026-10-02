@@ -1,0 +1,287 @@
+package valuelog
+
+import (
+	"bytes"
+	"fmt"
+	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"testing"
+)
+
+// Identical benchmark-only overlay for the affected qualification. It changes
+// no runtime; validate-only probes stop timing and skip after route checks.
+func qualificationGrouped512(b testing.TB) (*File, []page.ValuePtr, [][]byte) {
+	b.Helper()
+	id, err := EncodeFileID(0, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	path := filepath.Join(b.TempDir(), "value-l0-000001.log")
+	w, err := NewWriter(path, id)
+	if err != nil {
+		b.Fatal(err)
+	}
+	w.SetBlockCompression(BlockCodecSnappy, true)
+	records := make([]Record, 16)
+	want := make([][]byte, 16)
+	for i := range records {
+		v := bytes.Repeat([]byte("q"), 512)
+		copy(v, []byte(fmt.Sprintf("bench-record-%02d:", i)))
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		want[i] = v
+	}
+	ptrs, st, err := w.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, 16))
+	if err != nil || !st.Kept {
+		b.Fatalf("compressed fixture: kept=%t err=%v", st.Kept, err)
+	}
+	if err := w.Close(); err != nil {
+		b.Fatal(err)
+	}
+	f, err := openFile(path, id, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	f.setGroupedFrameCacheEntries(4)
+	f.setGroupedFrameCacheMaxBytes(8192)
+	f.manager = &Manager{files: map[uint32]*File{id: f}}
+	b.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	return f, ptrs, want
+}
+
+func BenchmarkOwnedMmapBudgetDenied512(b *testing.B) {
+	if runtime.GOOS == "windows" {
+		b.Skip("mmap unsupported")
+	}
+	oldCount, oldBytes := MaxMappedSealedSegments, MaxMappedSealedBytes
+	MaxMappedSealedSegments, MaxMappedSealedBytes = 0, 1<<30
+	b.Cleanup(func() { MaxMappedSealedSegments, MaxMappedSealedBytes = oldCount, oldBytes })
+	for _, reuse := range []bool{false, true} {
+		b.Run(fmt.Sprintf("reused_%t", reuse), func(b *testing.B) {
+			f, ptrs, want := qualificationGrouped512(b)
+			if f.tryEnableSealedLazyMmap() || !f.sealedLazyMmapDenied.Load() || f.sealedMapDeniedByCount.Load() != 1 {
+				b.Fatal("expected one initial count denial")
+			}
+			for i, p := range ptrs {
+				v, err := f.ReadAppend(p, true, make([]byte, 0, 512))
+				if err != nil || !bytes.Equal(v, want[i]) {
+					b.Fatalf("fixture %d: %v", i, err)
+				}
+			}
+			before := f.ReadStats()
+			fallback := f.mmapReadFallbackReadAt.Load()
+			hits := f.ensureGroupedFrameCache().stats().Hits
+			var dst []byte
+			if reuse {
+				dst = make([]byte, 0, 512)
+			}
+			validate := os.Getenv("TREEDB_OWNED_VLOG_VALIDATE_ONLY") != ""
+			if validate {
+				b.StopTimer()
+			} else {
+				b.ReportAllocs()
+				b.ResetTimer()
+			}
+			for i := range b.N {
+				v, err := f.ReadAppend(ptrs[i%16], true, dst[:0])
+				if err != nil || len(v) != 512 {
+					b.Fatalf("read: %v", err)
+				}
+			}
+			b.StopTimer()
+			cache := f.ensureGroupedFrameCache().stats()
+			if f.mmapReadHits.Load() != 0 || f.mmapReadFallbackReadAt.Load()-fallback != uint64(b.N) || f.ReadStats().RecordCRCChecks-before.RecordCRCChecks != uint64(b.N) || cache.Hits-hits != uint64(b.N) || f.sealedMapDeniedByCount.Load() != 1 || cache.RetainedBytes != 8192 || f.remapCount.Load() != 0 {
+				b.Fatal("memoized denial route/residency changed")
+			}
+			b.ReportMetric(1, "fallbacks/op")
+			b.ReportMetric(1, "cache_hits/op")
+			b.ReportMetric(1, "crc_checks/op")
+			b.ReportMetric(float64(cache.RetainedBytes), "retained_raw_B")
+			b.ReportMetric(1, "denial_events")
+			if validate {
+				b.Log("checked512B memoized denial, one CRC/cache/fallback per read, raw8192B")
+				b.Skip("untimed constructor probe")
+			}
+		})
+	}
+}
+
+func BenchmarkOwnedMmapConcurrentFirstAdmission(b *testing.B) {
+	if runtime.GOOS == "windows" {
+		b.Skip("mmap unsupported")
+	}
+	oldCount, oldBytes := MaxMappedSealedSegments, MaxMappedSealedBytes
+	MaxMappedSealedSegments, MaxMappedSealedBytes = 8, 1<<30
+	b.Cleanup(func() { MaxMappedSealedSegments, MaxMappedSealedBytes = oldCount, oldBytes })
+	a, pa, wa := qualificationGrouped512(b)
+	c, pc, wc := qualificationGrouped512(b)
+	// Verify the same prerecorded fixture completely before timed open/map work.
+	for _, r := range []struct {
+		f    *File
+		p    []page.ValuePtr
+		want [][]byte
+	}{{a, pa, wa}, {c, pc, wc}} {
+		r.f.currentWritable.Store(true) // Explicit file fallback for untimed validation.
+		for i, p := range r.p {
+			v, err := r.f.ReadAppend(p, true, nil)
+			if err != nil || !bytes.Equal(v, r.want[i]) {
+				b.Fatalf("fixture: %v", err)
+			}
+		}
+		r.f.currentWritable.Store(false)
+		if err := r.f.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	id2, err := EncodeFileID(0, 2)
+	if err != nil {
+		b.Fatal(err)
+	}
+	validate := os.Getenv("TREEDB_OWNED_VLOG_VALIDATE_ONLY") != ""
+	if validate {
+		b.StopTimer()
+	} else {
+		b.ReportAllocs()
+		b.ResetTimer()
+	}
+	for range b.N {
+		f, err := openFile(a.Path, a.ID, nil, nil, templ.DecodeOptions{}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		g, err := openFile(c.Path, id2, nil, nil, templ.DecodeOptions{}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		m := &Manager{files: map[uint32]*File{f.ID: f, g.ID: g}}
+		f.manager, g.manager = m, m
+		f.setGroupedFrameCacheEntries(0)
+		g.setGroupedFrameCacheEntries(0)
+		p2 := pc[0]
+		p2.FileID = id2
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for _, r := range []struct {
+			f    *File
+			p    page.ValuePtr
+			want []byte
+		}{{f, pa[0], wa[0]}, {g, p2, wc[0]}} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				v, err := r.f.ReadAppend(r.p, true, nil)
+				if err != nil || !bytes.Equal(v, r.want) {
+					b.Errorf("concurrent owned read: %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		for _, x := range []*File{f, g} {
+			data, _ := x.mmapData.Load().([]byte)
+			if len(data) == 0 || x.mmapReadHits.Load() != 1 || x.mmapReadFallbackReadAt.Load() != 0 || x.ReadStats().RecordCRCChecks != 1 || x.sealedLazyMmapDenied.Load() || x.deadMappingsCount.Load() != 0 {
+				b.Fatal("concurrent admitted route changed")
+			}
+		}
+		if err := m.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(2, "mmap_hits/op")
+	b.ReportMetric(2, "crc_checks/op")
+	b.ReportMetric(0, "fallbacks/op")
+	if validate {
+		b.Log("two checked first owned reads admitted, enough budget for both; includes open/goroutine/map/close costs")
+		b.Skip("untimed constructor probe")
+	}
+}
+
+// Untimed validation of existing internal rows before the retained capture.
+func TestOwnedMmapQualificationInternalRoutes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap unsupported")
+	}
+	expected := os.Getenv("TREEDB_OWNED_VLOG_EXPECT_MAPPED")
+	if expected != "0" && expected != "1" {
+		t.Fatal("explicit revision route required")
+	}
+	t.Run("warm_decode", func(t *testing.T) {
+		f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+		f.remapToFileSize()
+		f.setGroupedFrameCacheEntries(0)
+		for i, p := range ptrs {
+			v, err := f.ReadAppend(p, true, nil)
+			if err != nil || !bytes.Equal(v, want[i]) {
+				t.Fatalf("value%d: %v", i, err)
+			}
+		}
+		if f.mmapReadHits.Load() != uint64(len(ptrs)) || f.mmapReadFallbackReadAt.Load() != 0 || f.ReadStats().RecordCRCChecks != uint64(len(ptrs)) || f.ensureGroupedFrameCache().stats().RetainedBytes != 0 {
+			t.Fatal("warm cache-off route")
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("cold_first_map", func(t *testing.T) {
+		fixture, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+		for i, p := range ptrs {
+			v, err := fixture.ReadAppend(p, true, nil)
+			if err != nil || !bytes.Equal(v, want[i]) {
+				t.Fatalf("source%d: %v", i, err)
+			}
+		}
+		if err := fixture.Close(); err != nil {
+			t.Fatal(err)
+		}
+		f, err := openFile(fixture.Path, fixture.ID, nil, nil, templ.DecodeOptions{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &Manager{files: map[uint32]*File{f.ID: f}}
+		f.manager = m
+		defer func() {
+			if err := m.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		f.setGroupedFrameCacheEntries(4)
+		f.setGroupedFrameCacheMaxBytes(int64(len(want) * len(want[0])))
+		for i, p := range ptrs {
+			v, err := f.ReadAppend(p, true, nil)
+			if err != nil || !bytes.Equal(v, want[i]) {
+				t.Fatalf("cold%d: %v", i, err)
+			}
+		}
+		mapped := uint64(0)
+		if expected == "1" {
+			mapped = uint64(len(ptrs))
+		}
+		st := f.ensureGroupedFrameCache().stats()
+		if f.mmapReadHits.Load() != mapped || f.mmapReadFallbackReadAt.Load() != uint64(len(ptrs))-mapped || f.ReadStats().RecordCRCChecks != uint64(len(ptrs)) || st.Stores != 1 || st.RetainedBytes != uint64(len(want)*len(want[0])) || st.RetainedBytes > st.BudgetBytes {
+			t.Fatal("cold route/residency")
+		}
+	})
+	t.Run("dead_cap512", func(t *testing.T) {
+		f, ptrs, want := qualificationGrouped512(t)
+		f.mmapData.Store([]byte{0})
+		f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(1)))
+		for i, p := range ptrs {
+			v, err := f.ReadAppend(p, true, make([]byte, 0, 512))
+			if err != nil || !bytes.Equal(v, want[i]) {
+				t.Fatalf("capped%d: %v", i, err)
+			}
+		}
+		if f.mmapReadHits.Load() != 0 || f.mmapReadFallbackReadAt.Load() != uint64(len(ptrs)) || f.ReadStats().RecordCRCChecks != uint64(len(ptrs)) || f.remapCount.Load() != 0 {
+			t.Fatal("dead-cap route")
+		}
+	})
+}

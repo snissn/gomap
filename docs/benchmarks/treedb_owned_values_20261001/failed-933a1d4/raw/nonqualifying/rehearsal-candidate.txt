@@ -1,0 +1,21 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkFileReadAppendOwned/fallback-2         	     100	     72984 ns/op	 448.97 MB/s	         0 cache_hits/op	         1.000 crc_checks/op	         1.000 fallbacks/op	         0 retained_raw_B	   32770 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/mmap_decode-2      	     100	     70409 ns/op	 465.40 MB/s	         0 cache_hits/op	         1.000 crc_checks/op	         0 fallbacks/op	         0 retained_raw_B	   32768 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/mmap_cache-2       	     100	      9513 ns/op	3444.72 MB/s	         1.000 cache_hits/op	         1.000 crc_checks/op	         0 fallbacks/op	    262144 retained_raw_B	   32769 B/op	       1 allocs/op
+BenchmarkFileReadAppendOwned/cold_open_map-2    	     100	     96405 ns/op	         1.000 cache_stores/op	         0 fallbacks/op	         1.000 mmap_hits/op	  294101 B/op	      14 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.126s
+2026/10/01 17:48:09 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 17:48:09 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkDBOwnedValueLogRoute-2   	2026/10/01 17:48:11 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=128 raw=32768 stored=2815 ratio=0.086
+2026/10/01 17:48:11 treedb: value-log dict published class=single_value dict_id=11303750279326127989 k=4 payload_ratio=0.024 total_ratio=0.106
+     100	      1725 ns/op	 148.40 MB/s	         1.000 cache_hits/op	         1.000 crc_checks/op	         0 fallbacks/op	         0 inline_hits/op	    873560 mapped_B	         1.000 mmap_hits/op	         1.000 pointer_hits/op	   9389893 retained_raw_B	  12979432 warm_heap_delta_B	     827 B/op	       2 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB	4.856s
