@@ -1,10 +1,12 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier"
 )
 
 type collectionCommandWALCoordinator struct {
@@ -164,18 +166,17 @@ func (c *Collection) lockCommandWALStageCoordinatorWithRawPublishState(rawPublis
 				})
 			}, nil
 		}
+		if rawPublishLocked && owner != domain {
+			coord.mu.Unlock()
+			return nil, collectionCommandWALPendingDomainDrain(c.db, owner)
+		}
 		if collectionCommandWALDomainStageReserved(owner) {
 			coord.waitForCommandWALStageReservationLocked(owner)
 			coord.mu.Unlock()
 			continue
 		}
 		coord.mu.Unlock()
-		var err error
-		if rawPublishLocked {
-			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner)
-		} else {
-			err = flushCollectionWriteDomain(c.db, owner)
-		}
+		err := flushCollectionWriteDomain(c.db, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -206,18 +207,17 @@ func (c *Collection) drainCommandWALStageCoordinatorBeforeMutationWithRawPublish
 			coord.mu.Unlock()
 			return nil
 		}
+		if rawPublishLocked {
+			coord.mu.Unlock()
+			return collectionCommandWALPendingDomainDrain(c.db, owner)
+		}
 		if collectionCommandWALDomainStageReserved(owner) {
 			coord.waitForCommandWALStageReservationLocked(owner)
 			coord.mu.Unlock()
 			continue
 		}
 		coord.mu.Unlock()
-		var err error
-		if rawPublishLocked {
-			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner)
-		} else {
-			err = flushCollectionWriteDomain(c.db, owner)
-		}
+		err := flushCollectionWriteDomain(c.db, owner)
 		if err != nil {
 			return err
 		}
@@ -279,7 +279,20 @@ func (c *Collection) lockCommandWALPublishCoordinatorWithRawPublishState(rawPubl
 		if owner == nil {
 			return coord.mu.Unlock, nil
 		}
+		if rawPublishLocked && owner != domain {
+			coord.mu.Unlock()
+			return nil, collectionCommandWALPendingDomainDrain(c.db, owner)
+		}
 		if collectionCommandWALDomainStageReserved(owner) {
+			if rawPublishLocked {
+				coord.mu.Unlock()
+				return nil, &commandwalbarrier.PendingDrain{Drain: func() error {
+					coord.mu.Lock()
+					coord.waitForCommandWALStageReservationLocked(owner)
+					coord.mu.Unlock()
+					return nil
+				}}
+			}
 			coord.waitForCommandWALStageReservationLocked(owner)
 			coord.mu.Unlock()
 			continue
@@ -293,10 +306,6 @@ func (c *Collection) lockCommandWALPublishCoordinatorWithRawPublishState(rawPubl
 				err = c.flushBufferedWrites()
 			}
 			if err != nil {
-				return nil, err
-			}
-		} else if rawPublishLocked {
-			if err := flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner); err != nil {
 				return nil, err
 			}
 		} else if err := flushCollectionWriteDomain(c.db, owner); err != nil {
@@ -365,21 +374,20 @@ func (m *CollectionManager) lockCommandWALPublishCoordinatorWithRawPublishState(
 		if owner == nil {
 			return coord.mu.Unlock, nil
 		}
+		if rawPublishLocked {
+			coord.mu.Unlock()
+			if hook := m.testCommandWALRawDomainDrainHook.Load(); hook != nil {
+				(*hook)(owner)
+			}
+			return nil, collectionCommandWALPendingDomainDrain(m.db, owner)
+		}
 		if collectionCommandWALDomainStageReserved(owner) {
 			coord.waitForCommandWALStageReservationLocked(owner)
 			coord.mu.Unlock()
 			continue
 		}
 		coord.mu.Unlock()
-		var err error
-		if rawPublishLocked {
-			if hook := m.testCommandWALRawDomainDrainHook.Load(); hook != nil {
-				(*hook)(owner)
-			}
-			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(m.db, owner)
-		} else {
-			err = flushCollectionWriteDomain(m.db, owner)
-		}
+		err := flushCollectionWriteDomain(m.db, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -396,40 +404,112 @@ func (m *CollectionManager) publishCommandWALNoop(intent *backenddb.CommandWALIn
 }
 
 func (m *CollectionManager) flushPendingCommandWALBeforeRawPublish() error {
-	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
+	if m == nil || m.db == nil || !m.db.CommandWALEnabled() || m.commandWALCoordinator == nil {
 		return nil
 	}
-	unlock, err := m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
-	if err != nil {
-		return err
+	coord := m.commandWALCoordinator
+	coord.mu.Lock()
+	owner := coord.owner
+	coord.mu.Unlock()
+	if owner == nil {
+		return nil
 	}
-	unlock()
+	if hook := m.testCommandWALRawDomainDrainHook.Load(); hook != nil {
+		(*hook)(owner)
+	}
+	// Mutation, vector admission and stage reservations can all be owned by a
+	// foreground publisher waiting for raw publication. Do not wait for any of
+	// them here. The boundary owner releases all its leases before this drain,
+	// then reruns barriers before assigning a new command or capturing a root.
+	return &commandwalbarrier.PendingDrain{Drain: func() error {
+		unlock, err := m.lockCommandWALPublishCoordinator()
+		if err != nil {
+			return err
+		}
+		unlock()
+		return nil
+	}}
+}
+
+func collectionCommandWALPendingDomainDrain(db *backenddb.DB, owner *collectionWriteDomain) error {
+	return &commandwalbarrier.PendingDrain{Drain: func() error {
+		coord := owner.commandWALCoordinator.Load()
+		if coord != nil {
+			coord.mu.Lock()
+			coord.waitForCommandWALStageReservationLocked(owner)
+			coord.mu.Unlock()
+		}
+		return flushCollectionWriteDomain(db, owner)
+	}}
+}
+
+func collectionCommandWALPendingDrain(err error) *commandwalbarrier.PendingDrain {
+	var drain *commandwalbarrier.PendingDrain
+	if errors.As(err, &drain) {
+		return drain
+	}
 	return nil
+}
+
+// lockCommandWALStagingAfterForeignDrain yields only before any command is
+// assigned. The returned guard retains the original append-to-publish contract.
+func (c *Collection) lockCommandWALStagingAfterForeignDrain() (func(), error) {
+	for {
+		unlockRaw := c.db.LockCommandWALStaging()
+		if err := c.db.CheckCommandWALPublishReady(); err != nil {
+			unlockRaw()
+			return nil, err
+		}
+		err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock()
+		if err == nil {
+			return unlockRaw, nil
+		}
+		unlockRaw()
+		drain := collectionCommandWALPendingDrain(err)
+		if drain == nil {
+			return nil, err
+		}
+		if err := drain.Drain(); err != nil {
+			return nil, err
+		}
+	}
 }
 
 func (m *CollectionManager) withCommandWALPublishCoordinator(fn func() error) error {
 	if fn == nil {
 		return nil
 	}
-	var unlockRaw func()
-	lockHeldRaw := false
-	if m != nil && m.db != nil && m.db.CommandWALEnabled() {
-		unlockRaw = m.db.LockCommandWALPublish()
-		defer unlockRaw()
-		lockHeldRaw = true
+	for {
+		unlockRaw := func() {}
+		lockHeldRaw := m != nil && m.db != nil && m.db.CommandWALEnabled()
+		if lockHeldRaw {
+			unlockRaw = m.db.LockCommandWALPublish()
+			if err := m.db.CheckCommandWALPublishReady(); err != nil {
+				unlockRaw()
+				return err
+			}
+		}
+		var unlock func()
+		var err error
+		if lockHeldRaw {
+			unlock, err = m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
+		} else {
+			unlock, err = m.lockCommandWALPublishCoordinator()
+		}
+		if err == nil {
+			defer unlockRaw()
+			defer unlock()
+			return fn()
+		}
+		unlockRaw()
+		drain := collectionCommandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
 	}
-	var unlock func()
-	var err error
-	if lockHeldRaw {
-		unlock, err = m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
-	} else {
-		unlock, err = m.lockCommandWALPublishCoordinator()
-	}
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return fn()
 }
 
 func (m *CollectionManager) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) (err error) {
@@ -456,25 +536,41 @@ func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	if fn == nil {
 		return nil
 	}
-	lockHeldRaw := c != nil && c.commandWALRawPublishLocked
-	var unlockRaw func()
-	if !lockHeldRaw && c != nil && c.db != nil && c.db.CommandWALEnabled() {
-		unlockRaw = c.db.LockCommandWALPublish()
-		defer unlockRaw()
-		lockHeldRaw = true
+	for {
+		inheritedRaw := c != nil && c.commandWALRawPublishLocked
+		lockHeldRaw := inheritedRaw
+		unlockRaw := func() {}
+		if !lockHeldRaw && c != nil && c.db != nil && c.db.CommandWALEnabled() {
+			unlockRaw = c.db.LockCommandWALPublish()
+			if err := c.db.CheckCommandWALPublishReady(); err != nil {
+				unlockRaw()
+				return err
+			}
+			lockHeldRaw = true
+		}
+		var unlock func()
+		var err error
+		if lockHeldRaw {
+			unlock, err = c.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
+		} else {
+			unlock, err = c.lockCommandWALPublishCoordinator()
+		}
+		if err == nil {
+			defer unlockRaw()
+			defer unlock()
+			return fn()
+		}
+		unlockRaw()
+		drain := collectionCommandWALPendingDrain(err)
+		// An inherited/staged guard belongs to the actual append owner. It
+		// cannot be released or an assigned intent retried by this wrapper.
+		if drain == nil || inheritedRaw {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
 	}
-	var unlock func()
-	var err error
-	if lockHeldRaw {
-		unlock, err = c.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
-	} else {
-		unlock, err = c.lockCommandWALPublishCoordinator()
-	}
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return fn()
 }
 
 func (c *Collection) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) (err error) {

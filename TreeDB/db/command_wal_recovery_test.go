@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -1468,6 +1470,138 @@ func TestCheckpointRunsRawPublishBarrierBeforeRawAdmission(t *testing.T) {
 	}
 	if !barrierCalled.Load() {
 		t.Fatal("Checkpoint did not run raw publish barrier before its raw boundary")
+	}
+}
+
+func TestCommandWALRawBarrierDrainRerunsAllBarriersBeforeAssignment(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+	var firstCalls atomic.Int32
+	var laterCalls atomic.Int32
+	var drained atomic.Bool
+	unregisterFirst := db.RegisterCommandWALRawPublishBarrier(func() error {
+		if firstCalls.Add(1) == 1 {
+			return &commandwalbarrier.PendingDrain{Drain: func() error {
+				if db.CommandWALNextLSN() != 1 {
+					return errors.New("command assigned before pending drain")
+				}
+				drained.Store(true)
+				return nil
+			}}
+		}
+		return nil
+	})
+	defer unregisterFirst()
+	unregisterLater := db.RegisterCommandWALRawPublishBarrier(func() error {
+		laterCalls.Add(1)
+		if !drained.Load() || firstCalls.Load() != 2 || db.CommandWALNextLSN() != 1 {
+			return errors.New("all barriers were not revalidated before assignment")
+		}
+		return nil
+	})
+	defer unregisterLater()
+	if err := db.Set([]byte("after-drain"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if firstCalls.Load() != 2 || laterCalls.Load() != 1 || db.State().AppliedCommandLSN != 1 || db.CommandWALNextLSN() != 2 {
+		t.Fatalf("barriers first=%d later=%d applied=%d next=%d", firstCalls.Load(), laterCalls.Load(), db.State().AppliedCommandLSN, db.CommandWALNextLSN())
+	}
+	// The synthetic barriers only assert the first append boundary.
+	unregisterFirst()
+	unregisterLater()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	value, err := reopen.Get([]byte("after-drain"))
+	if err != nil || !bytes.Equal(value, []byte("value")) || reopen.State().AppliedCommandLSN != 1 {
+		t.Fatalf("reopened value=%q err=%v applied=%d", value, err, reopen.State().AppliedCommandLSN)
+	}
+}
+
+func TestCommandWALRawBarrierDrainReleasesLeasesForQueuedClose(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	closeDone := make(chan error, 1)
+	var calls atomic.Int32
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		if calls.Add(1) != 1 {
+			return errors.New("barrier ran after Close won admission")
+		}
+		close(entered)
+		<-release
+		return &commandwalbarrier.PendingDrain{Drain: func() error {
+			// Close was queued behind the original teardown reader. It must
+			// finish while the drain is still running outside that lease.
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					return err
+				}
+			case <-time.After(5 * time.Second):
+				return errors.New("drain retained teardown and blocked queued Close")
+			}
+			if !db.commandWALRawPublishMu.TryLock() {
+				return errors.New("drain retained raw publication")
+			}
+			db.commandWALRawPublishMu.Unlock()
+			if !db.commandWALRawAdmissionMu.TryLock() {
+				return errors.New("drain retained prepared admission")
+			}
+			db.commandWALRawAdmissionMu.Unlock()
+			return nil
+		}}
+	})
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		unregister()
+	}()
+	publishDone := make(chan error, 1)
+	go func() {
+		unlock, err := db.LockCommandWALPublishWithBarriers()
+		if err == nil {
+			unlock()
+		}
+		publishDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("raw barrier was not entered")
+	}
+	go func() { closeDone <- db.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !db.closing.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !db.closing.Load() {
+		t.Fatal("Close did not close write admission before the barrier released")
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-publishDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("reacquired public boundary=%v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("public boundary did not unwind after queued Close")
+	}
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	if applied, next := reopen.State().AppliedCommandLSN, reopen.CommandWALNextLSN(); applied != 0 || next != 1 {
+		t.Fatalf("reopened rejected boundary applied=%d next=%d, want 0 and 1", applied, next)
 	}
 }
 

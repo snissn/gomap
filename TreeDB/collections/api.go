@@ -407,6 +407,7 @@ type CollectionManager struct {
 	commandWALCoordinator                   *collectionCommandWALCoordinator
 	commandWALRawUnregister                 func()
 	testCommandWALRawDomainDrainHook        atomic.Pointer[func(*collectionWriteDomain)]
+	testCommandWALInsertStageMutationHook   atomic.Pointer[func(*collectionWriteDomain, bool)]
 	domainMu                                sync.RWMutex
 	domains                                 map[string]*collectionWriteDomain
 	collectionsMu                           sync.RWMutex
@@ -12399,16 +12400,26 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		defer releaseCommandWALRawStage()
 		if bufferedCommandWALIntent != nil && c.db != nil {
-			// Checkpoint teardown drains collection write domains while holding
-			// the raw publish barrier. Do not wait for that barrier while still
+			// Raw boundaries hand off collection drains before reentering their
+			// raw publish barrier. Do not wait for that barrier while still
 			// holding this domain's mutation lock. The validator below reacquires
 			// mutation and rechecks schema, roots, and persisted conflicts.
 			unlockIfLocked()
-			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
-			if err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock(); err != nil {
+			if c.manager != nil {
+				if hook := c.manager.testCommandWALInsertStageMutationHook.Load(); hook != nil {
+					(*hook)(c.writeDomain, false)
+				}
+			}
+			unlockCommandWALRawStage, err = c.lockCommandWALStagingAfterForeignDrain()
+			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
 				return nil, err
+			}
+			if c.manager != nil {
+				if hook := c.manager.testCommandWALInsertStageMutationHook.Load(); hook != nil {
+					(*hook)(c.writeDomain, true)
+				}
 			}
 		}
 		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, bufferedCommandWALIntent != nil, plan)
@@ -16008,12 +16019,7 @@ func (c *Collection) prepareDirectUpdateCommandWALStage(plan *updateBatchPlan) (
 		return nil, nil
 	}
 	runTestBeforeCommandWALBufferedUpdateStageLockHook()
-	unlockRawStage := c.db.LockCommandWALStaging()
-	if err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock(); err != nil {
-		unlockRawStage()
-		return nil, err
-	}
-	return unlockRawStage, nil
+	return c.lockCommandWALStagingAfterForeignDrain()
 }
 
 func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
@@ -17996,16 +18002,21 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				}
 				if pendingCommandWALBeforeMutation && c.db != nil {
 					runTestBeforeCommandWALBufferedUpdateStageLockHook()
-					unlockCommandWALRawStageBeforeMutation = c.db.LockCommandWALStaging()
+					var err error
+					unlockCommandWALRawStageBeforeMutation, err = c.lockCommandWALStagingAfterForeignDrain()
+					if err != nil {
+						return err
+					}
 					defer releaseCommandWALRawStage()
 				}
 				return c.withMutationLock(func() error {
 					if plan.bufferedCommandWALIntent != nil && c.db != nil {
 						if !pendingCommandWALBeforeMutation {
 							runTestBeforeCommandWALBufferedUpdateStageLockHook()
-							unlockCommandWALRawStage = c.db.LockCommandWALStaging()
+							var err error
+							unlockCommandWALRawStage, err = c.lockCommandWALStagingAfterForeignDrain()
 							defer releaseCommandWALRawStage()
-							if err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock(); err != nil {
+							if err != nil {
 								return err
 							}
 						}

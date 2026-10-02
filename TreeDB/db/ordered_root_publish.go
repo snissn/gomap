@@ -2845,20 +2845,12 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	if db.closing.Load() {
 		return 0, nil, preApplyErr(ErrClosed)
 	}
-	if !opts.teardownPinned {
-		db.teardownMu.RLock()
-		defer db.teardownMu.RUnlock()
-	}
 
-	rawPublishLocked := !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false)
-	if rawPublishLocked {
-		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if lockErr != nil {
-			return 0, nil, preApplyErr(lockErr)
-		}
-		defer unlockCommandWALPublish()
-		opts.rawPublishLocked = true
+	unlockPublication, lockErr := db.lockOrderedRootCommandWALPublication(commandWALIntent, false, &opts)
+	if lockErr != nil {
+		return 0, nil, preApplyErr(lockErr)
 	}
+	defer unlockPublication()
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -3750,19 +3742,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	if !opts.teardownPinned {
-		db.teardownMu.RLock()
-		defer db.teardownMu.RUnlock()
-	}
 
-	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false) {
-		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if lockErr != nil {
-			return 0, nil, lockErr
-		}
-		defer unlockCommandWALPublish()
-		opts.rawPublishLocked = true
+	unlockPublication, lockErr := db.lockOrderedRootCommandWALPublication(commandWALIntent, false, &opts)
+	if lockErr != nil {
+		return 0, nil, lockErr
 	}
+	defer unlockPublication()
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -4011,20 +3996,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	if !opts.teardownPinned {
-		db.teardownMu.RLock()
-		defer db.teardownMu.RUnlock()
-	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
-	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
-		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if lockErr != nil {
-			return 0, nil, lockErr
-		}
-		defer unlockCommandWALPublish()
-		opts.rawPublishLocked = true
+	unlockPublication, lockErr := db.lockOrderedRootCommandWALPublication(commandWALIntent, syncCommandWAL, &opts)
+	if lockErr != nil {
+		return 0, nil, lockErr
 	}
+	defer unlockPublication()
 	timing := commandWALIntent.publishTiming
 	lockStart := time.Now()
 	db.writeMu.Lock()
@@ -4486,6 +4464,34 @@ type orderedRootCommandWALPublishOptions struct {
 	teardownPinned              bool
 	durableResources            *rootpublication.StableResourceSet
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
+}
+
+// lockOrderedRootCommandWALPublication acquires the owning pre-build boundary.
+// A staged caller already owns both leases and must never yield them here.
+func (db *DB) lockOrderedRootCommandWALPublication(intent *CommandWALIntent, sync bool, opts *orderedRootCommandWALPublishOptions) (func(), error) {
+	if opts.teardownPinned {
+		if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
+			unlock, err := db.lockCommandWALPublishWithBarriersTeardownPinned()
+			if err == nil {
+				opts.rawPublishLocked = true
+			}
+			return unlock, err
+		}
+		return func() {}, nil
+	}
+	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
+		unlock, err := db.LockCommandWALPublishWithBarriers()
+		if err == nil {
+			opts.rawPublishLocked = true
+		}
+		return unlock, err
+	}
+	db.teardownMu.RLock()
+	if db.closing.Load() {
+		db.teardownMu.RUnlock()
+		return nil, ErrClosed
+	}
+	return db.teardownMu.RUnlock, nil
 }
 
 func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, baseSeq uint64, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) (bool, error) {

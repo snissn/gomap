@@ -170,6 +170,93 @@ func TestCollectionCommandWALCheckpointStaleOwnerDoesNotDeadlockDelete(t *testin
 	}
 }
 
+func TestCollectionCommandWALLiveOwnerDrainBeforeNewCommand(t *testing.T) {
+	for _, boundary := range []string{"raw-batch", "manager-create"} {
+		t.Run(boundary, func(t *testing.T) {
+			dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+				Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+			})
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+			mgr := NewCollectionManager(d)
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := col.Insert([]byte("u1"), []byte(`{"name":"Ada"}`)); err != nil {
+				t.Fatal(err)
+			}
+			mutation := col.lockMutation()
+			var releaseMutation sync.Once
+			defer releaseMutation.Do(mutation.Unlock)
+			selected := make(chan struct{})
+			var signal sync.Once
+			hook := func(owner *collectionWriteDomain) {
+				if owner == col.writeDomain {
+					signal.Do(func() { close(selected) })
+				}
+			}
+			mgr.testCommandWALRawDomainDrainHook.Store(&hook)
+			done := make(chan error, 1)
+			go func() {
+				if boundary == "raw-batch" {
+					b := d.NewBatch()
+					defer b.Close()
+					if err := b.Set([]byte("raw-key"), []byte("raw-value")); err != nil {
+						done <- err
+						return
+					}
+					done <- b.Write()
+				} else {
+					_, err := mgr.CreateCollection(&CollectionMeta{Name: "other", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}})
+					done <- err
+				}
+			}()
+			waitCollectionCommandWALSignal(t, selected, "new command selecting live pending owner")
+			if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != 0 || next != 2 {
+				t.Fatalf("while owner mutation held: applied=%d next=%d, want 0 and 2", applied, next)
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("new command completed before live pending owner was drained: %v", err)
+			default:
+			}
+			releaseMutation.Do(mutation.Unlock)
+			if err := waitCollectionCommandWALErr(t, done, "new command after live owner drain"); err != nil {
+				t.Fatal(err)
+			}
+			if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != 2 || next != 3 {
+				t.Fatalf("after drain: applied=%d next=%d, want 2 and 3", applied, next)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopen := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopen.Close() }()
+			reopenedMgr := NewCollectionManager(reopen)
+			reopened, err := reopenedMgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCollectionDocument(t, reopened, "u1", `{"name":"Ada"}`)
+			if boundary == "raw-batch" {
+				value, err := reopen.Get([]byte("raw-key"))
+				if err != nil || !bytes.Equal(value, []byte("raw-value")) {
+					t.Fatalf("reopened raw value=%q err=%v", value, err)
+				}
+			} else if _, err := reopenedMgr.OpenCollection("other"); err != nil {
+				t.Fatalf("reopened created collection: %v", err)
+			}
+			if got := reopen.State().AppliedCommandLSN; got != 2 {
+				t.Fatalf("reopened applied=%d, want 2", got)
+			}
+		})
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDStagesAppliedLSNUntilFlush(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -4240,5 +4327,169 @@ func assertCollectionIndexIDs(t *testing.T, col *Collection, indexName string, v
 		if string(got[i]) != want[i] {
 			t.Fatalf("FindByIndexValue(%q,%v)[%d]=%q, want %q (all got %q)", indexName, value, i, got[i], want[i], got)
 		}
+	}
+}
+
+// Both operations begin without a pending command prefix. The update owns
+// mutation before its staging lock; the insert owns the staging lock before
+// validating under mutation. No assigned frame is involved in this cycle.
+func TestCollectionCommandWALStagedInsertDoesNotDeadlockNonpendingUpdate(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}, collectionCommandWALSetupInsert{
+		ids:  [][]byte{[]byte("u1")},
+		docs: [][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}})},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	closeDB := true
+	defer func() {
+		if d == nil {
+			return
+		}
+		if closeDB {
+			_ = d.Close()
+		} else {
+			// Close needs the same leases as the reproduced cycle. Releasing
+			// the observations cannot break an actual raw/mutation deadlock.
+			stacks := make([]byte, 64<<10)
+			n := runtime.Stack(stacks, true)
+			t.Logf("skipping DB.Close after same-domain pre-append boundary failure:\n%s", stacks[:n])
+		}
+	}()
+	mgr := NewCollectionManager(d)
+	insertCol, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateCol, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if insertCol.writeDomain != updateCol.writeDomain {
+		t.Fatal("collection handles do not share mutation domain")
+	}
+	domain := insertCol.writeDomain
+	insertBeforeRaw := make(chan struct{})
+	insertWithRaw := make(chan struct{})
+	updateWithMutation := make(chan struct{})
+	releaseInsertBeforeRaw := make(chan struct{})
+	releaseInsertWithRaw := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	var beforeRawOnce, withRawOnce, updateOnce sync.Once
+	var releaseBeforeOnce, releaseRawOnce, releaseUpdateOnce sync.Once
+	defer releaseBeforeOnce.Do(func() { close(releaseInsertBeforeRaw) })
+	defer releaseRawOnce.Do(func() { close(releaseInsertWithRaw) })
+	defer releaseUpdateOnce.Do(func() { close(releaseUpdate) })
+	insertHook := func(owner *collectionWriteDomain, rawHeld bool) {
+		if owner != domain {
+			return
+		}
+		if !rawHeld {
+			beforeRawOnce.Do(func() {
+				close(insertBeforeRaw)
+				<-releaseInsertBeforeRaw
+			})
+		} else {
+			withRawOnce.Do(func() {
+				close(insertWithRaw)
+				<-releaseInsertWithRaw
+			})
+		}
+	}
+	mgr.testCommandWALInsertStageMutationHook.Store(&insertHook)
+	restoreUpdateHook := setTestBeforeCommandWALBufferedUpdateStageLockForTest(func() {
+		updateOnce.Do(func() {
+			close(updateWithMutation)
+			<-releaseUpdate
+		})
+	})
+	defer restoreUpdateHook()
+	newDoc := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "pdx"}})
+	city := mustBSONRawValue(t, "sea")
+	insertDone := make(chan error, 1)
+	updateDone := make(chan error, 1)
+	closeDB = false
+	go func() {
+		_, err := insertCol.InsertBatchValidatedBSON([][]byte{[]byte("u2")}, [][]byte{newDoc})
+		insertDone <- err
+	}()
+	waitCollectionCommandWALSignal(t, insertBeforeRaw, "staged insert after releasing mutation and before raw acquisition")
+	if mutation, ok := insertCol.tryLockMutation(); ok {
+		mutation.Unlock()
+	} else {
+		t.Fatal("insert retained mutation before its raw staging acquisition")
+	}
+	go func() {
+		matched, modified, err := updateCol.UpdateBSONSet([]byte("u1"), []BSONSetField{{Key: "city", Value: city}})
+		if err == nil && (!matched || !modified) {
+			err = errors.New("UpdateBSONSet matched/modified false")
+		}
+		updateDone <- err
+	}()
+	waitCollectionCommandWALSignal(t, updateWithMutation, "nonpending buffered update owning mutation before raw staging")
+	if mutation, ok := updateCol.tryLockMutation(); ok {
+		mutation.Unlock()
+		t.Fatal("nonpending update did not retain mutation at staging boundary")
+	}
+	domain.mu.RLock()
+	pending := collectionCommandWALDomainPendingLocked(domain)
+	domain.mu.RUnlock()
+	if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); pending || applied != 0 || next != 1 {
+		t.Fatalf("before staging: pending=%v applied=%d next=%d, want false,0,1", pending, applied, next)
+	}
+	releaseBeforeOnce.Do(func() { close(releaseInsertBeforeRaw) })
+	waitCollectionCommandWALSignal(t, insertWithRaw, "insert owning raw staging guard before mutation validator")
+	if next := d.CommandWALNextLSN(); next != 1 {
+		t.Fatalf("insert assigned a frame before mutation validation: next=%d, want 1", next)
+	}
+	// The paused insert holds raw; the paused update holds mutation. Their
+	// next production calls respectively wait for mutation and raw.
+	releaseUpdateOnce.Do(func() { close(releaseUpdate) })
+	releaseRawOnce.Do(func() { close(releaseInsertWithRaw) })
+	insertErr := waitCollectionCommandWALErr(t, insertDone, "same-domain staged insert raw->mutation validator versus nonpending update mutation->raw; Close cleanup is skipped on failure")
+	updateErr := waitCollectionCommandWALErr(t, updateDone, "nonpending update raw staging after same-domain insert")
+	closeDB = true
+	if insertErr != nil || updateErr != nil {
+		t.Fatalf("InsertBatchValidatedBSON=%v UpdateBSONSet=%v", insertErr, updateErr)
+	}
+	if err := insertCol.Flush(); err != nil {
+		t.Fatalf("Flush completed insert/update prefix: %v", err)
+	}
+	if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("covered prefix applied=%d next=%d, want 2,3", applied, next)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 2 || frames[0].LSN != 1 || frames[1].LSN != 2 {
+		t.Fatalf("command frames=%+v, want exactly contiguous LSNs 1,2", frames)
+	}
+	assertDocuments := func(col *Collection) {
+		t.Helper()
+		for id, wantCity := range map[string]string{"u1": "sea", "u2": "pdx"} {
+			doc, err := col.Get([]byte(id))
+			if err != nil {
+				t.Fatalf("Get(%s): %v", id, err)
+			}
+			if got := bson.Raw(doc).Lookup("city").StringValue(); got != wantCity {
+				t.Fatalf("%s city=%q, want %q", id, got, wantCity)
+			}
+		}
+	}
+	assertDocuments(insertCol)
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint completed prefix: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = nil
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocuments(reopened)
+	if applied, next := reopen.State().AppliedCommandLSN, reopen.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("reopened covered prefix applied=%d next=%d, want 2,3", applied, next)
 	}
 }
