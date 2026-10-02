@@ -16,7 +16,10 @@ import statistics
 import sys
 from types import SimpleNamespace
 sys.dont_write_bytecode = True
-HASHES = {'algorithm-full-primary-inspection.json': 'db4dc6bc746201b7512c4d13c9a8529e8ae697bd606f1b7f2bf3b078f954fef1',
+HASHES = {'4921-c6b-final-source-applicability.json': '3f153e5ff653bd563ed65e680e2f2c4cf1a284acea03c9521744b1f6af83eabf',
+ '4921-dacff-final-base-evidence-applicability-review.md': 'aa8266317a5c5c0ec66cd8047dabfac207cdb037860fa3034a2991aadb719d56',
+ '4921-actual-merge.json': '42bae8b8d9741790cbb0397dd1ad8296b31e70c36a33d3905bb4d95db9ae7c0c',
+ 'algorithm-full-primary-inspection.json': 'db4dc6bc746201b7512c4d13c9a8529e8ae697bd606f1b7f2bf3b078f954fef1',
  'algorithm-full-normal-freeze.json': 'eb0419e74f6c11493087e408eeebf394bf008e86006ced5eb64acd303b1bd336',
  'algorithm-full-counter-freeze.json': '9ee522e28df829d261cd8e6a4d3a8df6edfb8ce7d3d960af7774579ddd7aaf80',
  'algorithm-full-run-order-v2.json': 'aa1444381926f0661ea14fd2936c504b766c7a546d9bc6d53a1b5fbe06e49ec6',
