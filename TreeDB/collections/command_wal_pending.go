@@ -373,6 +373,9 @@ func (m *CollectionManager) lockCommandWALPublishCoordinatorWithRawPublishState(
 		coord.mu.Unlock()
 		var err error
 		if rawPublishLocked {
+			if hook := m.testCommandWALRawDomainDrainHook.Load(); hook != nil {
+				(*hook)(owner)
+			}
 			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(m.db, owner)
 		} else {
 			err = flushCollectionWriteDomain(m.db, owner)

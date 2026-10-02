@@ -22,6 +22,154 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+func TestCollectionCommandWALCheckpointStaleOwnerDoesNotDeadlockDelete(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids:  [][]byte{[]byte("u1")},
+		docs: [][]byte{[]byte(`{"name":"Ada"}`)},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	closeDB := true
+	defer func() {
+		if d == nil {
+			return
+		}
+		if closeDB {
+			_ = d.Close()
+		} else {
+			// A failed boundary wait leaves the reproduced lock cycle intact.
+			// Close would wait on it too; retain stacks and let this RED run exit.
+			stacks := make([]byte, 64<<10)
+			n := runtime.Stack(stacks, true)
+			t.Logf("skipping DB.Close cleanup after blocked boundary:\n%s", stacks[:n])
+		}
+	}()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u2"), []byte(`{"name":"Grace"}`)); err != nil {
+		t.Fatalf("Insert pending document: %v", err)
+	}
+	domain := col.writeDomain
+	domain.mu.RLock()
+	first, last := domain.pendingCommandWALFirst, domain.pendingCommandWALLast
+	domain.mu.RUnlock()
+	if first != 1 || last != 1 || d.State().AppliedCommandLSN != 0 {
+		t.Fatalf("pending prefix=[%d,%d] applied=%d, want [1,1] applied=0", first, last, d.State().AppliedCommandLSN)
+	}
+
+	drainSelected := make(chan struct{})
+	releaseDrain := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseDrain:
+		default:
+			close(releaseDrain)
+		}
+	}()
+	var pausedDrain atomic.Bool
+	drainHook := func(owner *collectionWriteDomain) {
+		if owner == domain && pausedDrain.CompareAndSwap(false, true) {
+			close(drainSelected)
+			<-releaseDrain
+		}
+	}
+	mgr.testCommandWALRawDomainDrainHook.Store(&drainHook)
+	checkpointDone := make(chan error, 1)
+	closeDB = false
+	go func() { checkpointDone <- d.Checkpoint() }()
+	waitCollectionCommandWALSignal(t, drainSelected, "checkpoint selecting pending owner under raw publish")
+
+	predicateEntered := make(chan struct{})
+	releasePredicate := make(chan struct{})
+	defer func() {
+		select {
+		case <-releasePredicate:
+		default:
+			close(releasePredicate)
+		}
+	}()
+	var predicateOnce sync.Once
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleted, err := col.DeleteDocumentIf([]byte("u1"), func(current []byte) (bool, error) {
+			predicateOnce.Do(func() { close(predicateEntered) })
+			<-releasePredicate
+			return bytes.Equal(current, []byte(`{"name":"Ada"}`)), nil
+		})
+		if err == nil && !deleted {
+			err = errors.New("DeleteDocumentIf did not delete existing document")
+		}
+		deleteDone <- err
+	}()
+	waitCollectionCommandWALSignal(t, predicateEntered, "conditional delete holding mutation after covering pending prefix")
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN at predicate=%d, want covered insert prefix 1", got)
+	}
+	mgr.commandWALCoordinator.mu.Lock()
+	owner := mgr.commandWALCoordinator.owner
+	mgr.commandWALCoordinator.mu.Unlock()
+	if owner != nil {
+		t.Fatal("foreground flush did not clear pending coordinator owner")
+	}
+	if mutation, ok := col.tryLockMutation(); ok {
+		mutation.Unlock()
+		t.Fatal("conditional delete predicate did not retain mutation")
+	}
+	// Checkpoint retains its previously selected owner while the delete owns
+	// mutation. Resuming both forces raw->mutation against mutation->raw.
+	close(releaseDrain)
+	close(releasePredicate)
+	deleteErr := waitCollectionCommandWALErr(t, deleteDone, "DeleteDocumentIf publish behind checkpoint stale-owner drain; Close cleanup is skipped on failure")
+	checkpointErr := waitCollectionCommandWALErr(t, checkpointDone, "checkpoint stale-owner domain drain after delete publish")
+	closeDB = true
+	if deleteErr != nil || checkpointErr != nil {
+		t.Fatalf("DeleteDocumentIf=%v Checkpoint=%v", deleteErr, checkpointErr)
+	}
+	if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != 2 || next != 3 {
+		t.Fatalf("command coverage applied=%d next=%d, want applied=2 next=3", applied, next)
+	}
+	domain.mu.RLock()
+	first, last = domain.pendingCommandWALFirst, domain.pendingCommandWALLast
+	domain.mu.RUnlock()
+	if first != 0 || last != 0 {
+		t.Fatalf("pending prefix after delete=[%d,%d], want empty", first, last)
+	}
+	assertCollectionDocument(t, col, "u2", `{"name":"Grace"}`)
+	if _, found, err := col.GetInto([]byte("u1"), nil); err != nil || found {
+		t.Fatalf("deleted document found=%v err=%v", found, err)
+	}
+	// The concurrent checkpoint may win before the delete publishes. Seal the
+	// now-completed two-command prefix before checking its durable reopen.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint completed prefix: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u2", `{"name":"Grace"}`)
+	if _, found, err := reopened.GetInto([]byte("u1"), nil); err != nil || found {
+		t.Fatalf("reopened deleted document found=%v err=%v", found, err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 2", got)
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDStagesAppliedLSNUntilFlush(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",

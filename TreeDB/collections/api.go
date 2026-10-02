@@ -406,6 +406,7 @@ type CollectionManager struct {
 	vectorIndexConstructionDecisionObserver atomic.Bool
 	commandWALCoordinator                   *collectionCommandWALCoordinator
 	commandWALRawUnregister                 func()
+	testCommandWALRawDomainDrainHook        atomic.Pointer[func(*collectionWriteDomain)]
 	domainMu                                sync.RWMutex
 	domains                                 map[string]*collectionWriteDomain
 	collectionsMu                           sync.RWMutex
