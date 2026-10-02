@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestCollectionCommandWALPreparedOwnerRetainsAdmissionThroughFinalize(t *testing.T) {
@@ -892,6 +893,209 @@ func TestCollectionCommandWALPreparedOwnerReflushesAfterForeignDrain(t *testing.
 			assertCollectionDocument(t, foreign, "f1", `{"city":"hnl"}`)
 			if applied, next := reopened.State().AppliedCommandLSN, reopened.CommandWALNextLSN(); applied != preparedLSN || next != preparedLSN+1 {
 				t.Fatalf("reopen coverage=%d/%d want %d/%d", applied, next, preparedLSN, preparedLSN+1)
+			}
+		})
+	}
+}
+
+func TestCollectionCommandWALOrdinaryPublishRevalidatesAfterOwnPendingFlush(t *testing.T) {
+	for _, operation := range []string{"document", "batch"} {
+		t.Run(operation, func(t *testing.T) {
+			meta := CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, BufferedIndexedWrites: true, BufferedIndexedWriteMaxDocuments: 100, DisableBufferedIndexedAsyncFlush: true}, Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}}}
+			dir := prepareCollectionCommandWALDir(t, meta)
+			d := openCollectionCommandWALDB(t, dir)
+			safeClose := true
+			defer func() {
+				if safeClose {
+					_ = d.Close()
+				}
+			}()
+			mgr := NewCollectionManager(d)
+			foreignMeta := meta
+			foreignMeta.Name = "foreign"
+			if _, err := mgr.CreateCollection(&foreignMeta); err != nil {
+				t.Fatal(err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := mgr.OpenCollection("foreign")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := col.Insert([]byte("seed"), []byte(`{"city":"sea"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := foreign.Insert([]byte("f1"), []byte(`{"city":"hnl"}`)); err != nil {
+				t.Fatal(err)
+			}
+			foreign.writeDomain.mu.RLock()
+			foreignPending := collectionCommandWALDomainPendingLocked(foreign.writeDomain)
+			foreign.writeDomain.mu.RUnlock()
+			if !foreignPending {
+				t.Fatal("fixture requires a real foreign pending prefix")
+			}
+			interveningLSN := d.CommandWALNextLSN()
+			acquisitions, publishCalls := 0, 0
+			var injectionErr error
+			acquire := func() func() {
+				acquisitions++
+				if acquisitions == 2 {
+					// Drain completed and both ordinary operation leases are
+					// absent. Buffer the once-absent delete target for real.
+					if d.State().AppliedCommandLSN != interveningLSN-1 {
+						injectionErr = errors.New("foreign prefix was not drained before reacquisition")
+					} else {
+						_, injectionErr = col.Insert([]byte("target"), []byte(`{"city":"bos"}`))
+					}
+					col.writeDomain.mu.RLock()
+					pending := collectionCommandWALDomainPendingLocked(col.writeDomain)
+					col.writeDomain.mu.RUnlock()
+					if injectionErr == nil && (!pending || d.State().AppliedCommandLSN != interveningLSN-1 || d.CommandWALNextLSN() != interveningLSN+1) {
+						injectionErr = errors.New("intervening insert must remain buffered and assigned")
+					}
+				}
+				return col.lockVectorIndexCoverageMutation()
+			}
+			done := make(chan error, 1)
+			safeClose = false
+			go func() {
+				unlockSchema := col.lockCollectionSchemaRead()
+				defer unlockSchema()
+				admission := collectionCommandWALAdmission{collection: col, acquire: acquire, release: acquire()}
+				defer admission.unlock()
+				done <- col.withMutationLockAdmission(&admission, func() error {
+					snap := d.AcquireSnapshot()
+					if snap == nil {
+						return backenddb.ErrClosed
+					}
+					catalog, err := col.catalogForSnapshot(snap)
+					if err != nil {
+						_ = snap.Close()
+						return err
+					}
+					if catalog == nil {
+						_ = snap.Close()
+						return errCollectionNotFound
+					}
+					// Capture the exact descriptor proof used by the absent
+					// target branches of both ordinary delete executors.
+					primary := collectionPrimaryRootName(catalog.meta.Name)
+					baseRoot := catalog.rootID(primary)
+					baseCommit, baseSystem := snapshotCommitSeq(snap), snapshotSystemRoot(snap)
+					planMeta := catalog.meta
+					_, _, absentErr := collectionGetEntryAtCatalogRoot(snap, catalog, primary, []byte("target"))
+					_ = snap.Close()
+					if !errors.Is(absentErr, tree.ErrKeyNotFound) {
+						return fmt.Errorf("planned target must be absent: %v", absentErr)
+					}
+					intent, err := col.newCollectionDeleteCommandWALIntent([][]byte{[]byte("target")}, nil)
+					if err != nil {
+						return err
+					}
+					if intent == nil {
+						return errors.New("fixture requires an ordinary unassigned delete intent")
+					}
+					err = col.withCommandWALPublishCoordinatorAdmission(intent, &admission, func() error {
+						return col.validateRootDescriptorSystemDeltaForMeta(planMeta, baseCommit, baseSystem, []string{primary}, map[string]uint64{primary: baseRoot})
+					}, func() error {
+						publishCalls++
+						// Red fails safely before a stale no-op Append; green
+						// rejects its changed root before reaching this callback.
+						return errors.New("stale ordinary delete plan reached publication")
+					})
+					if injectionErr != nil {
+						return injectionErr
+					}
+					if !errors.Is(err, ErrConcurrentMutation) || publishCalls != 0 || intent.AssignedLSN() != 0 {
+						return fmt.Errorf("changed plan rejection err=%v publishes=%d assigned=%d", err, publishCalls, intent.AssignedLSN())
+					}
+					if acquisitions != 2 || d.State().AppliedCommandLSN != interveningLSN || d.CommandWALNextLSN() != interveningLSN+1 {
+						return fmt.Errorf("post-flush proof acquisitions=%d applied=%d next=%d want 2/%d/%d", acquisitions, d.State().AppliedCommandLSN, d.CommandWALNextLSN(), interveningLSN, interveningLSN+1)
+					}
+					return nil
+				})
+			}()
+			err = waitCollectionCommandWALErr(t, done, "ordinary publish revalidation after own pending flush")
+			safeClose = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCollectionDocument(t, col, "target", `{"city":"bos"}`)
+			assertCollectionIndexIDs(t, col, "city", "bos", "target")
+			// Retry through each actual public delete route after the stale
+			// unassigned plan was refused; its new plan must remove the row.
+			if operation == "document" {
+				deleted, err := col.DeleteDocument([]byte("target"))
+				if err != nil || !deleted {
+					t.Fatalf("DeleteDocument retry=%t err=%v", deleted, err)
+				}
+			} else {
+				deleted, err := col.DeleteBatch([][]byte{[]byte("target")})
+				if err != nil || deleted != 1 {
+					t.Fatalf("DeleteBatch retry=%d err=%v", deleted, err)
+				}
+			}
+			deleteLSN := interveningLSN + 1
+			if d.State().AppliedCommandLSN != deleteLSN || d.CommandWALNextLSN() != deleteLSN+1 {
+				t.Fatal("actual delete did not publish one contiguous WAL boundary")
+			}
+			if err := d.CheckCommandWALPublishReady(); err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := col.GetInto([]byte("target"), nil); err != nil || found {
+				t.Fatalf("deleted target found=%t error=%v", found, err)
+			}
+			assertCollectionIndexIDs(t, col, "city", "bos")
+			assertCollectionDocument(t, col, "seed", `{"city":"sea"}`)
+			assertCollectionDocument(t, foreign, "f1", `{"city":"hnl"}`)
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			safeClose = false
+			insertFrames, deleteFrames := 0, 0
+			for _, frame := range collectionCommandWALFrames(t, dir) {
+				if frame.LSN == interveningLSN {
+					insertFrames++
+					payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(frame.Payload)
+					if err != nil || frame.Kind != commitlog.CommandKindCollectionInsertBatchByID || payload.Collection != "users" || len(payload.Documents) != 1 || string(payload.Documents[0].ID) != "target" {
+						t.Fatalf("intervening frame=%+v err=%v", frame, err)
+					}
+				}
+				if frame.LSN == deleteLSN {
+					deleteFrames++
+					payload, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(frame.Payload)
+					if err != nil || frame.Kind != commitlog.CommandKindCollectionDeleteBatchByID || payload.Collection != "users" || len(payload.IDs) != 1 || string(payload.IDs[0]) != "target" {
+						t.Fatalf("delete frame=%+v err=%v", frame, err)
+					}
+				}
+			}
+			if insertFrames != 1 || deleteFrames != 1 {
+				t.Fatalf("WAL frame counts=%d/%d want 1/1", insertFrames, deleteFrames)
+			}
+			reopened := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopened.Close() }()
+			reopenMgr := NewCollectionManager(reopened)
+			reopenCol, err := reopenMgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopenForeign, err := reopenMgr.OpenCollection("foreign")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := reopenCol.GetInto([]byte("target"), nil); err != nil || found {
+				t.Fatalf("reopened target found=%t error=%v", found, err)
+			}
+			assertCollectionIndexIDs(t, reopenCol, "city", "bos")
+			assertCollectionDocument(t, reopenCol, "seed", `{"city":"sea"}`)
+			assertCollectionDocument(t, reopenForeign, "f1", `{"city":"hnl"}`)
+			if reopened.State().AppliedCommandLSN != deleteLSN || reopened.CommandWALNextLSN() != deleteLSN+1 {
+				t.Fatal("reopen did not retain exact WAL coverage")
 			}
 		})
 	}
