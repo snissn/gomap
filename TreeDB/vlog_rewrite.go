@@ -61,7 +61,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return ValueLogRewriteStats{}, fmt.Errorf("%w: offline template rewrite requires dependency-closed rewritten-root publication (#3679)", rootpublication.ErrUnresolvedResource)
 	}
 
-	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
+	sideCleanup, _, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}

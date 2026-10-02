@@ -3,13 +3,17 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"runtime"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -294,4 +298,198 @@ func compactStoragePublicPhaseSeen(phases []backenddb.CompactStoragePhaseStats, 
 		}
 	}
 	return false
+}
+
+// Keep the public command-WAL/auto-compression path: lookup bytes alone are
+// insufficient authority for packed leaves after the cached owner closes.
+func TestCompactStorageExhaustiveCommandWALRandom4KOffline(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	for _, count := range []int{20000, 100000} {
+		t.Run(fmt.Sprintf("keys%d", count), func(t *testing.T) {
+			if testing.Short() && count == 100000 {
+				t.Skip("original-sized maintenance fixture")
+			}
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+			opts.FlushThreshold = 64 << 20
+			opts.ChunkSize = 256 << 10
+			opts.IndexOuterLeavesInValueLog = true
+			opts.LeafPrefixCompression = true
+			opts.IndexColumnarLeaves = true
+			opts.IndexPackedValuePtr = true
+			opts.LeafPageReadCacheWriteAdmission = treedb.LeafPageReadCacheWriteAdmissionAdaptive
+			opts.ValueLog.Compression = treedb.ValueLogCompressionAuto
+			t.Logf("durable command WAL: keys=%d, value=4096, batch=1000, updates=%d, compression=auto, outer-leaves=true, pointer-threshold=default(512)", count, count*2/5)
+			database, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if database != nil {
+					if err := database.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			write := func(start, end int, update bool) {
+				t.Helper()
+				for start < end {
+					batch := database.NewBatch()
+					limit := min(start+1000, end)
+					for j := start; j < limit; j++ {
+						i, version := j, uint64(0)
+						if update {
+							i = (j * 7919) % count
+							version = 1
+						}
+						id := uint64(i * 2)
+						if err := batch.Set(compactRandom4KKey(id), compactRandom4KValue(id, version)); err != nil {
+							t.Fatal(errors.Join(err, batch.Close()))
+						}
+					}
+					if err := errors.Join(batch.WriteSync(), batch.Close()); err != nil {
+						t.Fatal(err)
+					}
+					start = limit
+					if update && start%(count/10) == 0 {
+						if err := database.Checkpoint(); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			closePublic := func() {
+				t.Helper()
+				if err := errors.Join(database.Checkpoint(), database.Close()); err != nil {
+					t.Fatal(err)
+				}
+				database = nil
+			}
+			write(0, count, false)
+			closePublic()
+			database, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(0, count*2/5, true)
+			closePublic()
+			// Reopen/close the cached owner before the exclusive maintenance handoff.
+			database, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closePublic()
+			verifyReadOnly := func() {
+				t.Helper()
+				database, err = treedb.Open(treedb.Options{Dir: dir, ReadOnly: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed := make([]bool, count)
+				for j := 0; j < count*2/5; j++ {
+					changed[(j*7919)%count] = true
+				}
+				for i := 0; i < count; i++ {
+					id, version := uint64(i*2), uint64(0)
+					if changed[i] {
+						version = 1
+					}
+					got, err := database.Get(compactRandom4KKey(id))
+					if err != nil || !bytes.Equal(got, compactRandom4KValue(id, version)) {
+						t.Fatalf("read-only key=%d mismatch: %v", id, err)
+					}
+				}
+				for i := 0; i < min(count, 10000); i++ {
+					got, err := database.Get(compactRandom4KKey(uint64((i*7919%count)*2 + 1)))
+					if err != nil || got != nil {
+						t.Fatalf("read-only missing key %d: len=%d err=%v", i, len(got), err)
+					}
+				}
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				database = nil
+			}
+			if count == 20000 {
+				// An unresolved packed dependency fails after earlier phases have committed.
+				// Cleanup must release owners so a read-only reopen and a fresh retry work.
+				backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				backend.SetStableDictionaryResourceProvider(nil)
+				stats, compactErr := backend.CompactStorage(context.Background(), backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true})
+				closeErr := cleanup()
+				if !errors.Is(compactErr, rootpublication.ErrUnresolvedResource) || closeErr != nil {
+					t.Fatalf("partial compact: operation=%v cleanup=%v", compactErr, closeErr)
+				}
+				if !compactStoragePublicPhaseSeen(stats.Phases, "value-log-gc") {
+					t.Fatal("failure did not follow committed maintenance phases")
+				}
+				verifyReadOnly()
+			}
+			for pass := 0; pass < 2; pass++ {
+				backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The original-sized fixture also runs under the race detector in CI.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				stats, compactErr := backend.CompactStorage(ctx, backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true})
+				if compactErr == nil {
+					_, compactErr = backend.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+				}
+				if compactErr == nil {
+					_, compactErr = backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+				}
+				cancel()
+				err = errors.Join(compactErr, cleanup())
+				if err != nil {
+					t.Fatalf("offline compact/GC pass %d: %v", pass, err)
+				}
+				vacuumApplied := false
+				for _, phase := range stats.Phases {
+					if phase.Name == "index-vacuum" {
+						vacuumApplied = phase.Status == backenddb.CompactStoragePhaseStatusSucceeded ||
+							(pass > 0 && phase.Status == backenddb.CompactStoragePhaseStatusNotRequired)
+					}
+				}
+				if !vacuumApplied || stats.RemainingDebt.IndexVacuumRequired {
+					t.Fatalf("unfinished vacuum: phases=%+v debt=%+v", stats.Phases, stats.RemainingDebt)
+				}
+				if pass == 0 {
+					ran := false
+					for _, pack := range stats.LeafGenerationPacks {
+						ran = ran || pack.Ran
+					}
+					if !ran {
+						t.Fatal("fixture did not exercise leaf packing")
+					}
+				}
+				if stats.ByteMinimized && (stats.RemainingDebt.ValueLogRewriteBytes != 0 || stats.RemainingDebt.LeafGCBytes != 0) {
+					t.Fatalf("false byte-minimized claim: %+v", stats.RemainingDebt)
+				}
+				t.Logf("pass=%d byte-minimized=%t debt=%+v", pass, stats.ByteMinimized, stats.RemainingDebt)
+				verifyReadOnly()
+			}
+		})
+	}
+}
+
+func compactRandom4KKey(id uint64) []byte {
+	key := make([]byte, 32)
+	copy(key, "zone/settings/config/v1/")
+	binary.BigEndian.PutUint64(key[24:], id)
+	return key
+}
+
+func compactRandom4KValue(id, version uint64) []byte {
+	value := make([]byte, 4096)
+	binary.BigEndian.PutUint64(value, id)
+	binary.BigEndian.PutUint64(value[8:], version)
+	source := rand.New(rand.NewPCG(id+51, 99))
+	for offset := 16; offset < len(value); offset += 8 {
+		binary.LittleEndian.PutUint64(value[offset:], source.Uint64())
+	}
+	return value
 }
