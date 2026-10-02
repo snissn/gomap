@@ -78,12 +78,12 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 		route[metric] = current - prior
 		b.ReportMetric(float64(current-prior)/float64(b.N), metric)
 	}
-	// Outer leaf loads can add value-log reads to the one value pointer per
-	// Get. Check placement exactly and classify the observed file routes.
+	// Full fixture warmup retains outer leaf pages. The timed region must
+	// resolve exactly one logged value pointer per Get on either file route.
 	if pathAfter.GetAppendPointerHitsTotal-pathBefore.GetAppendPointerHitsTotal != uint64(b.N) || pathAfter.GetAppendInlineHitsTotal != pathBefore.GetAppendInlineHitsTotal {
 		b.Fatal("fixture no longer performs exactly one pointer read per Get")
 	}
-	if route["mmap_hits/op"]+route["fallbacks/op"] < uint64(b.N) || route["crc_checks/op"] < uint64(b.N) || route["cache_hits/op"] > route["mmap_hits/op"] {
+	if route["mmap_hits/op"]+route["fallbacks/op"] != uint64(b.N) || route["crc_checks/op"] != uint64(b.N) || route["cache_hits/op"] > route["mmap_hits/op"]+route["fallbacks/op"] {
 		b.Fatalf("public route counters are inconsistent: %v", route)
 	}
 	for metric, key := range map[string]string{
