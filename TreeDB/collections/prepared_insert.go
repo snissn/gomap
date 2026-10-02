@@ -594,7 +594,8 @@ func (p *PreparedInsertBatch) Commit() ([][]byte, error) {
 	c := p.collection
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(p.ids, p.documents, false, nil, nil,
 		insertBatchExecutionOptions{admission: admission, returnResultIDs: true, prepared: p})

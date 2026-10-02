@@ -11345,7 +11345,8 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 }
 
 func (c *Collection) insertOneViaBatchSchemaLocked(id, document []byte) ([]byte, error) {
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	return c.insertOneViaBatchWithCoverageLocked(id, document, admission)
 }
@@ -11376,7 +11377,8 @@ func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte, ad
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, false, nil, admission)
 	if err == nil {
@@ -11410,7 +11412,8 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	var stats CollectionInsertStats
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, false, nil, nil, insertBatchExecutionOptions{admission: admission,
@@ -11427,7 +11430,8 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 func (c *Collection) insertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	var stats CollectionInsertStats
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, false, nil, nil, insertBatchExecutionOptions{admission: admission, returnResultIDs: true, insertStats: &stats})
@@ -11447,7 +11451,8 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, false, encoder, admission)
 	if err == nil {
@@ -11463,7 +11468,8 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, true, nil, admission)
 	if err == nil {
@@ -11614,7 +11620,8 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, nil, commandWALIntent, insertBatchExecutionOptions{admission: admission, returnResultIDs: true})
 	if err == nil {
@@ -11634,7 +11641,8 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	_, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, nil, nil, insertBatchExecutionOptions{admission: admission, returnResultIDs: false})
 	if err == nil {
@@ -11679,7 +11687,8 @@ func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpt
 func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	execOpts.admission = admission
 	return c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
@@ -12017,8 +12026,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if !execOpts.borrowMutation {
 		defer unlockIfLocked()
 	}
-	unbindAdmission := execOpts.admission.bindMutation(unlockMutation, mutationLocked)
-	defer unbindAdmission()
+	previousAdmissionMutation, previousAdmissionHeld := execOpts.admission.bindMutation(unlockMutation, mutationLocked)
+	defer execOpts.admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 
 	if len(documents) == 0 {
 		c.recordInsertBatchStats(CollectionInsertStats{
@@ -13594,15 +13603,16 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
-	unbindAdmission := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbindAdmission()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	defer func() {
 		if mutationLocked {
 			unlockMutation.Unlock()
@@ -13655,7 +13665,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	for i, id := range documentIDs {
 		if len(id) == 0 {
@@ -13679,8 +13690,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
-	unbindAdmission := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbindAdmission()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	defer func() {
 		if mutationLocked {
 			unlockMutation.Unlock()
@@ -13719,7 +13730,8 @@ func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, comma
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	for i, id := range documentIDs {
 		if len(id) == 0 {
@@ -13740,8 +13752,8 @@ func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, comma
 	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
-	unbindAdmission := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbindAdmission()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	defer func() {
 		if mutationLocked {
 			unlockMutation.Unlock()
@@ -14425,7 +14437,8 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		return false, false, err
 	}
 	if c.commandWALActive(nil) {
-		admission := c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission := &admissionState
 		defer admission.unlock()
 		results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent([]updateBatchItem{{
 			UpdateBatchItem: UpdateBatchItem{
@@ -14491,7 +14504,8 @@ func validateCollectionUpdateDocumentInput(c *Collection, documentID []byte) err
 func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
@@ -14500,8 +14514,8 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 			unlockMutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	// PR2b pins no-index Update as synchronous: pending no-index inserts or
 	// indexed buffered writes are drained before reading/planning the update,
 	// and a modified no-index replacement publishes before this call returns.
@@ -14528,7 +14542,8 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
@@ -14537,8 +14552,8 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 			unlockMutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return false, false, err
 	}
@@ -14571,7 +14586,8 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	results, _, err := c.updateBatchSchemaLocked(items, updateBatchModeAny, admission)
 	if err == nil {
@@ -14588,7 +14604,8 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	results, batched, err := c.updateBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexes, admission)
 	if err == nil && batched {
@@ -14606,7 +14623,8 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	results, batched, err := c.updateBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexChanges, admission)
 	if err == nil && batched {
@@ -14642,7 +14660,8 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
 		return 0, 0, err
@@ -14704,7 +14723,8 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 func (c *Collection) updateBatchSchemaLocked(items []UpdateBatchItem, mode updateBatchMode, admissions ...*collectionCommandWALAdmission) ([]UpdateBatchResult, bool, error) {
 	admission := collectionCommandWALAdmissionArgument(admissions)
 	if admission == nil {
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 	}
 	admissions = []*collectionCommandWALAdmission{admission}
@@ -14743,7 +14763,8 @@ func (c *Collection) updateBatchOwnedItemsWithCommandWALIntent(items []updateBat
 	if admission == nil {
 		unlockSchema := c.lockCollectionSchemaRead()
 		defer unlockSchema()
-		admission = c.lockCollectionCommandWALAdmission()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		defer admission.unlock()
 		if commandWALIntent == nil {
 			defer func() {
@@ -15719,7 +15740,8 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 	collection := ownedBatch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := collection.ensureWriteDomainOpen(); err != nil {
 		prepared.err = err
@@ -15821,7 +15843,8 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	unlockSchema := func() {}
 	if err == nil {
 		unlockSchema = collection.lockCollectionSchemaRead()
-		admission = collection.lockCollectionCommandWALAdmission()
+		admissionState := collection.lockCollectionCommandWALAdmission()
+		admission = &admissionState
 		err = collection.ensureWriteDomainOpen()
 	}
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
@@ -15904,7 +15927,8 @@ func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepare
 	collection := prepared.batch[0].collection
 
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admission := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
 	if err := collection.ensureWriteDomainOpen(); err != nil {
@@ -16591,7 +16615,8 @@ func (combiner *collectionUpdateCombiner) runBatchWithScratch(batch []collection
 
 	collection := batch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admission := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
 	results, batched, err := func() ([]UpdateBatchResult, bool, error) {

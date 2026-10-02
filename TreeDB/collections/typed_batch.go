@@ -133,7 +133,8 @@ func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns [
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return nil, CollectionInsertStats{}, err
@@ -234,7 +235,8 @@ func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedCo
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return nil, err

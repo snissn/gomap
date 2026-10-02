@@ -226,7 +226,8 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admission := c.lockCollectionCommandWALAdmission()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
 	defer admission.unlock()
 	if replayPayload == nil {
 		if err := validateTypedMetadataMutation(c.Meta(), set, unset, generation); err != nil {
@@ -251,8 +252,8 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 			unlockMutation.Unlock()
 		}
 	}()
-	unbind := admission.bindMutation(&unlockMutation, &mutationLocked)
-	defer unbind()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return TypedMetadataUpdateResult{}, err
 	}
