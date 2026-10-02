@@ -52,7 +52,10 @@ Every17th request beginning with the first is sampled, with a fixed65536 sample
 capacity and fail-closed overflow. Maximum covers all successful reads. Raw
 samples, count, p99/p99.9/max and checked stop/join are retained. Reader failures
 remain fatal and deferred cleanup joins before owner close on failure paths.
-The fourth checkpoint phase includes reader stop/join; earlier phase stats
+Reader elapsed time ends after the fourth checkpoint phase capture, covering all
+eight update/checkpoint durations, quantile completion, checked join and reporting
+overhead; Get latency timers still cover only the API call. The fourth checkpoint
+phase includes reader stop/join; earlier phase stats
 observe the concurrent process and are not isolated writer-only measurements.
 
 Each named phase and the process carry `/proc/self/io` before/after counters,
@@ -144,3 +147,7 @@ canonical environment and benchmark argv, additionally passing
 separate untimed diagnostic process with full provenance. They are standalone
 Go profiles; inspect them with `go tool pprof`, not the unified-bench/benchprof
 artifact parser. Profile collection does not replace unprofiled timing pairs.
+
+Validation requires one process/phase IO support state, enclosing process counter
+containment and chronological monotonicity for all seven counters, plus exact
+configuration keys, types and values. Unsupported IO remains explicitly empty.

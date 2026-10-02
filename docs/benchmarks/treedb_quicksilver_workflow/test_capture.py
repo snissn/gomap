@@ -40,9 +40,12 @@ class UpdateObservations(unittest.TestCase):
         packet = fixture()
         with self.assertRaises(ValueError): q.check_update_observations(packet, 40000, True)
         names = ["rchar", "wchar", "syscr", "syscw", "read_bytes", "write_bytes", "cancelled_write_bytes"]
-        for pair in [packet["process_io"], *packet["phase_process_io"].values()]:
-            pair["before"] = dict(supported=True, counters=dict.fromkeys(names, 2))
-            pair["after"] = dict(supported=True, counters=dict.fromkeys(names, 3))
+        packet["process_io"] = dict(before=dict(supported=True, counters=dict.fromkeys(names, 0)),
+                                    after=dict(supported=True, counters=dict.fromkeys(names, 100)))
+        for i, name in enumerate(q.PHASES):
+            packet["phase_process_io"][name] = dict(
+                before=dict(supported=True, counters=dict.fromkeys(names, i * 2 + 2)),
+                after=dict(supported=True, counters=dict.fromkeys(names, i * 2 + 3)))
         q.check_update_observations(packet, 40000, True)
         for value in (-1, True, 1.5):
             wrong = copy.deepcopy(packet); wrong["process_io"]["after"]["counters"]["rchar"] = value
@@ -51,5 +54,50 @@ class UpdateObservations(unittest.TestCase):
         with self.assertRaises(ValueError): q.check_update_observations(wrong, 40000, True)
         wrong = copy.deepcopy(packet); wrong["process_io"]["after"]["counters"]["rchar"] = 1
         with self.assertRaises(ValueError): q.check_update_observations(wrong, 40000, True)
+
+    def test_all_eight_phase_lifetime(self):
+        packet = fixture()
+        for elapsed in (7000, 7999):
+            wrong = copy.deepcopy(packet)
+            wrong["concurrent_owned_reads"]["elapsed_ns"] = elapsed
+            with self.assertRaises(ValueError): q.check_update_observations(wrong, 40000, False)
+        packet["concurrent_owned_reads"]["elapsed_ns"] = 8000
+        q.check_update_observations(packet, 40000, False)
+
+    def test_phase_io_support_containment_and_chronology(self):
+        packet = fixture()
+        counters = dict.fromkeys(("rchar", "wchar", "syscr", "syscw", "read_bytes", "write_bytes", "cancelled_write_bytes"), 2)
+        wrong = copy.deepcopy(packet)
+        wrong["phase_process_io"][q.PHASES[4]] = dict(before=dict(supported=True, counters=counters), after=dict(supported=True, counters=counters))
+        with self.assertRaises(ValueError): q.check_update_observations(wrong, 40000, False)
+        packet["process_io"] = dict(before=dict(supported=True, counters=dict.fromkeys(counters, 0)),
+                                    after=dict(supported=True, counters=dict.fromkeys(counters, 100)))
+        for i, name in enumerate(q.PHASES):
+            packet["phase_process_io"][name] = dict(
+                before=dict(supported=True, counters=dict.fromkeys(counters, i * 2 + 2)),
+                after=dict(supported=True, counters=dict.fromkeys(counters, i * 2 + 3)))
+        q.check_update_observations(packet, 40000, True)
+        for counter in counters:
+            for before, after in ((1000, 1001), (0, 1)):
+                wrong = copy.deepcopy(packet)
+                pair = wrong["phase_process_io"][q.PHASES[6]]
+                pair["before"]["counters"][counter], pair["after"]["counters"][counter] = before, after
+                with self.subTest(counter=counter, before=before), self.assertRaises(ValueError):
+                    q.check_update_observations(wrong, 40000, True)
+
+    def test_configuration_exact_members(self):
+        configuration = dict(command_wal=True, command_wal_stats_scan=True, keep_recent=10000, flush_threshold=64 << 20,
+            outer_leaves_in_value_log=True, leaf_prefix_compression=True, columnar_leaves=True, packed_value_ptr=True,
+            leaf_cache_entries=-1, background_checkpoint_interval=-1, background_checkpoint_idle_duration=-1,
+            max_wal_bytes=-1, background_index_vacuum_interval=-1, disable_background_prune=True)
+        q.check_configuration(configuration, 0)
+        for key, value in configuration.items():
+            for replacement in (1 if type(value) is bool else float(value), None):
+                wrong = dict(configuration); wrong[key] = replacement
+                with self.subTest(key=key), self.assertRaises(ValueError): q.check_configuration(wrong, 0)
+            wrong = dict(configuration); del wrong[key]
+            with self.assertRaises(ValueError): q.check_configuration(wrong, 0)
+        wrong = dict(configuration); wrong["unexpected"] = True
+        with self.assertRaises(ValueError): q.check_configuration(wrong, 0)
 
 if __name__ == "__main__": unittest.main()

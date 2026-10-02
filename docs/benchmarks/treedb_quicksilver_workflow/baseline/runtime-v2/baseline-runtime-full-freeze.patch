@@ -26,12 +26,12 @@
  	opts := memoryBudgetOptions(b.TempDir(), leaf, threshold)
 -	opts.NegativeLookupFilterBytes = filterBytes
 +	if filterBytes != 0 {
-+ b.Fatal("baseline has no negative lookup filter")
-+ }
++		b.Fatal("baseline has no negative lookup filter")
++	}
  	d, err := Open(opts)
  	if err != nil {
  		b.Fatal(err)
-@@ -182,7 +184,7 @@
+@@ -185,7 +187,7 @@
  	}
  	environment := os.Environ()
  	sort.Strings(environment)
@@ -40,7 +40,7 @@
  		"keys": keys, "updates": updates, "read_keys": reads, "value_bytes": size, "key_bytes": 32,
  		"pointer_threshold": threshold, "verified_pointer_entries": pointers, "miss_percent": miss,
  		"distribution": distribution, "read_batch": batchSize, "negative_filter_bytes": filterBytes,
-@@ -307,7 +309,7 @@
+@@ -310,7 +312,7 @@
  func quicksilverCheckConfiguration(tb testing.TB, stats map[string]string, leafMiB, filterBytes int) {
  	tb.Helper()
  	if stats["treedb.vlog.read_integrity"] != "verify" ||
@@ -49,7 +49,7 @@
  		memoryBudgetStat(tb, stats, "treedb.process.read_path.outer_leaf.cache.capacity")*4096 != uint64(leafMiB<<20) ||
  		memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.budget_bytes") != uint64((64-leafMiB)<<20) ||
  		leafMiB == 64 && memoryBudgetStat(tb, stats, "treedb.vlog.grouped_frame_cache.capacity") != 0 {
-@@ -568,3 +570,21 @@
+@@ -600,3 +602,21 @@
  		t.Fatal("raw chronology changed")
  	}
  }
@@ -252,7 +252,7 @@
 +    require(actual == set(additions), "unallowed/missing baseline additions")
 +    ignored = git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split("\0")
 +    require(not any(name and Path(name).suffix in SOURCE_SUFFIXES for name in ignored), "unallowed ignored source input")
-+    canonical = {"TreeDB/quicksilver_workflow_bench_test.go": "03df0f39c802ff2f5e4963342482ee06d1af2109a987a424b134251a20d2bb89",
++    canonical = {"TreeDB/quicksilver_workflow_bench_test.go": "8cd0c7f40218a311f22710967e2b6f16c2b5a7ec3375d85bfcb55f636aefc460",
 +                 "TreeDB/memory_budget_bench_test.go": "03b389e475374af7157111b4a8feea72a22124aa4fec5f3342d512ea6cbad462"}
 +    require(manifest["canonical_sources"] == canonical and all(additions[name] == value for name, value in canonical.items()), "wrong canonical harness identity")
 +    for name, expected in additions.items():
@@ -332,7 +332,7 @@
          sub.add_argument("--prepared", type=Path, required=True)
 --- a/scripts/treedb_quicksilver_capture.py
 +++ b/scripts/treedb_quicksilver_capture.py
-@@ -119,12 +119,14 @@
+@@ -169,12 +169,14 @@
  
  
  def check_packet(packet, freeze, process, controls, retained):
@@ -348,7 +348,7 @@
                  "read_keys": reads, "key_bytes": 32, "shared_prefix_bytes": 24, "value_bytes": size,
                  "pointer_threshold": threshold, "verified_pointer_entries": keys if threshold == 1 or size == 4096 else 0,
                  "miss_percent": miss, "distribution": controls["distribution"], "read_batch": batch,
-@@ -177,9 +179,14 @@
+@@ -222,9 +224,14 @@
  def load(args):
      prepared = args.prepared.resolve()
      freeze = memory.load_freeze(prepared, args.freeze_sha256)

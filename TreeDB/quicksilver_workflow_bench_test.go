@@ -141,6 +141,9 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 			}
 		})
 	}
+	// Observe the complete lifetime after checkpoint_4 phase capture. This
+	// includes quantile completion, channel synchronization, join and phase reporting.
+	concurrent.ElapsedNS = time.Since(reader.start).Nanoseconds()
 	if len(ackSamples) != updates/1000 {
 		b.Fatal("incomplete update acknowledgements")
 	}
@@ -415,6 +418,7 @@ type quicksilverConcurrentResult struct {
 }
 
 type quicksilverReader struct {
+	start   time.Time
 	stop    atomic.Bool
 	failed  atomic.Bool
 	started chan error
@@ -424,11 +428,10 @@ type quicksilverReader struct {
 }
 
 func quicksilverStartReader(get func([]byte) ([]byte, error), keys, size, capacity int) *quicksilverReader {
-	r := &quicksilverReader{started: make(chan error, 1), done: make(chan quicksilverConcurrentResult, 1)}
+	r := &quicksilverReader{start: time.Now(), started: make(chan error, 1), done: make(chan quicksilverConcurrentResult, 1)}
 	go func() {
 		result := quicksilverConcurrentResult{API: "owned Get", Readers: 1, KeyDomain: "present even keys; permutation 7919", Generations: []int{0, 1}, Stride: quicksilverLatencyStride, Capacity: capacity, Samples: make([]int64, 0, capacity)}
 		key, old, updated := make([]byte, 32), make([]byte, size), make([]byte, size)
-		start := time.Now()
 		announced := false
 		for !r.stop.Load() {
 			id := int(result.Reads * 7919 % uint64(keys))
@@ -461,7 +464,6 @@ func quicksilverStartReader(get func([]byte) ([]byte, error), keys, size, capaci
 		if !announced {
 			r.started <- fmt.Errorf("concurrent reader did not validate first read: %s", result.Error)
 		}
-		result.ElapsedNS = time.Since(start).Nanoseconds()
 		result.P99NS, result.P999NS = quicksilverQuantile(result.Samples, .99), quicksilverQuantile(result.Samples, .999)
 		result.FullValuesValidated = result.Error == "" && result.Reads > 0
 		if result.Error != "" {
@@ -477,7 +479,12 @@ func quicksilverConcurrentValid(value, old, updated []byte) bool {
 }
 
 func (r *quicksilverReader) finish() quicksilverConcurrentResult {
-	r.once.Do(func() { r.stop.Store(true); r.result = <-r.done; r.result.Joined = true })
+	r.once.Do(func() {
+		r.stop.Store(true)
+		r.result = <-r.done
+		r.result.Joined = true
+		r.result.ElapsedNS = time.Since(r.start).Nanoseconds()
+	})
 	return r.result
 }
 
@@ -562,6 +569,31 @@ func TestQuicksilverUpdateReader(t *testing.T) {
 	result = r.finish()
 	if result.Error != "concurrent sample capacity exceeded" || !result.Joined {
 		t.Fatal("overflow accepted", result)
+	}
+	// A blocked owned Get keeps finish blocked until the reader completes. The
+	// lifetime includes that wait and reader-side quantiles/channel completion.
+	entered, release := make(chan struct{}), make(chan struct{})
+	joined := make(chan quicksilverConcurrentResult, 1)
+	delayed := quicksilverStartReader(func([]byte) ([]byte, error) {
+		close(entered)
+		<-release
+		return old, nil
+	}, 1, 256, 65536)
+	<-entered
+	go func() { joined <- delayed.finish() }()
+	for !delayed.stop.Load() {
+		runtime.Gosched()
+	}
+	select {
+	case <-joined:
+		t.Fatal("joined before Get completed")
+	default:
+	}
+	minimum := time.Since(delayed.start).Nanoseconds()
+	close(release)
+	observed := <-joined
+	if observed.ElapsedNS < minimum || observed.ElapsedNS > time.Since(delayed.start).Nanoseconds() || !observed.Joined {
+		t.Fatal("reader lifetime omitted join", observed)
 	}
 	samples := []int64{9, 1, 7}
 	if quicksilverQuantile(samples, .99) != 9 || samples[0] != 9 || samples[1] != 1 {

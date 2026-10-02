@@ -91,11 +91,22 @@ def check_update_observations(packet, updates, retained):
                    type(reader["p99_ns"]) is int and type(reader["p999_ns"]) is int and
                    reader["p99_ns"] == quantile(raw, .99) and reader["p999_ns"] == quantile(raw, .999) and
                    max(raw) <= reader["max_ns"] <= reader["elapsed_ns"], "invalid concurrent read tails")
-    memory.require(reader["elapsed_ns"] >= sum(phase["elapsed_ns"] for phase in packet["phases"][4:11]), "concurrent reader missed update/checkpoint interval")
+    memory.require(reader["elapsed_ns"] >= sum(phase["elapsed_ns"] for phase in packet["phases"][4:12]), "concurrent reader missed update/checkpoint interval")
     check_io(packet["process_io"], retained)
     memory.require(set(packet["phase_process_io"]) == set(PHASES), "incomplete phase process IO")
-    for pair in packet["phase_process_io"].values():
+    process = packet["process_io"]
+    previous = process["before"]
+    for name in PHASES:
+        pair = packet["phase_process_io"][name]
         check_io(pair, retained)
+        memory.require(pair["before"]["supported"] == process["before"]["supported"], "incoherent phase/process IO support")
+        if previous["supported"]:
+            for counter in process["before"]["counters"]:
+                memory.require(counter in pair["before"]["counters"] and counter in pair["after"]["counters"] and
+                               previous["counters"][counter] <= pair["before"]["counters"][counter] <=
+                               pair["after"]["counters"][counter] <= process["after"]["counters"][counter],
+                               "uncontained/chronologically reversed phase IO: " + counter)
+        previous = pair["after"]
 
 
 def extension_negative_packets(packet):
@@ -115,7 +126,46 @@ def extension_negative_packets(packet):
         wrong = copy.deepcopy(packet); wrong["concurrent_owned_reads"][key] = value; cases.append(wrong)
     wrong = copy.deepcopy(packet); wrong["phase_process_io"].pop(PHASES[0]); cases.append(wrong)
     wrong = copy.deepcopy(packet); wrong["process_io"]["before"] = {"supported": False, "counters": {"rchar": 0}}; cases.append(wrong)
+    wrong = copy.deepcopy(packet)
+    wrong["concurrent_owned_reads"]["elapsed_ns"] = sum(phase["elapsed_ns"] for phase in packet["phases"][4:11])
+    cases.append(wrong)
+    wrong = copy.deepcopy(packet)
+    wrong["phase_process_io"][PHASES[4]]["before"]["supported"] = not wrong["process_io"]["before"]["supported"]
+    cases.append(wrong)
+    # Coherent supported fixtures isolate containment/chronology rejection even
+    # on Darwin, where actual observations are explicitly unsupported.
+    for before, after in ((1000, 1001), (0, 1)):
+        wrong = copy.deepcopy(packet)
+        names = ("rchar", "wchar", "syscr", "syscw", "read_bytes", "write_bytes", "cancelled_write_bytes")
+        wrong["process_io"] = {"before": {"supported": True, "counters": dict.fromkeys(names, 0)},
+                               "after": {"supported": True, "counters": dict.fromkeys(names, 100)}}
+        for i, name in enumerate(PHASES):
+            wrong["phase_process_io"][name] = {
+                "before": {"supported": True, "counters": dict.fromkeys(names, i * 2 + 2)},
+                "after": {"supported": True, "counters": dict.fromkeys(names, i * 2 + 3)}}
+        pair = wrong["phase_process_io"][PHASES[6]]
+        pair["before"]["counters"]["rchar"], pair["after"]["counters"]["rchar"] = before, after
+        cases.append(wrong)
+    if "configuration" in packet:
+        for key, value in packet["configuration"].items():
+            wrong = copy.deepcopy(packet)
+            wrong["configuration"][key] = 1 if type(value) is bool else float(value)
+            cases.append(wrong)
+        wrong = copy.deepcopy(packet); wrong["configuration"]["unexpected"] = True; cases.append(wrong)
+        wrong = copy.deepcopy(packet); del wrong["configuration"]["command_wal"]; cases.append(wrong)
     return cases
+
+
+def check_configuration(configuration, leaf):
+    expected = {
+        "command_wal": True, "command_wal_stats_scan": True, "keep_recent": 10000, "flush_threshold": 64 << 20,
+        "outer_leaves_in_value_log": True, "leaf_prefix_compression": True, "columnar_leaves": True, "packed_value_ptr": True,
+        "leaf_cache_entries": leaf * (1 << 20) // 4096 if leaf else -1,
+        "background_checkpoint_interval": -1, "background_checkpoint_idle_duration": -1, "max_wal_bytes": -1,
+        "background_index_vacuum_interval": -1, "disable_background_prune": True}
+    memory.require(type(configuration) is dict and set(configuration) == set(expected), "wrong canonical option keys")
+    for key, value in expected.items():
+        memory.require(type(configuration[key]) is type(value) and configuration[key] == value, "wrong canonical option: " + key)
 
 
 def check_packet(packet, freeze, process, controls, retained):
@@ -141,12 +191,7 @@ def check_packet(packet, freeze, process, controls, retained):
                 "binary_sha256": freeze["identity"]["binary_sha256"], "process_id": process["pid"], "process_argv": process["argv"]}
     for key, value in expected.items():
         memory.require(type(packet.get(key)) is type(value) and packet[key] == value, "wrong/missing canonical field: " + key)
-    memory.require(packet["configuration"] == {
-        "command_wal": True, "command_wal_stats_scan": True, "keep_recent": 10000, "flush_threshold": 64 << 20,
-        "outer_leaves_in_value_log": True, "leaf_prefix_compression": True, "columnar_leaves": True, "packed_value_ptr": True,
-        "leaf_cache_entries": leaf * (1 << 20) // 4096 if leaf else -1,
-        "background_checkpoint_interval": -1, "background_checkpoint_idle_duration": -1, "max_wal_bytes": -1,
-        "background_index_vacuum_interval": -1, "disable_background_prune": True}, "wrong canonical options")
+    check_configuration(packet["configuration"], leaf)
     actual_env = run_environment(freeze, controls)
     env_hash = hashlib.sha256("\0".join(sorted(key + "=" + value for key, value in actual_env.items())).encode()).hexdigest()
     memory.require(process["environment"] == actual_env and packet["environment_sha256"] == env_hash, "wrong canonical environment")
