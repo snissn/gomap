@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import capture
 
@@ -77,7 +78,7 @@ class CaptureTests(unittest.TestCase):
         freeze, packets, rows = self.fixture()
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
-            freeze['environment'] = dict(capture.RUNTIME_ENV)
+            freeze['environment'] = capture.normalized_environment({'TMPDIR': '/frozen/database-filesystem', 'PATH': '/frozen/toolchain/bin', 'HOME': '/frozen/home', 'CC': 'clang'})
             (output / 'freeze.json').write_text(json.dumps(freeze))
             (output / 'stdout.log').write_text(self.log(packets, rows))
             (output / 'stderr.log').write_text('independent engine diagnostics\n')
@@ -88,7 +89,10 @@ class CaptureTests(unittest.TestCase):
             record = dict(complete=True, returncode=0, source_before=source, source_after=source,
                           prepared=str(output), freeze_sha256=capture.digest(output / 'freeze.json'),
                           binary_sha256=freeze['binary_sha256'], family='writes', pilot=False, small_flush=False,
-                          grant='synthetic-only', environment=freeze['environment'],
+                          grant='synthetic-only', environment=dict(freeze['environment'],
+                              TREEDB_ALGORITHM_RUNTIME_HEAD=freeze['runtime_head'],
+                              TREEDB_ALGORITHM_FREEZE_FILE=str(output / 'freeze.json'),
+                              TREEDB_ALGORITHM_PILOT='0', TREEDB_ALGORITHM_SMALL_FLUSH='0'),
                           command=capture.execution_command('writes', output / 'algorithm-work.test'),
                           stdout_sha256=capture.digest(output / 'stdout.log'), stderr_sha256=capture.digest(output / 'stderr.log'))
             (output / 'execution.json').write_text(json.dumps(record))
@@ -104,10 +108,44 @@ class CaptureTests(unittest.TestCase):
                 (output / 'execution.json').write_text(json.dumps(changed))
                 with self.assertRaises(ValueError):
                     capture.validate_capture(output, freeze)
-            changed = dict(record, environment=dict(freeze['environment'], GOGC='off'))
+            for name in ('TMPDIR', 'PATH', 'HOME', 'CC', 'TREEDB_ALGORITHM_FREEZE_FILE'):
+                for altered in (dict(record['environment'], **{name: '/changed'}),
+                                {k: v for k, v in record['environment'].items() if k != name}):
+                    (output / 'execution.json').write_text(json.dumps(dict(record, environment=altered)))
+                    with self.subTest(environment=name), self.assertRaises(ValueError):
+                        capture.validate_capture(output, freeze)
+            changed = dict(record, environment=dict(record['environment'], GOGC='off'))
             (output / 'execution.json').write_text(json.dumps(changed))
             with self.assertRaises(ValueError):
                 capture.validate_capture(output, freeze)
+
+    def test_changed_base_environment_rejected_before_process(self):
+        freeze, _, _ = self.fixture()
+        freeze.update(inputs={'synthetic.go': 'a'*64}, go_environment={'GOARCH': 'arm64'},
+                      modules={'synthetic': {}}, capture_sha256='a'*64,
+                      overlay_generator_sha256='a'*64, complete=True)
+        base = capture.normalized_environment({'GOROOT': '/frozen/compiler',
+                    'TMPDIR': '/frozen/database-filesystem', 'GOTMPDIR': '/frozen/build-temp',
+                    'PATH': '/frozen/bin', 'HOME': '/frozen/home', 'CC': 'clang'})
+        freeze['environment'] = base
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = Path(temporary) / 'prepared'
+            prepared.mkdir()
+            (prepared / 'algorithm-work.test').write_bytes(b'synthetic-not-executable')
+            freeze['binary_sha256'] = capture.digest(prepared / 'algorithm-work.test')
+            (prepared / 'freeze.json').write_text(json.dumps(freeze))
+            for name in ('TMPDIR', 'GOTMPDIR', 'PATH', 'HOME', 'CC'):
+                altered = dict(base, **{name: '/changed'})
+                argv = ['capture.py', 'capture', '--source', temporary,
+                        '--output', str(Path(temporary) / name), '--prepared', str(prepared),
+                        '--grant', 'synthetic-only']
+                with self.subTest(environment=name), mock.patch('sys.argv', argv), \
+                     mock.patch.dict(capture.os.environ, altered, clear=True), \
+                     mock.patch.object(capture, 'identity', return_value=capture.frozen_identity(freeze)), \
+                     mock.patch.object(capture.subprocess, 'run') as process:
+                    with self.assertRaisesRegex(ValueError, 'changed since preparation'):
+                        capture.main()
+                    process.assert_not_called()
 
     def test_runtime_environment_is_normalized_and_architectures_recorded(self):
         normal = capture.normalized_environment({'GOGC': 'off', 'GODEBUG': 'cpu.all=off',

@@ -79,3 +79,11 @@ Final decision collection needs repeated fresh-process serial cohorts, independe
 Persistent deltas need reproducible whole-leaf materialization dominance after eligible existing checkpoint/coalescing controls, plus a design preserving overlay reads/scans, captured base/delta generation pins, acknowledged-LSN replay, sealed checkpoint closure, and reachability-based GC. Shared traversal needs actual internal visit reduction on naturally supplied batches and profiles showing that repeated internal work materially limits the equivalent owned/callback route. Both require a stable measured improvement target and allocation/read-tail guardrails before the coordinator activates a separate durable implementation child and updates the parent edges. Eligible children execute in this graph.
 
 A negative decision requires measured cause/cost and a concrete revisit threshold. Counter opportunity alone, zero eligible backlog, noisy timing, or unmeasured capacity cannot close the decision as no-go. This harness makes no present go/no-go or speedup claim.
+
+The freeze binds the complete normalized build/base environment, including
+path, temporary-directory, home and forwarded compiler settings. Capture
+requires that entire base environment to match preparation, then records the
+complete actual subprocess environment with the four declared fixture controls.
+Validation rejects changed or omitted path/compiler settings and controls.
+Earlier pilot packets keep their original identities; this stronger provenance
+contract requires fresh preparation before full collection.
