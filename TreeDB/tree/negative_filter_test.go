@@ -50,6 +50,18 @@ func TestNegativeFilterPointEntrancesNeverDescend(t *testing.T) {
 	}
 }
 
+func TestNegativeFilterSetRootDropsCoverage(t *testing.T) {
+	tr := New(nil, nil, 99) // Exact descent into the new root fails on the missing pager.
+	tr.SetNegativeFilter(NewNegativeFilter(1024))
+	tr.SetRoot(100)
+	if tr.negativeFilter != nil {
+		t.Fatal("SetRoot retained coverage of another root")
+	}
+	if _, err := tr.GetEntry([]byte("new-root-key")); err == nil || errors.Is(err, ErrKeyNotFound) {
+		t.Fatal("uncovered root did not attempt exact descent", err)
+	}
+}
+
 func TestNegativeFilterMonotonicConcurrentAndBounded(t *testing.T) {
 	f := NewNegativeFilter(2048)
 	keys := [][]byte{nil, {}, {0, 255, 0}, bytes.Repeat([]byte("x"), NegativeFilterMaxKeyBytes)}

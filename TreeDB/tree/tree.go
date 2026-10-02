@@ -418,6 +418,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 
 // SetRoot updates the root page ID.
 func (t *Tree) SetRoot(root uint64) {
+	t.negativeFilter = nil
 	t.rootPageID = root
 }
 
