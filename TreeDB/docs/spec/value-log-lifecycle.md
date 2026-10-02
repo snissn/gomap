@@ -17,7 +17,7 @@ Segments must not be deleted based only on age.
 
 The shared compressed-frame decoder limits output to the admitted raw frame
 length, even when the caller supplies a larger scratch buffer. After a
-successful decode into the same starting backing allocation, its returned
+successful non-empty decode into the same starting backing allocation, its returned
 slice preserves the caller's capacity for subsequent mixed-size frames.
 Errors and newly allocated output do not restore capacity from the caller's
 buffer. This is an in-memory reuse contract; it changes no on-disk format,
