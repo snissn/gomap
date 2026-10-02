@@ -1,5 +1,22 @@
 # benchprof
 
+Standalone checkpointed point-read allocation/throughput qualification:
+
+```sh
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB -run '^$' -bench '^BenchmarkDBCheckpointedValueLogGet$' -benchmem -benchtime=1s -count=5
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/db -run '^$' -bench '^BenchmarkGetVersioned$' -benchmem -benchtime=1s -count=5
+```
+
+The public benchmark uses 32,768 keys and 256-byte pointer values, then
+checkpoints before timing so the cached API reaches backend capture. `Get` and
+`GetUnsafe` return owned copies; `GetAppend` reuses caller storage. Backend
+`BenchmarkGetVersioned` measures versioned appends into caller storage. Compare
+identical fixtures and commands on the same host at exact source heads; warm
+reads are the timed boundary. Output is Go benchmark text. Optional Go test
+CPU/allocation profiles must be inspected directly with `go tool pprof`; they
+are not `benchprof_results.json` inputs. No unified-bench artifact schema changes.
+
+
 `BenchmarkDocumentSnapshotGrowthV1` and
 `BenchmarkDocumentSnapshotForegroundV1` use the standalone
 `scripts/treedb_document_snapshot_evidence.sh OUTPUT_DIRECTORY` capture flow.
