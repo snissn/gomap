@@ -795,9 +795,10 @@ func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
 		snapshotRotations := os.Getenv("TREEDB_ALGORITHM_CRASH_SNAPSHOTS") == "true"
 		keys, updates, batchOps := 256, 64, 64
 		if snapshotRotations {
-			keys, updates, batchOps = 2048, 2000, 1000
+			keys, updates, batchOps = 4096, 3000, 1000
 		}
 		d := algorithmFixture(t, algorithmOptions(dir, true, false), keys)
+		fixtureLSN := algorithmUint(algorithmStats(d.Stats()), "treedb.command_wal.live_accepted_max_lsn")
 		for base := 0; base < updates; base += batchOps {
 			batch := d.NewBatchWithSize(batchOps)
 			for i := base; i < base+batchOps; i++ {
@@ -812,7 +813,10 @@ func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
 			if err := batch.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if snapshotRotations {
+			// The last acknowledgment stays in fresh mutable shards. Snapshot
+			// rotations may flush both earlier batches, but background flush
+			// drains only queued work and cannot cover this unrotated batch.
+			if snapshotRotations && base+batchOps < updates {
 				id := (base + batchOps - 1) * 7919 % keys
 				if err := algorithmSnapshotCheckAndClose(d.AcquireSnapshot(), algorithmKey(id*2), id, 1); err != nil {
 					t.Fatal(err)
@@ -820,7 +824,15 @@ func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
 			}
 		}
 		stats := algorithmStats(d.Stats())
-		if algorithmUint(stats, "treedb.command_wal.live_accepted_max_lsn") <= algorithmUint(stats, "treedb.command_wal.applied_lsn") {
+		acknowledgedBatches := uint64(1)
+		if snapshotRotations {
+			acknowledgedBatches = 3
+		}
+		acceptedLSN := algorithmUint(stats, "treedb.command_wal.live_accepted_max_lsn")
+		if acceptedLSN != fixtureLSN+acknowledgedBatches {
+			t.Fatalf("replay acknowledgment count: accepted=%d fixture=%d batches=%d", acceptedLSN, fixtureLSN, acknowledgedBatches)
+		}
+		if acceptedLSN <= algorithmUint(stats, "treedb.command_wal.applied_lsn") {
 			t.Fatal("fixture checkpointed acknowledged updates before crash")
 		}
 		os.Exit(0)
@@ -848,7 +860,7 @@ func TestAlgorithmWorkAcknowledgedReplay(t *testing.T) {
 			}()
 			keys, updates := 256, 64
 			if snapshotRotations {
-				keys, updates = 2048, 2000
+				keys, updates = 4096, 3000
 			}
 			algorithmVerify(t, d, keys, updates)
 			stats := algorithmStats(d.Stats())

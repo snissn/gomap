@@ -60,8 +60,13 @@ report the observed gates and a concrete revisit workload/threshold.
 The #4916 focused schema-selection test failed on the old capture validator;
 the public snapshot cleanup test failed to compile before its helper existed.
 The replay test retains its original no-rotation case and adds two matched
-1,000-op snapshot boundaries before process exit without checkpoint/DB close.
-This proves process-crash replay, not power-loss durability.
+1,000-op snapshot boundaries, then a third acknowledged 1,000-op batch without
+rotation before process exit without checkpoint/DB close. Background flush may
+apply the first two batches; the final batch remains in fresh mutable shards
+below the fixed flush threshold, outside the immutable queue. The child checks
+all three acknowledgment LSNs and a strictly outstanding final prefix; reopen
+validates all 3,000 distinct updates over 4,096 keys plus every unaffected value
+and interleaved miss. This proves process-crash replay, not power-loss durability.
 
 ## Measurements and units
 
