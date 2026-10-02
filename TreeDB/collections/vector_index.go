@@ -1681,6 +1681,11 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoadedWithMutationHeld() (
 				if err != nil {
 					return nil, err
 				}
+				// Recovery may publish buffered documents and advance healthy siblings.
+				generation, err = c.currentVectorIndexDocumentGenerationForAdmission()
+				if err != nil {
+					return nil, err
+				}
 				if rebuilt == nil {
 					rebuilt = make(map[string]struct{}, 1)
 				}
@@ -1700,6 +1705,11 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoadedWithMutationHeld() (
 				return nil, fmt.Errorf("%w: partition live carrier %q load failed: %s", ErrVectorIndexPartitionLiveUnavailableV1, def.Name, status.ExactFallbackReason)
 			}
 			_, err := c.buildVectorIndexPreparedWithMutationState(vectorIndexOptionsFromDefinition(def), true, true, true, true, true)
+			if err != nil {
+				return nil, err
+			}
+			// Recovery may publish buffered documents and advance healthy siblings.
+			generation, err = c.currentVectorIndexDocumentGenerationForAdmission()
 			if err != nil {
 				return nil, err
 			}

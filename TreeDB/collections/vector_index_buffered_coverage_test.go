@@ -355,8 +355,8 @@ func TestBufferedNativeCoveragePrefixRepairPreservesOwnedTailAndRequeue(t *testi
 func TestBufferedNativeCoveragePublicInsertRetainsLoadedBaseline(t *testing.T) {
 	for _, buffered := range []bool{false, true} {
 		for _, indexed := range []bool{false, true} {
-			for _, invalidSibling := range []bool{false, true} {
-				if invalidSibling && !buffered {
+			for _, invalidSibling := range []string{"none", "first", "second"} {
+				if invalidSibling != "none" && !buffered {
 					continue
 				}
 				t.Run(fmt.Sprintf("buffered=%v/indexed=%v/invalid-sibling=%v", buffered, indexed, invalidSibling), func(t *testing.T) {
@@ -393,35 +393,50 @@ func TestBufferedNativeCoveragePublicInsertRetainsLoadedBaseline(t *testing.T) {
 						t.Fatal(err)
 					}
 					first, second := col.registeredVectorIndex("first"), col.registeredVectorIndex("second")
-					before := first.Stats()
-					if invalidSibling {
-						second.invalidateSourceDocumentRoots()
+					healthy, invalid := first, second
+					healthyName := "first"
+					if invalidSibling == "first" {
+						healthy, invalid, healthyName = second, first, "second"
+					}
+					before := healthy.Stats()
+					beforeGeneration, err := col.currentVectorIndexDocumentGeneration()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if invalidSibling != "none" {
+						invalid.invalidateSourceDocumentRoots()
 					}
 					if _, err := col.InsertBatch([][]byte{[]byte("new-a"), []byte("new-b")}, [][]byte{
 						[]byte(`{"kind":"vector","embedding":[0,1]}`), []byte(`{"kind":"vector","embedding":[0.2,0.8]}`),
 					}); err != nil {
 						t.Fatal(err)
 					}
-					if col.registeredVectorIndex("first") != first {
+					if col.registeredVectorIndex(healthyName) != healthy {
 						t.Fatal("exact-ID notification replaced the retained baseline")
 					}
-					after := first.Stats()
+					after := healthy.Stats()
 					if after.LiveANNFullRebuilds != before.LiveANNFullRebuilds || after.Nodes != before.Nodes+2 {
 						t.Fatalf("notification rebuilt or duplicated valid sibling: before=%+v after=%+v", before, after)
 					}
-					if invalidSibling {
-						if col.registeredVectorIndex("second") == second || second.hasValidSourceDocumentRoots() {
+					if invalidSibling != "none" {
+						if col.registeredVectorIndex(invalidSibling) == invalid || invalid.hasValidSourceDocumentRoots() {
 							t.Fatal("genuinely invalid sibling was certified instead of rebuilt")
+						}
+						if mgr.StatsSnapshot().PendingDocuments != 0 {
+							t.Fatal("invalid sibling recovery did not publish pending documents")
 						}
 					} else if col.registeredVectorIndex("second") != second {
 						t.Fatal("notification replaced valid second baseline")
 					}
-					if buffered && !invalidSibling && mgr.StatsSnapshot().PendingDocuments == 0 {
+					if buffered && invalidSibling == "none" && mgr.StatsSnapshot().PendingDocuments == 0 {
 						t.Fatal("notification unnecessarily drained public buffer")
 					}
 					generation, err := col.currentVectorIndexDocumentGeneration()
 					if err != nil {
 						t.Fatal(err)
+					}
+					if invalidSibling != "none" && generation <= beforeGeneration {
+						t.Fatal("invalid sibling recovery did not advance document generation")
 					}
 					for _, def := range defs {
 						index := col.registeredVectorIndex(def.Name)
@@ -437,7 +452,7 @@ func TestBufferedNativeCoveragePublicInsertRetainsLoadedBaseline(t *testing.T) {
 					if err := col.Flush(); err != nil {
 						t.Fatal(err)
 					}
-					if mgr.StatsSnapshot().PendingDocuments != 0 || first.Stats().Nodes != after.Nodes {
+					if mgr.StatsSnapshot().PendingDocuments != 0 || healthy.Stats().Nodes != after.Nodes {
 						t.Fatal("publication did not drain cleanly or duplicated graph nodes")
 					}
 				})
