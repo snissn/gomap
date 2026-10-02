@@ -1,0 +1,21 @@
+{
+  "head": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+  "base": "784b0170f228f1d617727c49cee9606348b76d9c",
+  "workflow": 36980926766,
+  "attempt1_failed_jobs": {
+    "iterator": 110755033430,
+    "rabitq": 110755033596
+  },
+  "attempt2_pass_jobs": {
+    "iterator": 110772512975,
+    "rabitq": 110772515871
+  },
+  "iterator_retry2_paired_delta_percent": 2.54,
+  "iterator_retry2_bytes_op": 112,
+  "iterator_retry2_allocations_op": 2,
+  "root_control_paired_delta_percent": 1.539495609321495,
+  "classification": "Candidate failures unreproduced in bounded controls; no proven-flake claim; one failed-only retry passed both; original failures preserved",
+  "full_input_inventory_uncompressed_sha256": "3d901a661787d309d0aa0780a68c19d4a3cb8c5641967705f0c5149f791477e0",
+  "all_current_checks_success": 50,
+  "merge": "504135227828db5a53a9b18da4fde8e588ac813b"
+}

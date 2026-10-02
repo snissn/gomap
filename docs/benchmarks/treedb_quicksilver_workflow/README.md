@@ -1,8 +1,9 @@
 # Canonical public TreeDB workflow
 
-For the original-product and maintenance-control comparison, use the
-[reviewed baseline-only construction](baseline/README.md) and its separate
-absent-filter schema. Its Mac preparation is construction evidence only.
+For the original-product and maintenance-control comparison, review the
+[baseline runtime source update](baseline/runtime/README.md) and its separate
+absent-filter schema. The earlier [baseline construction](baseline/README.md)
+remains historical evidence and does not satisfy the current full runtime gate.
 
 `BenchmarkQuicksilverWorkflow` is the dependency-free TreeDB workflow for the
 Quicksilver investigation. It qualifies local engine behavior; it does not
@@ -54,7 +55,11 @@ reported separately. File length is not filesystem allocated-block size.
 
 The memory-budget preparation compiles the same TreeDB package test executable,
 including this harness, and retains the actual source/dependency/toolchain/
-overlay/binary freeze. The canonical driver requires its harness to be an
+overlay/binary freeze. Preparation fixes the runtime controls to the shared
+memory-capture contract (including GOMEMLIMIT=2GiB), forwards declared
+TMPDIR/GOTMPDIR metadata, and full loading rejects missing/changed fixed
+controls. Compare the complete campaign base environments and actual
+filesystem/device placement across products and cohorts. The canonical driver requires its harness to be an
 actual compiled input. It preserves the build environment, records a separate
 explicit run environment for its four workload controls, and hashes both raw
 stdout and stderr. No second compiler or generic benchmark framework is added.
@@ -62,7 +67,7 @@ stdout and stderr. No second compiler or generic benchmark framework is added.
 For a bounded smoke, use an explicit compatible Go binary and new output dirs:
 
 ```sh
-GOMAXPROCS=2 GOMEMLIMIT=1GiB python3 scripts/treedb_memory_budget_capture.py prepare \
+GOMAXPROCS=2 GOMEMLIMIT=2GiB python3 scripts/treedb_memory_budget_capture.py prepare \
   --source-root "$PWD" --output /tmp/quicksilver-prepared \
   --go /absolute/path/to/go1.26/bin/go \
   --leaf-mib 32 --value-bytes 4096 --threshold 1024 --pilot

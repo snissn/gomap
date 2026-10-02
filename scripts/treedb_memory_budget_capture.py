@@ -11,10 +11,14 @@ import shutil
 import subprocess
 import tempfile
 import time
+from unittest.mock import patch
 
 from treedb_memory_budget_overlay import COHORTS, generate
 
 HARNESS = "TreeDB/memory_budget_bench_test.go"
+RUNTIME_ENV = {"GOWORK": "off", "GOENV": "off", "GOFLAGS": "", "GOTOOLCHAIN": "local",
+               "GOMAXPROCS": "2", "GOMEMLIMIT": "2GiB", "GOGC": "100", "GODEBUG": "",
+               "GOTRACEBACK": "single", "GORACE": ""}
 PHASES = ["load_sync", "checkpoint", "owned_get_sweep", "reused_append_sweep",
           "read_gc1", "read_gc2", "updates_sync", "update_checkpoint",
           "verify_before_close", "verify_reopen"]
@@ -114,11 +118,11 @@ def compile_inputs(listing, replacements, goroot=None):
 def environment(leaf, value_bytes, threshold, pilot):
     # An explicit small environment avoids publishing ambient credentials and
     # gives the child precisely the environment recorded in the freeze.
-    names = ("PATH", "HOME", "TMPDIR", "GOCACHE", "GOPATH", "GOROOT", "GOMODCACHE",
-             "CC", "CXX", "CGO_ENABLED", "GOMAXPROCS", "GOMEMLIMIT", "GOGC", "GODEBUG")
+    names = ("PATH", "HOME", "TMPDIR", "GOTMPDIR", "GOCACHE", "GOPATH", "GOROOT", "GOMODCACHE",
+             "CC", "CXX", "CGO_ENABLED")
     env = {name: os.environ[name] for name in names if name in os.environ}
-    env.update(GOWORK="off", GOENV="off", GOFLAGS="", GOTOOLCHAIN="local",
-               TREEDB_MEMORY_LEAF_MIB=str(leaf), TREEDB_MEMORY_VALUE_BYTES=str(value_bytes),
+    env.update(RUNTIME_ENV)
+    env.update(TREEDB_MEMORY_LEAF_MIB=str(leaf), TREEDB_MEMORY_VALUE_BYTES=str(value_bytes),
                TREEDB_MEMORY_POINTER_THRESHOLD=str(threshold), TREEDB_MEMORY_PILOT="1" if pilot else "0")
     return env
 
@@ -193,6 +197,8 @@ def load_freeze(prepared, expected):
     require(freeze["schema"] == "memory-budget-freeze-v1", "wrong freeze schema")
     if not freeze["pilot"]:
         require(expected and digest(prepared / "freeze.json") == expected, "missing/wrong externally recorded freeze SHA")
+        require(all(freeze["environment"].get(key) == value for key, value in RUNTIME_ENV.items()),
+                "retained cohort requires fixed runtime controls")
     elif expected:
         require(digest(prepared / "freeze.json") == expected, "wrong pilot freeze SHA")
     check_identity(current_freeze_identity(prepared, freeze), freeze["identity"])
@@ -312,9 +318,31 @@ def validate(args):
 
 
 def self_check():
+    with patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "HOME": "/tmp/home", "TMPDIR": "/tmp/campaign",
+                                 "GOTMPDIR": "/tmp/go", "GOGC": "off", "GOMAXPROCS": "16",
+                                 "GOMEMLIMIT": "8GiB", "GODEBUG": "asyncpreemptoff=1",
+                                 "GOTRACEBACK": "all", "GORACE": "history_size=7", "PRIVATE_TOKEN": "excluded"}, clear=True):
+        first = environment(0, 256, 1024, False)
+        second = environment(64, 4096, 1, False)
+    for env in (first, second):
+        require(all(env.get(key) == value for key, value in RUNTIME_ENV.items()), "ambient runtime controls forwarded")
+        require(env["TMPDIR"] == "/tmp/campaign" and env["GOTMPDIR"] == "/tmp/go" and "PRIVATE_TOKEN" not in env,
+                "explicit path/credential allowlist drift")
+    cohort_keys = {key for key in first if key.startswith("TREEDB_MEMORY_")}
+    require({key: value for key, value in first.items() if key not in cohort_keys} ==
+            {key: value for key, value in second.items() if key not in cohort_keys}, "cohort base environment drift")
     # Identity and packet stream checks use the same fail-closed paths as runs.
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        for key in RUNTIME_ENV:
+            for env in ({**RUNTIME_ENV, key: "changed"}, {name: value for name, value in RUNTIME_ENV.items() if name != key}):
+                write_json(root / "freeze.json", {"schema": "memory-budget-freeze-v1", "pilot": False, "environment": env})
+                try:
+                    load_freeze(root, digest(root / "freeze.json"))
+                except ValueError as error:
+                    require(str(error) == "retained cohort requires fixed runtime controls", "wrong runtime rejection")
+                else:
+                    raise AssertionError("changed/omitted runtime control accepted: " + key)
         (root / "input.go").write_text("package input\n")
         listing = json.dumps({"Dir": directory, "GoFiles": ["input.go"]})
         original = compile_inputs(listing, {})

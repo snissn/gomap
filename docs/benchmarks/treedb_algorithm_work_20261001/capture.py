@@ -29,6 +29,16 @@ def normalized_environment(inherited):
     return dict({k: v for k, v in inherited.items() if k in allowed}, **RUNTIME_ENV)
 
 
+def capture_environment(freeze, prepared, pilot, small):
+    env = freeze.get('environment')
+    if not isinstance(env, dict) or env != normalized_environment(env):
+        raise ValueError('wrong/incomplete frozen process environment')
+    return dict(env, TREEDB_ALGORITHM_RUNTIME_HEAD=freeze['runtime_head'],
+                TREEDB_ALGORITHM_FREEZE_FILE=str(prepared / 'freeze.json'),
+                TREEDB_ALGORITHM_PILOT='1' if pilot else '0',
+                TREEDB_ALGORITHM_SMALL_FLUSH='1' if small else '0')
+
+
 def frozen_identity(freeze):
     if any(k not in freeze for k in IDENTITY_KEYS):
         raise ValueError('incomplete frozen identity schema')
@@ -206,7 +216,8 @@ def validate_capture(output, freeze):
     if record.get('binary_sha256') != freeze['binary_sha256']:
         raise ValueError('wrong binary identity')
     if (record.get('command') != execution_command(record['family'], Path(record['prepared']) / 'algorithm-work.test')
-            or record.get('environment') != freeze['environment'] or record.get('environment') != RUNTIME_ENV
+            or record.get('environment') != capture_environment(
+                freeze, Path(record['prepared']), record['pilot'], record['small_flush'])
             or not record.get('grant')):
         raise ValueError('wrong execution command/environment/grant')
     if record['source_before'] != frozen_identity(freeze):
@@ -246,7 +257,7 @@ def main():
     go = str(Path(env.get('GOROOT') or subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip()) / 'bin/go')
     overlay = Path(args.overlay).resolve() if args.overlay else None
     before = identity(root, go, env, overlay)
-    freeze = dict(before, source=str(root), environment={k: env[k] for k in RUNTIME_ENV}, complete=False)
+    freeze = dict(before, source=str(root), environment=dict(env), complete=False)
     if args.mode == 'prepare':
         binary = output / 'algorithm-work.test'
         command = [go, 'test', *(['-overlay=' + str(overlay)] if overlay else []), '-c', '-o', str(binary), './TreeDB']
@@ -255,13 +266,12 @@ def main():
         freeze = json.loads((prepared / 'freeze.json').read_text())
         binary = prepared / 'algorithm-work.test'
         if (not freeze.get('complete') or frozen_identity(freeze) != before
-                or freeze.get('environment') != {k: env[k] for k in RUNTIME_ENV}
+                or freeze.get('environment') != env
                 or digest(binary) != freeze['binary_sha256']):
             raise ValueError('source/dependency/toolchain/binary changed since preparation')
-        env.update(TREEDB_ALGORITHM_RUNTIME_HEAD=freeze['runtime_head'], TREEDB_ALGORITHM_FREEZE_FILE=str(prepared / 'freeze.json'),
-                   TREEDB_ALGORITHM_PILOT='1' if args.pilot else '0', TREEDB_ALGORITHM_SMALL_FLUSH='1' if args.small_flush else '0')
+        env = capture_environment(freeze, prepared, args.pilot, args.small_flush)
         command = execution_command(args.family, binary)
-    record = dict(command=command, environment={k: env[k] for k in RUNTIME_ENV}, source_before=before, grant=args.grant,
+    record = dict(command=command, environment=dict(env), source_before=before, grant=args.grant,
                   pilot=args.pilot, small_flush=args.small_flush, family=args.family, complete=False)
     if args.mode == 'capture':
         record.update(prepared=str(prepared), freeze_sha256=digest(prepared / 'freeze.json'))
