@@ -1,0 +1,20 @@
+=== RUN   TestNegativeLookupQualificationFixture
+2026/10/01 18:33:05 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=3935 ratio=0.030
+    negative_lookup_test.go:118: payload=compressible256 enabled=false
+    negative_lookup_test.go:119: stage=initialLoadCheckpoint idx=0x38301655c3f0 seq=2 userRoot=9 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:121: stage=after64WriteSync idx=0x38301655c3f0 seq=2 userRoot=9 systemRoot=3 filter=0x0 activeBytes=0
+2026/10/01 18:33:05 treedb: value-log dict published class=single_value dict_id=17395127312747225772 k=16 payload_ratio=0.027 total_ratio=0.031
+    negative_lookup_test.go:121: stage=afterUpdateCheckpoint idx=0x38301655c3f0 seq=3 userRoot=48 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:126: stage=afterPublicGC idx=0x38301655c3f0 seq=4 userRoot=48 systemRoot=3 filter=0x0 activeBytes=0
+2026/10/01 18:33:06 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=3956 ratio=0.030
+    negative_lookup_test.go:118: payload=compressible256 enabled=true
+    negative_lookup_test.go:119: stage=initialLoadCheckpoint idx=0x38301b91a380 seq=2 userRoot=9 systemRoot=3 filter=0x38301b919a80 activeBytes=10240
+    negative_lookup_test.go:121: stage=after64WriteSync idx=0x38301b91a380 seq=2 userRoot=9 systemRoot=3 filter=0x38301b919a80 activeBytes=10240
+2026/10/01 18:33:06 treedb: value-log dict published class=single_value dict_id=3352450148154684535 k=32 payload_ratio=0.028 total_ratio=0.031
+    negative_lookup_test.go:121: stage=afterUpdateCheckpoint idx=0x38301b91a380 seq=3 userRoot=48 systemRoot=3 filter=0x38301b919a80 activeBytes=10240
+    negative_lookup_test.go:126: stage=afterPublicGC idx=0x38301b91a380 seq=4 userRoot=48 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:128: metadata-only GC lost main-root coverage
+--- FAIL: TestNegativeLookupQualificationFixture (1.43s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	1.433s
+FAIL

@@ -1,0 +1,2574 @@
+{
+  "measured_reviewed_runtime": "9ab02b48ce2397410940a7e42cc22bbf95a96c5a",
+  "measured_base": "a68a84c7195e0c5d8c339343a385b40acf818d03",
+  "integrated_main": "c9a00bb631d34b62669ec1d3f4437e1c8c5df845",
+  "integration_commit": "a7d6b68d2877294e9c92512bdd06cdbeb3951512",
+  "main_delta_paths": [
+    "TreeDB/docs/spec/fixed-peer-tcp-runtime-v1.md",
+    "TreeDB/docs/spec/verification.md",
+    "TreeDB/internal/raftfsm/raft_snapshot.go",
+    "TreeDB/internal/raftfsm/raft_snapshot_capture_v1_test.go",
+    "TreeDB/internal/raftfsm/snapshot_capture_files_v1.go",
+    "TreeDB/internal/raftfsm/snapshot_interference_v1_test.go",
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go",
+    "TreeDB/nativewire/peer_request_lifetime_v1_test.go",
+    "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go",
+    "TreeDB/nativewire/vector_partition_split_source_insert_authenticated_v1_test.go"
+  ],
+  "identical_after_main_integration": {
+    "AGENTS.md": {
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+      "git_blob": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2"
+    },
+    "CONTRIBUTING.md": {
+      "sha256": "a20ed8c10b32b4a0caed9d5b962e2bab654e268c9562871154d471c9dbec636e",
+      "git_blob": "567ad3164e25ac1d333ece2a9bf843bc4e8e8190"
+    },
+    "TreeDB/AGENTS.md": {
+      "sha256": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+      "git_blob": "13811b724a980dddad76b3e4c12b6403214b8069"
+    },
+    "TreeDB/caching/append_only_batch_direct_arena_test.go": {
+      "sha256": "29e9f5d18883c18f81fcfcdb3da0e2b0002b1f418ba1124a6e558489930a1a8d",
+      "git_blob": "2dc86de0809c1ba2acaf5f1daa80aefd8ec5e212"
+    },
+    "TreeDB/caching/append_only_direct_writer_pool_test.go": {
+      "sha256": "53b973ab1cd59a997d6bde78e12af891e73d95d6328983ea6d009f0255d9a6d1",
+      "git_blob": "06f734c81179432e66ec4969e3a5f4e4af580014"
+    },
+    "TreeDB/caching/append_only_hint_test.go": {
+      "sha256": "8270b133ba765982f7c4546f9ff448db825c72742dddb0e3211e78e952adcf0e",
+      "git_blob": "8a6f2a960ebf51f0d38afc5e256ad6462ceb642a"
+    },
+    "TreeDB/caching/append_only_snapshot_flush_test.go": {
+      "sha256": "b78c28e2ae991c0f02294a0936687db121e04d87c05a1d4953a214f24357a87c",
+      "git_blob": "b7833a97951e1e79abdad71f2d5e09fb51c7ecdc"
+    },
+    "TreeDB/caching/backend_storage_layout_test.go": {
+      "sha256": "5daeec1191c6ef1686ab2612e1fadf47056fa69feb58a44e7f9fb015a49bbe51",
+      "git_blob": "fad1e441ab69525ae0b75089d0c57300a5c228b0"
+    },
+    "TreeDB/caching/backpressure.go": {
+      "sha256": "2b849f71dbc4b10c1f1e0200c74d670154510e6424569893a2ac05e00f84f5d4",
+      "git_blob": "c3ca8ef419c0f78ab7e25365b7751bb93dad0b20"
+    },
+    "TreeDB/caching/backpressure_component_test.go": {
+      "sha256": "f4a926d5da4f5cb2029b131dfe6deaca02c1f84744b7b44df630fa7ce509cfa8",
+      "git_blob": "3da72a20e55171b37f26f98507538fd5af1b62ac"
+    },
+    "TreeDB/caching/backpressure_invariants_test.go": {
+      "sha256": "fe94eae5dc30921c1d57cf394925a965ab072c24a068a0ed77049086aec16b29",
+      "git_blob": "7b5720e558bd0d7397cd6703f74920a5c81280fb"
+    },
+    "TreeDB/caching/backpressure_test.go": {
+      "sha256": "7131e2d3faf9670cec39dbbb97cff0bb118c4e974bf107480c0de2450e12edef",
+      "git_blob": "a1cf636c76d4bdbd2d1a959d5019109c3963c41d"
+    },
+    "TreeDB/caching/backpressure_wait_test.go": {
+      "sha256": "eee9b236050a49f2eb93b920792f3055008147a7d782f47ed511a9d6ab9ec281",
+      "git_blob": "2dfae4e53f5b343bc728d0eb931ec697ac7ab4f4"
+    },
+    "TreeDB/caching/batch_arena_budget_test.go": {
+      "sha256": "0e7105dc156a951190d926defef3c85476dfab3bfcbb59a5f2fc682c6555b1f9",
+      "git_blob": "40977994faa6e49fb7d52016446450d910efadd4"
+    },
+    "TreeDB/caching/batch_arena_chunk_cap_test.go": {
+      "sha256": "07988628127179d71153ccce3cb5a4790624fa1c2de455c88b5cc8ab5c3560e2",
+      "git_blob": "b6284fa5b03bc8b5dba641f60c9e438d21ba9e05"
+    },
+    "TreeDB/caching/batch_arena_ownership_test.go": {
+      "sha256": "eb443473b39657eba30c8de0de19411d69ce31db279f777bef0cc6b5cf8ceb89",
+      "git_blob": "c0390b6c73a8b6a20460f02146a774638f9b7823"
+    },
+    "TreeDB/caching/batch_arena_retained_max_test.go": {
+      "sha256": "901df484cfbe92d4880303d3cc7801947cd774f5251fd0e193d6d7126110806c",
+      "git_blob": "aa2c17e412fd46e9a8f63bc957fc5d170ff2e926"
+    },
+    "TreeDB/caching/batch_arena_sizing_test.go": {
+      "sha256": "f3d6e0ade9530d049046825b51f046eea7670c75adcada0aaf48de7b42f622a3",
+      "git_blob": "2dd30043d4cd66733a51a1e625631b8eaa4cd1da"
+    },
+    "TreeDB/caching/batch_aux_pool_test.go": {
+      "sha256": "48b8dc6f1dc231341e59331a048cce28dd99af77ae12db892c549add2adde2ba",
+      "git_blob": "9206f6b87758590c01748f5d067de20bb4f23562"
+    },
+    "TreeDB/caching/batch_followup_test.go": {
+      "sha256": "c395ec57359959e4b90d4bd90d30ad0b5fdba04cec91482ac29fac3720b00c0d",
+      "git_blob": "b4e06be3196d0a23424f4568d0ed216a3eaa5e77"
+    },
+    "TreeDB/caching/batch_ptr_value_arena_test.go": {
+      "sha256": "6201041c6321923fc9adb00e85ecf97c64e12027d4dae90ac13d928bbfdd5e5b",
+      "git_blob": "f7b8dfd9e218a8395e2d582f179bb0848a222438"
+    },
+    "TreeDB/caching/batch_setops_stream_test.go": {
+      "sha256": "a629d82169869bf96de721f2e738e57d0083c8437d5e2f3bd0a437f1c9466865",
+      "git_blob": "5dced8d20404f0c81978212999106f951c524596"
+    },
+    "TreeDB/caching/batch_size_hint_test.go": {
+      "sha256": "672c12184da9db44296357c4de764e7fc480517341ad774a2e0b5ebc606e95b9",
+      "git_blob": "680e146816ca16a0369f6196773574177cb8f927"
+    },
+    "TreeDB/caching/batch_unsynced_vlog_flush_test.go": {
+      "sha256": "cbf03b0f4fbe4f09f545b0dedd2b43c74470c16a771b406e5322e9d0a0df1980",
+      "git_blob": "f8d90cd63dba5a0741d808f4fd4d0137f35d5833"
+    },
+    "TreeDB/caching/bench_test.go": {
+      "sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+      "git_blob": "97f39620d7dcfe744d1c73ff2647a4d8fbcc0511"
+    },
+    "TreeDB/caching/bytes_to_string_safe.go": {
+      "sha256": "36df298276353c367160823020571e330d9b2c3ff4362c9c35e0485ec0f70730",
+      "git_blob": "8bed2b731301788b4df6f96f7644b45ad6672385"
+    },
+    "TreeDB/caching/bytes_to_string_unsafe.go": {
+      "sha256": "f93461eef4064effa2257885494ceee0a261e990618abe1f15f1b64c242cb223",
+      "git_blob": "c025bc168393393d3f8bcdc106ff060c0aab0495"
+    },
+    "TreeDB/caching/checkpoint_parallel_build_test.go": {
+      "sha256": "6f7eb344a51c18626c8332bc9dacd617cfc15d567b1b6f0433a3c1b4fca69d3b",
+      "git_blob": "2079ff04982751cb33e786e12629192115493b9a"
+    },
+    "TreeDB/caching/checkpoint_productivity_stats_test.go": {
+      "sha256": "6030b5129da19e6b756366ab7055c89f7396225b80b1cfe825780faaa2d31128",
+      "git_blob": "4a64870965efdc377f29acee9c064017a7de11a1"
+    },
+    "TreeDB/caching/checkpoint_test.go": {
+      "sha256": "679886071d738d11d4faa42bac3f8d0ce7096e276ff37966768be42b8a814a80",
+      "git_blob": "ff075583b89297a3f81d316b3643fe1046ee0667"
+    },
+    "TreeDB/caching/close_flush_test.go": {
+      "sha256": "e8da8a9cb1c869bfc6348ae43f909793dd8d82cc172d44e6e388d89c5f37e5e1",
+      "git_blob": "90c1f820b185c46f362b4ff4f309b51aa171c7f2"
+    },
+    "TreeDB/caching/command_wal_checkpoint_publish_test.go": {
+      "sha256": "bb0dd0a87cb7321b1850bd234e2a398c4d20e0545585e426b7cc5c926e3c678e",
+      "git_blob": "6ad706531633bc7e4f519ea308d6da9829b7aeaf"
+    },
+    "TreeDB/caching/command_wal_cleanup_test.go": {
+      "sha256": "4ea7cb45ca45437d779486bc62c4476c43edfc63b07d0c62dcb2629884f77265",
+      "git_blob": "921331881a921a9b4caae75fcd6d6e810b9707ac"
+    },
+    "TreeDB/caching/compact_storage_audit_provider_test.go": {
+      "sha256": "7331abe3ece3fb167f781665dc18e2f974237e1aaebd87ea878d2510b9e0ddc9",
+      "git_blob": "b199dca0242a4935345d09791273ded30560cff2"
+    },
+    "TreeDB/caching/component_throughput_bench_test.go": {
+      "sha256": "461c1e38fa05b93162942c8eeeece72358975603a2c6c64cac84cbaa4e505657",
+      "git_blob": "b39ad9372f4eaad1b02e9b1e90936ed41e7d8c39"
+    },
+    "TreeDB/caching/conditional_txn.go": {
+      "sha256": "34a553633a7b4353279e9734e80420086518ff622dd97913033d363b15b06393",
+      "git_blob": "bb75502dc37bf01ebb84862f34247f8014bd6e77"
+    },
+    "TreeDB/caching/conditional_txn_bypass_test.go": {
+      "sha256": "302d1888ff8bd988093240e1e46ed6c6c0f766ed8c1267cafde5a04c411caaad",
+      "git_blob": "16a0d87f92da2b341b4859d8345a3f15d9146d2d"
+    },
+    "TreeDB/caching/db.go": {
+      "sha256": "d0647cc1a2062f258cfa823c08b6c4bbdcaeb50c234f360e298d8ffdf3d6fa74",
+      "git_blob": "6455ed7e6c5b52bafbb98173c9d70a81383b5371"
+    },
+    "TreeDB/caching/db_pool_invariant_test.go": {
+      "sha256": "af4a6a715a0d29a69f7aec72b6c9c4366db16b682d43117e97490d6a1e47ef1c",
+      "git_blob": "6ba53eaa7f5d7b1135ac2caab9cbac376a433add"
+    },
+    "TreeDB/caching/db_test.go": {
+      "sha256": "28ae917fdb3a7512fe11254f770d5c3379b87070b822b7eec0cd54ddd0045376",
+      "git_blob": "d0187aacfee7260499c133ce21f17469166d70f1"
+    },
+    "TreeDB/caching/debug_memtable_rotate.go": {
+      "sha256": "4941e20c75e64465479d261ccc7ac0a1278437d2d265d52b3098c58629a41f48",
+      "git_blob": "33a5ca902aeed2a35f9ea39fe7b5514cfd0fd01a"
+    },
+    "TreeDB/caching/debug_memtable_rotate_test.go": {
+      "sha256": "c5b872968d835f41ba1de1103953fd0e0a22fbe1b438cc52553cf9ae1790f331",
+      "git_blob": "f89e9318964f25088db0b696afdedc7e6a8c41ff"
+    },
+    "TreeDB/caching/debug_vlog_maint.go": {
+      "sha256": "757e9eb4891c1175a576455bf9e3fe4e8cd9f9edd7f8d3bfcff5bf63f595af60",
+      "git_blob": "0d83fd161a9e509c325bf3ed4692f014eb50ca19"
+    },
+    "TreeDB/caching/debug_vlog_shape.go": {
+      "sha256": "af371191cab78f9a8dca17e784047a4229a842e11dcb4a360ccd2b8457e61f6a",
+      "git_blob": "1de2680033a21cb1cfc7ee3449756934ec7d601f"
+    },
+    "TreeDB/caching/debug_vlog_timings.go": {
+      "sha256": "83a00499b48b10e7de3fd6fac8bdc1f2865313c334b24dec27d67b2d99f19167",
+      "git_blob": "9ff4d8e71dc032bb17482124368bf5d1fed21bf6"
+    },
+    "TreeDB/caching/delete_range_stats_test.go": {
+      "sha256": "d3dbe54f1e821d73e2ed1088ef73c718409ac43fe2a2e574dd840f5d0b50744e",
+      "git_blob": "3ad57e13c8c92603bcb39795685c84bf2d317b99"
+    },
+    "TreeDB/caching/delete_range_test.go": {
+      "sha256": "4e5e0a481ffc6682cc4d035c003fcbbf1ce0a708910fff95fba17493eda81625",
+      "git_blob": "7ed4548ecbf7279eb7af1d129d13d147d8d5e6bf"
+    },
+    "TreeDB/caching/dict_k_compression_test.go": {
+      "sha256": "103004fdec63c00d327714ad223088b7e16978054c74a30a0ccc9543208b2f60",
+      "git_blob": "70eb15109a0155fdb0b92d145f3b87301de472ff"
+    },
+    "TreeDB/caching/domain_ingress_test.go": {
+      "sha256": "0966590cad6f9f470bca823e396b837c3a913969bafe424bb0083f28a4c397ff",
+      "git_blob": "22c2719f03a412a7f1c4815dd257ad895957e78a"
+    },
+    "TreeDB/caching/expvar_stats.go": {
+      "sha256": "d81698b4488375a02bd8db534b55b3142d7ee4c13c8561b45e3929350229e3be",
+      "git_blob": "3b9823442add65551eb6d6375e5c3c39d017e560"
+    },
+    "TreeDB/caching/expvar_stats_test.go": {
+      "sha256": "40d8c0fc3b13fe7af765b3d9d5a2f95336e14611d06535e564bde90f47c85937",
+      "git_blob": "9e985875c80bdce7bd4feee19fc3e14549793e7c"
+    },
+    "TreeDB/caching/flush_apply_stats.go": {
+      "sha256": "65f55e220925f7e579fd4739c3cd974621856386a308cc7cc29e993f72e99808",
+      "git_blob": "a40d33a444eef6b893df3cebe71fceb596392ed8"
+    },
+    "TreeDB/caching/flush_apply_stats_test.go": {
+      "sha256": "e41f9023bd50e5659033a3557b28d4da20925da3f9834392e467026191f8dc4b",
+      "git_blob": "3749d6b2531a9c4d2ed8f1950e3321d5d226afda"
+    },
+    "TreeDB/caching/flush_backlog_coalescing.go": {
+      "sha256": "14f46d8af80114c021964d0e327308a68617e13b7ef37044dd13406af8c16e5a",
+      "git_blob": "60a5e1049b7edb6e647d5f92a110006c304ff997"
+    },
+    "TreeDB/caching/flush_backlog_coalescing_test.go": {
+      "sha256": "10eba28b8771debadcc00d77124b4e311e90160e8f2f45b8a132dea4026a5206",
+      "git_blob": "8e06ba88efee9a987016fab795585c80fcb4191a"
+    },
+    "TreeDB/caching/flush_batch_size_test.go": {
+      "sha256": "c663e5bf2d1efeb41a740f5872962001395fe5b5b5166695c2ed4e5d306743f0",
+      "git_blob": "ad35bff1cd9f0edbbe16c1f3ea98e0a2ba388676"
+    },
+    "TreeDB/caching/flush_build_bench_test.go": {
+      "sha256": "72cce13c4340d494d443bb62d43f777933f0519cb9a59b76e27a3ba4c480d10b",
+      "git_blob": "b85ffb502e4e369cc0bbae058c42e02cdbf91913"
+    },
+    "TreeDB/caching/flush_build_compare_bench_test.go": {
+      "sha256": "02568fd60e275058b0811203fc03b131721025f2b6ad62aefb2b7dd71d5f89cd",
+      "git_blob": "4ea914db013f8705167618da8fa0c8cb21e3e297"
+    },
+    "TreeDB/caching/flush_build_runs_test.go": {
+      "sha256": "72c3fa8e259f4437251e5bee3388dbc9d330b1ffb6c309445d643a86980f0b41",
+      "git_blob": "4c19c36a56599a11833255d0c91306da24873a6a"
+    },
+    "TreeDB/caching/flush_concurrency_test.go": {
+      "sha256": "60aa62a33302403166f215df206b08fd971c2caa8bc170331990b4e8b8bcee14",
+      "git_blob": "909d201822511b7c5251a4dee63e5ce3000eb3a8"
+    },
+    "TreeDB/caching/flush_coordinator_test.go": {
+      "sha256": "adf8db73147a2cea8fc3a1a88f5be47cfb8cf42271349c2014594fc53d9dd1e0",
+      "git_blob": "43238045c91f67f479bd07cc269a2a1e33ee547c"
+    },
+    "TreeDB/caching/flush_large_test.go": {
+      "sha256": "03adc0a3c430cae710085b1224e293ddd20e0f89fd42c50a7faad0ef2500db26",
+      "git_blob": "8ebddbc14c625dbc41eeea9502a97ec1bbb8dc6a"
+    },
+    "TreeDB/caching/flush_pool_helpers_test.go": {
+      "sha256": "554d49224cffb97ec465bfea481d321da9215293b803da62c3bfff0e9d0847a5",
+      "git_blob": "4a7614062b9acd50b40988e81bf5973292320338"
+    },
+    "TreeDB/caching/flush_run_planner.go": {
+      "sha256": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858",
+      "git_blob": "aad2590d32de67367f6c107eac8ac29fa7326ef2"
+    },
+    "TreeDB/caching/freelist_bloat_bench_test.go": {
+      "sha256": "fe50b87ea50625b95dff0816aa934558e3506ce1ee69431c2e0fd43afd383ae3",
+      "git_blob": "83d5b449d4d13dd8aa92b510236297ec421e71ae"
+    },
+    "TreeDB/caching/freelist_bloat_pagecount_test.go": {
+      "sha256": "5441b88455d404120991cb6a8904c3a4eb6d734bffd6c98f368b62235fc20865",
+      "git_blob": "75d4ead8e3cb7ed750cb6c716fe1e93d1ad4461a"
+    },
+    "TreeDB/caching/getmany_arena_test.go": {
+      "sha256": "60a5cebe40a8c2d16e817feae60672ee1f8b9455ab8f535e4907551024ad2067",
+      "git_blob": "03078fa893e39284372a71e73c7f03e9345ed90b"
+    },
+    "TreeDB/caching/getmany_view_test.go": {
+      "sha256": "c45f9db660c289564514bdb3d21e3d7ff8695260472b3c28e698cfd19c282b64",
+      "git_blob": "537232eae2e19de8414b24e2c4a53330df16873a"
+    },
+    "TreeDB/caching/iterator_backend_fastpath_test.go": {
+      "sha256": "8521a7adbd3804f5cb1c471224f4e2686bd58f59770cb13d4301cc461e953792",
+      "git_blob": "8150effeccf2b4db294c79e5ecbd53c8900fa0ac"
+    },
+    "TreeDB/caching/iterator_cached_writes_test.go": {
+      "sha256": "f7fffdcd9d4e419d7a1260c7ee38e428d526e6166f7742dd44087abedb229092",
+      "git_blob": "8791355d6b47d05a0d7b41eccff0d9c8d87d2a27"
+    },
+    "TreeDB/caching/iterator_lease_test.go": {
+      "sha256": "861581693894c810bd4d9f915e04338440dc9c151c7483318d4d965c998f5a20",
+      "git_blob": "be4bf01e2146db9ea1f9e669a72d3c5fbd693b9d"
+    },
+    "TreeDB/caching/iterator_rotation_flush_test.go": {
+      "sha256": "1ef96b0fc26ffde5638a0c34b85b03ee39e329372fe8020b201259a52507e50e",
+      "git_blob": "4ba2e72959a7a4d01d28752b32112babd4182228"
+    },
+    "TreeDB/caching/journal_lanes_test.go": {
+      "sha256": "7cc9e1de95b89b19013e3ad6745f56874c251cc26c88bf681bbe953d80416119",
+      "git_blob": "1dfff55939608a5fcc5a4286292de21aaf987fe1"
+    },
+    "TreeDB/caching/lane.go": {
+      "sha256": "2ab0522b16203860decf4e21fa6ddec2999e6d0e97db8ef4e06787034b885ee1",
+      "git_blob": "b43bb6205edcb1f75f0f628222d4084c0f3d85a3"
+    },
+    "TreeDB/caching/lane_flush_test.go": {
+      "sha256": "05456f0d21b115a8327b271924ccfee8db15ac26f3a2ec187ee4fb0dd28eb330",
+      "git_blob": "ab963e0c7b67bd78fcb0a6993bfc68917ecc7ebe"
+    },
+    "TreeDB/caching/leaf_generation_pack_capability_test.go": {
+      "sha256": "6e7a424a20638b263f07a0a781c7496bca2326d39b114e450c5e0185b2b833fe",
+      "git_blob": "363c73a3eefdb266dd3a831eb2045de3c4748e23"
+    },
+    "TreeDB/caching/leaf_generation_pack_metrics_test.go": {
+      "sha256": "714ddd555b824b472c7ae586a687709ccc99e054fa1854c6e222afab26a2629f",
+      "git_blob": "aa4c6d1cd174fdbb63ad8697a834f337ee668826"
+    },
+    "TreeDB/caching/leaf_page_log.go": {
+      "sha256": "ff9b827c89c8f00f4a13452363e7d891c6b3200da2dcd8f555caf4c84dc5ef5b",
+      "git_blob": "efb18be74a988df0bc291ec3c3c3fe971d1f023c"
+    },
+    "TreeDB/caching/leaf_page_log_lanes.go": {
+      "sha256": "69b32028b514aa938a5a517057c1a540328f6e089ab69ea0fc09eaebf52f39aa",
+      "git_blob": "b13e259b36fdc04d1f2d6cfea32c7bdd01d5735b"
+    },
+    "TreeDB/caching/leaf_page_log_lanes_lifecycle_test.go": {
+      "sha256": "39fe5a5e82788677e778439c82c2f1defb02d988c1dbf8c98ec4dd34b5fedd40",
+      "git_blob": "76f3537b10cbf7e2acd3db13e007b3b2aca6c58d"
+    },
+    "TreeDB/caching/leaf_page_log_test.go": {
+      "sha256": "8f346ea1d3153baf9eac1b388038efa03337fd6df873ca975614a56feac516c5",
+      "git_blob": "e03e8f94680a2400e96be469c42e809b09c3b2be"
+    },
+    "TreeDB/caching/leaf_page_stable_resource_test.go": {
+      "sha256": "7827261163b0cf6e8f557e87c0b0b44c1ae2dba7f8c6d4f03d4ec6db2cd5a487",
+      "git_blob": "3a6def12f52b228ade6402ef5f229e2e90e90701"
+    },
+    "TreeDB/caching/leafref_live_ids.go": {
+      "sha256": "78e24b572c8a44398a91d39aa5e6700df81d758513caf276c4b25f505ce707db",
+      "git_blob": "6c8e69492c7f93363ce9327b07804b23c7b397db"
+    },
+    "TreeDB/caching/leafref_live_ids_test.go": {
+      "sha256": "bdd91d06322d4c770c34ede24e30edaf81f18315cfdad974f82989a21f253074",
+      "git_blob": "9f43b0d1b709da004e54490d14f4e1df28182291"
+    },
+    "TreeDB/caching/leak_test.go": {
+      "sha256": "f0dca4fa469ab5700c9451c2102ecad517a1186c3bda3dc7e2fa67d56958c049",
+      "git_blob": "ccab6072eeea6a031b02a67afc3a5f6fb54e722d"
+    },
+    "TreeDB/caching/log_writer.go": {
+      "sha256": "0dac6ea9b739f41931a242ad3cc12cf5bcef59b8f2817a64fb47a4641b7e479c",
+      "git_blob": "1b3a26dd59042261ee508b06058a09fec48cf0e3"
+    },
+    "TreeDB/caching/memory_stats_test.go": {
+      "sha256": "036232996bd5957a57e9b7a461606340b42be6086ae9ba12adc9467d6ef0d5a1",
+      "git_blob": "a58b02b6f7b37414b3b07fd41a60a6c6ac440b61"
+    },
+    "TreeDB/caching/memtable_adaptive_public_bench_test.go": {
+      "sha256": "5bdb4cf34f7c2bc9055f3417634d4c0e68c926bd8608b8a1fc61b3d9d06607df",
+      "git_blob": "4c1df0624ee2d17780c78b5b9671664ce9fb650d"
+    },
+    "TreeDB/caching/memtable_adaptive_test.go": {
+      "sha256": "d72f34577583944d2389c072005a695613cea68935c640b15f8ce972ffc2a0c6",
+      "git_blob": "9c75aa87f6b22f7eb6574d2eda0670a3648ee17b"
+    },
+    "TreeDB/caching/memtable_residency_test.go": {
+      "sha256": "35b1628b7deb0d9552db8fbdebc33a2c7e5b75e36d0f2963aaa62f7facf8fdd8",
+      "git_blob": "93ba1457b4e758df5d1d754d40be52b45454696e"
+    },
+    "TreeDB/caching/memtable_view_refs_test.go": {
+      "sha256": "552c1cd92eeb48f8f08e6b02954be510f194f7020d91fb641837200643d2428f",
+      "git_blob": "669f91492836f209af62fb9c933fc32d56211ebe"
+    },
+    "TreeDB/caching/memtable_view_telemetry_test.go": {
+      "sha256": "ccf2902d78751de278a39f4d264fa26ae383afd862a71295b79079391c0a9517",
+      "git_blob": "11da3c16f7128ca9a606d6700cdec9c0ac104b23"
+    },
+    "TreeDB/caching/mode4_stream_bypass_test.go": {
+      "sha256": "23061d677fb478e25cf09885478f917f5a0e82ae15e202531f6acb2275f756f1",
+      "git_blob": "3f13bc57042bf83a41a70f37eba74a1180ec2875"
+    },
+    "TreeDB/caching/mvcc_shard_affinity_test.go": {
+      "sha256": "1838c74881f8b9144864b0dc6c47a7f01bcbbe56306ae2e7d00c6e1b25e4646d",
+      "git_blob": "c981a96b936b7a20e4611bdb6a8c699929458978"
+    },
+    "TreeDB/caching/namespace_instrumentation_test.go": {
+      "sha256": "dcd8c696d0319b26006e5ad8ae0d47f8c121a6f01a4fe9384ee8269c3f17ec1a",
+      "git_blob": "b02ebecdcd57857218fcf866cdcefdd50a7cf5ea"
+    },
+    "TreeDB/caching/native_root_value_log_lanes.go": {
+      "sha256": "16b65e4bb95d36da21ea1bd8ee9dcf4a45310641b5c7b001cba54f51b1dd63fc",
+      "git_blob": "5db462c2e8accbd9c43f791a387829c06e71f1e7"
+    },
+    "TreeDB/caching/native_root_value_log_lanes_test.go": {
+      "sha256": "ae0dda861b2188b1d6f40a5fcf186c73d36803b0a210f2c895e0a1f5b2c7b413",
+      "git_blob": "67acf0f4d1b7657ba5f0bb2d7039c2d4a78445b9"
+    },
+    "TreeDB/caching/owned_read_result.go": {
+      "sha256": "aadbad90cb56a9b6780224a35974ef34a6c1cc7013f88321cbc60e73f7668826",
+      "git_blob": "a2176e853fc04e50ab1b1386f8619e71cb6d5d03"
+    },
+    "TreeDB/caching/owned_read_result_test.go": {
+      "sha256": "304f9d6e18dd6e2326db12ea4afeb165464e825c73b60db4d32dbea1b3b0e77c",
+      "git_blob": "3768f49ac9d7959d036a66710d80d0cca1f1b7fe"
+    },
+    "TreeDB/caching/point_read_shard_queue_test.go": {
+      "sha256": "78e0d8d5d9ffcf604e5a122530e2635018b093314028bab3b8b0852af3d65134",
+      "git_blob": "a50d75b6d7ab85f2e5d2f5c774e0b3995f449ca7"
+    },
+    "TreeDB/caching/point_successor.go": {
+      "sha256": "8c9bbbd426ff071c0f6809d3202329799595e5b791cd9b6b6de3096c0b656ccf",
+      "git_blob": "8838a4700e4ebf9965485d739be75225b01ae6f1"
+    },
+    "TreeDB/caching/point_successor_mvcc_test.go": {
+      "sha256": "5f36647ec19253e69e0a3242cad519237f49883e65ee2db0ac1ea3d11bb2bb5e",
+      "git_blob": "9d6901b367c3624fc28f28b5df4c0a34ac5bd5b9"
+    },
+    "TreeDB/caching/point_successor_test.go": {
+      "sha256": "fcee1fe355d3b79f96918bb7a301a9867959e4200337ef68a6f0414bde2feea2",
+      "git_blob": "7c14323d46ab413dc964bcb77d3bcf8f6f873f0e"
+    },
+    "TreeDB/caching/pool_pressure_test.go": {
+      "sha256": "f64170946b42ec4f9e1888101cd1fd63dbb324a1dc173c4f256279c98b6587a2",
+      "git_blob": "0245277eb99b91bd0a097c80a49f7ac09c47898a"
+    },
+    "TreeDB/caching/process_memory_linux.go": {
+      "sha256": "9f4080d7e075b9650f2e09dae3839d6383d14f44bc2ecfce3d6eb84be14d10cd",
+      "git_blob": "7590cf0325db0deff2d95c234e3e11008d271f12"
+    },
+    "TreeDB/caching/process_memory_other.go": {
+      "sha256": "70065eea794b3723889cc9334f12d1ec3ab50d1be03030b4dd05a50dd4809ded",
+      "git_blob": "0d859af701bc1653aea1d53584a5e61e2a4f22f0"
+    },
+    "TreeDB/caching/race_flag_race_test.go": {
+      "sha256": "162db896d7bc94e133c22c15f49a3c4cf93024a4879e3b7a2c06e047c7b2d592",
+      "git_blob": "757dc608f649daa3aff132366150b72c11057ee3"
+    },
+    "TreeDB/caching/race_flag_test.go": {
+      "sha256": "997883713c4191b851ccf407ee7cc4571e5629b5a0a13b4e12b492027b941963",
+      "git_blob": "3fb137805d8efe48b97aeec2665b35f09e6624c6"
+    },
+    "TreeDB/caching/race_flush_rotate_test.go": {
+      "sha256": "370d425ebf5d8e4fa94ba9ed865f1317633d33cd6b788fee6e316142856e36b8",
+      "git_blob": "525daffd687a9c15e7760d2d5ce610d3d789d0d3"
+    },
+    "TreeDB/caching/range_spans.go": {
+      "sha256": "a04e7239d9fe1b943ffd68cd323caa6fa0faf4efe8283db18d0b864a9c98c6fc",
+      "git_blob": "675844895d41265f22e117c9b1117b6ef50369fe"
+    },
+    "TreeDB/caching/raw_kv_compat.go": {
+      "sha256": "4a9ce7573720d66366bd8f02bc849ceeb7cbba22a26c70856cbda8dbfa070489",
+      "git_blob": "01734415b2ba3c4996e59792f940a7cf7ff0b2e5"
+    },
+    "TreeDB/caching/raw_kv_parity_test.go": {
+      "sha256": "7218e3ab3058a8bd924e2412866acebe779b83222d1c52e60f362f44048f6ba4",
+      "git_blob": "1b8d1c53af2b78a61379358fdde55b4386f518a4"
+    },
+    "TreeDB/caching/raw_span_native_route_test.go": {
+      "sha256": "2c798ef278ce879e0b7c923fb95b27d7785cd2cc97d8dff6598b42b43a315a4b",
+      "git_blob": "38cef59c4c78044cdae26d79b1f798aa78ee5711"
+    },
+    "TreeDB/caching/rcu_snapshot_test.go": {
+      "sha256": "0d11d126d74c577b02fc72f32b6bebdfc63a56e2001a011477e3dd96d04505aa",
+      "git_blob": "022f29f9aed74a30a0e44c20a84674aad77820f3"
+    },
+    "TreeDB/caching/resource_descriptor_caching_test.go": {
+      "sha256": "abd31b754356a12b08de2e0a3597f49da1b2f1e9b4a7e558d08ed9df4a459b92",
+      "git_blob": "51007d571f85ccd79b0007b0e5c1b553e16c6869"
+    },
+    "TreeDB/caching/retained_arena_trim_test.go": {
+      "sha256": "6237099c0a44a052e7b5be58ea7f0f5f93b500c94b8493ec772e05eb40cdda3c",
+      "git_blob": "ae4e2c62a63f33ff5ec070acdfca1039b5259203"
+    },
+    "TreeDB/caching/reverse_iterator_cached_writes_test.go": {
+      "sha256": "76304a96103badde4b5e263f4a1f7124fb6ddbdeb687516ff522c3488e483465",
+      "git_blob": "1ec5543318d034ad56e9bcaff3d99f7248e2e49c"
+    },
+    "TreeDB/caching/reverse_iterator_parity_test.go": {
+      "sha256": "2ac950f6d588c6142566b4cc188cd38adbaebf819386544461828551930026fa",
+      "git_blob": "e10f7c12125ff41d998d796067928370b73fd95d"
+    },
+    "TreeDB/caching/root_domain.go": {
+      "sha256": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+      "git_blob": "15eaee917c302396e308a184bc324f387b8a008b"
+    },
+    "TreeDB/caching/root_domain_iterator_bench_test.go": {
+      "sha256": "1174e4b362694af1918af8ffc29f96d6070386982f634a6613d6bac54ff251fe",
+      "git_blob": "d5b7f9f11e9c9ddb6e9fdc5d307ea9507f310141"
+    },
+    "TreeDB/caching/root_domain_live_read_test.go": {
+      "sha256": "d5c96452504183dd6c5616dee0f5d131f8263986dbe7cd3fbf0a4088af1c3ed2",
+      "git_blob": "859d5de24d484fb4a60108d3b74b6d3817a561d8"
+    },
+    "TreeDB/caching/root_domain_probe_stats.go": {
+      "sha256": "1aff5adf4305c1ba923b2ca0cd1f10bff8aa54d700d118b036e965dbb6184f54",
+      "git_blob": "8628faf575c7b3c21134ebd61044dae37160e3f8"
+    },
+    "TreeDB/caching/root_domain_probe_stats_test.go": {
+      "sha256": "f6560518cbdfd9a0df6fce2aa1f951ebe7b1d0bcff942d74c427d8c1c54b02c3",
+      "git_blob": "fa6137521e66b44d6e7893e22916d2ed25fbb4a6"
+    },
+    "TreeDB/caching/root_domain_test.go": {
+      "sha256": "227d7368fcfb05e08099756fdcf98031b07a0621a00b60672ea932324161d1e5",
+      "git_blob": "e4a31d8bfe72020be45beb74e8a8020081b44f1c"
+    },
+    "TreeDB/caching/root_group_publish_test.go": {
+      "sha256": "84584ec9c1f546ccda17a6e2db5abfe3cc8cce4f7589df1cf55c1da6bf494a1c",
+      "git_blob": "822ae4096758505526c82d07e836c5fe82deb5d9"
+    },
+    "TreeDB/caching/root_group_snapshot_test.go": {
+      "sha256": "d56d950c86e572565518ba7a89de2ac43cd7bac9354923b848aa7a865c1471d9",
+      "git_blob": "6903e23e3788d2f77ff85845605f61e5ba716c83"
+    },
+    "TreeDB/caching/root_published_vlog_liveids_test.go": {
+      "sha256": "58b34a7e58c49e6d0c72000663d281eea7605c78b889d75dbb17076b0e5227e0",
+      "git_blob": "dfe06a880bbe4a75214d760de5ede5367b6643c6"
+    },
+    "TreeDB/caching/seed_batchsize_fill_threshold_test.go": {
+      "sha256": "c46df9202ff6ba318b0c31e410e9897d56f0981bc2e9e06d26420cb3ad8d6fe3",
+      "git_blob": "a237115f36e7fabf4c5656d3c1d5360f3495908d"
+    },
+    "TreeDB/caching/selected_sorted_rotation_race_test.go": {
+      "sha256": "9ace52214d8a6ff4422bccf9c3ac4ce4f5e91e81c6e5f6695db541195ef27039",
+      "git_blob": "01dfbd4d3c6444feefaa5692d067fa563d787a65"
+    },
+    "TreeDB/caching/snapshot.go": {
+      "sha256": "d2bb5aa18a5e102ca561cc5dbb7ee28bb479dcd091a58d05ea85dcec12c06601",
+      "git_blob": "0fe8756381eb4ea6632a78118e9c9f0a384dfb4e"
+    },
+    "TreeDB/caching/snapshot_closed_surface_test.go": {
+      "sha256": "1efe480f3daaa1f9c92c50ac1517f8cde127bdee7d3432a48ddc22c67806131d",
+      "git_blob": "71b6efea20b17573a413baf5fb6262180f8decfa"
+    },
+    "TreeDB/caching/snapshot_exact_key_test.go": {
+      "sha256": "a7b752fd5b76c6de414ff327ac079d530460be231e56c2f2c790f774d34cfce8",
+      "git_blob": "4311b60a21787eed62828cc2bfa10ef06e00a985"
+    },
+    "TreeDB/caching/snapshot_iterator_creation_test.go": {
+      "sha256": "4d13536486ab68e6da698e53324bcefa35bb9403fba6379f83aa653afcdfa4a3",
+      "git_blob": "4f7c9bb039278cef130a10b41551f487299fdb33"
+    },
+    "TreeDB/caching/snapshot_iterator_lifetime.go": {
+      "sha256": "0e6bf1dddc5773dc85c136129583a825c579044b1f061efc09db8b81633eacf4",
+      "git_blob": "f2eb5c2b1a920c08038169ec04ccae23dacf9568"
+    },
+    "TreeDB/caching/snapshot_iterator_test.go": {
+      "sha256": "956b0ae82673d9380f62ad5ab0f2d82f3a76c0a9e5ef2621d4d2ddb13947b466",
+      "git_blob": "1837a4f32f0ebf4ef161c2148654a2603e6fb066"
+    },
+    "TreeDB/caching/snapshot_pool_test.go": {
+      "sha256": "1164e9367b6c5b7c080f658a6254220050c29da038fc74bb6d7b9a9a925da84e",
+      "git_blob": "78b43820f30067d64bf68c831abe427c12edfcbe"
+    },
+    "TreeDB/caching/snapshot_read_lifetime.go": {
+      "sha256": "7fc5a27c21dcb5886093ccc4d9f82055aefd701d1c3e51c1ac2e2a6cbf77763f",
+      "git_blob": "0b9a1e5f1c9ebdf827a6adadb9d09236f62adf46"
+    },
+    "TreeDB/caching/snapshot_test.go": {
+      "sha256": "022e820e7c83fb0aa1bf6aae51b59602df81556cab65411a2415e0f7102fd639",
+      "git_blob": "3f89cccdc1b7af177a9c3991e98feb78e376ed98"
+    },
+    "TreeDB/caching/sorted_write_fastpath_test.go": {
+      "sha256": "78f65d34cc5cbcc2985aaa1625d2db471dc8ac2dac54a932f3e8c07b4cc85b30",
+      "git_blob": "b430bd4f96ac3849c143b6d1c7aca5e577770f53"
+    },
+    "TreeDB/caching/split_leaf_log_lane_reservation_test.go": {
+      "sha256": "65fc8ffca384746dd36bf61f9bfe5b959eb4eaa3507761061ae9f82630a953d0",
+      "git_blob": "50d59b92e45fc5cb780d78fbe67315a4e05beb94"
+    },
+    "TreeDB/caching/stable_dictionary_resource_test.go": {
+      "sha256": "ef586bbd07d9a3d6a835725a187154a206e52796910f66f6de4a302828a4f721",
+      "git_blob": "3cd5663ab54f3c42dc71a553916d27e35d4922f7"
+    },
+    "TreeDB/caching/stable_leaf_resource.go": {
+      "sha256": "8df8b158b212269ef21ff3f008aebeab19b7bab485f051cea8247ceaf840c545",
+      "git_blob": "92d155596dab666791b8ebe43a76ab14af21f294"
+    },
+    "TreeDB/caching/stable_resource_registry_test.go": {
+      "sha256": "35ac5f6e0f4c67555e2b70d4fdd3feb2c1b16583a0962921c93ac86313465574",
+      "git_blob": "11b86e85987e45cf035ef6a745bb7debab8fb9c4"
+    },
+    "TreeDB/caching/stats_test.go": {
+      "sha256": "75af96359bb5e6f477171c5a98384582c71dcf2e42a18af19c3cdd0e157ca52c",
+      "git_blob": "594009de73cfb135c293a9b1b60f66d955c13829"
+    },
+    "TreeDB/caching/stress_gate_test.go": {
+      "sha256": "0f2ac8fa45505274a05a592e8cdba3a4bc0d84a6543fb1aeb0348f8adf4d5a19",
+      "git_blob": "a60d15adf874f0758d2cf85d69e69f19b8e97df7"
+    },
+    "TreeDB/caching/unified_wal_comprehensive_test.go": {
+      "sha256": "7a7a1ab613db1f15b4af13818f9f4e394d0f034427585f194392302057553d25",
+      "git_blob": "16fb25c645dd8faa623dfbb21708c51671be06f7"
+    },
+    "TreeDB/caching/unsafe_options_test.go": {
+      "sha256": "29c1a7dbb45390b1eac719c0ead7637340328d0c01f8b081de0318787c893382",
+      "git_blob": "f9d8bba1d00a3f2fd0d5f33aa2eab175a94f1ef6"
+    },
+    "TreeDB/caching/update_lock_alloc_test.go": {
+      "sha256": "b1aef71946cbe4d948c2724833b8074ad5ff6a5c689049affff3765b8528c377",
+      "git_blob": "56a1b1f2bf4a569a2a0976a4f463b0368eaf251e"
+    },
+    "TreeDB/caching/value_log_appender.go": {
+      "sha256": "0437fc328bfbdc81e00dba9be76b35d04454e5322826e2596d7cb52ef99571c2",
+      "git_blob": "2fcb158610ad79f2fe2df8506b1fa9d73e2f77d1"
+    },
+    "TreeDB/caching/value_log_appender_test.go": {
+      "sha256": "1fd8e0e4322b37553b2a40f2abee28cfa40ec82655642574ec36d4595e411ef3",
+      "git_blob": "5a2b462eb23508875067ff7c31abd514df7a58fe"
+    },
+    "TreeDB/caching/value_log_iterator.go": {
+      "sha256": "5ee28b35e269ac23805450e72edf352f5736da758754643a5814e73a0d59278c",
+      "git_blob": "6ca93c326bd8a95dc59463bf61a709352a8a04f7"
+    },
+    "TreeDB/caching/value_log_record_pool_test.go": {
+      "sha256": "d00ab78631a0ed6d294357bf706af269e4a84284dbf7c6d5f43d6143f23839e5",
+      "git_blob": "a3b79720a414e254ff50edfe373cf78bfba9d854"
+    },
+    "TreeDB/caching/value_log_rid_allocator_test.go": {
+      "sha256": "10b589b445825153c0d9f25a928f348fa57b48447841f781986fc2cb1d7e419d",
+      "git_blob": "60b1759abccb912f25c1e801b017208df24823b6"
+    },
+    "TreeDB/caching/value_log_rid_reopen_test.go": {
+      "sha256": "8446a643e1eaab4d645b6903e05dc7608f4cc065f2b1027a5b158ba4eda02140",
+      "git_blob": "2926be48998f3a992f12a97a215a0d0246d153e1"
+    },
+    "TreeDB/caching/value_placement_options_test.go": {
+      "sha256": "655bdfa978bfb9e59778bd4dede46d66089feafdd217008f6b49660763ff082b",
+      "git_blob": "44613614dfd0f767ee644561e208c8e7f17fa30f"
+    },
+    "TreeDB/caching/versioned_read_test.go": {
+      "sha256": "ff7046dc1f99561a8e14f56fd9e55a4dd4a871488880337bc29184ccb8055d1b",
+      "git_blob": "90edcac6d4d6e9bc47b19aea58393ad0d81b3f28"
+    },
+    "TreeDB/caching/vlog_append_allocs_bench_test.go": {
+      "sha256": "ef98d30008370791593f397182646b8ff9bcbcb487cdee02c06a66ab6fcc1b5e",
+      "git_blob": "ea342127839e943cc7ea55d5aba2e7201e139636"
+    },
+    "TreeDB/caching/vlog_auto_sampling_test.go": {
+      "sha256": "2e0912a7b9f5d69d59e30096cfc2411fc79a07bcc5b8dfc0d1ab15fdcd119541",
+      "git_blob": "dfb2a1844bd8e9cec52abc75cc168e3cb4fb9eeb"
+    },
+    "TreeDB/caching/vlog_autotune.go": {
+      "sha256": "5342a1162779ddef2777a7332e0ccbecfda8db3b45e33e4789ec013b30eb99b5",
+      "git_blob": "5913305df04c2e575fb55a2f564c55572564d075"
+    },
+    "TreeDB/caching/vlog_autotune_bench.go": {
+      "sha256": "dc4aa3c00e07d2e660ed0a308daa4af0af5b748b69528bf74dd798cfd884f190",
+      "git_blob": "de4c3e1b73ce5328d561f724d59d87e793f0b818"
+    },
+    "TreeDB/caching/vlog_autotune_integration_test.go": {
+      "sha256": "5af45a1903ebaeae3b2ed67a10f23694f145804102b14f01a29f4f97d62dfac4",
+      "git_blob": "993136b4a02d7a22b932515ab5266bb110785c11"
+    },
+    "TreeDB/caching/vlog_autotune_metrics.go": {
+      "sha256": "55eabc9760b9b4c4414115ad2376898a37ce81e4c36cfe890ee5cab2c491f040",
+      "git_blob": "bc73bd5bd804efb9ccc811a874c0711de2c99fbb"
+    },
+    "TreeDB/caching/vlog_block_group_large_payload_test.go": {
+      "sha256": "3e7906bbb66f8998e2a7e5ecd31f2cc6eaa0aab05c3bb5021326ce25f6a22499",
+      "git_blob": "ac2319ba09cd12d2224741a0e29e7c6082d7ede1"
+    },
+    "TreeDB/caching/vlog_compression_regression_test.go": {
+      "sha256": "f969f73e5dbc158fd1ec2895942c12b7ea1eb15d84091cf582253962aff86c7f",
+      "git_blob": "25ddc8ae41a8fa8aec9d11b5127561cf5ffbc542"
+    },
+    "TreeDB/caching/vlog_compression_selector.go": {
+      "sha256": "38d40531a69ed55e5074caed5aad3ceb0af23a4ad2b86d6a9a16d17b188d926c",
+      "git_blob": "61f35b23864c84c32a6f934ff845b12f86bb350d"
+    },
+    "TreeDB/caching/vlog_compression_selector_test.go": {
+      "sha256": "3bd246cbf738baf2417d0bd9678d45f4e36d16b2d291a853da5ae0eebc20e5ac",
+      "git_blob": "e8acc609ae3f1205e5ddc93aedc0a162e5deca50"
+    },
+    "TreeDB/caching/vlog_current_segment_readbarrier_open_test.go": {
+      "sha256": "4dcd3cdd7832ec650ab93cb461f80435d1adb438195a0a18c0b85b470be5e015",
+      "git_blob": "e797c4e4bd396eca79681e8a275efda19cd2ad39"
+    },
+    "TreeDB/caching/vlog_current_segment_readbarrier_test.go": {
+      "sha256": "75e0a485497f34f60e13718067f4bf2a99040bc3ac3e2159a92dedee0578507b",
+      "git_blob": "8e6cc27d443d12b78f35c39bb77fdd4afc67fdf3"
+    },
+    "TreeDB/caching/vlog_dict.go": {
+      "sha256": "d697dfd09964a8e00c699c21024003431708ec7681a9e5733bdf52bfa6191317",
+      "git_blob": "02b7dd89a90562015d8cea2b830daf812cb48961"
+    },
+    "TreeDB/caching/vlog_dict_candidate_k_test.go": {
+      "sha256": "d1dfcd404aa53cd8177edbe3b7d0e265278530b3b02a66901d547fbe738f8332",
+      "git_blob": "62978a172765a3d70feafd05cd92d04ed8654389"
+    },
+    "TreeDB/caching/vlog_dict_clamp_test.go": {
+      "sha256": "3c51a26915d42871422dacd5ea4c6b0829f582a2f6cfb7c2bf1c113c396aba7d",
+      "git_blob": "4c8881181053526c14779d9abcfee4fbc5869357"
+    },
+    "TreeDB/caching/vlog_dict_classifier_test.go": {
+      "sha256": "05eb9051de8e4d3633609b6667664735e40b115282e3f331dd3d8c9e4ec58a21",
+      "git_blob": "073e914b32e0356f1b3b78ed095b53e968ae89a2"
+    },
+    "TreeDB/caching/vlog_dict_collect_budget_test.go": {
+      "sha256": "b8019f21d3141a24d53f08c4493eb0fba176ab6fee105b5ccf585f3f6c3514d5",
+      "git_blob": "a80e2b286f260e6fc663bac8b5f623ce421e302c"
+    },
+    "TreeDB/caching/vlog_dict_k_update_test.go": {
+      "sha256": "68f76b2dcd7715bf52ecb32d34c35d83cf3ffc7f8dddf64557740f806e131aa8",
+      "git_blob": "0dae9e1a64a4e332fc7f55fa8437061e480c7c84"
+    },
+    "TreeDB/caching/vlog_dict_pause_probe_test.go": {
+      "sha256": "205d215bcf2e6e389b878c0e3ca4ec007d138449bb75258f0b6bb7b4f78394b9",
+      "git_blob": "ed8c98763245b0f444692a056b15fc9a7df30d7e"
+    },
+    "TreeDB/caching/vlog_dict_quiesce_test.go": {
+      "sha256": "b66bc4cd67bda92e20e6edce915630a0dde9a8688eb6a5542c7ffd601315e2f0",
+      "git_blob": "464ff05d28b0edef8fe426b13c047ef43e6e61ca"
+    },
+    "TreeDB/caching/vlog_dict_write_k_test.go": {
+      "sha256": "26337103c8c2f231fdf9056608bb1184bd8abc5d68de1c69789c1b4610f32959",
+      "git_blob": "d4ef99fc4dfa485e380a9ccbc3d61a74be94f4ca"
+    },
+    "TreeDB/caching/vlog_dirty_order_test.go": {
+      "sha256": "c28a0ecf4073773650704417393571a3549dc4178b3acb075f15d6715c762651",
+      "git_blob": "15d4fc40203f10abc2d762b3d2e7b972e6add3d2"
+    },
+    "TreeDB/caching/vlog_generation_checkpoint_kick_walon_test.go": {
+      "sha256": "354abe5f933ab5ae6b428b55e5f894043962cbddd2c14e05008e08dda18a9ddd",
+      "git_blob": "fe5c0b8853094dde7290f4a6c22845c4ff010f94"
+    },
+    "TreeDB/caching/vlog_generation_chunk_harness_test.go": {
+      "sha256": "f3f15bf57945bd83e26f66d88ffef537d51dafc197af1f1dffe9b8ce1d030fac",
+      "git_blob": "18d1c07a3f5af4111e085b5f141bababb0bac920"
+    },
+    "TreeDB/caching/vlog_generation_gc_protection_test.go": {
+      "sha256": "34e213cfbec7f834c446fcd3c0b4b632ce6fd661bac2674e91627da20d1ada45",
+      "git_blob": "7dc626561da3c1f6ccfe0ecb64fd261f56d8d0b9"
+    },
+    "TreeDB/caching/vlog_generation_leafref_reopen_test.go": {
+      "sha256": "b335c85091287cfd6fe026f2e3681e0d056da0be9947a62b2fdf9eea917fccb3",
+      "git_blob": "98a4cf17bcbac02c9ceb1f20d787070de0da66ad"
+    },
+    "TreeDB/caching/vlog_generation_protected_paths_test.go": {
+      "sha256": "1bb820973eb7d5cc89a420e835dfcdf72cf58c9330f8d6ee5941073cd4bb9bee",
+      "git_blob": "48854f1e6c2ad6bc99649aec0549fcc170945a0b"
+    },
+    "TreeDB/caching/vlog_generation_scheduler_test.go": {
+      "sha256": "16d7d4617c7fb8b5fafbd9ef1b98ae3daefaaaa45ac5a2e60c832f19f7f7b100",
+      "git_blob": "70f903ed95ada88a7786aa9681834acb81e17c3e"
+    },
+    "TreeDB/caching/vlog_generation_state.go": {
+      "sha256": "de20a073bf8e66a65b11965dc1646488aeef45da07656b8e39af3fe4fb65f025",
+      "git_blob": "d771a3d55a95f0c069c3878d0ceab2d31079083d"
+    },
+    "TreeDB/caching/vlog_generation_state_test.go": {
+      "sha256": "12c2d73115d1bceb2ceb4d2a2af4e16411d32d3a7d85319fcbfc81d9a0a2d3a7",
+      "git_blob": "47879bbb391e4d363e32e1367a310b445696a987"
+    },
+    "TreeDB/caching/vlog_idle_lane_rotation_test.go": {
+      "sha256": "ed46e310dc18c2acac90d5ed7a7bf6b8f3a3092a80d2ceba69fa9f6a9ccb9553",
+      "git_blob": "a5faa8f5d73dfa76fe57b28584d207c742872b54"
+    },
+    "TreeDB/caching/vlog_lane_contention_bench_test.go": {
+      "sha256": "77f88a9b64b56a987d38368cdeac58f74338157adbb13afa27cc01e9a290970f",
+      "git_blob": "8bacffabfaf4715d622b94076f1062f135e386d1"
+    },
+    "TreeDB/caching/vlog_prepared_allocs_test.go": {
+      "sha256": "efd497471d94b419678d73b0cd6af90045d11d6b6378554a727d67b102db80aa",
+      "git_blob": "68a7bebf5fb7f6c97cf2d425d37163671f81292d"
+    },
+    "TreeDB/caching/vlog_queue_dict_test.go": {
+      "sha256": "602ee196c262c5bf29be54ba5df25b0a8eab88174a2987c96e290fc2b92170f0",
+      "git_blob": "5558a9257517c272943f4f213bba27e90a99183c"
+    },
+    "TreeDB/caching/vlog_queue_metrics.go": {
+      "sha256": "2cc4771980a2c99dccc1adb1997724687c6f1a315be2b708bf8dcb9e790465d7",
+      "git_blob": "07229424f4e883d0b7a798ba8efdfa02a3f33653"
+    },
+    "TreeDB/caching/vlog_retained_manager_drift_test.go": {
+      "sha256": "2f22fc7b9d9c468302b49eddac16bac770d02bb5d9c57718cde336f743fd5ccf",
+      "git_blob": "49ef2e3bdee26cfefa48dbed8acbba62c0dd11fb"
+    },
+    "TreeDB/caching/vlog_retained_prune_test.go": {
+      "sha256": "43124f7c4039c798980ef526018b0146325208dd8eda3a60f796e34bb03e255b",
+      "git_blob": "c8f1265e91ce1e647cac57e085ef8d7ae76af5bf"
+    },
+    "TreeDB/caching/vlog_rotate_reload_test.go": {
+      "sha256": "8a1a99738b3cec11c07a484be521c957a7b118aa1222f6ede20c61c45a6c0886",
+      "git_blob": "95e5ea7971271007fcb768a7d4f86dc83cf92014"
+    },
+    "TreeDB/caching/vlog_segment_scan_test.go": {
+      "sha256": "16b3db11ad78afe9cd8f854cc94ac2f9481e1613073fc945b39bfc7f91745724",
+      "git_blob": "fcdece1a7521b3afb95e82b0ecb12d701325b110"
+    },
+    "TreeDB/caching/vlog_shape_stats_test.go": {
+      "sha256": "217c0d5407bde349d4ef587695ffa417b95a33ee9025a33c7534c815525c6ec3",
+      "git_blob": "caef930666f3b83a7d45280aeac6cddb8f158370"
+    },
+    "TreeDB/caching/vlog_timegate_test.go": {
+      "sha256": "415785ccfc1920ff5a859f5a60e70192b5e6b270ad9dc9e0a07c7d5f456802f7",
+      "git_blob": "19087558e48f771e22e92001bce8c4bdc31fc1d2"
+    },
+    "TreeDB/caching/vlog_writer_caps.go": {
+      "sha256": "dd751faa91a4b14e3a68962f49b384260cae1cc95637833bde836692299f4e78",
+      "git_blob": "2393b830bfb47c706620333a9e1b87b760c21f16"
+    },
+    "TreeDB/caching/wal_coalesce_seq_test.go": {
+      "sha256": "2f65cf9cda609293d2551031a06a991801ad9e1875bb146e09c8257eb72014e7",
+      "git_blob": "140add371fce8307afba06fc32672bd9cb4ba2a9"
+    },
+    "TreeDB/caching/zipper_pressure_test.go": {
+      "sha256": "6969960d6e2543f9b7b1df58355bd438c39639be50cdd7a73eeaa81f66956242",
+      "git_blob": "7acc66f026d2e202d31ec9904997934da2f324a8"
+    },
+    "TreeDB/db/alloc_tracker.go": {
+      "sha256": "d8c576df19516e35b53353126f65c70a281e4327ace4e0e4fd2684c841053fcb",
+      "git_blob": "027c5c2165556a3bed9e088ed21ddd01464cc5e8"
+    },
+    "TreeDB/db/api.go": {
+      "sha256": "9f9bf7dbf31ca7cffb86fa2bc87d9677ae4245454efb2a186f6fe474edc4db34",
+      "git_blob": "61457387c6a91ad3af526e8827713e2b6843a340"
+    },
+    "TreeDB/db/api_test.go": {
+      "sha256": "fcb79da09dcba4ec79b3d193e23852e6ed6e1323870edf696e7edb307b79e79f",
+      "git_blob": "473de4605064ec220b46c1a9120d1e65859da6b6"
+    },
+    "TreeDB/db/append_only_page_allocator_test.go": {
+      "sha256": "523ed0b2010605b923300e32eba549fe298039f66034a3d53a2268dbc561f826",
+      "git_blob": "26bd40181120e83131a7413a6f5b691e1a7bb1d5"
+    },
+    "TreeDB/db/background_prune_test.go": {
+      "sha256": "53368d31eaee5a4295c9906767913d2e00d17796fc69a1eacd854986bffebc06",
+      "git_blob": "624ec89e71bfab7b695fc7a60d5a53722f094fca"
+    },
+    "TreeDB/db/batch.go": {
+      "sha256": "671df44dd94f6d252cceb989e19fbacac89cc3c1710a91634dd1fa1b066a112a",
+      "git_blob": "b1fe45ab17b3ea0281c51f46c513342cc54ac362"
+    },
+    "TreeDB/db/batch_delete_range_bench_test.go": {
+      "sha256": "6389ec271c99dbf217a7648b8aeea01b764ac91569b0f01496391e4820035560",
+      "git_blob": "6a4b7df0e6a72bf3dd0946b4c24193fce32b1fdf"
+    },
+    "TreeDB/db/batch_delete_range_test.go": {
+      "sha256": "0ae4776d4832f80dba77bfb6fc10987b2ff0e9a6b93ed0630aed8f37d8549a08",
+      "git_blob": "263073d0a48882f13cfe314f9771bbd91a7434c0"
+    },
+    "TreeDB/db/batch_reserve_test.go": {
+      "sha256": "ab2971be19ac16945df3dee528eafd010976eb8db6813a3ef8fd114b511d05ca",
+      "git_blob": "fd05ab43b335830246596bdf6d97808f3f3759bc"
+    },
+    "TreeDB/db/bench_test.go": {
+      "sha256": "28a7b3f45334a475d1d598c92b96f0155a9f17cf0fb21bbf5d5de255a0405432",
+      "git_blob": "9f7f37253fb4b7af98d90bb11fe02d58d4724a0d"
+    },
+    "TreeDB/db/checkpoint_test.go": {
+      "sha256": "fb672f46bac2c6030377bc40c3d3a131470e030af7b00b0c53f44da5475162ca",
+      "git_blob": "d3393a1a56c45938ef95684508bea1273ea39483"
+    },
+    "TreeDB/db/chunk_size_default_test.go": {
+      "sha256": "59ec89cacfaf300d4e073e35bc63d9d25bcafc161a07ff36feeb0b3b260e866b",
+      "git_blob": "c06dfb3a37f63371ef02c26cf5ca6bb40af4617e"
+    },
+    "TreeDB/db/close_hooks_test.go": {
+      "sha256": "765bc8428922268dbbd5daa34f5df8ec8ff55b2488ae4e6f05954af696735ce5",
+      "git_blob": "2b4b96b140d90e48a82817b6591cb767b7e3b09c"
+    },
+    "TreeDB/db/close_race_read_panic_test.go": {
+      "sha256": "abe3c78ccfbfd76a709d13e30c8a4a6da434a73006aed533e29bc219210ffdc1",
+      "git_blob": "dce1c92936fdb97eea837c6934f13e88ed845ae7"
+    },
+    "TreeDB/db/closed_db_public_methods_test.go": {
+      "sha256": "d240668a02b81a968d8375e25b7b6432ca0b746f6ad65115010506bf387baeab",
+      "git_blob": "361fc96d0446d6a2ec3aef0eec8995245b46282a"
+    },
+    "TreeDB/db/collection_relocation.go": {
+      "sha256": "f745250535c0662bc7c40ced9d0bb2770e37a490db525ae19c60e51f3974c42a",
+      "git_blob": "3b404356bbbcc4c7e473999d1a6b2ac07ca17aff"
+    },
+    "TreeDB/db/collection_relocation_test.go": {
+      "sha256": "c62eea987cb4ac24329f6d406e1238d229821ef1168bd1659fcf7baf78863f76",
+      "git_blob": "68f1c52062ad7cf636977db0a71fdf35b008e5be"
+    },
+    "TreeDB/db/collectionwal_dirty_test.go": {
+      "sha256": "285a53fc0686bf46d1f8da24393be5cb4ef2ca02b382dbf0962e2e2c242dffd6",
+      "git_blob": "4903891d195d3b6d85c9750518ca6591ffcea9bf"
+    },
+    "TreeDB/db/command_wal_barrier.go": {
+      "sha256": "cd356349ba3cf9992c3313f4152312c12a19fd2b756b686057d9624442459ce2",
+      "git_blob": "eebabe44b394433f382d2e294369b8083c3a6d39"
+    },
+    "TreeDB/db/command_wal_cleanup_proof.go": {
+      "sha256": "74142935751b52d51f643b332a248dfe2af6adc972dcae2e4a6cbf5f7b482e20",
+      "git_blob": "08c22c838c86819acd42daa0442edcd544cd5ae1"
+    },
+    "TreeDB/db/command_wal_debt.go": {
+      "sha256": "55463629e0cec4ffad507c59977f728b18957e07e256e73632eb3695d6400224",
+      "git_blob": "c443a1b4fa24b92a20167bea23442bad8f9faaf9"
+    },
+    "TreeDB/db/command_wal_debt_test.go": {
+      "sha256": "bd872ee91fe15f7a086f850a655b297e357218ca84ff40226ca7260f62c0eeb1",
+      "git_blob": "511873966aebcbf1ac90314c30355a5292cafd1f"
+    },
+    "TreeDB/db/command_wal_feature_gate_test.go": {
+      "sha256": "e41f5f2ed1984890971915e346c53391ffbc06deff68272a03336a03e662f362",
+      "git_blob": "0b780a485e4295f97994fd5ca6c1a90be1f62c91"
+    },
+    "TreeDB/db/command_wal_gate.go": {
+      "sha256": "bd171627496fc3e31623608e9e728c7a5b4e575fc706a80f5cf8dda5ccf9591d",
+      "git_blob": "50512587d1ecc75c6233e71a49ee42bca6c5f1e0"
+    },
+    "TreeDB/db/command_wal_publish.go": {
+      "sha256": "261bc3371a5f06361eb5d91bc01a59e49737a921a715eb9261177ef4306c0b18",
+      "git_blob": "efff44ee59d70db6eeda161c93e28beef254f824"
+    },
+    "TreeDB/db/command_wal_publish_bench_test.go": {
+      "sha256": "88be5d54b466443a90de31a4fbe971589799d1685996232354e6b3a3fc2fca61",
+      "git_blob": "cafdd2c42f0eb7c392d1d08feba25b6b911502f7"
+    },
+    "TreeDB/db/command_wal_publish_test.go": {
+      "sha256": "82d2f6c3892631c9d3603c122c6edd6deabd6fed4e24375aaa53f41b2c195d54",
+      "git_blob": "c6634a4444c7e7f77c0b6eec9f8515f49c16b214"
+    },
+    "TreeDB/db/command_wal_raw.go": {
+      "sha256": "5f8c9930d85cc883c0acc76adba9d4fad8fc3251caf229241332af98b06862ac",
+      "git_blob": "04f0e22eebae5acadff3a2974f4b52f548906afe"
+    },
+    "TreeDB/db/command_wal_raw_test.go": {
+      "sha256": "ef3886f2ed70c1975473a87e45c5384f333f77e852dc4055f23f5eb781c6b4fe",
+      "git_blob": "fd4d0d65804c92235b5f45afd52a59e8882c69b5"
+    },
+    "TreeDB/db/command_wal_recovery_bench_test.go": {
+      "sha256": "50f2e51957c12cdd069bd5825bed3936143e0edd989ba14f7163f58221d98eb6",
+      "git_blob": "fd7fe1f6c004aeb62ed9bbc1e27f15a2a430a42e"
+    },
+    "TreeDB/db/command_wal_recovery_test.go": {
+      "sha256": "6019629e442055eb7a8ab7a1266f0ddec9c5586c780dec26df968332b1283f9f",
+      "git_blob": "39ac4c9827eb5b883fbd9a3fd02aa9fcf29d4c54"
+    },
+    "TreeDB/db/command_wal_replay_registry.go": {
+      "sha256": "6e6301f01b2e01f542c45b54e04be81e7b62be9a4951786cf5749e206116dd15",
+      "git_blob": "006c2546d8fad998c5d585bdd5504274526c5daa"
+    },
+    "TreeDB/db/command_wal_stable_parent_supported_test.go": {
+      "sha256": "7e088a79913ba439636fc9ade70ef6e5ac8565872aed705052412dd41b24c51d",
+      "git_blob": "df234a2d48b01ac2ec2a23fc7c05e25d2077e5b3"
+    },
+    "TreeDB/db/command_wal_stats.go": {
+      "sha256": "c45393353d81cd09bf47c60212dc84e9dd8085c94f8ce993c3ae2abfe87b985f",
+      "git_blob": "bd76d9a21e13e887a2d3563518bc38cf6982e5b9"
+    },
+    "TreeDB/db/command_wal_stats_test.go": {
+      "sha256": "4583eff687d1471e0a753c472545b3354e3ec7c4da1d54b11c606fee1b7509f5",
+      "git_blob": "335b3aacc24e5bb4b316f5df3cbd6fffc33d7d99"
+    },
+    "TreeDB/db/command_wal_v2_bench_test.go": {
+      "sha256": "c1255ac3fb36d83e07a833b8c58c6a1736e705636f86fa9583f3df74c5373721",
+      "git_blob": "a1b29b9761dde11d03e24ca96758717a7738a160"
+    },
+    "TreeDB/db/command_wal_v2_classification_test.go": {
+      "sha256": "32ce4bf9522c557f56ccc859320a67e6d07e3a0df7d8908b496e81eb242cd6ee",
+      "git_blob": "ec90867705c2ee263c3dfa9d5c39deabcc397eb1"
+    },
+    "TreeDB/db/command_wal_v2_physical_test.go": {
+      "sha256": "a6f1c9c9aeeef8a1706627d2ee59282255b6f44a7c2726382f7811452950419a",
+      "git_blob": "04bc3719b2245be482013f9b104676486276ed8a"
+    },
+    "TreeDB/db/command_wal_v2_recovery.go": {
+      "sha256": "b5cc386645591c9170b50613fdbe0d03cd5a5af46b1e538c9f077ea6203fa5c3",
+      "git_blob": "76d0373d14c97d41ae554b1976ffa9e3d14ad3b3"
+    },
+    "TreeDB/db/commit_combiner.go": {
+      "sha256": "b2b33755e89de221f0badd4388cb9b67becf67a0d1f139c8f8cb2b521e57186e",
+      "git_blob": "12269326b2131e8c666a728a38659438c4765651"
+    },
+    "TreeDB/db/commit_combiner_fallback_test.go": {
+      "sha256": "19745deeae68a2244277bec6ed57c9ec503326ffc90e54970ae9ba77ba821f85",
+      "git_blob": "2e3fa2bc23360baf586511761b7378ac3d47587b"
+    },
+    "TreeDB/db/compact_index_sequential_alloc_test.go": {
+      "sha256": "04561e1a4d58228dcf7eb92409a71acfa4564825b7de70177bb215418dc4930a",
+      "git_blob": "1467c4e7a7557a935d3f84f123bcbd67185c0860"
+    },
+    "TreeDB/db/compact_index_test.go": {
+      "sha256": "f7fdccb504c1e5e39f1ab7a7280d204673ebff7a1938e8589c3630a16221cb92",
+      "git_blob": "b1c73b267a138fc55b08f07d886b51063e7f4aa0"
+    },
+    "TreeDB/db/compact_storage.go": {
+      "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21",
+      "git_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e"
+    },
+    "TreeDB/db/compact_storage_audit.go": {
+      "sha256": "151b4b0eb8dcb7aa25dccf698e4e3cb57ef1808e4a038c2fe8558b3e06552ffc",
+      "git_blob": "b68c9054fff34343e438f3f4651c2806535732d5"
+    },
+    "TreeDB/db/compact_storage_audit_bench_test.go": {
+      "sha256": "9c93177e54ee9a45d799f7273f2ef6c34b852ea200d2939bd2a9164410c40e01",
+      "git_blob": "7a04bd5234287c019529ddd88baf12fed1968c75"
+    },
+    "TreeDB/db/compact_storage_audit_test.go": {
+      "sha256": "7264b7201a33afd4ef1288e539920a4cdfab33fc2b8f65441ed312e2d2a63324",
+      "git_blob": "ffba1537a83802c67bee598afd489c4cb5df986c"
+    },
+    "TreeDB/db/compact_storage_bench_test.go": {
+      "sha256": "e09cc50759cd64af0d12ba77a93dac117cb9b4eeeb0671bb7f2f43680d4e36e3",
+      "git_blob": "c9edd7c39112c2a85141ce5edb3ca39d6b599c30"
+    },
+    "TreeDB/db/compact_storage_file_errors.go": {
+      "sha256": "56c19b6c1fc384de87c06d8af365863e0e54f73ed15301821d8610d5286ef545",
+      "git_blob": "2b9376f2ba176603f75a36f8818040d9592f4446"
+    },
+    "TreeDB/db/compact_storage_file_errors_windows.go": {
+      "sha256": "c5a4f9a638f5046efedaa7eb539e52377e0c22476bb12b4b35fc2bafa8876392",
+      "git_blob": "156bec72bfa9bc8c5e52175737512a9af11459ec"
+    },
+    "TreeDB/db/compact_storage_index_vacuum_test.go": {
+      "sha256": "35ebcf6a8124060c3db5730b066cb8793b9be04676fa526cb8fe89abaf8fdb2b",
+      "git_blob": "6573eff3b68e691b1c59106f73bcee4380984d69"
+    },
+    "TreeDB/db/compact_storage_m0_bench_test.go": {
+      "sha256": "6570d2e623992983c4b210c0e61c458acd3ae49ec79c3fb27493253da82511e5",
+      "git_blob": "9c7cc849fef353431cf78f54b0af40ed47ef714a"
+    },
+    "TreeDB/db/compact_storage_m0_measurement_test.go": {
+      "sha256": "a6c65dc91c674b84357c8aa6198f62d3dc21a1acf972cae9c616070c05f18106",
+      "git_blob": "33f94db04b59b7f2a31800e52a8b5b3af6aa912a"
+    },
+    "TreeDB/db/compact_storage_m0_recorder_test.go": {
+      "sha256": "e15b5c4a0b342829d2624c04c19d1c4d22f58dc42aef2bdfc80420e54bddea93",
+      "git_blob": "8a9854a3a5b1a21fff3cb38c0cf5297320694094"
+    },
+    "TreeDB/db/compact_storage_measurement_test.go": {
+      "sha256": "bc19ecec4f1a52ed83be656b98faeb6e18692266c392fa1fbc86e5d5292aed38",
+      "git_blob": "c492e16fdbf1a7ce93ec14eb8f7eb9b841058624"
+    },
+    "TreeDB/db/compact_storage_owner_matrix_test.go": {
+      "sha256": "688be0cee53944c15f737a49ae575b0ea499ab09a65fdb3b279aca19941f5bf1",
+      "git_blob": "555cbdeb7e087f21f4540d80a1f6a0272dcf16a4"
+    },
+    "TreeDB/db/compact_storage_persistence_test.go": {
+      "sha256": "66c58990fa62dc572c1b5d1b470ef90c33f76aa85ac43a5dd33863e42e76dded",
+      "git_blob": "a3b927e1a06c841eb0b207729b90b3e9d5148380"
+    },
+    "TreeDB/db/compact_storage_test.go": {
+      "sha256": "274c87d9f8fdfc7267fdb2e797c4c8770996d87bd30189b304d9119a4685b53d",
+      "git_blob": "c89d763b7159462f2a635e62d5b94c32cea35f59"
+    },
+    "TreeDB/db/compliance_test.go": {
+      "sha256": "e68e1c3f4c23bb369cba71927794d94086afcba8e455060c90f0ff8b2f805c55",
+      "git_blob": "b9dcc19a6111030f0e905371e2dc52a7bbd5ea67"
+    },
+    "TreeDB/db/component_throughput_bench_test.go": {
+      "sha256": "3b2dc420522480f3e37680751b728c583ce213e94e0b20f4b3380778d2e4abad",
+      "git_blob": "e35a950778c93b816fb85d43dec9b6f071812d91"
+    },
+    "TreeDB/db/concurrent_write_test.go": {
+      "sha256": "1ac3bc931373e686846bcb7671bd474e9f97546e49422026f907ffd3369feeb7",
+      "git_blob": "857dd30829054001f152c32f0e81c9216233ccc6"
+    },
+    "TreeDB/db/conditional_kv_contract_bench_test.go": {
+      "sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+      "git_blob": "ae3a6d3cd0ca244781e7843168dc5b35aac5d898"
+    },
+    "TreeDB/db/conditional_txn.go": {
+      "sha256": "6ef36b61056fa726d08200b6dfc50b4409866945184e9fcdc44e5a0d2cc22ce4",
+      "git_blob": "c3eb769e266fb450bef48add69700b6e40bf8bc5"
+    },
+    "TreeDB/db/conditional_txn_stats.go": {
+      "sha256": "1eb12bdfa147777e0b539a81e70e3e8d1d9b761a5a79e6cd9289f73fe8d82178",
+      "git_blob": "97778c673df7e58f5e3d25881f8d199ab70c56dc"
+    },
+    "TreeDB/db/conditional_txn_test.go": {
+      "sha256": "0541176b0c10a5674f786a007665bf590a0304bd78155930c3da6ea9baa004a5",
+      "git_blob": "6c73b121a3c782333f0616aececc1c09f71b894d"
+    },
+    "TreeDB/db/currentset_refresh_test.go": {
+      "sha256": "6ba8919fc12f0cc61cf137f06f1a0e0b5dc1e8ae4acdd5e9bd5bc7273baf73a7",
+      "git_blob": "82ddf5a2303c51a52f91a10b48c370d43e2237bd"
+    },
+    "TreeDB/db/db.go": {
+      "sha256": "5f704772968d9af05932b8a809a3f1210f631d1f3c33136236aca90db5ad9ac6",
+      "git_blob": "535aaf992adf910d81555c84dd5e17e8c3155dff"
+    },
+    "TreeDB/db/debug_commit_timing.go": {
+      "sha256": "67d1d02a4941a781e3e4f75228b9d2cbd298cef6cfdfa46918b616cb7c97b375",
+      "git_blob": "37ec1656f54ba60cb659e703b6a5c5d6ec9e5ada"
+    },
+    "TreeDB/db/dependency_directory_feature_v2_test.go": {
+      "sha256": "757d72419e5c477ceb21150b22c25333f7c771e8d09fdd8321a900314b31fe47",
+      "git_blob": "6a7401505ca520add8d2f903f4399f8205116a70"
+    },
+    "TreeDB/db/dependency_directory_lifetime_v2_test.go": {
+      "sha256": "dcba1e4d63db8e47731b90a4cfcbce189e54b099724b3ea02d48044ae3c85529",
+      "git_blob": "887cc58feabc3e570b8906b31bfd06d92f3167b5"
+    },
+    "TreeDB/db/dependency_directory_rebuild_v2.go": {
+      "sha256": "44ddf8675bd8a73c9c72f9f576e1bef3936c7813eed8f103ecae437f17a83218",
+      "git_blob": "7a4f44894f589ca3947994129aa8d8447390d43e"
+    },
+    "TreeDB/db/dependency_directory_snapshot_rebind_v2.go": {
+      "sha256": "d42e1b7b6ff815c9d2b0c674eab2e6f4cc3f415df389c027a1f53314fa31bb39",
+      "git_blob": "a2898d10a5a7bfe410fd25cf726cc4630dfb869a"
+    },
+    "TreeDB/db/dependency_directory_v2.go": {
+      "sha256": "d1b44f15bb0eb2385ee02897bb2195528b8d33b543a73203a00b60f4174ff819",
+      "git_blob": "3028a53f4cdb7c891f1bb0ae3988e5a6c89da1b3"
+    },
+    "TreeDB/db/dependency_directory_v2_test.go": {
+      "sha256": "423a087aba999ba6e28c7295c43925d7114d13b3b977270dab39c1297a462246",
+      "git_blob": "63e292332fbe5837d038c74b035841259f85754c"
+    },
+    "TreeDB/db/durability_profile.go": {
+      "sha256": "f0dc558ab04d43b9fc0e3aad20e31a33914ee2b16acd6b4d0e996e11e348d593",
+      "git_blob": "df0e66a6a473455a05d8ca8cbec6c7608bb995df"
+    },
+    "TreeDB/db/durable_root_bench_test.go": {
+      "sha256": "97a44dcec26e974db76ceb24ad63de429fe3ddfe36c0f95027d9984fb3c1dd4a",
+      "git_blob": "f7b271c54f43b82cfee9d20d8983866a9aa5fb46"
+    },
+    "TreeDB/db/durable_root_metadata_reuse_test.go": {
+      "sha256": "7433203cb211e27baddf1f8f31aca5d6ffbe9c92bf10e053adf8b07895bde29e",
+      "git_blob": "0fa8fb6fe5fe8883ee4e52078d49b7143ea631f7"
+    },
+    "TreeDB/db/durable_root_namespace_closure_test.go": {
+      "sha256": "c689d1513544c882a47a135b2e842b3610492f494f0f09eda8168175b0154e05",
+      "git_blob": "41cc9b4d560faed3cf99e08688e6c6d274f9815e"
+    },
+    "TreeDB/db/durable_root_open_test.go": {
+      "sha256": "1e9260af83ac40244f9e977f3fc6baed65a5ac6c85b58a9d8239c4a9292a64e8",
+      "git_blob": "179eb8168c96c97c658c241a3977d6251f7035bd"
+    },
+    "TreeDB/db/durable_root_pager_lock_contract_test.go": {
+      "sha256": "490c8e2500f78bd16c38b8b99d40fb3bd828b870fd56c832d2a76a43d8bd9fe1",
+      "git_blob": "ecbba8027471a6376c949a93a3bafd38bb795a59"
+    },
+    "TreeDB/db/durable_root_projection_test.go": {
+      "sha256": "d85afae1dfdafab4b4e0262d0957873f0498a06793c0ba830ae4d5f1d8c4c872",
+      "git_blob": "f89a03a28d7e4f7b47930823f37c8f3a62b39344"
+    },
+    "TreeDB/db/durable_root_recovery.go": {
+      "sha256": "23885c24bc53534f042a2de3c8a8af4fb906bd52747b7070e3d31433de6bf003",
+      "git_blob": "205f9273bef518b0f1d4a35cc35445bbe217e574"
+    },
+    "TreeDB/db/durable_root_recovery_test.go": {
+      "sha256": "40546eeea4d979eba9c1c0512ac8d4ca0e545384a80e242f417e807be0646864",
+      "git_blob": "0c4bf01d3c8bd84494f33ed049c42e049d51760f"
+    },
+    "TreeDB/db/durable_root_resource_closure_test.go": {
+      "sha256": "8b000f410986389c0f3c0fa4b85fd4350a09f2a30197e5df72ce12bf3d3df1c9",
+      "git_blob": "8ff9293dd4b302013a277bc04bc18ff68f67fc5c"
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+      "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05"
+    },
+    "TreeDB/db/durable_root_side_store_recovery_supported_test.go": {
+      "sha256": "92bcd215885c17d41bd36da617e11ae6c9ea968fa57b22c2d88d628c97ca119c",
+      "git_blob": "189995e3daaa91fceb0c5a010c98c960f9ee4a4a"
+    },
+    "TreeDB/db/durable_root_snapshot_rebind.go": {
+      "sha256": "a5f0bb1f871aa1b5ac6c3325dc0d7f32da2d71c9a41f604c8dc4e1e8fd01a861",
+      "git_blob": "f03fcf3e338d25f408531dd1dac26b0800dc917f"
+    },
+    "TreeDB/db/durable_root_snapshot_rebind_test.go": {
+      "sha256": "860918352e00599227c026bb5f2cac3c12599e95b7ea6653f0756eb718619502",
+      "git_blob": "ce74238196c83d1e5e32f88d0e3f46634d1f1918"
+    },
+    "TreeDB/db/durable_root_stats.go": {
+      "sha256": "c30bfab5fe61385c9f568fd5363c8fc108786b05468160abaae2e0fe29926c80",
+      "git_blob": "90b46341a13bdf7f5716482cb10e46ea1c36101e"
+    },
+    "TreeDB/db/durable_root_storage_transaction_test.go": {
+      "sha256": "dc4cc656f99814aed8b19fa4f1db055dbee6f38afdc56729fca274f218f96a2e",
+      "git_blob": "76ff72a58d2ab4959bd4df38276103ae5520f4d6"
+    },
+    "TreeDB/db/durable_root_teardown_test.go": {
+      "sha256": "ede6b1b2e318ef61e388037d799cdd030b015014520f4828be7c19daf3a66245",
+      "git_blob": "c35b3d732aae727bb7cc5a62a95b3f94cbd63f1d"
+    },
+    "TreeDB/db/durable_root_tracker_repair_test.go": {
+      "sha256": "7bce0586a19d5c4ae463df1777600d45754d3a0257a33f7f02027de13fe23100",
+      "git_blob": "fd8103cadbe4384437bc624f6edd63ac7af75ea0"
+    },
+    "TreeDB/db/empty_leaf_prune_test.go": {
+      "sha256": "a206adbeb93a91b26404d77727d373fb5db68af94f4381c3a29d1c0a8198355c",
+      "git_blob": "e1c6d3f10bb846d1b4ece539e5e5f1b3fb300466"
+    },
+    "TreeDB/db/entry_revision.go": {
+      "sha256": "d297b1b9d524003c8ec95159a20810a9e660dcc6026d0df4acc6fcc9e717f9a5",
+      "git_blob": "7f52653628e98c52b3ec9002760fb45eb466a513"
+    },
+    "TreeDB/db/errors.go": {
+      "sha256": "0d19b4c0326f83008b02930a10bbb592245b3d1399b0990fea35f8f670adfa17",
+      "git_blob": "aa0fe598da01069a0be715b180c5ed9fa1dfcdec"
+    },
+    "TreeDB/db/fill_factor_test.go": {
+      "sha256": "f1513c5a15cb87103459d36569b9bea50d7a4e282030cd6d2ac79410cec2dbc5",
+      "git_blob": "1f244002324cfeec1852ffc0dbb670fbd81cfc98"
+    },
+    "TreeDB/db/finalize_commit_prepare.go": {
+      "sha256": "6264dffadaaf3e19aeed66bcb5ffd99a8b18f24d6e8c040655e82a8f3ec71435",
+      "git_blob": "e56058ec244d7ab0e0a83596c741e0a70c248d5e"
+    },
+    "TreeDB/db/flush_admission_policy.go": {
+      "sha256": "039ddbceacc7e3350099452a31ea82da8a620c063786659089d13e2f2cf8a57d",
+      "git_blob": "dea5e676396f153dfdf9971700b98bc6ff226a58"
+    },
+    "TreeDB/db/flush_admission_policy_test.go": {
+      "sha256": "a2dac789a8916b95f508ed2d9de56cbd2b175718ecc458737b54314cf6ad6863",
+      "git_blob": "ae0e985f49bc65042d1b6ae52e4f04ba6a2c1827"
+    },
+    "TreeDB/db/flush_apply_options.go": {
+      "sha256": "0890c6047c7e549b82f0731ef22743069492ad0197ed15330efbbdae52687c30",
+      "git_blob": "85ccd0318948ae0756dbc0880e018839e2215998"
+    },
+    "TreeDB/db/flush_apply_parallel_test.go": {
+      "sha256": "dcae7ff2a2651eb132364bdf114ec1c0e2403d2402c01e0b4f8da938248e9185",
+      "git_blob": "49205b7ae46a7d4e82518b6e848adfbdcd5a1731"
+    },
+    "TreeDB/db/flush_apply_prepare_pool.go": {
+      "sha256": "a3bb8e751cc1dd40f903a11a79185d03f2a3e0a2fe8e5c3e3ae9199e301119aa",
+      "git_blob": "94d401d9b6661c093be6ad27face928a64a1b387"
+    },
+    "TreeDB/db/flush_apply_prepare_pool_test.go": {
+      "sha256": "c4f35f2576c66613d4b46b1bb3dfb3af6cf27064630c59743808e9b478c96453",
+      "git_blob": "054c9bca081ed64afb9ae47da4e69f2af5535d92"
+    },
+    "TreeDB/db/flush_apply_stats.go": {
+      "sha256": "98e8e2a5a910e4730a791a32dbf6a3d201d1e1ac9fb7aacaa0bd34d834bb9dc9",
+      "git_blob": "baa5d3c23c91b60ca83b8ef1bb1cf9d33bb00c53"
+    },
+    "TreeDB/db/flush_apply_stats_test.go": {
+      "sha256": "9bbbdb9cbeec8d5923150b5179129f624e9cb7ca94bbf48a496a6431ccecdd12",
+      "git_blob": "1cbda4ce3b8ad21c84612cdf22aff4209a745b9d"
+    },
+    "TreeDB/db/flush_span_run_plan.go": {
+      "sha256": "592aa9631551cba7d32ef9e2754ffc993b1b6fbbd2668c7130b4e3172c1926b0",
+      "git_blob": "63e5285a2ccfc25281e2aa3580d0ab1dc738ee49"
+    },
+    "TreeDB/db/format_config.go": {
+      "sha256": "ffd7310820a6b4ec82aef893edf22b873d60293334ba9424897673440810a09b",
+      "git_blob": "761e1767303bed86fd1d1fbd519aed3c201da33b"
+    },
+    "TreeDB/db/format_config_test.go": {
+      "sha256": "1037c0f27b95339e911a8cb90d683b1402a182e7aa47ba1577a5964a92bc4145",
+      "git_blob": "0e22ee6ee87b99c80e05cf1ff079cbaf22676e77"
+    },
+    "TreeDB/db/fragmentation.go": {
+      "sha256": "0e2a5505075d043ad5914c81cb373d61e25ade726d08bab69cd0cba1f4499799",
+      "git_blob": "38f42ec2c27ca72df9f4cc2d2050d2c4ac1d3536"
+    },
+    "TreeDB/db/fragmentation_internal_test.go": {
+      "sha256": "be52f33e65c3c49c5784e25cfd451e1cb99a16a04267d88f51979ddddaa74444",
+      "git_blob": "82a67dfa9c375b9e1ae67e5b17b2dc6e9165b53a"
+    },
+    "TreeDB/db/fragmentation_trigger_test.go": {
+      "sha256": "41ac79a283e23bad10ab4d15fbe60edc0e6609ce3fd1fb56156c191579bc0d4b",
+      "git_blob": "28ed4eaed16379a8651e0e5ff1968bf5415b8bef"
+    },
+    "TreeDB/db/fragmentation_validate.go": {
+      "sha256": "c95c2482f2a7eb658c81f3e8c01b9f7967171d9a21ebe5b938bbeffee6a2b101",
+      "git_blob": "fd82e70a336b370bfadc9cab8e56c64d8363f703"
+    },
+    "TreeDB/db/fragmentation_validate_test.go": {
+      "sha256": "da9f95fc5fb505638dc9ee79e1860ffbc49920a3a1c39822641c3a7f321ab85e",
+      "git_blob": "d5b6d358c42a6b76669e20d2b3739d0d254f178b"
+    },
+    "TreeDB/db/freelist_region_defaults_test.go": {
+      "sha256": "b2b52f398def96a3edfcb434a5e05a30d49e65b103696ce64f94cc38f6c65933",
+      "git_blob": "4aecebe9c1f1346b245f2caaf4d5c95f01dfbefb"
+    },
+    "TreeDB/db/fuzz_test.go": {
+      "sha256": "88fb727a9c45b18ee16b2652b24898c0478de3bbcf14fda55bc104e65cf4eb9e",
+      "git_blob": "07b5293a0de8fccd4ada197c58172a235dd35842"
+    },
+    "TreeDB/db/getmany_test.go": {
+      "sha256": "15ee1a378e8a99ded5367e77eac8289e7f067865e70646dd96379634e2599f15",
+      "git_blob": "da4d2aa9e3d36e6c83d34adc51147e9484efa218"
+    },
+    "TreeDB/db/graveyard_retire_seq_test.go": {
+      "sha256": "bd22ae4afc0580db89706e78953927c9a4233ad55ab9203ec00ac169f46618f2",
+      "git_blob": "074c96c850d47806de967a0d777796e933ed6e93"
+    },
+    "TreeDB/db/hardware_darwin.go": {
+      "sha256": "6ccc60e3f3d766a44e405fb0779a1f8fc532f6491a183490f0e999271c4f6afb",
+      "git_blob": "5356d79c6f6c49d0a3558b495536babb72030fc5"
+    },
+    "TreeDB/db/hardware_defaults.go": {
+      "sha256": "84bd286f1af52394660afe7d82f09ca6e342aaa2ed9e153a2342f4ab82020974",
+      "git_blob": "0bc889a236eb5f2c5323c738eef3359ae13c04f0"
+    },
+    "TreeDB/db/hardware_defaults_test.go": {
+      "sha256": "e217c38d365ff28213c7a4353d1103710d71a56352c6fce5a7900cffe660d9cc",
+      "git_blob": "23e79724da99d751b33a39279e1d067ef6bf9423"
+    },
+    "TreeDB/db/hardware_linux.go": {
+      "sha256": "783acfa66d92b16e743a1f7074d3d4ce2baa023d48c535d705f0e561963295ae",
+      "git_blob": "bc35fdffc8a078d389714132a6e4d815e49bf0f5"
+    },
+    "TreeDB/db/hardware_other.go": {
+      "sha256": "9e8900c33f815f9f03674e95076c543cc41d4826988b721866ca65db2cd919b0",
+      "git_blob": "cea2191ea6cdd6159a71a0aed394814e8d4ff06f"
+    },
+    "TreeDB/db/index_gen.go": {
+      "sha256": "b62e6488b7148102fdaa69798b1f7d262af6df7405667da9c40eb0cc703c76e6",
+      "git_blob": "82cb6ab1b663691f972f05d384523fdad62431aa"
+    },
+    "TreeDB/db/index_gen_db.go": {
+      "sha256": "22ef9e3b354ee86148ea8f72f7f9553845c5b086b1792bae1264da18e602d371",
+      "git_blob": "8e72542d95bb9ef3218bb10903cc9cb44431e612"
+    },
+    "TreeDB/db/index_swap.go": {
+      "sha256": "fad827b3c635171f6fd886e061c0aeff5c3ccba1dbd4185a8382bc501dff7fb8",
+      "git_blob": "8bb0f63e565c92b42a951b233bead605f70fb94b"
+    },
+    "TreeDB/db/index_swap_test.go": {
+      "sha256": "c8d87b39c1e4cbcb1fe42563ea4031c9b29b3dfdb52eaac671bdf168956907ae",
+      "git_blob": "8bb2aa2ec020f3155fee7f607d8e1df5478d5bdf"
+    },
+    "TreeDB/db/index_vacuum_m4_capture_test.go": {
+      "sha256": "6ebb7b56a00f3560c41d3855c89b02e7867480be127b5fa1554ce47c13d2b372",
+      "git_blob": "3a90c8b2136fe0c18cc0c3a22e2fbe2277d5cfe4"
+    },
+    "TreeDB/db/investigation_bench_test.go": {
+      "sha256": "9330ec685be0edf4f4e5b163338750ce722de34cc7169d66a16c91a8e108fe65",
+      "git_blob": "b3b49401e1784da8d2af2e614f9564df3d1e49bd"
+    },
+    "TreeDB/db/iterator_view_test.go": {
+      "sha256": "de14e67e2843c6e7cb38d65a3a2a21641a0ab41729f38969e51ee7ab0e9a7034",
+      "git_blob": "656c28593f5009327b27592140c9cffd716eda87"
+    },
+    "TreeDB/db/layout.go": {
+      "sha256": "4c9ea5156abc3b91cefb22a5ad7d9f9f84412e3a4619bf6adfb652378c9038dd",
+      "git_blob": "23fcb335ea4fce7ed0ad7290c3e4240beeea4169"
+    },
+    "TreeDB/db/layout_test.go": {
+      "sha256": "31fa7a685bd20ae83e52e01740a892cb79c3a8b40130b8b5f91dd084a8ea22cd",
+      "git_blob": "4f72eed9e82bf117af35d1de90d90628fcdd3842"
+    },
+    "TreeDB/db/leaf_generation_gc.go": {
+      "sha256": "e822b656eaef1a64bbfcce5284aa2212304f01255b4b6f167bc6adda7ee08bb2",
+      "git_blob": "78d1280035ae0f48114901bdfbe72e8e4ba9411b"
+    },
+    "TreeDB/db/leaf_generation_gc_bench_test.go": {
+      "sha256": "e7acf18246de378d3a22ff02e5dfc24c7ebe7015821fcb79fa8e02be00da72ef",
+      "git_blob": "8efd4ac18009eeb63b44fcda4a4dc2c4c4e12af9"
+    },
+    "TreeDB/db/leaf_generation_gc_test.go": {
+      "sha256": "3901b1646faa4a7e4e864ff20c820c2ccab782c8f4e5d4a722f2d712afe67e6e",
+      "git_blob": "f819977103fe4655148fdb1c6ca18ad8aca507bd"
+    },
+    "TreeDB/db/leaf_generation_maintenance_limits.go": {
+      "sha256": "9cc183d968f0048917df870145edcbbd1420ef7ff42b3f534b36c99e6e0102ba",
+      "git_blob": "b7ee6ed0b61e208bcfaefe961ebaa9a82dbe8e71"
+    },
+    "TreeDB/db/leaf_generation_maintenance_limits_test.go": {
+      "sha256": "29b6f219d4c5948845a54549ac52476f35ac864ba1ed09f9278516834b56a1a3",
+      "git_blob": "ddb997a3734956e7d9e73039456602dad6918115"
+    },
+    "TreeDB/db/leaf_generation_manifest.go": {
+      "sha256": "1bbefc621aee133323939e26d7a60f4729a07e1b55449fcd17c6fe85ba5bdfc3",
+      "git_blob": "03fa34e3f92630bcab0bb964cad8d892c46c7081"
+    },
+    "TreeDB/db/leaf_generation_manifest_stable_prepare.go": {
+      "sha256": "2f9d9ea6532eeac8765df1ced1c9b21890a157f3084c075619159024a88bf099",
+      "git_blob": "5b4a909f6e5dfcb634bd0079f9a6420a08952e0f"
+    },
+    "TreeDB/db/leaf_generation_manifest_stable_prepare_test.go": {
+      "sha256": "efab62fe61054e0cc44f80def59c823ee8bf0ab6d3aaf21e52abad2b70de32e9",
+      "git_blob": "bcead58a9dad1598e372ddf386632c5dab61830f"
+    },
+    "TreeDB/db/leaf_generation_manifest_stable_test.go": {
+      "sha256": "05279ec0b39a849b3f25bddb427a0c270089e3000237f55129449c178f918fad",
+      "git_blob": "044f2467a6472a724a94eab26e94ad7e6619ae07"
+    },
+    "TreeDB/db/leaf_generation_manifest_stable_windows_test.go": {
+      "sha256": "58716c8ff94b9b412a70c827282b10b9edcc4be9966c7df3e48d92da05014a3a",
+      "git_blob": "d735d6c9b1a8ac542dc867d5fb9e6147426f6c97"
+    },
+    "TreeDB/db/leaf_generation_manifest_store.go": {
+      "sha256": "ed4b42d3c65740bd7272a00085d42c020c576ef341f89199ce6b8b32a3e8fff7",
+      "git_blob": "b3b1accc80eade4e1ebd12218b685675ef3c87ef"
+    },
+    "TreeDB/db/leaf_generation_manifest_test.go": {
+      "sha256": "f0e454798dc1af43adb3e18fd3308b4446f98fff773e70968cbd8cc538f2fa3d",
+      "git_blob": "ce46134e9050625ff70c452d40b457d6d2ecfa5e"
+    },
+    "TreeDB/db/leaf_generation_pack.go": {
+      "sha256": "9624eba9aaf40be68c87dd02620fd74165688087c43bcaca1a7e402df5082275",
+      "git_blob": "6cb1eebf2360e79e2f4a0a586071d0bad7d091db"
+    },
+    "TreeDB/db/leaf_generation_pack_authority.go": {
+      "sha256": "28696d875bf17e0fff9e04f49ac68267bc4eb6f9dcdf6b4a35575dd1772f4573",
+      "git_blob": "ef63cd93d0c3b200ee077c45aa0a381673b2c0ce"
+    },
+    "TreeDB/db/leaf_generation_pack_authority_test.go": {
+      "sha256": "c6c3b9ea12f5f23b3b52c0498213d5405918103a5202fdfe66811bec9f18f6bb",
+      "git_blob": "cd24e959800fad8b68434152bc7a00b35945c408"
+    },
+    "TreeDB/db/leaf_generation_pack_authority_unix_unsupported_test.go": {
+      "sha256": "8fb85ea45e1cff43163f64924d65a42925fc44f3047ecc7298617a6c3177af17",
+      "git_blob": "8f6d4394c67844187a6f66047a318ee419b86ab4"
+    },
+    "TreeDB/db/leaf_generation_pack_authority_windows_test.go": {
+      "sha256": "ccecb8705fbd565de4df0631adab1415709b91a61fbea03170ebfddd5f70b9db",
+      "git_blob": "533032c5271787217080e3629bfeda86141b4094"
+    },
+    "TreeDB/db/leaf_generation_pack_bench_test.go": {
+      "sha256": "5ee67cf8a720e7cece487e89fcf0160e7dbd47f3d5b727ef17f8ec3dc68d5821",
+      "git_blob": "b64d80243ec37585b85391cc0000335c8111561d"
+    },
+    "TreeDB/db/leaf_generation_pack_capability_test.go": {
+      "sha256": "e92b4e31c4aa7bf4e84fb876289a62cf103048ca1e260c2dac6e9e06a55a32bc",
+      "git_blob": "ac18736f0a07f7ad72100704992adcf1153a5358"
+    },
+    "TreeDB/db/leaf_generation_pack_cleanup_test.go": {
+      "sha256": "ae41630d9676e50c939a6843cc77402a37a09276dc4c4cf0da7ede7fad6c3299",
+      "git_blob": "c51ac7ca5f0eccb667fcca20819641e2f86bea96"
+    },
+    "TreeDB/db/leaf_generation_pack_concurrency_test.go": {
+      "sha256": "7f276cbe0756fd1670b5d5367127bb0b9077f1387bf798871b099ee091f57ed6",
+      "git_blob": "25a413bb095df6a753f8c0491ea93207dfe8b704"
+    },
+    "TreeDB/db/leaf_generation_pack_from_plan.go": {
+      "sha256": "8cb5c0b1ac09caf28a2fcf2b174a50a4ed1bf68090eb98e9a3ff866f69466f40",
+      "git_blob": "04e343b0f7108fb7bf190237dbd7f62492509f61"
+    },
+    "TreeDB/db/leaf_generation_pack_publication_test.go": {
+      "sha256": "128a73d5a52f68cba93381fcf697ea70afc180cba6c971e282e4d8b04bfc419c",
+      "git_blob": "c690d613e3a37781af3a90894dfea024dd1e4eac"
+    },
+    "TreeDB/db/leaf_generation_pack_relocation_test.go": {
+      "sha256": "05bc53e9fcd34db46f9d116b37113bc385daf397dbd095683dc0fed8c29ea131",
+      "git_blob": "22b8b596ac7a549e8c5e7059d4489ebcaa6b4295"
+    },
+    "TreeDB/db/leaf_generation_pack_rewrite.go": {
+      "sha256": "f4fc82b3d92e5056a65f658b7c1ce55cd8282bc1b6a01a61810a3772fedcd17e",
+      "git_blob": "a44da2b42e577d48ec1cb563313e42da011d0afd"
+    },
+    "TreeDB/db/leaf_generation_pack_run_once.go": {
+      "sha256": "c32990dfd32364a50182aecc6cc7dcb4be3dfc0be84a858d30941fbd96bb5300",
+      "git_blob": "96e73a895f225c2aa7d7565d8383d3d05871bfc9"
+    },
+    "TreeDB/db/leaf_generation_pack_run_once_test.go": {
+      "sha256": "d361bbb6b7b4127d6bfd9fe70425af8ac27b918063614a03ac36647949392daf",
+      "git_blob": "f59b8f80c5200e25d9d4725123a6893689714f9a"
+    },
+    "TreeDB/db/leaf_generation_pack_select.go": {
+      "sha256": "01784a2b6f163ffc83033db7542465a3e0a0de055dd33e32c8f03e537f272b29",
+      "git_blob": "b8e4bee3f250b3c303f893e5c9787ecf14d49d76"
+    },
+    "TreeDB/db/leaf_generation_pack_select_test.go": {
+      "sha256": "3382d27a36483fa776c899a17b1827e8efaca4fbb3cfb96744d16f1320c5fc1a",
+      "git_blob": "05f4870d8c16edcefaf45ee2ed7be46c6a393796"
+    },
+    "TreeDB/db/leaf_generation_pack_sequence_authority_test.go": {
+      "sha256": "d53c99b7770bd150e38bc64938999681712ce89a74e2100d508d20ee704d324b",
+      "git_blob": "299b1d58a3838a0c6d2d442c8d67442b30dce3b1"
+    },
+    "TreeDB/db/leaf_generation_pack_stable_prepare.go": {
+      "sha256": "2c5783effcc05ececbbbe6bf81ffcf558099a9a5e37ce2b80878be7e4e94b9d4",
+      "git_blob": "05c115c067733693f642f594421a1cc37271cea6"
+    },
+    "TreeDB/db/leaf_generation_pack_stable_prepare_test.go": {
+      "sha256": "3cd3dde0101ef53f3506daded2a1456b72be1f4dd850c34b23ba03e3233b723e",
+      "git_blob": "5ef0a2eaf1182d8dfadea54cd1ee9b9705c50dd4"
+    },
+    "TreeDB/db/leaf_generation_pack_stage_stats_test.go": {
+      "sha256": "4ba1338cb7dc88ea0671d2e0d52a0e3272c10f5e728849451a6359e74b6a7bab",
+      "git_blob": "f3524275aa45d2d7fbf7fcc16f0ad99776e48d94"
+    },
+    "TreeDB/db/leaf_generation_pack_target_preflight_test.go": {
+      "sha256": "bb4753a4f9d05db3a666a4b95175ae43017d393a7e18fac66d4aac4aefb97907",
+      "git_blob": "d594b5b29e7360003b91e29df3882fff15143481"
+    },
+    "TreeDB/db/leaf_generation_pack_test.go": {
+      "sha256": "4a39925915ed55404822ecf1b7182fee271b3912e725a1bafaf9bea10b915910",
+      "git_blob": "390266dcbd1a1f697dc0225fb3a3b13a36ed9256"
+    },
+    "TreeDB/db/leaf_generation_pack_unsupported_contract_test.go": {
+      "sha256": "2da8b4440e4864370c1042123661078b9efe442bceb96298999bc89a33ab4af8",
+      "git_blob": "078bf1c7f38a3bf660986368911ef68bb3ba25d2"
+    },
+    "TreeDB/db/leaf_generation_plan.go": {
+      "sha256": "07847b487ff758228148d4e643eb0dbde2d0a0f910289a56e4148a5c3d5d29d9",
+      "git_blob": "aada3822848f8000a5484164b4f08910652f800a"
+    },
+    "TreeDB/db/leaf_generation_plan_bench_test.go": {
+      "sha256": "121e5535b57b33dc62fc3ac0816f104efd2879b8682bbb31b1bc64d3c0ef69c9",
+      "git_blob": "ef61a868a50ccbeda17486dafac956d78d777bae"
+    },
+    "TreeDB/db/leaf_generation_plan_test.go": {
+      "sha256": "6cca3c66f2fa6a3f4ed5407697d5bb878516f7aebf90d445cb79adf2ed5425dc",
+      "git_blob": "f2664cb405493c4ef0fc638849e6522dffe19e42"
+    },
+    "TreeDB/db/leaf_generation_record_length_index.go": {
+      "sha256": "b48d79d8e768de909b6585288ad8db6a9ea6be998afa74598838643aa69125ff",
+      "git_blob": "62b481fec80bc8c6cd81e4d61d45c482e54e6113"
+    },
+    "TreeDB/db/leaf_generation_record_length_index_test.go": {
+      "sha256": "4f20c3f6e2f06c78725932e71a85b29123c5dc5f6325af5935da44d5e97019a7",
+      "git_blob": "73bdd8898cba302ab85ad3c2f08bba7e568517fd"
+    },
+    "TreeDB/db/leaf_generation_runtime.go": {
+      "sha256": "f50000ceeb93faf0d640c454e8e962e87dc52f83ba465ba7390b5c0b53b6ab05",
+      "git_blob": "ebc0d07004456ca061dafcabae4245b6af9eac87"
+    },
+    "TreeDB/db/leaf_generation_stats.go": {
+      "sha256": "19591c0515b571247ebf067c32db085c594962a940ce77f2109c706175a8ed26",
+      "git_blob": "7a0bc28e3088a9c9fb00ae0b98be3c916326c82a"
+    },
+    "TreeDB/db/leaf_generation_stats_test.go": {
+      "sha256": "bfc5536f0c3d21d793c37abe6e393d6f7282cf8ff8d84aaddd11243813e643d1",
+      "git_blob": "ebd752e34437148526361ac55ff59de3f103044c"
+    },
+    "TreeDB/db/leaf_page_log.go": {
+      "sha256": "0d23848d23961fc10cc929cb7aaebc57b364d880a377ee24856dd30173630a27",
+      "git_blob": "44677b224765108df613fd88f1a8c156a1e7b9d6"
+    },
+    "TreeDB/db/leaf_page_log_lanes.go": {
+      "sha256": "9366f8d1bb7a7ba16b9a1e4ef6b3c5f71549901646fa75fc1c894d49b7ee73df",
+      "git_blob": "e110aa45081de65b789458c4dc2e52cc510530db"
+    },
+    "TreeDB/db/leaf_page_log_lanes_lifecycle_test.go": {
+      "sha256": "4d3c9fc509fbb134a382b685fc3df831452268e744b995eda30dd6b81232a22a",
+      "git_blob": "88b9b4039902989c58ba1d15b8ec2909811b8ac3"
+    },
+    "TreeDB/db/leaf_page_log_lanes_read_test.go": {
+      "sha256": "ae0be1eba3dc55e250ba5dde0a4106b64d9de3c9545d6511af434e33fa68d87d",
+      "git_blob": "4e036ea946776aea4189e947b14b4ddd9a421595"
+    },
+    "TreeDB/db/leaf_page_log_lanes_test.go": {
+      "sha256": "3998d8185e7369420734af200c09d5d8f49ce0198507f00408e36333d8b6ca63",
+      "git_blob": "3b515ade6a993a768d277ead8a28f568c7fb4eae"
+    },
+    "TreeDB/db/leaf_page_read_cache.go": {
+      "sha256": "cebcb434322e7fb016e623e401907c6fe75d8c47bdc1f0449f54094d3b3c9bd7",
+      "git_blob": "0571c085a6c6e5417e93c957eb2276c572fc2157"
+    },
+    "TreeDB/db/leaf_page_read_cache_test.go": {
+      "sha256": "3ac93b3007d0e3869a2b8ba11b02acc11a4d73f90c8bfeb44e18523eaadf6e5b",
+      "git_blob": "a59e8ae9582eb8eeda915f84c8260d12620d7315"
+    },
+    "TreeDB/db/leaf_page_stable_contract_test.go": {
+      "sha256": "43c60cc4ef29d1e6188489a03633c3b2fd9b5c68f7f5218c64589cbc191e15e9",
+      "git_blob": "1f7fdd86300e3b9ae170d6c1a72024f7781e0db1"
+    },
+    "TreeDB/db/leak_test.go": {
+      "sha256": "06d4c247e4711980dfd6e83a5b3258fcd27ad6d56098797040741c7902ce22ce",
+      "git_blob": "165316ddab024a64531d5ed37a36267f5bdeb2f9"
+    },
+    "TreeDB/db/lock_test.go": {
+      "sha256": "a61baf1762ea55d250deb81618570a241860d9fa312258620eae20715e75d8e7",
+      "git_blob": "6224804645a389c4c858b669fd0397a917c21d42"
+    },
+    "TreeDB/db/maintenance_bloat_test.go": {
+      "sha256": "9ac548bed69cda5e3e98279fb7a63a5b860baf8d1fb3e0ba5acdbab1b355af28",
+      "git_blob": "ba26b8040ecb4f852f472da959af7287d6decfbb"
+    },
+    "TreeDB/db/maintenance_leaf_fill_test.go": {
+      "sha256": "3c5963cae470d0a2f7255cf28eeb3e98b489b0e3cf37161e10c0a830990e84d7",
+      "git_blob": "ed811c7efac1a9ab828aa45aba4128905c6cc677"
+    },
+    "TreeDB/db/maintenance_reachability.go": {
+      "sha256": "b16ad78689082140793052a0826dfcdaa8bbaaa25cb78326a62b596bf9f87c84",
+      "git_blob": "3c775ef4e707c456072761270a7c4c0667eec463"
+    },
+    "TreeDB/db/maintenance_reachability_test.go": {
+      "sha256": "a3d2a774a1f0805d0812ce8a96710689035fe02ea17c04f9ff38c97884352d0a",
+      "git_blob": "3046e22ec0817f59ae5b8c9efb18dd36b7a3cbe7"
+    },
+    "TreeDB/db/maintenance_roots.go": {
+      "sha256": "5baba2e5accfde6dd9695cadc98f3efede282753d56c22040e02bc74cd6f4532",
+      "git_blob": "902d20f50d54da4829eb2c6594bac09ae69932fd"
+    },
+    "TreeDB/db/maintenance_roots_test.go": {
+      "sha256": "270ae686329f8e8528c2779ae5ea63bec86fe13ccbe373d235e67330f265253e",
+      "git_blob": "6abf1c35e3b1997e20550c14d92105b1ee707aee"
+    },
+    "TreeDB/db/manual_root_commit_test.go": {
+      "sha256": "4550161909dfc087e223f4d9e8fb483aa589db7626a57d99b0c07f2190b2736a",
+      "git_blob": "25a31d0126fe0483d03842cadc5138d12d041b78"
+    },
+    "TreeDB/db/namespace_instrumentation_test.go": {
+      "sha256": "ba240863520111e4843db38ca71c190d311463b9d0ad143726a01002d29ffd7a",
+      "git_blob": "0cfb7142650212bffa50e051fd3813af93da7540"
+    },
+    "TreeDB/db/namespace_mutation.go": {
+      "sha256": "e4847c0d2ea6159dfe4729fbe9079f0cc7ffa7e6187619fab2701e1b5216a81c",
+      "git_blob": "e2d15560d07163aab3ec20381c457700a5ee51c5"
+    },
+    "TreeDB/db/one_shot_read_test.go": {
+      "sha256": "91d68242340a3553cc5353575792d685dd0f3b96654a23ef62a0926665504764",
+      "git_blob": "b1cdbf566b5c4122fffab052ecdc118e334b5036"
+    },
+    "TreeDB/db/open_readonly.go": {
+      "sha256": "18dfcfd4c3be811d9548a377c4d1cd8c63f242a778427c547b521b567ab2b0e6",
+      "git_blob": "3b356831a2efb2f0f4a3dd8427bec2dd2a46fab6"
+    },
+    "TreeDB/db/ordered_root_foreground_observer_test.go": {
+      "sha256": "b05055687c249341524e6aa1a0d61db04bcb4ab45521fbb76db0caf73c99990f",
+      "git_blob": "81d48c3d8d5d1ccecfafbbfdc7095ea0319195e2"
+    },
+    "TreeDB/db/ordered_root_publish.go": {
+      "sha256": "15ded55a96fd4eee570046847a9faa231bb05c58655b543889d4b7299203f4eb",
+      "git_blob": "8389bc5c0af6c36f68563abf7572547c092d459b"
+    },
+    "TreeDB/db/ordered_root_publish_test.go": {
+      "sha256": "154acba80a76540c5cd1ddd3787231ea2114a5208d2d9a5fdcd9d85a4663e3d2",
+      "git_blob": "5b9bca4f24e0e5da0dcf62fe7953531785df6391"
+    },
+    "TreeDB/db/ordered_root_span_native_classification_test.go": {
+      "sha256": "bd2feedd9371846ebbf9ed58f575adf851336953b92d8302e1eb209eaf64ebbb",
+      "git_blob": "1a7dd04b20b26019192e4c21c9c2ab2b72896c2d"
+    },
+    "TreeDB/db/ordered_root_span_native_correctness_test.go": {
+      "sha256": "a9a04bd518b8737b3ddc877e5e71c3265e3c5246dd55eb05579f372c0ad71268",
+      "git_blob": "5c5a54f520294e1ab8655248d73a5a4feb2b6494"
+    },
+    "TreeDB/db/ordered_root_span_native_observability.go": {
+      "sha256": "d11ba9188176a3e7619482afe85cc2eff80df47b0f9be6e791ea848b85099510",
+      "git_blob": "2dfa975a5ec001b27720410f841f16e17a93be28"
+    },
+    "TreeDB/db/ordered_root_test_hooks_test.go": {
+      "sha256": "54bce48a50d5bc05881fe706b8cdf3a052e5717b37e655038b422cce17fb41a3",
+      "git_blob": "6b77197a797be9ba50c07161b1d83396b5cf1533"
+    },
+    "TreeDB/db/permissions.go": {
+      "sha256": "adaad1474237b56c3459d38c4f17b1b09c187c72e4c2a2c1d1bc073363006403",
+      "git_blob": "1a1226038b650b84ea181863764be2aa4c4d20da"
+    },
+    "TreeDB/db/physical_snapshot_cut_v1.go": {
+      "sha256": "e12ce70d0858ab8f5efb01401b8097f3dfa4dbd99a80655358d22961625e8ea6",
+      "git_blob": "6e8b3fe3bece4e94c984173c61a0a9f58aed7064"
+    },
+    "TreeDB/db/physical_snapshot_cut_v1_test.go": {
+      "sha256": "756b3af9b760923d748552ecce0aee6c01fdbf23788d85e9b00ea4376d42f4f5",
+      "git_blob": "ec1c384fd0c71980394c4b8ad27448b9f0da7e39"
+    },
+    "TreeDB/db/policy.go": {
+      "sha256": "fcf6debe89e8e3d7fb186777aeb0792c7830de5771e266bd195e6cdec8bccad9",
+      "git_blob": "ce32cf4b2fc39d27441359f06fc3ae3f1e74a960"
+    },
+    "TreeDB/db/pool_bench_test.go": {
+      "sha256": "66b1dbc21d39ab3925935d3a6bc405828085b9268082083653184da8cbc79224",
+      "git_blob": "ace6174dc7aea9314a88797698628a11e282389b"
+    },
+    "TreeDB/db/pools.go": {
+      "sha256": "69fab007700c7c361d483cc163cdf928ee91d85dba4119d4e0eb8bf9e90cc3f4",
+      "git_blob": "8b910ccaa9751fd91a06020d544fc02841c2dc0e"
+    },
+    "TreeDB/db/power_loss_certification_stale_build_test.go": {
+      "sha256": "9abf532bd5a44dc7b6f91b13cabf00f0d744e19de760925061668d7e0d610fcb",
+      "git_blob": "0276e8409fdcdc098f19f5cd60ee44eed6699229"
+    },
+    "TreeDB/db/power_loss_oracle_page_reuse_test.go": {
+      "sha256": "54a1bb3c26574020b3170d88d289edf796fd8144cdbd52123dc23409d45b90a8",
+      "git_blob": "991bccf1e0bf6b90e56d8ac3f841a376730222a8"
+    },
+    "TreeDB/db/power_loss_oracle_poison_test.go": {
+      "sha256": "3407d7990c82a279c667f69e8472db3d83ba3a9a7d1c0837284676fbb4a63e35",
+      "git_blob": "079fa163c3758645798b07b06653fb17e069cdd4"
+    },
+    "TreeDB/db/power_loss_witness_external_registry_test.go": {
+      "sha256": "cf8d1434b473acfedc6bc2d3d9445eb1a530c9a87cd6a796216df56d832577b5",
+      "git_blob": "9f95e4decd4afeb3fa26fbe67e76e0e982ffcafa"
+    },
+    "TreeDB/db/power_loss_witness_registry_test.go": {
+      "sha256": "eedb6d3bb1f76ee51b2a9355de412588c94bf19742d4ed4239fe5a0356653621",
+      "git_blob": "c14748b2327be7b3046689e8e0ef163fbee7856c"
+    },
+    "TreeDB/db/prepared_root_point_profile.go": {
+      "sha256": "2dd2abccec985d2e7d23e203edff5642673369b68e6ed2d867997a53d633fbcb",
+      "git_blob": "43f09010cc78461042c48c861eff4fd701e7504f"
+    },
+    "TreeDB/db/prepared_root_point_profile_test.go": {
+      "sha256": "2836e3e1e8d1adcda42587632351cad3be60ff1b291f046efc5fef6db5536adc",
+      "git_blob": "d7c6635a352555d0f4af5c8e5384e4c6c8ebaab6"
+    },
+    "TreeDB/db/prepared_root_publication_profile.go": {
+      "sha256": "31c2c622e293a92e762c35376dcf32e939175efaf215a70b84bd04bc65c7b5b3",
+      "git_blob": "c2c5bee328b317e6331a21476b199baa02e3e41c"
+    },
+    "TreeDB/db/prepared_root_publication_profile_test.go": {
+      "sha256": "a7f7e888c5dfa7b0cf4a5687fe93efe54ff766e3eed2892eb3a885ca0c43424b",
+      "git_blob": "0d014daf4de95e0af9a01ab418186e2bed42fd75"
+    },
+    "TreeDB/db/prepared_serial_apply_test.go": {
+      "sha256": "85c1ba3b2c4c3deeb08f4540774afb771df3b936c525298813b8103d7c6b3d03",
+      "git_blob": "1dbfdacaeefe7b54a7d06192f76246ae4f5f3a86"
+    },
+    "TreeDB/db/prune.go": {
+      "sha256": "056017aae6965f4660e13c0fa0e4a1c799b4f18b3e8cf52a47a90014712d5caf",
+      "git_blob": "75d8c9b72cc1a79aa2493bbd3252c6d7a444e3a3"
+    },
+    "TreeDB/db/publish_watermark_metrics.go": {
+      "sha256": "fc2fed7c72ee98b8fa9fe6e79c149fa0946829b6c921237359666908ec4353f5",
+      "git_blob": "3ac591cd1600bc6ab0253735491f38907b570461"
+    },
+    "TreeDB/db/publish_watermark_metrics_test.go": {
+      "sha256": "245e822f25ae63c1bda9c77496e56c4e3f1a0b2ad12c2d8de55c18775744e1c5",
+      "git_blob": "54a856b28f7660f0ff386df385078df5d0256e0f"
+    },
+    "TreeDB/db/race_test.go": {
+      "sha256": "fa1dcbee357bf69140986e550f39d0c7d21fa4321d92230e4c93cce3209dbfcd",
+      "git_blob": "3f03878527859adc6b13bbd8374029b56f36c7d1"
+    },
+    "TreeDB/db/raw_kv_compat.go": {
+      "sha256": "986dd35cb636d3167054ae2bb7ba69fe558103b18737288062dbbf0147ba2a44",
+      "git_blob": "c44fe3b1ba9ce18c8847bdd85796346812b7092b"
+    },
+    "TreeDB/db/raw_kv_parity_test.go": {
+      "sha256": "b432f9eee05f133aba860c3640078e6e92e73ce19955d3ad87530d665abb0609",
+      "git_blob": "e222673d61da58b4202efd315760208ba3c59d46"
+    },
+    "TreeDB/db/raw_span_native_observability.go": {
+      "sha256": "3514d3dd156f0ac86f9b016c5f022013a429939f0f7fa3080c946c0468161efc",
+      "git_blob": "add13074c3a931a9f6d88faa8dd13bdec119112f"
+    },
+    "TreeDB/db/raw_span_native_route_test.go": {
+      "sha256": "91ebdd4c42cc1b708e85ee880e6bd6c61fd416081b0448af73910f2f15ee163d",
+      "git_blob": "ea3fc5e32983fa4f4265edf0832daaa9f8983010"
+    },
+    "TreeDB/db/read_only_prepare.go": {
+      "sha256": "057750d288e705ac8515d349747cf752109162a5fef66c4ed1ff0e6e7a113a58",
+      "git_blob": "dbfb5bc915de60faf37fd18e9bcddf6ba80d0f93"
+    },
+    "TreeDB/db/read_only_prepare_test.go": {
+      "sha256": "8881a994928a030f85b39de0cff23846c99a4473c03c8a69b502ae724b3cbcf8",
+      "git_blob": "bd26f1b480c20bd150cb4f826834c64c5fef758a"
+    },
+    "TreeDB/db/readonly_open_test.go": {
+      "sha256": "c029ca3d2d69761e714ccc1eb9180b618013acedfc3ca2677eb072d8b1805fb6",
+      "git_blob": "55d40f6e7b950eede1578f484dd9c7fa67d51279"
+    },
+    "TreeDB/db/recoverable_root_set.go": {
+      "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+      "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17"
+    },
+    "TreeDB/db/recoverable_root_set_bench_test.go": {
+      "sha256": "7a00318411fd4f03a83acb6b876339c70ace25105b805b328bd354bf822f438b",
+      "git_blob": "1de04f077ea5b6034a50ca7d31333c3e51378f11"
+    },
+    "TreeDB/db/recoverable_root_set_test.go": {
+      "sha256": "9b441aa762fbeb9aee57f1c786f8032f3d2b07e46e0bc27d95068a253408df18",
+      "git_blob": "0f2eaf27e40a893b878e0784aa034dfaa7a83e08"
+    },
+    "TreeDB/db/repro_frag_test.go": {
+      "sha256": "b5a73e8dbb7247e9c5e89cddcff5eea48b7ed77d67d2bdee571eab58f6ff0362",
+      "git_blob": "c79aa49041dfdf97de2e11c725cd5ca8409798b5"
+    },
+    "TreeDB/db/resource_descriptor_db_test.go": {
+      "sha256": "d660022ba366a777ca747160879b5d8f2e461730b510567ddb1ea2828207b673",
+      "git_blob": "14aa3fe1f2f03affd2a59cfe07cf1bcac8125a6e"
+    },
+    "TreeDB/db/resource_selector_test.go": {
+      "sha256": "68994ddfc7d450caeb858f6943e0e63c38af64ca9ca38ee33217dddadc13a0a6",
+      "git_blob": "17afca1aed6f4bb9060cf566fec3438f16a87612"
+    },
+    "TreeDB/db/root_collapse_test.go": {
+      "sha256": "bc2543d3c45e3c178c7bec090b05cd7fff80615524d9145b59ddae41017c404b",
+      "git_blob": "a1b5dc005f6bc330b3927d736c61c2f1b0eddf26"
+    },
+    "TreeDB/db/root_probe_stats.go": {
+      "sha256": "c12b0ee57a4e25712de86a137f10fa098d11e6af176fe67a18a3584fab6a71ce",
+      "git_blob": "3628ec0deaed371fa03aa599bbb4c8ac77312765"
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "sha256": "76c9e34d2386423346f31ab6b826d127017d1b6ac20b69da9a4295f53e62c9c7",
+      "git_blob": "067ec368c3abfd329d04a2ce5242631d07cd6424"
+    },
+    "TreeDB/db/root_publication_activation_bench_test.go": {
+      "sha256": "4b32a4757ba933502d7334f1d0f34200d5941edf617f5d0f8e64530870921ed8",
+      "git_blob": "48625622e3590e135ddb02b3d80b3283e70fd4da"
+    },
+    "TreeDB/db/root_publication_activation_test.go": {
+      "sha256": "fc3e305cd9684e1eced1c13b6d2a0e18a1fbfcc7618996bbe54633ca61c87768",
+      "git_blob": "93b4c2905c160103d8d32aa17b77bdefc20f301d"
+    },
+    "TreeDB/db/root_publication_build_group.go": {
+      "sha256": "a78ef35b0a921da7729923817afa202a04b8b6477b642cc7c07946ef1aa931a7",
+      "git_blob": "5c37c50d8a26c6db522ff61e4174e41915db101f"
+    },
+    "TreeDB/db/root_snapshot.go": {
+      "sha256": "c549bb0e922c1ac9c992d6e469e4288e3e6a1cce9b7197ebcdc62b2ccd7fb876",
+      "git_blob": "e4641499d958332389819094d7e9027513ba6468"
+    },
+    "TreeDB/db/snapshot_closed_surface_test.go": {
+      "sha256": "6ff1ba295e0a2c901382bf85684ec90d1e5dcc88a8e62a56bb74fd0f907d47a9",
+      "git_blob": "85e8a94f3332a6100b444e441d7e953402cf5a30"
+    },
+    "TreeDB/db/snapshot_iterator_creation_test.go": {
+      "sha256": "864b73050f0db97dd7dc58fee8e337feac7d87ab1621862811335e8d0954be7c",
+      "git_blob": "815aac3d667108a722ea0b0bd5dc0404ba9582ba"
+    },
+    "TreeDB/db/snapshot_iterator_lifetime.go": {
+      "sha256": "5e157ff85f2c7b03ee719760b8b2bc716803b38f69f8e24e4d72f7bc7c19ef57",
+      "git_blob": "648679f9a0f6f95ead7654fd1d5959373ac207f4"
+    },
+    "TreeDB/db/snapshot_pins.go": {
+      "sha256": "c2c3f66020578ad5720e666978be9ead09186381f4309fb3b463a95556b3428e",
+      "git_blob": "4af9b00a6d20e98fc8661453a5275e4e818b118f"
+    },
+    "TreeDB/db/snapshot_probe_test.go": {
+      "sha256": "03a9d5c7e4c6b2907bb149808363531b9063ab29328ae5855d4196ae07d6de0d",
+      "git_blob": "f4dd6c5f5333194c936cc256cc5a5a3827147df1"
+    },
+    "TreeDB/db/snapshot_read_lifetime.go": {
+      "sha256": "40ad6a277191ffa9feb281bcbb0c21686d1634bed5003a4697ff8708fa5aaa9a",
+      "git_blob": "e4f6bdeed02ff216152a7b4914d85c457410e1af"
+    },
+    "TreeDB/db/snapshot_view_test.go": {
+      "sha256": "ce8356fc2225f61c324229fdd014e188f969ae06cb6e2d534db4585cd4eff278",
+      "git_blob": "1bb82352cbac896c6ac199d0e0232b775ba4ca1c"
+    },
+    "TreeDB/db/span_native_apply_stats_test.go": {
+      "sha256": "99d9313f489e6fdd4cd5566ef509f338deae29962108ec71797130b97967850e",
+      "git_blob": "4a791495d76a7dcba94dbcd8ce63b4e1ac16b61e"
+    },
+    "TreeDB/db/span_run_contract.go": {
+      "sha256": "b99f7ce2d84f392af9848ee5ff74222ad76e65b0ea4c829a04de0010b3ef86c2",
+      "git_blob": "2561a2920e12da39c420569f53c800f88eb22baa"
+    },
+    "TreeDB/db/span_run_contract_test.go": {
+      "sha256": "f10d4b147f9d931abfab07de74cd6b56d789c0feeea88ef7cdbb2f60bf89caa2",
+      "git_blob": "744e9c1c61bc910331784e7151e300c368fed462"
+    },
+    "TreeDB/db/stable_dictionary_test.go": {
+      "sha256": "1de238f459fa72d7f7b7137f00764d7b4a73b04cef468824d6941cf7a1d8d493",
+      "git_blob": "5a8d1fd6e3b706cea55f12a0f5969f978e6c4a89"
+    },
+    "TreeDB/db/stable_leaf_rewrite.go": {
+      "sha256": "bf18ae120bba1cbfac8aacabca17a4d8052dead15d95e81695cb01fcd9074666",
+      "git_blob": "180e8d55e46a336ee35aecded5794e50afec957a"
+    },
+    "TreeDB/db/stable_resource.go": {
+      "sha256": "bd0374a5357dbdd8422b2396f0bf0b46f309c9659d3b884c1784cfa4990581b4",
+      "git_blob": "6592775d732397e6e685c2f8fb7ce7d453315a0e"
+    },
+    "TreeDB/db/stable_resource_test.go": {
+      "sha256": "218f34bc2c73a0fa627bc29627594b1c781a23a429c9eccbbc6bf12ace4efd26",
+      "git_blob": "b39bcbc9a1f3ece79fc3ba2e815678f32dd27737"
+    },
+    "TreeDB/db/stable_resource_windows_test.go": {
+      "sha256": "32912ec4f9819fb062de62f7613806e8dc94004aa765a563a03c6886fa4627b6",
+      "git_blob": "75763c380ffe34beb4990a05562a7588bf7e8063"
+    },
+    "TreeDB/db/stable_template_test.go": {
+      "sha256": "c72458c1859e5a3b221dd18d921de478dd550236e475a6afe84c604805cd01d7",
+      "git_blob": "c915cdfdfbebdfe1c513fe00e613e7547a6da669"
+    },
+    "TreeDB/db/standalone_leaf_page_log.go": {
+      "sha256": "bf1d9918b42ee8b7872d760a356e42ff8917d8eff6dcb89275b7901baf322105",
+      "git_blob": "1ad7ee73425815fe9e701abf6145ff6d68ba2ad0"
+    },
+    "TreeDB/db/standalone_leaf_page_log_test.go": {
+      "sha256": "080d6d167cb33cee18f177b72bd77a39ab2515353efe18bdcca9dbc4d69a90b8",
+      "git_blob": "dc01e84cf687272ca287eca4892fc06f96bdcc62"
+    },
+    "TreeDB/db/standalone_leaf_page_stable_resource_test.go": {
+      "sha256": "7bf13486a37f90a372296958d189f799a3ced1384221f61b4367a57b3f36f181",
+      "git_blob": "4f0ab96083edbc1f8db28f36356e90da28d827c1"
+    },
+    "TreeDB/db/storage_maintenance_plan.go": {
+      "sha256": "30347e105cc24e62a988e13855182628b96dd04b22ce5ffcdc9782c3d919ee92",
+      "git_blob": "2b4fc3bf767bd97ae44b91eb43c13d59bf42da96"
+    },
+    "TreeDB/db/storage_maintenance_test.go": {
+      "sha256": "29197003d40fe8b83ef255a092bc5e4fc24c848bc83d3ad1add123b0f03c8c1d",
+      "git_blob": "12433aaa7afcfcdbe777b2f4135f32c17e1cd775"
+    },
+    "TreeDB/db/sync_latency_bench_test.go": {
+      "sha256": "790b1dc7603089fa5d7b4bd5a986a7a58f6cc8bc018129d50cf959d2972b3879",
+      "git_blob": "d6772c7e7768c7c046d1ccc45f4a59dbae1dc630"
+    },
+    "TreeDB/db/system_root_publish.go": {
+      "sha256": "4352710bea820aec82e2603fb32c8906fda0527d257687f7875ddc5e06d1e8cc",
+      "git_blob": "03024e96b6a725af802a95ad812e19b7ab23b0ec"
+    },
+    "TreeDB/db/system_root_publish_bench_test.go": {
+      "sha256": "a3f250449fa5c3e6fa344d8c9d2d46a2741b8198b94bfd456f51bda354099af9",
+      "git_blob": "adf0a0162dfd58d12153e14b3a2b505da0aa6e5b"
+    },
+    "TreeDB/db/system_root_publish_test.go": {
+      "sha256": "94fc4a20292bedcb2e1cc8799d88fc3aac0d0c58073b39b02422e1a0da7dccdf",
+      "git_blob": "3b9b6dae25c97f3f0262bf8a63428c22c3b827ae"
+    },
+    "TreeDB/db/template_lookup_open_test.go": {
+      "sha256": "8a2c6c25d78b5f4758d11e7180b1fc4f96ea9c5c4ea766ee446f5b3049b4d546",
+      "git_blob": "2c8c0fabfd2203cd7a3b4bacdd2edd1e9df92746"
+    },
+    "TreeDB/db/tree_balance_test.go": {
+      "sha256": "2938b6f5db29d5814bcacd6d0ed7ac288da9e2457ccb5838e6231f71aff32a8b",
+      "git_blob": "f67a21ef9ebdd3643c20abd9ffcb4dde9cfae594"
+    },
+    "TreeDB/db/typed_child_ref_test.go": {
+      "sha256": "a6134c95188e30b4a60a111ca048986295a3b5b16c9d3263a6f8aa178600306f",
+      "git_blob": "57e152346b972ee7d6442f7eb189c9bcc37ca735"
+    },
+    "TreeDB/db/underfull_internal_merge_test.go": {
+      "sha256": "28681015663a40bcae0b04065d30a22ce4363d6cb058a9e6fc758527bc95bd62",
+      "git_blob": "d284ac3a26b3473ec3888dcabc5dcb9def5f4f51"
+    },
+    "TreeDB/db/underfull_merge_test.go": {
+      "sha256": "977e48f982e295711969f414b76619b469645f59f7085041a53263d43887ed09",
+      "git_blob": "75af7f024b38b86e3a177d90404e3d0c88b07be5"
+    },
+    "TreeDB/db/update.go": {
+      "sha256": "1a9b0046f49f4eaf18b760a2fda5b56adb07384e4d84d6355aad68f21884e4bc",
+      "git_blob": "2fe2cf8145ab034adf0cab5ada4b70e609ea9570"
+    },
+    "TreeDB/db/update_lock_alloc_test.go": {
+      "sha256": "011ec0488a8706381dad55db68a46413dced8cf81f15debd57ce3a75edd0b723",
+      "git_blob": "594d7b4110d7cf2bda7a3616fc8136bd015eb3a1"
+    },
+    "TreeDB/db/update_test.go": {
+      "sha256": "c09968c8cfac3510f2bdcddc7645941a1fab63ad9e8807d427ca80961b6e4cfa",
+      "git_blob": "65a5587162fb1f59b3bf49fec57b5ef8e2ea0ecf"
+    },
+    "TreeDB/db/vacuum_collection_bench_test.go": {
+      "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+      "git_blob": "c5347bb64a3900d1a051576b93fc395db8912039"
+    },
+    "TreeDB/db/vacuum_collection_external_bench_test.go": {
+      "sha256": "227faeb039973ec5f7a882edf5961cd44540e2504650686cd31b226e7cc2bac2",
+      "git_blob": "6b27545ac6219fba6ce4144f53d6a9623baa2730"
+    },
+    "TreeDB/db/vacuum_collection_latency_external_bench_test.go": {
+      "sha256": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0",
+      "git_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53"
+    },
+    "TreeDB/db/vacuum_collection_publication_guard_test.go": {
+      "sha256": "d7c7271b30aa34d73ee21634d86b3d3d8182d5a8610803fd4c067d42ce6abbe6",
+      "git_blob": "0e2d863495aec436972cdd5ecd76746be21da25e"
+    },
+    "TreeDB/db/vacuum_collection_roots.go": {
+      "sha256": "5559fbf7af7a74a28f2aebb9e9ed4b31b56563f1166d8f98352e2e73e8b1d334",
+      "git_blob": "675f3973febce6093804d2dec205164535a388b9"
+    },
+    "TreeDB/db/vacuum_collection_roots_test.go": {
+      "sha256": "ec570dc143b28f012e394410f6926e5fbac7943f0a6b322ec84e6e6a5753b3e1",
+      "git_blob": "0a6e0e6543cb17fb425ab708287c744008bb0d4a"
+    },
+    "TreeDB/db/vacuum_collection_snapshot_test.go": {
+      "sha256": "50414a030d553af8988ebe581886881b427787b8115a38ba713829bde6cf4c08",
+      "git_blob": "1ae3326c21d42f4669cf74421465d8c9be37f217"
+    },
+    "TreeDB/db/vacuum_m0_fixture_test.go": {
+      "sha256": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b",
+      "git_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb"
+    },
+    "TreeDB/db/vacuum_manifest_compatibility_test.go": {
+      "sha256": "656d3438a0423fe6779989aceeb2f1fae2660c51e9cceeef5080ebc441169a0b",
+      "git_blob": "d69c0a5ab2e3cabb58c9abb607ebd2be13d27d6e"
+    },
+    "TreeDB/db/vacuum_offline.go": {
+      "sha256": "7dfb9262472c7508a491087058347adbbe67cfa83c6308355d82c2b6973d357d",
+      "git_blob": "791565373e5252e9959f20e6ce3c9606b6c43c4c"
+    },
+    "TreeDB/db/vacuum_offline_test.go": {
+      "sha256": "f863cbff028b460bd20ed52bf3943b74ba56cef2fcdbf89f4e64f097fa7d906b",
+      "git_blob": "a5f04f6ea80b8d646f1f1d17c3dd01294b99f9fc"
+    },
+    "TreeDB/db/vacuum_online.go": {
+      "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993",
+      "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06"
+    },
+    "TreeDB/db/vacuum_online_free_retired_instrument_test.go": {
+      "sha256": "d65e318ca89bc8f389c6435bda351783fe64628b47fb3d477745cdbee3617396",
+      "git_blob": "45c770014c87505e70f5b115aea45444e33f0fc3"
+    },
+    "TreeDB/db/vacuum_online_free_retired_test.go": {
+      "sha256": "b4363bb4f3d8673b48fe7f114b174ef5ec9940b98c1ca1dc4a0ab5a3cfb585fc",
+      "git_blob": "cb647e0ee4e12392c92d693c2f3b217ea54e1273"
+    },
+    "TreeDB/db/vacuum_online_legacy_test.go": {
+      "sha256": "7de398fbc4901a114e5b0ea32c828b24fbe7c0ebe010e2a0408d2ecf502274e6",
+      "git_blob": "6744d44507910b97b4281fd9d901ba0b80fb9717"
+    },
+    "TreeDB/db/vacuum_online_stats_bench_test.go": {
+      "sha256": "46d28582f2c82dec55ec7db4766d13831865f68cbdd2bf509097bdb782d213e3",
+      "git_blob": "809a63ed0fbef663568f390f16121fb0579caef0"
+    },
+    "TreeDB/db/vacuum_online_swap_test.go": {
+      "sha256": "f18f89a600065779f3d94ff69354cc80c788055b7c0f14ff743d82634ddecc2b",
+      "git_blob": "6c83060fc8f7fcbfebbbb0afaae1bdb44725dbd3"
+    },
+    "TreeDB/db/vacuum_panic_test.go": {
+      "sha256": "7576b3e26a886634773723e43683bf382f918b292a192a14802a7eb578834ee3",
+      "git_blob": "3e45fa503b610962129ef62ab9b050e8150add4b"
+    },
+    "TreeDB/db/vacuum_recorder_test.go": {
+      "sha256": "0521d5ea8b5fbd69d364009aaeb0c51a7ee960ca9d4e84ddd02387bcc494c0c0",
+      "git_blob": "4368541129dade8d0eef452a11a868f608333e38"
+    },
+    "TreeDB/db/vacuum_system_leaf_policy_test.go": {
+      "sha256": "30778fd114ac2fb7ec2d9501438f9d25e30b8f92399f7b1fd1c2d2599657a3e8",
+      "git_blob": "e4037378023417e7b8a11e9ccb1ad8322b6c54f2"
+    },
+    "TreeDB/db/value_log_appender.go": {
+      "sha256": "03be5e9d82a12804d7bc75ecf300dcd2bdd1086c976db8ac8845eb0cbdc831f8",
+      "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0"
+    },
+    "TreeDB/db/value_log_appender_segments_test.go": {
+      "sha256": "cd97df544e101c4e868bf32ea94b2172358098816c14d3fe7fb1cc66b932fb9d",
+      "git_blob": "796c5658e144062af5497ea13ce260f894c87f98"
+    },
+    "TreeDB/db/value_log_appender_test.go": {
+      "sha256": "40f826ce6c3f5d394fdd6d8c2fc533cf39fa6021b7bc3f78e80d4807e68beade",
+      "git_blob": "55f32616d305c9b94722bb88efb64efc792c9429"
+    },
+    "TreeDB/db/value_placement.go": {
+      "sha256": "60615935c4ccf5069e8a5d351742976629ab351b593d2d39400d91b196e0a232",
+      "git_blob": "e2bd4e2d39c1be0b6912c4d6ed35d7821a2af921"
+    },
+    "TreeDB/db/value_reader.go": {
+      "sha256": "5b9dd13e5c64b1d2dca5e6242520e5a4ff4e2d52b71366c5eb77fc5990ff5fc1",
+      "git_blob": "b7617557235b1549416f6e02fce10517c354a8be"
+    },
+    "TreeDB/db/versioned_read_test.go": {
+      "sha256": "1b8aee695bb3f376dca91d252955b4847cdb531d8ffe3bc1bf2198a70998863e",
+      "git_blob": "cb56b17ced4539f5636287d842ae68d27de2ec23"
+    },
+    "TreeDB/db/vlog_gc.go": {
+      "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca",
+      "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe"
+    },
+    "TreeDB/db/vlog_gc_incremental.go": {
+      "sha256": "2b85d19db873904d4042623b1e17e23c02e182fcdfdfae99d59f0461cd4ea7c3",
+      "git_blob": "3ffef331a324c81708517dcedfc9ee4466bf2bc2"
+    },
+    "TreeDB/db/vlog_gc_incremental_apply_test.go": {
+      "sha256": "8abc3e010e471eb436c06ee66cfbccc4225aeda31aea0f2cca77c04c327efee2",
+      "git_blob": "407652f7ba54aad796cca8c900a988d54a44e911"
+    },
+    "TreeDB/db/vlog_gc_incremental_bench_test.go": {
+      "sha256": "9316c03c1eadc3198ecaac0626d0eaac8fd6d45b21dc8ceb77675c892aac838f",
+      "git_blob": "03e9862b91641f1661e75715c787efceb3957209"
+    },
+    "TreeDB/db/vlog_gc_incremental_delta_test.go": {
+      "sha256": "c834cfe5a7dd8a77de838959a87a790d541ddc894310adcb68673e4119084618",
+      "git_blob": "950f568979743c20d27641645cf9ee3073e1596e"
+    },
+    "TreeDB/db/vlog_gc_lock_bench_test.go": {
+      "sha256": "c853627ffc9a76ec241d6922cbe72134083040f03a0f00a1c577a1fe9aea219d",
+      "git_blob": "880ef95caf77ecdbdaf3f98031f0c9994536e4ec"
+    },
+    "TreeDB/db/vlog_gc_test.go": {
+      "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2",
+      "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5"
+    },
+    "TreeDB/db/vlog_health.go": {
+      "sha256": "83ee150fcb609c9e1c7a860bc6f61d6ece55366c32e56ab0568646a326732ae8",
+      "git_blob": "1980d49fbe530b7857c7bf26902817778400150a"
+    },
+    "TreeDB/db/vlog_leafref_maintenance_test.go": {
+      "sha256": "ee95b629797ce3946fe1d35fb2da3c3681cb8b2d4268681d7b15a76665f7d421",
+      "git_blob": "ad2ef0bf3351da9da32cadde9dc728a378a8b052"
+    },
+    "TreeDB/db/vlog_refresh_scan_test.go": {
+      "sha256": "9b9d80915a5121530419cedd3daaa6d2cf36764a475763dc04384fac7b0edf9c",
+      "git_blob": "bf361ac9ff73e71df135e29c30f8a6364c9fa8ef"
+    },
+    "TreeDB/db/vlog_rewrite.go": {
+      "sha256": "c4624e593d029a7117aa240a991cc66618c3a2935cf00ce767fc0ff47b1ea5ab",
+      "git_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c"
+    },
+    "TreeDB/db/vlog_rewrite_bench_test.go": {
+      "sha256": "c3f0ee28e7c62aa2f86983ffc6d63024c5b8248f89235bde2157014816561f6a",
+      "git_blob": "a809e18b9ee8102d1f364cb4c6946d98550bc64a"
+    },
+    "TreeDB/db/vlog_rewrite_chunk_plan.go": {
+      "sha256": "6d013175470cac4dc203cd029d87bd9cfbad053a1369060bffdb6dcdf9b6790c",
+      "git_blob": "624baeb5e957ea04427e83d6653679164062b83d"
+    },
+    "TreeDB/db/vlog_rewrite_chunk_plan_test.go": {
+      "sha256": "5f109806559695daa6ec221ab5efd401c48b9b0b22eee1ab064f22e013fbc4af",
+      "git_blob": "f0117a392c21c443e14b419bae2ce2a7e89b7a67"
+    },
+    "TreeDB/db/vlog_rewrite_concurrency_test.go": {
+      "sha256": "2a56d22121eb6c5c43c014353c4c45406df6592b93086533f00c3d2dff7b3a99",
+      "git_blob": "adf040d0950a3ca5f89e15bce12bec4ca8fe90c2"
+    },
+    "TreeDB/db/vlog_rewrite_rotation_error_test.go": {
+      "sha256": "631b51b351d62dd3ae6a9282588881484c3582fab6a4e085476402e04e7f392f",
+      "git_blob": "7baccfebe0db59253e26a9d7374d35027c3864ab"
+    },
+    "TreeDB/db/vlog_rewrite_test.go": {
+      "sha256": "64a8d7e82f5245e8de66d54434cbc9fbac06011379549cba82f30f59f5bcb95d",
+      "git_blob": "e220171cd263172efad2a030459b8217f56f2371"
+    },
+    "TreeDB/db/wal_recovery.go": {
+      "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+      "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763"
+    },
+    "TreeDB/db/wal_recovery_test.go": {
+      "sha256": "ee09ad218742060f7e6c76bca033a668c7415e33c89bec74987452f81688ff2e",
+      "git_blob": "0b558d51e60dd56964ff515852a9c8deccfb2bef"
+    },
+    "TreeDB/db/work_stats_test.go": {
+      "sha256": "326ca02564d4d4ab8e93cf8f0b01ec3ceb013ea7b331a37e08a36e149ec52116",
+      "git_blob": "095a05a475c16cab7ca0a4af08b64f2de12819cd"
+    },
+    "TreeDB/db/write_admission_test.go": {
+      "sha256": "ab13ff640ff48a96828fef70422e655ac840703eb98054a0564c56a7f8c98b0d",
+      "git_blob": "e06bb18326bc3091235748bf7fde8af4f33b6250"
+    },
+    "TreeDB/db/zipper_outerleaf_compressed_bench_test.go": {
+      "sha256": "e572bff5865830d52925706557ceccbbd9296dea3bad6ce5b93d1b0d2fb2c53f",
+      "git_blob": "044876e34e04affdbf5d2e2abbb3516958d9728b"
+    },
+    "TreeDB/docs/spec/contracts.md": {
+      "sha256": "4b51be5ff755606d7838d9ee22f5842bed73f2c2e765746830adeafca157f64b",
+      "git_blob": "075015556f0ca2f06403d397b2bedc8c6acab2ae"
+    },
+    "TreeDB/internal/valuelog/autotune_keep.go": {
+      "sha256": "fd5862b57a9dfa9b8176b57991b12b62335c83b51c08adb08a2fff200c7ac2eb",
+      "git_blob": "a36376bb2121251da333b3db31ab33dce41e82b1"
+    },
+    "TreeDB/internal/valuelog/autotune_keep_bench_test.go": {
+      "sha256": "fd62cb0a50fa9ea36f43e385049e6803265b229b61c0ff27a5021be929fee071",
+      "git_blob": "3c69b9e52fedacb6d9078fbf34ef9a211842dc8a"
+    },
+    "TreeDB/internal/valuelog/autotune_keep_test.go": {
+      "sha256": "30a7890bcd8062adda1ddb190a41efbcd3ad04600d52faeb80231cec7c6ee686",
+      "git_blob": "e3d37f6c83cc99745b579dee214bc4adca0a6ea1"
+    },
+    "TreeDB/internal/valuelog/autotune_options.go": {
+      "sha256": "2fb3f8285d63b4ca63917b2fe7db9cc3e60030f78ee8450ab897f75062a79d64",
+      "git_blob": "f7e64a96c7b9c70a168db0d6fe90b6b6b8ca98fd"
+    },
+    "TreeDB/internal/valuelog/autotune_options_test.go": {
+      "sha256": "957c7ba85d1788794f26f395c02dd7ac3f1f44eb8a51de103917d1c07eb1a39e",
+      "git_blob": "0a0cb148566c58f1cba2b5c0fe0c5572d9725eb7"
+    },
+    "TreeDB/internal/valuelog/autotune_scenarios.go": {
+      "sha256": "d2c13bc836b47e5127134d33521cdbe0b1559fc9d764319aad4ff459dc063155",
+      "git_blob": "39381be796ae350aa968926a541437210aec56e7"
+    },
+    "TreeDB/internal/valuelog/autotune_virtual_time_test.go": {
+      "sha256": "65853c60ad9f1c1b52883b0c91a1353e9f7cf863ba990b50a1d357ca78f75944",
+      "git_blob": "b1d721b5b852a8e96adfc7678d34f27c3912d74c"
+    },
+    "TreeDB/internal/valuelog/block_codec.go": {
+      "sha256": "8b1f4b09d3602b7d22d9d3eea4f519979cc6f4782675f15bb7bf6a9116ad99ce",
+      "git_blob": "a9dbd97c7c2a85980017185d08e4743ba1bdfcc0"
+    },
+    "TreeDB/internal/valuelog/block_compression_bench_test.go": {
+      "sha256": "ee448d2cb2a2184ad1f3717ad6cc3734fdfd0de9cef813a278acd3a3d1e45c13",
+      "git_blob": "44eabacf2db3e7d3a7ab4d3f1ec4f4369cd08ede"
+    },
+    "TreeDB/internal/valuelog/block_compression_parts_test.go": {
+      "sha256": "9e301333e1e6aa75fc665fd9364ca2c818ebd29c36c68eeb59adca2e0ebc0ad7",
+      "git_blob": "2f2ee4fa6cc61a564e1fa0de5a4d30c86b5e5401"
+    },
+    "TreeDB/internal/valuelog/block_grouping.go": {
+      "sha256": "0d28bfb0adb0864627ba4bb37a1aca9c2024977350b40e42e993ebe721271ca2",
+      "git_blob": "3b79180b2672b9a390ea89d12a43c53978ae7386"
+    },
+    "TreeDB/internal/valuelog/block_grouping_test.go": {
+      "sha256": "b66ba533fea0d16345b629061bb151480de88705c67e6ec747fe1dc3bf5222a6",
+      "git_blob": "f42d16262264886cf7eb041c904e055ddb52d821"
+    },
+    "TreeDB/internal/valuelog/buf.go": {
+      "sha256": "9fe3e2622c4ecd221eb893c246223234341fe42ebd2349f00797405aea919448",
+      "git_blob": "8889685d2af0ee57ef6324f27d83f5a2c9a4a95b"
+    },
+    "TreeDB/internal/valuelog/buf_test.go": {
+      "sha256": "9168ab27b2b8f9bb02704023933d162a18d8b1b1fabf47b241a723030cdc5311",
+      "git_blob": "3b918bb24dafafdf111277990943256cd352d3c8"
+    },
+    "TreeDB/internal/valuelog/clock.go": {
+      "sha256": "ce08cd69f4953ebee93d8519cd3bd95b422636d10aa64fe3fee0e926d38cd211",
+      "git_blob": "df9d8958cfcf47e50078a78e89c23adf84990c90"
+    },
+    "TreeDB/internal/valuelog/crc_bench_test.go": {
+      "sha256": "90e73a32ef114ec008efc5ca1ac4734b4c37ed131e7214937a160d67af06a0b4",
+      "git_blob": "04a42722258120b993336f780ebc278fbabe4e85"
+    },
+    "TreeDB/internal/valuelog/decode_scratch_pool_test.go": {
+      "sha256": "e9fb7b1a54d34b538f0abdf47fee2ae6390f9d620bf2ec2c23e28ec9fbb8c13f",
+      "git_blob": "8da4864d29f7d141c0b5d4524b80164dd68385ba"
+    },
+    "TreeDB/internal/valuelog/decode_scratch_stats.go": {
+      "sha256": "a40cc94554d719eb7f975fc44cb1a127917ea58d069bb19978fe07be6bbba7ea",
+      "git_blob": "c8522ae8f31e6241203dc2aeafaa41c51245b33c"
+    },
+    "TreeDB/internal/valuelog/dict_autotune_bench_test.go": {
+      "sha256": "b475fc7f56df0e4679a3b8f0f77205eb6ee216c8987e3e0438d3ccf1221e8ad5",
+      "git_blob": "6542e628db6cbfb47b3522344e069db7c412dc32"
+    },
+    "TreeDB/internal/valuelog/dict_bench_helper_test.go": {
+      "sha256": "3a4cb556224c2831e78e760f564ed08f5d9fd3befa430e70b2bebb6d4713573a",
+      "git_blob": "874ed447670afde5a3aa781d5e474f1d73b2485f"
+    },
+    "TreeDB/internal/valuelog/dict_codec_cache.go": {
+      "sha256": "7954488ee51918526e8ff06a9026abd281579165bb8bffdc6efb2b331534e35c",
+      "git_blob": "2a1f5dd7c24f506c05e0ff9fbe17e280f96d3b8a"
+    },
+    "TreeDB/internal/valuelog/dict_compressibility_bench_test.go": {
+      "sha256": "e952074e1c361f9fda7a121437a8fd89bd6944ee47524272ddd0c7c15c3982d1",
+      "git_blob": "028aaa740962b18f6dbb6a2488114b7418bec6cb"
+    },
+    "TreeDB/internal/valuelog/dict_corruption_test.go": {
+      "sha256": "284f60b507f609469789d45bae944f1304a05cfa5bc409dcf68c827f5b21a5c1",
+      "git_blob": "680a1a0e5e16867f115f46d867a4fc0555f5128a"
+    },
+    "TreeDB/internal/valuelog/dict_encode_parts_bench_test.go": {
+      "sha256": "5dfc97f13b9c9c195dd8ebc353b204d11c47b23a9b67c3fc5ddbf14727f5702d",
+      "git_blob": "b4ab4637359a82c9fad192d57216249d2a62ca1c"
+    },
+    "TreeDB/internal/valuelog/dict_frame_preparer_alloc_bench_test.go": {
+      "sha256": "660f3eb0d4258934f5c59d972026b3061d8c7dac6c4da782cb92578f2da88a93",
+      "git_blob": "57e7d7dac1394926fa0aa1c7b41f3fb6a5940152"
+    },
+    "TreeDB/internal/valuelog/dict_invalid_offsets_test.go": {
+      "sha256": "bd06dc018292bd4159e22c0e3a46d203b70aca13a4fc5b38d069e9d2b09c4305",
+      "git_blob": "1977865bc8fd824103fac27cf673b1bc1d6e8dcd"
+    },
+    "TreeDB/internal/valuelog/dict_read_bench_test.go": {
+      "sha256": "a95046a6398cf4ff847aead400bfd0f1ae5f7689bc518366515a191691e62727",
+      "git_blob": "05b84f62fa5bbfdf48d8f3f09e6bcab30f5c3f30"
+    },
+    "TreeDB/internal/valuelog/encode_cost_model.go": {
+      "sha256": "4813517a398fcf979524aa16ef229309714a1861e1038ed940bc0608c5090b0b",
+      "git_blob": "43b8bb681b1a7190a03a7e9671177c42d1811d30"
+    },
+    "TreeDB/internal/valuelog/errors.go": {
+      "sha256": "722e27d085e538db720d2a05c07c6d2a9f851839277a219c57ef33c570da734c",
+      "git_blob": "a00f686c58a5a464158109f92e87cf5ef696860e"
+    },
+    "TreeDB/internal/valuelog/frame_preparer.go": {
+      "sha256": "4091f8dde31ea5e362326d8a34dfdddaaf2fe087750dc5b52982d1bde010ba96",
+      "git_blob": "341c5c4b449a33244862221cf458bed96bc0e6bf"
+    },
+    "TreeDB/internal/valuelog/fuzz_decode_test.go": {
+      "sha256": "22cca4651619d33e112e25fe407c96e7f920e9da5a0d0888a10006b4499cc81c",
+      "git_blob": "9d027583e3e1deba023182cd5638ffff6d6b23ec"
+    },
+    "TreeDB/internal/valuelog/grouped_frame_cache.go": {
+      "sha256": "f453ef5c72b6c2f2bf973e6a4d08fda1fdd85fcc2e876b029aa5a12c47004d5d",
+      "git_blob": "d0995109fdf9e25ac1c7160620595f90ea580338"
+    },
+    "TreeDB/internal/valuelog/grouped_frame_cache_test.go": {
+      "sha256": "90546f85a8f3f023323a26b1f25e30bf572cec425d57bb7356706d1a4ae208bb",
+      "git_blob": "290d16e4f2478e80851cff7a2d02548678020e8b"
+    },
+    "TreeDB/internal/valuelog/identity_pin_manager_test.go": {
+      "sha256": "6b10dfc98609f0456f05027a3dcf8d1a503646c8d5ca629e5587f2e9cb359978",
+      "git_blob": "14a6248b95035e6bc029dc5c85b6616f42d5a8b0"
+    },
+    "TreeDB/internal/valuelog/leaf_page_payload.go": {
+      "sha256": "9c7efc06c2a9d38b95519f0face46d9af19dcfa09c73e4f784128838694355ae",
+      "git_blob": "c52e2ba6c86ea8aaf8ed3cad7da531acd3662c28"
+    },
+    "TreeDB/internal/valuelog/leaf_page_payload_bench_test.go": {
+      "sha256": "5b546f8da71a5f0fe292175cd0848383aed279a56e4dd7ffcfbc5f36b58ca450",
+      "git_blob": "03692960b2df44e2aea7306ddce3f3ddde338918"
+    },
+    "TreeDB/internal/valuelog/leaf_page_payload_test.go": {
+      "sha256": "6cdc822528ebbfb1d9bb97e673ae0fdcfa0dd6175018feb4e8a1be721f0a40b4",
+      "git_blob": "02e16e5b74b155a4dc4d2ad9cc824fc0bbcc7bd3"
+    },
+    "TreeDB/internal/valuelog/leak_test.go": {
+      "sha256": "0ae55389eaf6a08943f81d247508de0cda19309fa9b1a0b8da09cfd4b8c2bca8",
+      "git_blob": "fc79dd2918d6ac6aaf88613a4afe1f5f4e255ddc"
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "sha256": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf",
+      "git_blob": "1a613731464df0c8a8ef3d0036fb71232ca141ac"
+    },
+    "TreeDB/internal/valuelog/manager_test.go": {
+      "sha256": "4922ef4211a008b265d77d8ce3844a3966e5934fd5729085995a88fe51139171",
+      "git_blob": "096d439cb8d6bd91df58b273bf67277af9bd5557"
+    },
+    "TreeDB/internal/valuelog/mmap_admission_test.go": {
+      "sha256": "fd03b973a6f07ce08279d40bfc5a028a08d8a6018b0fe04c16103065003b3201",
+      "git_blob": "798a5898bf04d213cb3aa59d7d864fc3a4065ceb"
+    },
+    "TreeDB/internal/valuelog/mmap_safety_test.go": {
+      "sha256": "f16831f5cfa4aacc148fbf10ef7104aa8a5def1c96cae0306abbcf4989ad9b3f",
+      "git_blob": "92c1390570fcaeec4c6c1c727716f5aacc9e75bb"
+    },
+    "TreeDB/internal/valuelog/mmap_unix.go": {
+      "sha256": "17aa890edad534805ded838e609d4f37199ad97a6f98dd09c09d9b7a8a4aa647",
+      "git_blob": "bfc32d335138fc7980f5566fb04da9333894ff1f"
+    },
+    "TreeDB/internal/valuelog/mmap_view_compressed_grouped_test.go": {
+      "sha256": "86acacbf55bed49ba9df74580061e876eb3f2d68e5f03e0e792ad0d4a40aecf6",
+      "git_blob": "68a437d404ff2dc4180864bd1cb7493651243e09"
+    },
+    "TreeDB/internal/valuelog/mmap_windows.go": {
+      "sha256": "e11370d0966ac8b99b4c237ea10dcf34e9859b7bf5c2895041609cbed4a7daf3",
+      "git_blob": "a0ebd6cc605a54343afa94e2e7234c8dd4708172"
+    },
+    "TreeDB/internal/valuelog/namespace_instrumentation_test.go": {
+      "sha256": "baaf64070b778fce15a14921e15d68a0b91419b8ce9218fbb05b4b1d85e70171",
+      "git_blob": "bc8ab117a875add903dab3b5dacdf555a6af40cb"
+    },
+    "TreeDB/internal/valuelog/read_append_fallback_bench_test.go": {
+      "sha256": "40d4ee32781abbe73aab267ae1b306aefa2b91b73784f73d4902c22d802abd5e",
+      "git_blob": "d1f0fbd966a627fc63fb0d03441c799f66c9a4ba"
+    },
+    "TreeDB/internal/valuelog/read_append_fallback_test.go": {
+      "sha256": "076a94eed0b3757435c11c2add693d160cf13724dedadc249d1530e1bc55885c",
+      "git_blob": "142be560d210cb464918c7f4f519c2e90f386cc3"
+    },
+    "TreeDB/internal/valuelog/read_append_owned_test.go": {
+      "sha256": "676c0f9dbc1f625f140a27b98037ebd8dae405834e119a125453c630b4a383f7",
+      "git_blob": "eae1e6891fcbd5e55af31a744487abc97400fd6e"
+    },
+    "TreeDB/internal/valuelog/read_grouped_batch.go": {
+      "sha256": "4cc380333b06ed01c8619cf4713af04c8c41981ff8345b657dc28842ee23fd6b",
+      "git_blob": "af7206c1f138554d8a49921e28d4c268522b4120"
+    },
+    "TreeDB/internal/valuelog/read_grouped_batch_test.go": {
+      "sha256": "c19faf165cd176fd961368735b87ade775c3aa92ad4a3f1065467ca1685335d4",
+      "git_blob": "73232618dbcafe6fc077b20ded67423c267c65ab"
+    },
+    "TreeDB/internal/valuelog/read_grouped_compressed_file_test.go": {
+      "sha256": "ff410494483eddf43b7c31a7bbddaa93dddca1f3eabf89843213babc5f964bc6",
+      "git_blob": "c434917b37e528548d4a23bb7ce787655746aa46"
+    },
+    "TreeDB/internal/valuelog/read_stats.go": {
+      "sha256": "c4e0a502cc01dd76115b2e3f7c73375f6c88fdb41788482300268cb65cf27cb7",
+      "git_blob": "572ff2237469cb500b60f30b97e4d3d39e933f06"
+    },
+    "TreeDB/internal/valuelog/read_stats_test.go": {
+      "sha256": "40d4554f12b9bf348eff07592e722e7052ae8903fd634b5f423edce90bd654c6",
+      "git_blob": "d5f916d6c14afbb8a461869a6a770a9ee4dbc870"
+    },
+    "TreeDB/internal/valuelog/reader.go": {
+      "sha256": "c01cfd34bd8625514d6e8220f4dcd2f82738c5f89e4bcfb337e56aa96ce49fcb",
+      "git_blob": "c60b2cfeb977bebb0563e4689b5bc68eafed3552"
+    },
+    "TreeDB/internal/valuelog/reader_bench_test.go": {
+      "sha256": "767c92d88853a058e87cad1d6c948be73644dda1d816b2abfd738f984b392c11",
+      "git_blob": "563bd42756ef05147af63f6d3fc97e4ca956d35e"
+    },
+    "TreeDB/internal/valuelog/reader_bounded_zstd_test.go": {
+      "sha256": "1a0398d8891ae37202920ed38d995db26e3a6c46577f9477172a99193dbabd16",
+      "git_blob": "9ef6520ffc9da2389624eaeecfea4c6cc8ebb372"
+    },
+    "TreeDB/internal/valuelog/reader_decode_reuse_test.go": {
+      "sha256": "457883d13aae6328dfd1a665a4b68b82e0424a13d23e03bc7857275bcb4af346",
+      "git_blob": "c5e72c7e5c96a6d72c86ffbbacc1f5ae4c7d3741"
+    },
+    "TreeDB/internal/valuelog/reader_mmap.go": {
+      "sha256": "ed83a571b50a5ce1f06c52f009a0b9c01cec35cc1eb4b7352beeda6ee176a397",
+      "git_blob": "c3f690d16ce163eb88bbd62f3dd1fdbda2ba84be"
+    },
+    "TreeDB/internal/valuelog/reader_mmap_alloc_regression_test.go": {
+      "sha256": "2dabf292a3722c28fd9a13e8b5a8f7a6423e786c5acc974266f293c6b392182a",
+      "git_blob": "84b774172bcf6f15fad562ffa82d04eaa9bef703"
+    },
+    "TreeDB/internal/valuelog/reader_mmap_cap_test.go": {
+      "sha256": "4cb5397aabc07b35219b9aea39feb59e4086bdbf9e4b4ff31642189997b43365",
+      "git_blob": "446968f06a01d52aad7d0e6032dbceca7b9b79cd"
+    },
+    "TreeDB/internal/valuelog/reader_readnextmeta_alloc_test.go": {
+      "sha256": "01d3db81ac7258eb5cc5d16d39822cd90c9d636510ecbaa1b3a96bfed4afb9da",
+      "git_blob": "e0358ab0ab116a343c48fd6b0132ab7ad8febf85"
+    },
+    "TreeDB/internal/valuelog/reader_to_test.go": {
+      "sha256": "b769af0b2c5d7f9a7854747818026d88f813b58d0f7292b76cea8a0f26834f80",
+      "git_blob": "d3b32f98e0dd129038737c8fedfcf88e3c1903bf"
+    },
+    "TreeDB/internal/valuelog/resource_descriptor_valuelog_test.go": {
+      "sha256": "9ea858010ab6e1ff0dfcfd3abab0ce2d4a8b12e9d1f03f31535d49732bdd66f5",
+      "git_blob": "7de20d6662119d8a626e6f29234ceebf6f14a05b"
+    },
+    "TreeDB/internal/valuelog/segment_id.go": {
+      "sha256": "107b4aaebfa5839fce118929226b9605253cac0cdf5f116c802941f892a246f2",
+      "git_blob": "302d54d95caca7b35f000519bdce84d8159f5544"
+    },
+    "TreeDB/internal/valuelog/segment_open_other.go": {
+      "sha256": "3d140e38cba4b348aa4e8a302d3ef998db9b24d15a85095dd39d0cdbeb52eab3",
+      "git_blob": "29d9bf7dfa7e45daf695b419adf4d5d6684f959f"
+    },
+    "TreeDB/internal/valuelog/segment_open_windows.go": {
+      "sha256": "5ea810b482bfd7a5999594564c6709268b2f98ffe4ffe94b9d588b877d663e4b",
+      "git_blob": "1ebb046e6cd40725941f7946f7752f0c973efad6"
+    },
+    "TreeDB/internal/valuelog/segment_open_windows_test.go": {
+      "sha256": "ea4518692ec98df38efcc218cf9e50eba963db626c90929ccdebada7772187e5",
+      "git_blob": "c5620b26369aa5387df3715f2611d39a7e6178c2"
+    },
+    "TreeDB/internal/valuelog/stable_pending_successor_supported_test.go": {
+      "sha256": "9771d6e2f721e95264b7f8bd99ce13d4cc72846ca538d5d465a024eb3f976bf5",
+      "git_blob": "ae454c6b6a3ecfa4c04d03e6efca74cdaf670291"
+    },
+    "TreeDB/internal/valuelog/stable_resource.go": {
+      "sha256": "dd8be52da3d2305308c0031335a92c4bcd0d66afed62bfcb1d2bf93e4f019a9f",
+      "git_blob": "d9dd7c01fd6965d3e47cf33e04a56da9d2e20534"
+    },
+    "TreeDB/internal/valuelog/stable_resource_supported_test.go": {
+      "sha256": "963e780cba928648ac98e5be958b30d5506bba7668a3660d49dcc0f2933b274b",
+      "git_blob": "167f268fc918d6c78854dc748d1dcdaa264681b7"
+    },
+    "TreeDB/internal/valuelog/stable_resource_test.go": {
+      "sha256": "4772b8b56db275f4062b31936f85394ffcbb1d79cdf02aa028bab3e994d0035d",
+      "git_blob": "d51bde03bc6ca263424c81054866b4e219982085"
+    },
+    "TreeDB/internal/valuelog/stable_resource_windows_test.go": {
+      "sha256": "c3e1085209a20ddab2f5c901913fb95dc1949d35dc0addbd8fa2973f4fb265fe",
+      "git_blob": "72cf557cedaff99b2edf6c46c7a5834f1f0704e6"
+    },
+    "TreeDB/internal/valuelog/sync_staging_file_linux.go": {
+      "sha256": "4c30230eabfe12021bc8c6bd708e2fe3ef4e576a4eb1c5ef68c1c52a9ba306ad",
+      "git_blob": "66372498c99895398b2baf457e0ec0800e5087fb"
+    },
+    "TreeDB/internal/valuelog/sync_staging_file_other.go": {
+      "sha256": "8daa6dd210fdd8b7cfab3449c5165ef13b52c59c7f3deb39b0b676bf57b7afbd",
+      "git_blob": "bff4340b72d4e45df1b4b182f5295302ca34e300"
+    },
+    "TreeDB/internal/valuelog/template_cache.go": {
+      "sha256": "5efdf6afbc0fc0ee391f355d9765b866db1f34bad61a6aa311c6af5bd3c4874f",
+      "git_blob": "23afee434986376bdfd90dd2a7e16755e1961f9e"
+    },
+    "TreeDB/internal/valuelog/template_cache_test.go": {
+      "sha256": "73f4976facd07c119a31564a14400c4fb70011046590f096aa2490364f5ec576",
+      "git_blob": "062c7c1a061888847508fb8ba00768435f5e3854"
+    },
+    "TreeDB/internal/valuelog/template_lookup.go": {
+      "sha256": "7c1c5996ea760463423efd1c9b7778bbe137b2cb3a13999ec6879df704fc9374",
+      "git_blob": "ea2e1c1a6ddb5547319bd2873378bd2521942b89"
+    },
+    "TreeDB/internal/valuelog/template_read_bench_test.go": {
+      "sha256": "b53439e0d8ff5311231f318ee40e26b35b2a61e3c9ff81c8b314db9544341173",
+      "git_blob": "601393948e45b16b0a89a374b7b476bd7bf371c5"
+    },
+    "TreeDB/internal/valuelog/valuelog.go": {
+      "sha256": "ba1d1771e3e11b9b16c5376ed3153d75dc16760ba942a090517b8e641702f298",
+      "git_blob": "73020697a20dc1b6f01cfe96534a086af48005eb"
+    },
+    "TreeDB/internal/valuelog/valuelog_fuzz_test.go": {
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "git_blob": "7251bec507505b415687b36547eba6e9d2e4d3a7"
+    },
+    "TreeDB/internal/valuelog/valuelog_test.go": {
+      "sha256": "0ee2a9f37197f3d7c10a54ad55b90e6757dbef88bb28a960f4114a37949efaa3",
+      "git_blob": "1d8ef651a576302377422dc8b59eafc8552e5a3e"
+    },
+    "TreeDB/internal/valuelog/virtual_clock.go": {
+      "sha256": "df2a1180f6dfadbf7ed994fad4af9d8034a198892f7e27d866a9f9aa4241f8d9",
+      "git_blob": "583714f75e0015e6e7c05f61120b2f1a53cc72d3"
+    },
+    "TreeDB/internal/valuelog/virtual_sink.go": {
+      "sha256": "99518edba0794721e977559a1890c53979d19238775c474cad2370faa0b18d51",
+      "git_blob": "c32e37c7b402274717d078edce76c8927edfc526"
+    },
+    "TreeDB/internal/valuelog/writer.go": {
+      "sha256": "39e3245b751f31798d036951a90c660c523fce6d7f9eda2600f53542c49efbd5",
+      "git_blob": "e983927e76d92bccda174088e4b7020683f6103d"
+    },
+    "TreeDB/internal/valuelog/writer_append_buf_stats.go": {
+      "sha256": "7f3b3ec8f8ba34b585ab44b164b6ccd1f3ad2c727ba8932a25a25a678ba06556",
+      "git_blob": "e61b165e9bfbd75d6d4c140f04e6fadef85fd9c1"
+    },
+    "TreeDB/internal/valuelog/writer_memory_test.go": {
+      "sha256": "f1c7a372b533090b787a1af7cbc37be948e3809ea320743d01953495af0030a6",
+      "git_blob": "5aad54d762bdd295dcafbed265f0f068357f5b18"
+    },
+    "TreeDB/internal/valuelog/writer_stable_identity_test.go": {
+      "sha256": "ddc756f69d743a7ec18a382e401ef9dacc1a0b205cac045e5ca26eaa1dda39dd",
+      "git_blob": "549d70de131700f622586b2e9ed227072ac23110"
+    },
+    "TreeDB/internal/valuelog/writer_writev.go": {
+      "sha256": "f1dccbf267de63167fc9fcaf7ef9bd3b3d6dadd54d8a19365d269e62b739820c",
+      "git_blob": "e5be5faf7cc2a24200a8e56a314e9b68654c9773"
+    },
+    "TreeDB/internal/valuelog/writer_writev_test.go": {
+      "sha256": "00a3a6ef14bd8c1f830c52d89655b59d5c86ac8e6f9d670ecc941e362ec95f0b",
+      "git_blob": "460ffdd15560187a3d481e68e4f6f55b7f9d631b"
+    },
+    "TreeDB/internal/valuelog/writev_stats.go": {
+      "sha256": "0bc6208086a7e665299b1f88c6063ad5608f74e39b3926e6ec0ee10a4a05f556",
+      "git_blob": "c626451317c3366b8d381a3bf8f8167c3cc8c427"
+    },
+    "TreeDB/internal/valuelog/writev_stub.go": {
+      "sha256": "352a0bb36c3cf95aec4402090cd0a2c636a223fd73c2d5cbe7c1fbb331a27990",
+      "git_blob": "c21f9ce83f11b2f4177d9a2847908803cf3edf45"
+    },
+    "TreeDB/internal/valuelog/writev_unix.go": {
+      "sha256": "3921c09502c31c0d11d69c672bcc0bb3e45ee6159695a6060484a8253fbfafbb",
+      "git_blob": "58c85e63c983a48f4d09f2cd37e2219d0e39bf2f"
+    },
+    "TreeDB/snapshot_read_bench_test.go": {
+      "sha256": "8d0244fab4707e68b5f96d18e4445a18dc5b419895c5c9a33e8455daeb9030e0",
+      "git_blob": "6a8e39a1e233b7c6f2276241321ffc698b6adc6a"
+    },
+    "TreeDB/tree/inplace_update.go": {
+      "sha256": "6ef696f9dd2461b76caf549dbe39403e366c1a2a4f62511b9e893182cf1055b0",
+      "git_blob": "23e23cf0884e266295eb58b3350b1a00d164f18e"
+    },
+    "TreeDB/tree/iterator.go": {
+      "sha256": "3d1522787f8af00a32aed2c3766b8a9d7ea5d426a993f6a8b4536992938c888e",
+      "git_blob": "dd33637ab1c88b749e600b4878c7e39bdac67d00"
+    },
+    "TreeDB/tree/iterator_test.go": {
+      "sha256": "4e7efb41b240bbdacacf6bf1e81c9d5e8e761157fba4484df0041b5c163995eb",
+      "git_blob": "9651762ed4db6d93035cae4ee7a6877164fb2242"
+    },
+    "TreeDB/tree/iterator_valuelog_test.go": {
+      "sha256": "1d436a2c885ef5dac0e32ba1d52d803f6daad2df050f1e5e25fbe06cc43afd32",
+      "git_blob": "d0cda53e812c99a3aeb8504ab86f90efdb6d143b"
+    },
+    "TreeDB/tree/leafref_decode_to_test.go": {
+      "sha256": "2f2dd7624710504dc323be80f1915c9121baa31453be7bb5aaa1cda6fb271cf9",
+      "git_blob": "11e866866834664f186d260112ed88f90e426b79"
+    },
+    "TreeDB/tree/leak_test.go": {
+      "sha256": "2fca234226e575137eff49e5651005c1cac86044823bd78bcafd1dc8b7e96f32",
+      "git_blob": "c587fd517f5b9244af183b3ed77c09cb8077c4ff"
+    },
+    "TreeDB/tree/outer_leaf_stats.go": {
+      "sha256": "8816a6c1203ee84ac4a0f59966bf980b7262205e2be9be6283441177cc302678",
+      "git_blob": "9e85ea33f1ba0595feb784f0fea2ad7b3b41eece"
+    },
+    "TreeDB/tree/outer_leaf_stats_test.go": {
+      "sha256": "3c5172a7d0f07d345df3d8c99cc969af51aa77317cb968ad7f77025d2ac17dff",
+      "git_blob": "91b4ddc338b7604a19c0accc8be01491579d3386"
+    },
+    "TreeDB/tree/page_limit_test.go": {
+      "sha256": "8d287854639061b4a4b24dc6b7fb5dcda640d50c477297721ffcb9dfd0014dab",
+      "git_blob": "b6267b1d79d71254d31c6186699f1c949979aa79"
+    },
+    "TreeDB/tree/pages.go": {
+      "sha256": "8abc2e6010ee829781df370306e7f59e65851143f5542d3f77b07248254efd50",
+      "git_blob": "fb06fc6bd5f8b68b4efa761db14966c5cd744fcd"
+    },
+    "TreeDB/tree/test_helpers_test.go": {
+      "sha256": "bd910740a8ddd424dcbc5c59e04f2e38647f049a89015f8c78ae59dc7b97d74f",
+      "git_blob": "4c253cf3bd6d0583f1130ddde43cc564225bac09"
+    },
+    "TreeDB/tree/tree.go": {
+      "sha256": "b8421c6e6b41b57a85c458768b397ea9549eacd197ef4c6403deb1326256e92f",
+      "git_blob": "ee62082f3cc6f90bb7e777358cdd91369356774f"
+    },
+    "TreeDB/tree/tree_test.go": {
+      "sha256": "6371c334ca347cc827d45e7505ab0f5678869a85d1a3766a887e477304eb5d00",
+      "git_blob": "2f594e07bab2035cffa268716fc43e1f213feb72"
+    },
+    "TreeDB/tree/verified_cache_bench_test.go": {
+      "sha256": "cf4f909633cb7b3cde830acd4a78fa2c4daaf1e0248e50ce44166bc2b81f0cd5",
+      "git_blob": "97eb34d653b2571b6f4bc49f15dd8d5b4c42e7a6"
+    },
+    "TreeDB/tree/verified_cache_safety_test.go": {
+      "sha256": "2bd845b036cef1d80b0786c45d5acd35749db17ad01c6736d6be04b78a2e7e94",
+      "git_blob": "05d615de4476f7657f0d8bad1feb0df4763b8bff"
+    },
+    "TreeDB/value_log_owned_bench_test.go": {
+      "sha256": "75e72ffddf82bcf884cbfcbbab09762c865839d9d1edf0104717b1d23cf7550e",
+      "git_blob": "56e1b4c9f4371ba84e48643ab88d0d2c5b43802d"
+    },
+    "TreeDB/value_log_owned_route_test.go": {
+      "sha256": "538bb8a6665d2a586184edc11b3fb1870070ef7ef062e6ccfdd796bd0beac642",
+      "git_blob": "4fd2085458157a15abd854b5a5abc436513cab1e"
+    },
+    "go.mod": {
+      "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+      "git_blob": "9c50190970e42029aebab51af84002c17341053e"
+    },
+    "go.sum": {
+      "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+      "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a"
+    }
+  },
+  "production_and_harness_changes_after_frozen_runtime": [],
+  "applicability": "Measured/reviewed identities remain exact9ab; main integration changes only the listed raft/nativewire/docs files. Final evidence/docs changes do not rebuild or relabel frozen binaries. Current-head CI remains coordinator-owned."
+}

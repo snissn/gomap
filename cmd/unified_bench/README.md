@@ -737,6 +737,22 @@ It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
 and source/fixture hash inventories. These are standalone artifacts, not
 unified-bench profile-dir output or benchprof inputs.
 
+The final shared mmap publication repair has a separate
+[95-cell qualification and 20-cell repair control](../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md).
+It adds `BenchmarkOwnedMmapBudgetDenied512` and
+`BenchmarkOwnedMmapConcurrentFirstAdmission` in an identical test-only overlay.
+Retained stdout, stderr and time-v RSS are separate streams; source/binary/fixture
+hashes and successful process statuses are checked. Prepare a new reviewed
+freeze following that packet, then run:
+
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/inputs/qualify-mmap-repair.sh NEW_FROZEN_CAPTURE_DIR
+```
+
+Ordinary pointer Get improves in that bounded comparison; capped nil fallback
+and OS-warm first-map lifecycle costs increase and remain explicitly disclosed.
+The earlier packet retains its original source identities.
+
 ## TreeDB algorithm-work package harness
 
 The standalone `BenchmarkAlgorithmSparseUpdates` and `BenchmarkAlgorithmGetMany`

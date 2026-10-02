@@ -1,0 +1,11 @@
+# Frozen e508 bounded qualification: retained incomplete packet
+
+Grant root-negative-e508-20261002T0538-exclusive. Exact source e50876abc70e9be6d776f9b042e4a2a139395a4c; candidate/source b17df9082b92bfe1833a988fa8ce569ce22d33824b2e856d1aeb6a3775ca9cd6; reference a68a84c7195e0c5d8c339343a385b40acf818d03/source1c7b8879978a2c6457123c750044b4ceb108f67ea78f50cb630b3e10fcbfe34f; preparation c672486b7bc84e23f0db601dc5f51d3480faf83e765cd29229d14a2f1b39ed56. Source/scripts/binaries unchanged; no repairs made.
+
+Capture exited1 after all10public and10canonical jobs completed and parsed successfully. updates-1 test binary returned0/PASS and printed all6actual rows, but the strict parser found0bound rows. capture.json remains complete=false with21execution records. This packet cannot qualify the full930performance+160diagnostic plan. No performance acceptance or counter claim is made.
+
+Root cause is merged stdout/stderr framing: testing prints a benchmark name prefix before its setup/calibration; dict training and publication use standard log.Printf (TreeDB/internal/compression/trainer.go:883 and TreeDB/caching/vlog_dict.go:1272), which writes stderr. Collector merges stderr into stdout, producing a name+timestamp/log line followed later by an unlabeled numeric result line. Exact parser correctly refuses to guess associations. All6updates/bootstrap rows have this shape. No product/fixture assertion failed.
+
+Smallest proposed repair: separate per-job stdout (.log) and stderr (.stderr.log), retain both hashes and require both in manifest/parser, keep exact benchmark row binding strict. Do not disable dictionary training, mute product logs, change timing or fixture, weaken name checks, or splice partial captures silently. Fresh script provenance/preparation/capture disposition belongs to root; proposal sent before editing.
+
+Retained local packet failed-qualification-e50876abc-v1/, control failed-qualification-e50876abc-v1-control.log; remote qualification-e50876abc-v1 remains untouched. capture.json SHA6b6a05c0bd805c2679a06db8c247f1cf52d165c88f4ef098824fe0493ca39794; updates-1.log SHA56d748bf744497788018d03f7e03c2fe9f4739359668158c5c83978196ca4aea; control SHAa57c0e3b571837225b0af5c6a39de4fe10af6c90703ed9de49e04cd9c19762c9. Runner released promptly after outcome; no new timed capture or PR started.
