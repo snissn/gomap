@@ -1,9 +1,18 @@
 # TreeDB main-cache memory/placement instrumentation (#4892)
 
-This is the first instrumentation stage of #4892, not a retained-memory result
-or a trim decision. Review and land this harness after the #4891/#342
-predecessors, then freeze that landed source before full collection. No runtime
-controller, public knob, default, on-disk format or storage lifecycle changes.
+The landed harness now has a [retained-owner and budget decision](OWNER_DECISION.md)
+from all 60 original budget cells and 70 paired trial cells. The selected policy
+keeps existing owner controls and defaults. The checkpoint-only 32 MiB global
+free-entry-bin trial reduced direct post-GC heap, but unresolved warm guards
+prevent promotion. No runtime controller, public knob, default, on-disk format
+or storage lifecycle changes are included in this documentation decision.
+
+The linked decision records exact source/artifact hashes, all cohort tables,
+measurement bounds, rejected mechanisms, replay commands and a source-only table
+validator. A combined configured 64 MiB MAIN leaf/frame budget is not a
+whole-process memory bound. Independent exact-head review and required CI/merge
+remain prerequisites for #4892 closure; #3589 and #4894/#4895 obligations remain
+active.
 
 `BenchmarkMemoryBudgetWorkflow` runs exactly once in each fresh process. Full
 mode loads 250,000 even hit keys (32 bytes, 24-byte shared prefix), in 1,000-key
