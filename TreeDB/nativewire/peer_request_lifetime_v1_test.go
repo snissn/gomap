@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -149,6 +151,128 @@ func TestPeerSecurityShutdownTimeoutAndForcedCloseV1(t *testing.T) {
 			work.release()
 			if current := transport.ResourceStatsV1().Current; current != (peerResourceAmountsV1{}) {
 				t.Fatalf("leases: %v", current)
+			}
+		})
+	}
+}
+
+// A speculative authenticated self-dial can lose to a connection returned by
+// another request. Its completed TLS socket then sits unused in our own HTTP
+// pool, still StateNew to the server. Close must retire that pool before Shutdown.
+func TestFixedPeerCloseRetiresUnusedAuthenticatedSelfDialV1(t *testing.T) {
+	caller, config := peerTransportFixtureV1(t)
+	defer caller.Close()
+	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	dialed, releaseDial := make(chan struct{}), make(chan struct{})
+	var releaseOnce, releaseDialOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	unblockDial := func() { releaseDialOnce.Do(func() { close(releaseDial) }) }
+	defer unblock()
+	defer unblockDial()
+	var handled, dials atomic.Int32
+	// Install barriers before opening any HTTP connection to this runtime.
+	node.server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		node.serve(w, r)
+		if handled.Add(1) == 1 {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+	})
+	transport := node.client.readHTTP.Transport.(*http.Transport)
+	dial := transport.DialTLSContext
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err == nil && dials.Add(1) == 2 {
+			close(dialed) // real authenticated handshake completed, no HTTP sent
+			select {
+			case <-releaseDial:
+			case <-ctx.Done():
+			}
+		}
+		return conn, err
+	}
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := node.client.Status(ctx, config.NodeID); first <- err }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first request did not enter", ctx.Err())
+	}
+	go func() { _, err := node.client.Status(ctx, config.NodeID); second <- err }()
+	select {
+	case <-dialed:
+	case <-ctx.Done():
+		t.Fatal("second authenticated dial did not enter", ctx.Err())
+	}
+	unblock() // returning the first socket must satisfy the second request
+	for _, done := range []<-chan error{first, second} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("request waited behind speculative dial", ctx.Err())
+		}
+	}
+	unblockDial()
+	if current := node.client.peerTransport.ResourceStatsV1().Current[peerRequestsV1]; current != 0 {
+		t.Fatalf("completed status calls retained %d admitted requests", current)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatalf("Close retained its unused authenticated self-dial: %v", err)
+	}
+	if current := node.client.peerTransport.ResourceStatsV1().Current; current != (peerResourceAmountsV1{}) {
+		t.Fatalf("Close retained resources: %v", current)
+	}
+}
+
+// TLS handshake completion does not imply an HTTP request was sent. Such a
+// caller-owned socket is still StateNew to net/http and can outlive a recipient's
+// graceful shutdown budget. Fixture teardown must retire callers first.
+func TestFixedPeerAuthenticatedControlSocketCleanupOrderV1(t *testing.T) {
+	for _, callerFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "recipient-first-times-out", true: "caller-first-drains"}[callerFirst], func(t *testing.T) {
+			caller, config := peerTransportFixtureV1(t)
+			defer caller.Close()
+			recipient, err := OpenFixedPeerTCPRuntimeV1(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer recipient.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			conn, err := caller.dialScope(ctx, config.ListenAddress, config.NodeID, "control")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			// Bound only Close's test budget; the opened HTTP server keeps its
+			// ordinary header timeout, so expiry cannot race this characterization.
+			if !callerFirst {
+				recipient.config.RequestTimeout = 100 * time.Millisecond
+			}
+			if callerFirst {
+				if err := caller.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = recipient.Close()
+			if callerFirst && err != nil {
+				t.Fatalf("caller-first shutdown: %v", err)
+			}
+			if !callerFirst && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("recipient-first shutdown: %v", err)
 			}
 		})
 	}
