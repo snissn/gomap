@@ -3361,6 +3361,15 @@ func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, 
 	return true, nil
 }
 
+// A domain publisher has no public handle to supply its catalog identity or
+// stored-document format. Bind both before admission without retaining mu.
+func collectionForWriteDomainPublication(db *backenddb.DB, domain *collectionWriteDomain) *Collection {
+	domain.mu.RLock()
+	meta := domain.meta
+	domain.mu.RUnlock()
+	return &Collection{db: db, writeDomain: domain, name: meta.Name, meta: meta}
+}
+
 func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain) error {
 	return flushCollectionWriteDomainWithRawPublishState(db, domain, false)
 }
@@ -3377,7 +3386,9 @@ func flushCollectionWriteDomainWithTypedReconcile(db *backenddb.DB, domain *coll
 	if db == nil || domain == nil {
 		return nil
 	}
-	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked, typedGraphReconcile: token}
+	collection := collectionForWriteDomainPublication(db, domain)
+	collection.commandWALRawPublishLocked = rawPublishLocked
+	collection.typedGraphReconcile = token
 	unlockAdmission := collection.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)
@@ -3389,7 +3400,7 @@ func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDo
 	if db == nil || domain == nil {
 		return nil
 	}
-	collection := &Collection{db: db, writeDomain: domain}
+	collection := collectionForWriteDomainPublication(db, domain)
 	for {
 		work, err := collection.prepareIndexedAsyncPublish()
 		if err != nil || work == nil {
