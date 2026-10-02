@@ -716,3 +716,39 @@ allocation reduction alone does not prove faster reads. These are Go test
 outputs, not unified-bench profile-dir artifacts or benchprof inputs. No
 profile parser or on-disk format changes are required. See the
 [typed-storage performance guide](../../TreeDB/docs/guides/typed-storage-performance.md#persistent-value-log-decode-scratch).
+
+### Owned persistent value-log reads
+
+The standalone `BenchmarkFileReadAppendOwned` and
+`BenchmarkDBOwnedValueLogRoute` compare cache copies, decode, OS-cache-warm
+open/map/read/close, and ordinary public owned Get. The capture also runs landed
+`BenchmarkFileReadAppendCompressedFallback`,
+`BenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo`, and
+`BenchmarkDBValueLogGet/Get` and `/GetAppend` guardrails.
+
+Prepare the source/binaries/fixture described in the
+[retained packet](../../docs/benchmarks/treedb_owned_values_20261001/README.md), then run:
+
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/qualify.sh FROZEN_CAPTURE_DIR
+```
+
+It writes fresh-process Go benchmark text, separate `/usr/bin/time -v` RSS text,
+and source/fixture hash inventories. These are standalone artifacts, not
+unified-bench profile-dir output or benchprof inputs.
+
+The final shared mmap publication repair has a separate
+[95-cell qualification and 20-cell repair control](../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md).
+It adds `BenchmarkOwnedMmapBudgetDenied512` and
+`BenchmarkOwnedMmapConcurrentFirstAdmission` in an identical test-only overlay.
+Retained stdout, stderr and time-v RSS are separate streams; source/binary/fixture
+hashes and successful process statuses are checked. Prepare a new reviewed
+freeze following that packet, then run:
+
+```sh
+bash docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/inputs/qualify-mmap-repair.sh NEW_FROZEN_CAPTURE_DIR
+```
+
+Ordinary pointer Get improves in that bounded comparison; capped nil fallback
+and OS-warm first-map lifecycle costs increase and remain explicitly disclosed.
+The earlier packet retains its original source identities.

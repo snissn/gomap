@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkOwnedMmapBudgetDenied512/reused_false-4         	 1000000	      1089 ns/op	         1.000 cache_hits/op	         1.000 crc_checks/op	         1.000 denial_events	         1.000 fallbacks/op	      8192 retained_raw_B	     512 B/op	       1 allocs/op
+BenchmarkOwnedMmapBudgetDenied512/reused_true-4          	 1000000	      1032 ns/op	         1.000 cache_hits/op	         1.000 crc_checks/op	         1.000 denial_events	         1.000 fallbacks/op	      8192 retained_raw_B	       0 B/op	       0 allocs/op
+PASS

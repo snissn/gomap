@@ -77,6 +77,44 @@ no on-disk format change. See [decode scratch reuse](../spec/value-log-lifecycle
 The [#4889 qualification packet](../../../docs/benchmarks/treedb_decode_reuse_20261001/README.md)
 retains matched sources, public caller/ownership audit and physical-capacity caveats.
 
+For owned value-log routing, `BenchmarkFileReadAppendOwned` compares equal
+compressed pointer records through file fallback, mapped decode and warmed
+mapped cache. The cache row pre-admits the same raw frame through a reusable
+destination on both revisions, isolating the final owned-copy cost. The
+`cold_open_map` row includes OS-cache-warm open, map, read, admission and close
+costs. Each result still owns its output bytes. Cache retained-byte counters
+measure raw payload lengths; pooled backing capacity may be larger. Report GC
+heap, mapped bytes and process RSS separately. Mapping and cache admission
+retain their existing limits. Use reopened public `Get` route
+counters to prove the selected path rather than comparing inline values against
+pointer values. For paired retained capture, export one fully verified closed
+canonical fixture with `TREEDB_OWNED_VLOG_FIXTURE_EXPORT=/new/fixture/path`
+(the benchmark skips timed reads), freeze its file hashes, then pass
+`TREEDB_OWNED_VLOG_FIXTURE=/frozen/fixture/path` to both revisions. Each process
+clones the fixture before opening it. Existing snapshot restore helpers rebind
+only physical dependency identities in the copied indexes; value-log and
+dictionary bytes, pointers and logical roots stay identical. Copy, identity
+rebind, full-value verification and warmup are outside timing. Normal constructors remain separate guardrails because
+asynchronous dictionary training can change their stored layout. The
+[retained #4891 packet](../../../docs/benchmarks/treedb_owned_values_20261001/README.md)
+records sources, fixture hashes, repetitions and memory limits. See [owned append reads](../spec/value-log-lifecycle.md#12-owned-append-reads).
+
+The [final mmap publication repair packet](../../../docs/benchmarks/treedb_owned_values_20261001/repair-9ab02b48/README.md)
+binds runtime 9ab and the unchanged read/fixture blobs after main integration.
+Its ordinary pointer Get median improves 3098→1928 ns while allocations remain
+315 B/op and integer 1 alloc/op. It explicitly accepts the measured capped nil
+fallback +55 ns/+5.04% and OS-warm lifecycle +7.32% tradeoffs; the separate exact
+ab2→9ab control cannot erase those base comparisons. Integer allocation fields
+and logical raw-cache counters do not prove exact allocation counts or physical
+memory reductions.
+
+```sh
+GOWORK=off go test ./TreeDB/internal/valuelog -run '^$' \
+  -bench '^BenchmarkFileReadAppendOwned$' -benchmem -count 5
+TREEDB_HOT_PATH_STATS=1 GOWORK=off go test ./TreeDB -run '^$' \
+  -bench '^BenchmarkDBOwnedValueLogRoute$' -benchmem -count 5
+```
+
 ### Default typed-column int64 aggregate benchmark
 
 Use this for a repeatable local signal. It runs the landed #1808 default matrix:

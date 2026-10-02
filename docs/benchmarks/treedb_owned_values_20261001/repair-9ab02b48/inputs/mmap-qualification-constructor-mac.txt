@@ -1,0 +1,19 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+cpu: Apple M3
+BenchmarkOwnedMmapBudgetDenied512
+BenchmarkOwnedMmapBudgetDenied512/reused_false
+    mmap_qualification_overlay_test.go:109: checked512B memoized denial, one CRC/cache/fallback per read, raw8192B
+    mmap_qualification_overlay_test.go:110: untimed constructor probe
+--- SKIP: BenchmarkOwnedMmapBudgetDenied512/reused_false
+BenchmarkOwnedMmapBudgetDenied512/reused_true
+    mmap_qualification_overlay_test.go:109: checked512B memoized denial, one CRC/cache/fallback per read, raw8192B
+    mmap_qualification_overlay_test.go:110: untimed constructor probe
+--- SKIP: BenchmarkOwnedMmapBudgetDenied512/reused_true
+BenchmarkOwnedMmapConcurrentFirstAdmission
+    mmap_qualification_overlay_test.go:203: two checked first owned reads admitted, enough budget for both; includes open/goroutine/map/close costs
+    mmap_qualification_overlay_test.go:204: untimed constructor probe
+--- SKIP: BenchmarkOwnedMmapConcurrentFirstAdmission
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.585s

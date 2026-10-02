@@ -1,0 +1,3 @@
+a8c26314c6e6c254575f616cc6543478f8dcd02cde291ad0aa51ec74c4689b16  treedb-diagnostic.test
+c459c64195a7c017787ad25d845d4dbac7c770e2bb126d159164cbfb3f18e008  logs/hot-before.pprof
+f1ab9b9a8429e548d277a03c71e103f0746d21d4f5585f5f755ed5dd1eeadc01  logs/hot-after.pprof

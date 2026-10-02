@@ -1,0 +1,2 @@
+capture_exit_status=0
+freeze_exit_status=0
