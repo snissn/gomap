@@ -10,6 +10,7 @@ import treedb_memory_budget_capture as memory
 
 HARNESS = "TreeDB/quicksilver_workflow_bench_test.go"
 PREFIX = "TREEDB_QUICKSILVER_PACKET "
+LATENCY_SAMPLE_STRIDE = 17
 PHASES = ["load_sync", "initial_checkpoint", "verify_initial", "owned_warm_reads"]
 PHASES += [name for part in range(1, 5) for name in (f"updates_{part}", f"checkpoint_{part}")]
 PHASES += ["verify_before_close", "verify_reopen"]
@@ -56,7 +57,8 @@ def check_packet(packet, freeze, process, controls, retained):
                 "batch_size": 1000, "update_stride": 7919, "update_checkpoints": 4, "sentinel_keys": 1,
                 "read_api_requests": reads // batch, "read_hits": reads * (100 - miss) // 100,
                 "read_misses": reads * miss // 100, "query_table_bytes": reads * 8,
-                "latency_samples": (reads // batch + 15) // 16, "latency_sample_stride_requests": 16,
+                "latency_samples": (reads // batch + LATENCY_SAMPLE_STRIDE - 1) // LATENCY_SAMPLE_STRIDE,
+                "latency_sample_stride_requests": LATENCY_SAMPLE_STRIDE,
                 "latency_unit": "ns per owned API request", "throughput_includes_crc32_consumption": True,
                 "crc_disabled": False, "background_maintenance_disabled": True, "side_store_limits_changed": False,
                 "all_values_and_interleaved_misses_verified": True, "present_empty_verified": True, "final_close_checked": True,

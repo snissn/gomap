@@ -26,7 +26,8 @@ The 14 phases separate load acknowledgement, initial checkpoint, initial proof,
 warm owned reads, four update intervals with their checkpoints, final proof and
 reopen proof. Reopen time and post-reopen GC observations are separate fields.
 Read throughput includes CRC consumption and uses read-key count/phase time;
-latency samples cover only each owned API request and occur every 16 requests.
+latency samples cover only each owned API request and occur every 17 requests,
+avoiding alignment with the deterministic miss schedule.
 Batch latency is per 64-key request, not per key. Whole-workflow Go `ns/op` is
 not a read-throughput result. No phase is a cold-device measurement: placement
 scans/full proof precede the explicitly warm read phase.

@@ -164,7 +164,7 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 		"throughput_includes_crc32_consumption": true, "latency_unit": "ns per owned API request",
 		"query_table_bytes": len(queries) * 8, "read_checksum": checksum, "latency_samples": len(latency),
 		"read_api_requests": reads / batchSize, "read_hits": reads * (100 - miss) / 100, "read_misses": reads * miss / 100,
-		"latency_sample_stride_requests": 16, "read_p99_ns": algorithmQuantile(latency, .99),
+		"latency_sample_stride_requests": quicksilverLatencyStride, "read_p99_ns": algorithmQuantile(latency, .99),
 		"read_p999_ns": algorithmQuantile(latency, .999), "read_max_ns": algorithmQuantile(latency, 1), "reopen_ns": reopenNS,
 		"initial_stats": initial, "closure_stats": closure, "reopen_stats": reopenStats,
 		"post_reopen_gc_heap_bytes": retained.HeapAlloc, "post_reopen_gc_stats": retainedStats,
@@ -185,6 +185,9 @@ type quicksilverQuery struct {
 	KeyID uint32
 	CRC   uint32
 }
+
+// Coprime to both the 100-key miss period and the 25-request GetMany64 period.
+const quicksilverLatencyStride = 17
 
 func quicksilverQueries(keys, count, miss int, distribution string, size int) []quicksilverQuery {
 	rng := rand.New(rand.NewPCG(51, 99))
@@ -215,7 +218,7 @@ func quicksilverRead(tb testing.TB, d *DB, queries []quicksilverQuery, batchSize
 	for i := range keys {
 		keys[i] = make([]byte, 32)
 	}
-	samples := make([]int64, 0, (len(queries)/batchSize+15)/16)
+	samples := make([]int64, 0, (len(queries)/batchSize+quicksilverLatencyStride-1)/quicksilverLatencyStride)
 	var checksum uint64
 	for base := 0; base < len(queries); base += batchSize {
 		for i := range keys {
@@ -246,7 +249,7 @@ func quicksilverRead(tb testing.TB, d *DB, queries []quicksilverQuery, batchSize
 			}
 			checksum += uint64(query.CRC)
 		}
-		if base/batchSize%16 == 0 {
+		if base/batchSize%quicksilverLatencyStride == 0 {
 			samples = append(samples, elapsed)
 		}
 	}
@@ -288,6 +291,21 @@ func TestQuicksilverWorkflowFixture(t *testing.T) {
 			}
 			if missing != 6400*miss/100 {
 				t.Fatal("wrong deterministic miss count", missing)
+			}
+			for _, batch := range []int{1, 64} {
+				hits, misses := 0, 0
+				for base := 0; base < len(queries); base += batch * quicksilverLatencyStride {
+					for _, query := range queries[base : base+batch] {
+						if query.KeyID%2 == 0 {
+							hits++
+						} else {
+							misses++
+						}
+					}
+				}
+				if hits == 0 || miss > 0 && misses == 0 {
+					t.Fatal("latency sample omitted hit/miss population", distribution, miss, batch, hits, misses)
+				}
 			}
 		}
 	}
