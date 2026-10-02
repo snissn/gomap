@@ -1328,121 +1328,125 @@ func (t *Tree) planGetMany(keys [][]byte, scratch *getManyScratch, verifyAlways 
 // mmap views stay out of pooled scratch. One bounded decode buffer is shared
 // only after each parent separator has been consumed.
 func (t *Tree) planGetManyInterval(ref page.ChildRef, start, end, depth int, scratch *getManyScratch, verifyAlways bool, keyScratch **leafRefPageScratch) (bool, error) {
-	if start == end {
-		return true, nil
-	}
-	if depth >= maxTraversalDepth {
-		return false, errors.New("tree too deep")
-	}
-	if ref.Kind == page.ChildRefLeafLog {
-		groupIdx, ok := scratch.groupByRef[ref]
-		if !ok {
-			groupIdx = len(scratch.groups)
-			scratch.groupByRef[ref] = groupIdx
-			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
+	for {
+		if start == end {
+			return true, nil
 		}
-		g := &scratch.groups[groupIdx]
-		for i := start; i < end; i++ {
-			scratch.probes[i].next = g.first
-			g.first = i
-			g.count++
-			scratch.present[scratch.probes[i].outIndex] = true
+		if depth >= maxTraversalDepth {
+			return false, errors.New("tree too deep")
 		}
-		return true, nil
-	}
-	var n node.Node
-	if err := t.loadChildRefViewInto(&n, ref, verifyAlways, false); err != nil {
-		return false, err
-	}
-	switch n.Type() {
-	case page.PageTypeLeaf:
-		return false, nil
-	case page.PageTypeInternal:
-	default:
-		return false, fmt.Errorf("invalid page type %d", n.Type())
-	}
-	if depth == 0 {
-		low, high, ok, err := n.InternalFenceBounds()
-		if err != nil {
+		if ref.Kind == page.ChildRefLeafLog {
+			groupIdx, ok := scratch.groupByRef[ref]
+			if !ok {
+				groupIdx = len(scratch.groups)
+				scratch.groupByRef[ref] = groupIdx
+				scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
+			}
+			g := &scratch.groups[groupIdx]
+			for i := start; i < end; i++ {
+				scratch.probes[i].next = g.first
+				g.first = i
+				g.count++
+				scratch.present[scratch.probes[i].outIndex] = true
+			}
+			return true, nil
+		}
+		var n node.Node
+		if err := t.loadChildRefViewInto(&n, ref, verifyAlways, false); err != nil {
 			return false, err
 		}
-		if ok {
-			for start < end && len(low) > 0 && compareTreeKey(scratch.probes[start].key, low) < 0 {
-				start++
-			}
-			for start < end && len(high) > 0 && compareTreeKey(scratch.probes[end-1].key, high) >= 0 {
-				end--
-			}
-			// Compact once at the root; clear discarded borrowed keys too.
-			count := copy(scratch.probes, scratch.probes[start:end])
-			clear(scratch.probes[count:])
-			scratch.probes = scratch.probes[:count]
-			start, end = 0, count
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			return false, nil
+		case page.PageTypeInternal:
+		default:
+			return false, fmt.Errorf("invalid page type %d", n.Type())
 		}
-	}
-	if start == end {
+		if depth == 0 {
+			low, high, ok, err := n.InternalFenceBounds()
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				for start < end && len(low) > 0 && compareTreeKey(scratch.probes[start].key, low) < 0 {
+					start++
+				}
+				for start < end && len(high) > 0 && compareTreeKey(scratch.probes[end-1].key, high) >= 0 {
+					end--
+				}
+				// Compact once at the root; clear discarded borrowed keys too.
+				count := copy(scratch.probes, scratch.probes[start:end])
+				clear(scratch.probes[count:])
+				scratch.probes = scratch.probes[:count]
+				start, end = 0, count
+			}
+		}
+		if start == end {
+			return true, nil
+		}
+		if n.Count() == 0 {
+			return false, node.ErrCorruptedNode
+		}
+		if end-start == 1 {
+			child, _, err := n.SearchInternalChildRef(scratch.probes[start].key)
+			if err != nil {
+				return false, err
+			}
+			ref = child
+			depth++
+			continue
+		}
+		if n.InternalBaseDeltaEnabled() {
+			if *keyScratch == nil {
+				*keyScratch = getLeafRefPageScratch()
+			}
+			n.SetKeyScratch((*keyScratch).buf)
+		}
+		for start < end {
+			// Find the exact floor separator, including the first-child rule below
+			// the first separator. Decode views are consumed before the next decode.
+			lo, hi := 0, int(n.Count())
+			child := page.ChildRef{}
+			for lo < hi {
+				mid := int(uint(lo+hi) >> 1)
+				separator, ref, err := getManyInternalEntryRefView(&n, uint16(mid))
+				if err != nil {
+					return false, err
+				}
+				if compareTreeKey(separator, scratch.probes[start].key) <= 0 {
+					lo, child = mid+1, ref
+				} else {
+					hi = mid
+				}
+			}
+			if lo == 0 {
+				var err error
+				_, child, err = getManyInternalEntryRefView(&n, 0)
+				if err != nil {
+					return false, err
+				}
+				lo = 1
+			}
+			next := end
+			if lo < int(n.Count()) {
+				separator, _, err := getManyInternalEntryRefView(&n, uint16(lo))
+				if err != nil {
+					return false, err
+				}
+				if compareTreeKey(scratch.probes[end-1].key, separator) >= 0 {
+					next = start + sort.Search(end-start, func(i int) bool {
+						return compareTreeKey(scratch.probes[start+i].key, separator) >= 0
+					})
+				}
+			}
+			groupable, err := t.planGetManyInterval(child, start, next, depth+1, scratch, verifyAlways, keyScratch)
+			if err != nil || !groupable {
+				return groupable, err
+			}
+			start = next
+		}
 		return true, nil
 	}
-	if n.Count() == 0 {
-		return false, node.ErrCorruptedNode
-	}
-	if end-start == 1 {
-		child, _, err := n.SearchInternalChildRef(scratch.probes[start].key)
-		if err != nil {
-			return false, err
-		}
-		return t.planGetManyInterval(child, start, end, depth+1, scratch, verifyAlways, keyScratch)
-	}
-	if n.InternalBaseDeltaEnabled() {
-		if *keyScratch == nil {
-			*keyScratch = getLeafRefPageScratch()
-		}
-		n.SetKeyScratch((*keyScratch).buf)
-	}
-	for start < end {
-		// Find the exact floor separator, including the first-child rule below
-		// the first separator. Decode views are consumed before the next decode.
-		lo, hi := 0, int(n.Count())
-		child := page.ChildRef{}
-		for lo < hi {
-			mid := int(uint(lo+hi) >> 1)
-			separator, ref, err := getManyInternalEntryRefView(&n, uint16(mid))
-			if err != nil {
-				return false, err
-			}
-			if compareTreeKey(separator, scratch.probes[start].key) <= 0 {
-				lo, child = mid+1, ref
-			} else {
-				hi = mid
-			}
-		}
-		if lo == 0 {
-			var err error
-			_, child, err = getManyInternalEntryRefView(&n, 0)
-			if err != nil {
-				return false, err
-			}
-			lo = 1
-		}
-		next := end
-		if lo < int(n.Count()) {
-			separator, _, err := getManyInternalEntryRefView(&n, uint16(lo))
-			if err != nil {
-				return false, err
-			}
-			if compareTreeKey(scratch.probes[end-1].key, separator) >= 0 {
-				next = start + sort.Search(end-start, func(i int) bool {
-					return compareTreeKey(scratch.probes[start+i].key, separator) >= 0
-				})
-			}
-		}
-		groupable, err := t.planGetManyInterval(child, start, next, depth+1, scratch, verifyAlways, keyScratch)
-		if err != nil || !groupable {
-			return groupable, err
-		}
-		start = next
-	}
-	return true, nil
 }
 
 // Entry views check their payload bounds; also reject header offsets, as the

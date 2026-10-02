@@ -185,98 +185,109 @@ func TestTreeGetManySharedTraversal(t *testing.T) {
 }
 
 func TestTreeGetManySharedTraversalErrorsBeforeCallbacks(t *testing.T) {
-	for _, kind := range []string{"depth", "checksum", "extent", "type", "pager-leaf"} {
-		t.Run(kind, func(t *testing.T) {
-			tr, reader, keys, _ := sharedGetManyFixture(t)
-			data, err := tr.pager.GetForWrite(tr.rootPageID + 6)
-			if err != nil {
-				t.Fatal(err)
-			}
-			switch kind {
-			case "depth":
-				b := node.NewBuilder(data, page.PageTypeInternal)
-				b.SetPageID(tr.rootPageID + 6)
-				if err := b.AddInternalChild([]byte("k096"), tr.rootPageID+6); err != nil {
+	for _, sparse := range []bool{false, true} {
+		for _, kind := range []string{"depth", "checksum", "extent", "type", "empty", "pager-leaf"} {
+			t.Run(fmt.Sprintf("%s/sparse=%v", kind, sparse), func(t *testing.T) {
+				tr, reader, keys, _ := sharedGetManyFixture(t)
+				if sparse {
+					keys = sharedGetManySparseKeys()
+				}
+				data, err := tr.pager.GetForWrite(tr.rootPageID + 6)
+				if err != nil {
 					t.Fatal(err)
 				}
-				b.FinishNoNode()
-			case "checksum":
-				data[len(data)-1] ^= 1
-				tr.pager.SetVerifyOnRead(true)
-			case "extent":
-				tr.pageLimit = tr.rootPageID + 6
-			case "type":
-				n := node.NewNode(data)
-				n.SetType(99)
-				n.UpdateChecksum()
-			case "pager-leaf":
-				b := node.NewBuilder(data, page.PageTypeLeaf)
-				b.SetPageID(tr.rootPageID + 6)
-				b.FinishNoNode()
-			}
-			if kind == "pager-leaf" {
-				scratch := getGetManyScratch(len(keys))
-				groupable, err := tr.planGetMany(keys, scratch, false)
-				putGetManyScratch(scratch)
-				if err != nil || groupable || reader.views != 0 {
-					t.Fatal("fallback planner materialized leaf", err, groupable, reader.views)
+				switch kind {
+				case "depth":
+					b := node.NewBuilder(data, page.PageTypeInternal)
+					b.SetPageID(tr.rootPageID + 6)
+					if err := b.AddInternalChild([]byte("k096"), tr.rootPageID+6); err != nil {
+						t.Fatal(err)
+					}
+					b.FinishNoNode()
+				case "checksum":
+					data[len(data)-1] ^= 1
+					tr.pager.SetVerifyOnRead(true)
+				case "extent":
+					tr.pageLimit = tr.rootPageID + 6
+				case "type":
+					n := node.NewNode(data)
+					n.SetType(99)
+					n.UpdateChecksum()
+				case "empty":
+					b := node.NewBuilder(data, page.PageTypeInternal)
+					b.SetPageID(tr.rootPageID + 6)
+					b.FinishNoNode()
+				case "pager-leaf":
+					b := node.NewBuilder(data, page.PageTypeLeaf)
+					b.SetPageID(tr.rootPageID + 6)
+					b.FinishNoNode()
 				}
-			}
-			calls := 0
-			err = tr.GetManyView(keys, func(int, []byte, []byte, bool) error { calls++; return nil })
-			if kind == "pager-leaf" {
-				if err != nil || calls != len(keys) {
-					t.Fatal(err, calls)
+				if kind == "pager-leaf" {
+					scratch := getGetManyScratch(len(keys))
+					groupable, err := tr.planGetMany(keys, scratch, false)
+					putGetManyScratch(scratch)
+					if err != nil || groupable || reader.views != 0 {
+						t.Fatal("fallback planner materialized leaf", err, groupable, reader.views)
+					}
 				}
-				return
-			}
-			message := map[string]string{"depth": "tree too deep", "checksum": "checksum mismatch", "extent": "outside selected root extent", "type": "invalid page type"}[kind]
-			if err == nil || !strings.Contains(err.Error(), message) || calls != 0 || reader.views != 0 {
-				t.Fatal(err, calls, reader.views)
-			}
-			out := make([][]byte, len(keys))
-			if _, err := tr.GetManyAppend(keys, out, nil); err == nil || !strings.Contains(err.Error(), message) {
-				t.Fatal(err)
-			}
-		})
+				calls := 0
+				err = tr.GetManyView(keys, func(int, []byte, []byte, bool) error { calls++; return nil })
+				if kind == "pager-leaf" {
+					if err != nil || calls != len(keys) {
+						t.Fatal(err, calls)
+					}
+					return
+				}
+				message := map[string]string{"depth": "tree too deep", "checksum": "checksum mismatch", "extent": "outside selected root extent", "type": "invalid page type", "empty": node.ErrCorruptedNode.Error()}[kind]
+				if err == nil || !strings.Contains(err.Error(), message) || calls != 0 || reader.views != 0 {
+					t.Fatal(err, calls, reader.views)
+				}
+				out := make([][]byte, len(keys))
+				if _, err := tr.GetManyAppend(keys, out, nil); err == nil || !strings.Contains(err.Error(), message) {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
 func TestTreeGetManySharedTraversalScratch(t *testing.T) {
 	tr, _, keys, _ := sharedGetManyFixture(t)
-	scratch := getGetManyScratch(len(keys))
-	// Warm the existing map/slices before checking the planner itself.
-	if ok, err := tr.planGetMany(keys, scratch, false); err != nil || !ok {
-		t.Fatal(ok, err)
-	}
-	// Keep the same buffers: the race runtime deliberately drops sync.Pool
-	// entries, which would measure pool misses rather than planner allocations.
-	if allocs := testing.AllocsPerRun(100, func() {
-		clear(scratch.probes)
-		clear(scratch.groups)
-		clear(scratch.present)
-		clear(scratch.groupByRef)
-		scratch.probes = scratch.probes[:0]
-		scratch.groups = scratch.groups[:0]
+	for _, keys := range [][][]byte{keys, sharedGetManySparseKeys()} {
+		scratch := getGetManyScratch(len(keys))
+		// Warm the existing map/slices before checking the planner itself.
 		if ok, err := tr.planGetMany(keys, scratch, false); err != nil || !ok {
 			t.Fatal(ok, err)
 		}
-	}); allocs != 0 {
-		t.Fatalf("warm planner allocated %g times", allocs)
-	}
-	putGetManyScratch(scratch)
-	for _, probe := range scratch.probes[:cap(scratch.probes)] {
-		if probe.key != nil {
-			t.Fatal("pooled borrowed key")
+		// Keep the same buffers: the race runtime deliberately drops sync.Pool
+		// entries, which would measure pool misses rather than planner allocations.
+		if allocs := testing.AllocsPerRun(100, func() {
+			clear(scratch.probes)
+			clear(scratch.groups)
+			clear(scratch.present)
+			clear(scratch.groupByRef)
+			scratch.probes = scratch.probes[:0]
+			scratch.groups = scratch.groups[:0]
+			if ok, err := tr.planGetMany(keys, scratch, false); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+		}); allocs != 0 {
+			t.Fatalf("warm planner allocated %g times", allocs)
 		}
-	}
-	for _, group := range scratch.groups[:cap(scratch.groups)] {
-		if group.ref != (page.ChildRef{}) {
-			t.Fatal("pooled child ref")
+		putGetManyScratch(scratch)
+		for _, probe := range scratch.probes[:cap(scratch.probes)] {
+			if probe.key != nil {
+				t.Fatal("pooled borrowed key")
+			}
 		}
-	}
-	if len(scratch.groupByRef) != 0 {
-		t.Fatal("pooled ref map")
+		for _, group := range scratch.groups[:cap(scratch.groups)] {
+			if group.ref != (page.ChildRef{}) {
+				t.Fatal("pooled child ref")
+			}
+		}
+		if len(scratch.groupByRef) != 0 {
+			t.Fatal("pooled ref map")
+		}
 	}
 }
 

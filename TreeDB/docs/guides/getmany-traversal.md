@@ -15,7 +15,8 @@ root extents, checksums and page types, and the 50-level corruption guard still
 applies. Internal node views remain on the traversal stack. Multi-key intervals
 find the exact floor separator once per occupied child, then partition sorted
 probes at the next separator. Singleton intervals retain the checked child
-search. Sparse intervals skip untouched children. Base-delta separator decoding
+search and continue iteratively through their remaining internal levels, with a
+fresh node view and the same checked loads at each level. Sparse intervals skip untouched children. Base-delta separator decoding
 borrows one existing page-sized scratch buffer lazily for the planning call;
 parent separator comparisons finish before a child can overwrite that buffer.
 No separator views survive in pooled scratch. The buffer returns before leaf
@@ -86,3 +87,19 @@ binaries; the overlay adds a mutex/map counter and is only for untimed load
 counts. A small `TREEDB_ALGORITHM_PILOT=1` allocation check does not qualify the
 250k-key host-local latency target. Retain uniform and pointer cells as guards,
 and measure both owned and view locality cohorts before adopting a candidate.
+
+A disposable extension of the checked-loader overlay also verifies singleton
+control flow in both public modes, without affecting normal or timed builds:
+
+```sh
+python3 TreeDB/tree/testdata/getmany_singleton_overlay.py "$PWD" /tmp/getmany-singleton-overlay
+go test -overlay=/tmp/getmany-singleton-overlay/overlay.json \
+  -tags=algorithm_work_overlay,getmany_singleton_overlay ./TreeDB/tree \
+  -run '^TestTreeGetManySharedTraversalSingletonWork$' -count=1 -v
+```
+
+The existing mixed-reference fixture uses a 64-key public batch whose root
+fences leave two singleton tails. Planning enters three intervals and performs
+the same five unique checked internal loads. The dense fixture still performs
+seven unique checked internal loads. These are structural checks, not latency
+qualification; uniform and locality performance guards require paired captures.
