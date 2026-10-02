@@ -52,16 +52,14 @@ func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), cover
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return err
 	}
-	var err error
+	flushBuffered := c.flushBufferedWritesWithVectorAdmissionLocked
 	if coveragePersistence {
-		err = c.flushBufferedWritesWithCoverageLocked()
-	} else {
-		err = c.flushBufferedWritesWithVectorAdmissionLocked()
+		flushBuffered = c.flushBufferedWritesWithCoverageLocked
 	}
-	if err != nil {
+	if err := flushBuffered(); err != nil {
 		return err
 	}
-	unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, nil)
+	unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, flushBuffered)
 	if err != nil {
 		return err
 	}
