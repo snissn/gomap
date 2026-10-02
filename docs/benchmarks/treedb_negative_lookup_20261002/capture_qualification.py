@@ -113,14 +113,15 @@ def main():
         command = execution_command(job, binary)
         print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {job['id']} starting", flush=True)
         log = output / (job['id'] + '.log')
+        stderr_log = output / (job['id'] + '.stderr.log')
         began = time.time()
-        with log.open('w') as stream:
+        with log.open('w') as stream, stderr_log.open('w') as errors:
             result = subprocess.run(command, cwd=roots[job['revision']], env=run_env,
-                                    stdout=stream, stderr=subprocess.STDOUT)
+                                    stdout=stream, stderr=errors)
         record = dict(job=job, command=command, cwd=str(roots[job['revision']]),
                       binary_sha256=binary['sha256'],
                       started_unix=began, ended_unix=time.time(), returncode=result.returncode,
-                      log_sha256=digest(log))
+                      log_sha256=digest(log), stderr_sha256=digest(stderr_log))
         manifest['runs'].append(record)
         save()
         if result.returncode:

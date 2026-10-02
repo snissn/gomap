@@ -240,26 +240,39 @@ func TestCapturedRaftSnapshotV1CanceledMaterializationCleansStage(t *testing.T) 
 	source := openRaftSnapshotFSMForTest(t, database, dir, true)
 	defer source.Close()
 	applySnapshotSourceEntries(t, source, []byte(`{"_id":"u-large","name":"before"}`))
-	source.snapshotCaptureLimits.Lifetime = 30 * time.Millisecond
 	snapshot, err := source.CaptureRaftSnapshotV1()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer snapshot.Release()
-	// A bounded local-file hook spans expiry after materialization starts.
-	// It always returns, including on failure, so it cannot deadlock teardown.
-	first := true
-	raftSnapshotBeforeCopyForTest = func() {
-		if first {
-			first = false
-			time.Sleep(60 * time.Millisecond)
+	// Release cancels before waiting for Materialize. Observe that cancellation
+	// in the copy hook, so setup time cannot consume the test's action window.
+	released := make(chan error, 1)
+	copyStarted := false
+	raftSnapshotBeforeCopyForTest = func(ctx context.Context) {
+		if copyStarted {
+			return
+		}
+		copyStarted = true
+		entries, err := os.ReadDir(raftSnapshotStagingDirV1(source.cluster.Layout.SnapshotDir))
+		if err != nil || len(entries) == 0 || !source.snapshotOperationActive.Load() {
+			t.Errorf("copy did not retain stage/admission: %v %v", entries, err)
+		}
+		go func() { released <- snapshot.Release() }()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Error("Release did not cancel in-progress materialization")
 		}
 	}
 	defer func() { raftSnapshotBeforeCopyForTest = nil }()
-	if _, err := snapshot.Materialize(); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("materialize error=%v", err)
+	if _, err := snapshot.Materialize(); !errors.Is(err, context.Canceled) {
+		t.Errorf("materialize error=%v", err)
 	}
-	if err := snapshot.Release(); err != nil {
+	if !copyStarted {
+		t.Fatal("materialization did not reach the copy hook")
+	}
+	if err := <-released; err != nil {
 		t.Fatal(err)
 	}
 	if source.snapshotOperationActive.Load() {

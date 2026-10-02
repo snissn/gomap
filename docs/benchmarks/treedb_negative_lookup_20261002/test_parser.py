@@ -86,14 +86,16 @@ class ParserTests(unittest.TestCase):
                 log = root / (job['id'] + '.log')
                 log.write_text(synthetic_log(job))
                 binary = prepared['binaries_before'][parser.binary_id(job)]
+                stderr_log = root / (job['id'] + '.stderr.log')
+                stderr_log.write_text('retained synthetic diagnostic stderr\n')
                 manifest['runs'].append(dict(job=job, returncode=0, command=parser.execution_command(job, binary),
                                             cwd=prepared['roots'][job['revision']], binary_sha256=binary['sha256'],
-                                            log_sha256=parser.digest(log)))
+                                            log_sha256=parser.digest(log), stderr_sha256=parser.digest(stderr_log)))
             path = root / 'capture.json'
             path.write_text(json.dumps(manifest))
             parsed = parser.validate(root)
             self.assertEqual((parsed['processes'], parsed['performance_samples'], parsed['diagnostic_rows']), (36, 930, 160))
-            for mutation in ('partial', 'source', 'failed', 'command', 'environment', 'log', 'binary', 'script', 'binding'):
+            for mutation in ('partial', 'source', 'failed', 'command', 'environment', 'log', 'stderr', 'binary', 'script', 'binding'):
                 broken = copy.deepcopy(manifest)
                 if mutation == 'partial':
                     broken['runs'].pop()
@@ -111,6 +113,8 @@ class ParserTests(unittest.TestCase):
                     broken['scripts_after']['capture_qualification.py'] = 'e'*64
                 elif mutation == 'binding':
                     broken['runs'][0]['binary_sha256'] = 'e'*64
+                elif mutation == 'stderr':
+                    broken['runs'][0]['stderr_sha256'] = 'e'*64
                 else:
                     broken['runs'][0]['log_sha256'] = 'f'*64
                 path.write_text(json.dumps(broken))
@@ -137,6 +141,27 @@ class ParserTests(unittest.TestCase):
         counters = next(j for j in parser.plan() if j['counters'])
         with self.assertRaises(ValueError):
             parser.parse_log(synthetic_log(counters).replace(' 1 descents/key', '', 1), counters)
+        # Actual retained update failure: stderr interrupted testing's name
+        # prefix before its numeric suffix. Exact matching must keep rejecting it.
+        updates = next(j for j in parser.plan() if j['id'] == 'updates-1')
+        mixed = Path(__file__).with_name('failed-updates-1-mixed.log').read_text()
+        with self.assertRaises(ValueError):
+            parser.parse_log(mixed, updates)
+        # Model the two file descriptors without changing the parser's row
+        # matching: stdout prefix and numeric suffix concatenate; diagnostic
+        # timestamps remain in their own retained stream.
+        stdout, stderr = [], []
+        for line in mixed.splitlines(keepends=True):
+            if line.startswith('Benchmark'):
+                prefix, diagnostic = line.split('2026/', 1)
+                stdout.append(prefix)
+                stderr.append('2026/' + diagnostic)
+            elif line.startswith('2026/'):
+                stderr.append(line)
+            else:
+                stdout.append(line)
+        self.assertEqual(len(parser.parse_log(''.join(stdout), updates)), 6)
+        self.assertIn('dict training trained dict', ''.join(stderr))
 
 
 if __name__ == '__main__':

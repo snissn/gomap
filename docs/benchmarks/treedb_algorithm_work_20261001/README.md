@@ -4,6 +4,8 @@ This is an instrumentation-only harness for [#4893](https://github.com/snissn/go
 
 Initial provisional source is the clean union `6fffa5412db4ec70a5db614bd52f9cf7d255b210`: V `ab2e9124fcca72710b896cf78577fa6bd37a11b0` plus N `a95ffc65cf4020b41cdbf90774473a6a469d0215`. Final acceptance must synchronize merged predecessors and audit the actual diff before freezing runtime and harness identities. Root/TreeDB AGENTS.md and CONTRIBUTING.md were read at this union. This bounded benchmark/instrumentation change uses the issue's test-first exception; public behavior checks protect its constructor.
 
+The next provisional synchronization merged V `9ab02b48ce2397410940a7e42cc22bbf95a96c5a`, N `37fb160c1ebfd21710cbce68da53d883c1e18eff`, and main `c9a00bb631d34b62669ec1d3f4437e1c8c5df845` without conflict, producing `a0827b8818b0af728d5ac7b63443922d3651f534`. This preserves the original constructor evidence at `b80d4c09bc78086ef5e7fb216786109f8907fb74`; it does not relabel it as acceptance of the newer runtime.
+
 ## Fixed write workflow
 
 `BenchmarkAlgorithmSparseUpdates` uses ordinary public `Open`, `NewBatchWithSize`, `Batch.Set`, synchronous `Batch.WriteSync`, and `Checkpoint`. It loads 250,000 even keys, updates exactly 40,000 keys with `(i*7919)%keys`, and verifies every byte and every interleaved odd-key miss after close/reopen. Both fixture sizes are coprime to 7919; updates do not repeat a key. Keys are 32 bytes with shared prefixes. Values are compressible 256 bytes with an explicit key ID and generation. One update generation is permitted: the concurrent reader accepts exactly generation 0 or 1 and checks all remaining bytes.
@@ -30,6 +32,10 @@ Existing leaf-group counters do not count internal descents. `scripts/treedb_alg
 
 The script records original source SHA-256/Git blob, runtime HEAD/TreeDB tree, and generated source hashes. It fails if the instrumented function marker changes. Full collection compares the claimed runtime HEAD to actual checkout HEAD, rejects dirty/untracked relevant sources, and checks an external freeze JSON binding `runtime_head`, `runtime_tree` (the TreeDB Git tree identity, which binds its blobs), `harness_sha256`, and `binary_sha256`. The executable is hashed before timing. Build/freeze the executable from the reviewed clean source before collection and preserve that external manifest; recording an environment variable alone is insufficient. Pilot mode is explicitly unretained and does not require this production freeze.
 
+`capture.py` provides the operational freeze around that runtime check. Preparation builds one test binary without running it. Its external `freeze.json` records the exact build command, executable SHA-256 and `go version -m` output, actual `go env` settings, resolved module graph, and SHA-256 inventory of the actual `go list -deps -test` package inputs (including local replacements, stdlib, cgo/assembly and embedded files), plus Go compiler/linker/assembler inputs. The same identity is checked before and after preparation and every capture; package files in a dependency cache are bound independently of Git HEAD. Clean tracked/untracked checkout, changed source/dependency/toolchain/binary, and changed overlay inputs fail closed. C compiler settings are recorded; system C headers and filesystem/device state still require the external host manifest and are not inferred from Go package inputs. Inspect build-info output alongside the build command/input inventory: a test binary may omit module details from build info, so that field alone is insufficient.
+
+Each process writes exclusively created `stdout.log` and `stderr.log`, then records their independent hashes, exact command/environment and exit status in `execution.json`. JSON and benchmark rows are parsed only from stdout; engine stderr is retained without repair or splicing. A failed process or validation leaves an incomplete packet and both raw streams. Completed raw logs/records are made read-only and can be revalidated against their hashes; permissions do not replace hashes. Eight write cells require eight unique control packets, exact fixture/ack/checkpoint counts, complete stride samples, monotonic required work counters, and checked closure. Twelve batch cells require 1,000 public calls of 64 inputs each. Twelve independent internal diagnostic cells require all 128 batches and consistent actual/union/repeated visit counts. These checks establish packet completeness, not sample precision or noise acceptance. Synthetic records in `test_capture.py` are gate tests, never measured evidence.
+
 ## Reproduction
 
 On the exclusively granted Linux runner, use Go 1.26.3, `GOWORK=off`, persistent build cache, and a dedicated source/tmp/log directory. No other timed run may overlap. Keep raw successful and failed logs. Package test profiles are ordinary Go profiles, not benchprof inputs.
@@ -45,10 +51,23 @@ TREEDB_ALGORITHM_PILOT=1 GOWORK=off go test ./TreeDB -run '^$' -bench '^Benchmar
 python3 scripts/treedb_algorithm_work_overlay.py "$PWD" /tmp/algorithm-overlay
 TREEDB_ALGORITHM_PILOT=1 GOWORK=off go test -overlay /tmp/algorithm-overlay/overlay.json ./TreeDB -run '^TestAlgorithmWorkInternalVisits$' -count=1 -v
 
-# Full retained run: build once from reviewed+landed clean frozen source,
-# then independently record the external freeze JSON and run that binary.
-GOWORK=off go test -c -o /tmp/algorithm-work.test ./TreeDB
-TREEDB_ALGORITHM_RUNTIME_HEAD=FROZEN_RUNTIME_HEAD TREEDB_ALGORITHM_FREEZE_FILE=/tmp/algorithm-freeze.json /tmp/algorithm-work.test -test.run '^$' -test.bench '^BenchmarkAlgorithmSparseUpdates$' -test.benchtime=1x -test.count=1 -test.benchmem -test.v
+# After review/landing: build only, then collect under the coordinator's grant.
+# Output directories must be new; prepared paths/source remain stable.
+CAPTURE=docs/benchmarks/treedb_algorithm_work_20261001/capture.py
+# Pin the actual toolchain; the helper disables automatic toolchain downloads.
+export GOROOT=/home/mikers/.gvm/gos/go1.26.3
+python3 "$CAPTURE" prepare --source "$PWD" --output /tmp/algorithm-prepared
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-writes-r1 --family writes --grant COORDINATOR_EXCLUSIVE_GRANT
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-prepared --output /tmp/algorithm-many-r1 --family many --grant COORDINATOR_EXCLUSIVE_GRANT
+python3 "$CAPTURE" validate --source "$PWD" --output /tmp/algorithm-writes-r1
+# Add --pilot for an explicitly unretained 8k qualification;
+# add --small-flush only for the separate 1 MiB write cohort.
+
+# Diagnostic binary is prepared independently and never used for timing.
+python3 "$CAPTURE" prepare --source "$PWD" --output /tmp/algorithm-counter-prepared --family internal --overlay /tmp/algorithm-overlay/overlay.json
+python3 "$CAPTURE" capture --source "$PWD" --prepared /tmp/algorithm-counter-prepared --output /tmp/algorithm-counters --family internal --overlay /tmp/algorithm-overlay/overlay.json --grant COORDINATOR_EXCLUSIVE_GRANT
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s docs/benchmarks/treedb_algorithm_work_20261001 -p test_capture.py -v
 ```
 
 Final decision collection needs repeated fresh-process serial cohorts, independently frozen profiles for internal traversal share, and all requested closure/debt observations. Report the actual repetition/noise policy before collection. Unmeasured larger-than-memory capacity stays open.
