@@ -350,3 +350,16 @@ Go benchmark output and JSON diagnostic packets, as documented in
 Their package-test profiles and counter-only overlays are not benchprof inputs.
 The dedicated `capture.py prepare|capture|validate` flow emits `freeze.json`,
 `execution.json`, `parsed.json`, and separately hashed stdout/stderr logs.
+
+`BenchmarkAlgorithmSparseUpdatesSnapshotRotations` adds one checked public
+snapshot/read/close per acknowledged batch. It emits
+`algorithm-work-snapshot-rotations-v1` packets with snapshot counts and
+`snapshot_ns`, using the same freeze and raw artifact format. After review,
+landing, preparation and coordinator runner grant, select it explicitly:
+
+```sh
+python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
+  --source "$PWD" --prepared /tmp/algorithm-prepared \
+  --output /tmp/algorithm-snapshot-rotations-eligibility --family snapshot-rotations \
+  --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
+```
