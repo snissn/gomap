@@ -10,7 +10,10 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -53,9 +56,12 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 	}()
 	quicksilverCheckConfiguration(b, d.Stats(), leaf, filterBytes)
 	binaryHash := memoryBudgetBinaryHash(b)
+	processIOBefore := quicksilverIO()
 	initial := d.Stats()
+	phaseIO := make(map[string]any)
 	phases := make([]memoryBudgetPhase, 0, 15)
 	measure := func(name string, operations int, run func()) {
+		ioBefore := quicksilverIO()
 		beforeStats := d.Stats()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -63,6 +69,7 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 		run()
 		elapsed := time.Since(start).Nanoseconds()
 		runtime.ReadMemStats(&after)
+		phaseIO[name] = map[string]any{"before": ioBefore, "after": quicksilverIO()}
 		phases = append(phases, memoryBudgetPhase{Name: name, Operations: operations, ElapsedNS: elapsed,
 			AllocatedBytes: after.TotalAlloc - before.TotalAlloc, Allocations: after.Mallocs - before.Mallocs,
 			HeapBytes: after.HeapAlloc, BeforeStats: beforeStats, Stats: d.Stats(), Files: memoryBudgetFiles(b, opts.Dir)})
@@ -89,11 +96,23 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 	measure("owned_warm_reads", reads, func() {
 		latency, checksum = quicksilverRead(b, d, queries, batchSize)
 	})
+	// The concurrent reader has fixed present-key Get composition, separately
+	// labeled from the warm query table. Cleanup joins it before any owner closes.
+	reader := quicksilverStartReader(d.Get, keys, size, 65536)
+	defer reader.finish()
+	if err := <-reader.started; err != nil {
+		b.Fatal(err)
+	}
+	ackSamples := make([]int64, 0, updates/1000)
+	var concurrent quicksilverConcurrentResult
 	// Four identical synchronous update intervals, each ending at a checkpoint.
 	// Values are generated only one batch at a time, outside any reader loop.
 	for part := range 4 {
 		measure(fmt.Sprintf("updates_%d", part+1), updates/4, func() {
 			for base := part * (updates / 4); base < (part+1)*(updates/4); base += 1000 {
+				if reader.failed.Load() {
+					b.Fatal("concurrent reader failed")
+				}
 				batch := d.NewBatchWithSize(1000)
 				for i := base; i < base+1000; i++ {
 					id := i * 7919 % keys
@@ -102,13 +121,35 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				writeErr, closeErr := batch.WriteSync(), batch.Close()
+				ackStart := time.Now()
+				writeErr := batch.WriteSync()
+				ackNS := time.Since(ackStart).Nanoseconds()
+				closeErr := batch.Close()
 				if writeErr != nil || closeErr != nil {
 					b.Fatal(writeErr, closeErr)
 				}
+				ackSamples = append(ackSamples, ackNS)
 			}
 		})
-		measure(fmt.Sprintf("checkpoint_%d", part+1), 1, checkpoint)
+		measure(fmt.Sprintf("checkpoint_%d", part+1), 1, func() {
+			checkpoint()
+			if part == 3 {
+				concurrent = reader.finish()
+				if concurrent.Error != "" || concurrent.Reads == 0 || len(concurrent.Samples) == 0 {
+					b.Fatal("concurrent reader incomplete", concurrent.Error)
+				}
+			}
+		})
+	}
+	if len(ackSamples) != updates/1000 {
+		b.Fatal("incomplete update acknowledgements")
+	}
+	var ackSum int64
+	for _, ns := range ackSamples {
+		if ns <= 0 {
+			b.Fatal("nonpositive acknowledgement")
+		}
+		ackSum += ns
 	}
 	closure := d.Stats()
 	if memoryBudgetStat(b, closure, "treedb.command_wal.applied_lsn") < memoryBudgetStat(b, closure, "treedb.command_wal.live_accepted_max_lsn") {
@@ -169,6 +210,13 @@ func BenchmarkQuicksilverWorkflow(b *testing.B) {
 		"initial_stats": initial, "closure_stats": closure, "reopen_stats": reopenStats,
 		"post_reopen_gc_heap_bytes": retained.HeapAlloc, "post_reopen_gc_stats": retainedStats,
 		"phases": phases, "closed_files": memoryBudgetFiles(b, opts.Dir),
+		"update_ack_samples_ns": ackSamples, "update_ack_count": len(ackSamples), "update_ack_batch_ops": 1000,
+		"update_ack_ns": ackSum, "update_ack_latency_unit": "ns per 1000-key WriteSync",
+		"update_ack_p99_ns": quicksilverQuantile(ackSamples, .99), "update_ack_p999_ns": quicksilverQuantile(ackSamples, .999),
+		"update_ack_max_ns": quicksilverQuantile(ackSamples, 1), "concurrent_owned_reads": concurrent,
+		"phase_process_io": phaseIO, "process_io": map[string]any{"before": processIOBefore, "after": quicksilverIO()},
+		"process_io_scope":                           "kernel process counters; includes concurrent owner and helper work, not device writes",
+		"final_checkpoint_includes_reader_join":      true,
 		"all_values_and_interleaved_misses_verified": true, "present_empty_verified": true, "final_close_checked": true,
 		"binary_sha256": binaryHash, "go_version": runtime.Version(), "goos": runtime.GOOS,
 		"goarch": runtime.GOARCH, "gomaxprocs": runtime.GOMAXPROCS(0), "gomemlimit": os.Getenv("GOMEMLIMIT"),
@@ -341,4 +389,182 @@ func TestQuicksilverWorkflowFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	quicksilverVerify(t, d, 100, 256, 0)
+}
+
+// Quantile sorts its input; retain chronological raw samples in the packet.
+func quicksilverQuantile(samples []int64, fraction float64) int64 {
+	return algorithmQuantile(append([]int64(nil), samples...), fraction)
+}
+
+type quicksilverConcurrentResult struct {
+	API                 string  `json:"api"`
+	Readers             int     `json:"readers"`
+	KeyDomain           string  `json:"key_domain"`
+	Generations         []int   `json:"allowed_generations"`
+	Stride              int     `json:"sample_stride"`
+	Capacity            int     `json:"sample_capacity"`
+	Reads               uint64  `json:"reads"`
+	Samples             []int64 `json:"samples_ns"`
+	MaxNS               int64   `json:"max_ns"`
+	P99NS               int64   `json:"p99_ns"`
+	P999NS              int64   `json:"p999_ns"`
+	ElapsedNS           int64   `json:"elapsed_ns"`
+	FullValuesValidated bool    `json:"full_values_validated"`
+	Joined              bool    `json:"joined"`
+	Error               string  `json:"error"`
+}
+
+type quicksilverReader struct {
+	stop    atomic.Bool
+	failed  atomic.Bool
+	started chan error
+	done    chan quicksilverConcurrentResult
+	once    sync.Once
+	result  quicksilverConcurrentResult
+}
+
+func quicksilverStartReader(get func([]byte) ([]byte, error), keys, size, capacity int) *quicksilverReader {
+	r := &quicksilverReader{started: make(chan error, 1), done: make(chan quicksilverConcurrentResult, 1)}
+	go func() {
+		result := quicksilverConcurrentResult{API: "owned Get", Readers: 1, KeyDomain: "present even keys; permutation 7919", Generations: []int{0, 1}, Stride: quicksilverLatencyStride, Capacity: capacity, Samples: make([]int64, 0, capacity)}
+		key, old, updated := make([]byte, 32), make([]byte, size), make([]byte, size)
+		start := time.Now()
+		announced := false
+		for !r.stop.Load() {
+			id := int(result.Reads * 7919 % uint64(keys))
+			memoryBudgetKey(id*2, key)
+			memoryBudgetValue(id, 0, old)
+			memoryBudgetValue(id, 1, updated)
+			readStart := time.Now()
+			value, err := get(key)
+			ns := time.Since(readStart).Nanoseconds()
+			if err != nil || !quicksilverConcurrentValid(value, old, updated) || ns <= 0 {
+				result.Error = fmt.Sprintf("concurrent Get invalid id=%d err=%v", id, err)
+				break
+			}
+			if ns > result.MaxNS {
+				result.MaxNS = ns
+			}
+			if result.Reads%quicksilverLatencyStride == 0 {
+				if len(result.Samples) == cap(result.Samples) {
+					result.Error = "concurrent sample capacity exceeded"
+					break
+				}
+				result.Samples = append(result.Samples, ns)
+			}
+			result.Reads++
+			if !announced {
+				r.started <- nil
+				announced = true
+			}
+		}
+		if !announced {
+			r.started <- fmt.Errorf("concurrent reader did not validate first read: %s", result.Error)
+		}
+		result.ElapsedNS = time.Since(start).Nanoseconds()
+		result.P99NS, result.P999NS = quicksilverQuantile(result.Samples, .99), quicksilverQuantile(result.Samples, .999)
+		result.FullValuesValidated = result.Error == "" && result.Reads > 0
+		if result.Error != "" {
+			r.failed.Store(true)
+		}
+		r.done <- result
+	}()
+	return r
+}
+
+func quicksilverConcurrentValid(value, old, updated []byte) bool {
+	return len(value) > 0 && (bytes.Equal(value, old) || bytes.Equal(value, updated))
+}
+
+func (r *quicksilverReader) finish() quicksilverConcurrentResult {
+	r.once.Do(func() { r.stop.Store(true); r.result = <-r.done; r.result.Joined = true })
+	return r.result
+}
+
+// Keep this helper inside H: the original-product overlay has five additions
+// and does not import A's Go file. Missing /proc data is explicit, never zero.
+func quicksilverIO() map[string]any {
+	counters := map[string]uint64{}
+	raw, err := os.ReadFile("/proc/self/io")
+	if err != nil {
+		return map[string]any{"supported": false, "counters": counters}
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		key, value, ok := strings.Cut(line, ": ")
+		if ok {
+			n, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+			if err == nil {
+				counters[key] = n
+			}
+		}
+	}
+	return map[string]any{"supported": true, "counters": counters}
+}
+
+func TestQuicksilverUpdateReader(t *testing.T) {
+	old, updated := memoryBudgetValue(0, 0, make([]byte, 256)), memoryBudgetValue(0, 1, make([]byte, 256))
+	for _, value := range [][]byte{old, updated} {
+		if !quicksilverConcurrentValid(value, old, updated) {
+			t.Fatal("valid generation rejected")
+		}
+	}
+	corrupt := append([]byte(nil), old...)
+	corrupt[len(corrupt)-1] ^= 1
+	for _, value := range [][]byte{nil, {}, old[:16], corrupt} {
+		if quicksilverConcurrentValid(value, old, updated) {
+			t.Fatal("invalid full value accepted")
+		}
+	}
+	for _, fail := range []bool{false, true} {
+		for _, value := range [][]byte{nil, {}, corrupt} {
+			failed := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return value, nil }, 1, 256, 65536)
+			if err := <-failed.started; err == nil {
+				t.Fatal("invalid read announced success")
+			}
+			if result := failed.finish(); result.Error == "" || !result.Joined || result.FullValuesValidated {
+				t.Fatal("invalid reader accepted", result)
+			}
+		}
+		// Deferred joins also run on an early writer/checkpoint failure return.
+		for _, stage := range []string{"write", "checkpoint"} {
+			reader := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return old, nil }, 1, 256, 65536)
+			if err := <-reader.started; err != nil {
+				t.Fatal(err)
+			}
+			func() { defer reader.finish(); _ = fmt.Errorf("injected %s failure", stage); return }()
+			if !reader.result.Joined || !reader.stop.Load() {
+				t.Fatal("failure cleanup did not join", stage)
+			}
+		}
+		r := quicksilverStartReader(func([]byte) ([]byte, error) {
+			if fail {
+				return nil, fmt.Errorf("injected read error")
+			}
+			runtime.Gosched()
+			return old, nil
+		}, 1, 256, 65536)
+		first := <-r.started
+		result := r.finish()
+		if !result.Joined || (first != nil) != fail || (result.Error != "") != fail || result.FullValuesValidated == fail {
+			t.Fatal("reader lifecycle", first, result)
+		}
+		if again := r.finish(); again.Reads != result.Reads || !again.Joined {
+			t.Fatal("join not idempotent")
+		}
+	}
+	r := quicksilverStartReader(func([]byte) ([]byte, error) { runtime.Gosched(); return old, nil }, 1, 256, 1)
+	if err := <-r.started; err != nil {
+		t.Fatal(err)
+	}
+	// Wait for overflow without relying on arbitrary sleeps.
+	result := <-r.done
+	r.done <- result
+	result = r.finish()
+	if result.Error != "concurrent sample capacity exceeded" || !result.Joined {
+		t.Fatal("overflow accepted", result)
+	}
+	samples := []int64{9, 1, 7}
+	if quicksilverQuantile(samples, .99) != 9 || samples[0] != 9 || samples[1] != 1 {
+		t.Fatal("raw chronology changed")
+	}
 }

@@ -1,7 +1,7 @@
 # Canonical public TreeDB workflow
 
 For the original-product and maintenance-control comparison, review the
-[baseline runtime source update](baseline/runtime/README.md) and its separate
+[versioned update-tail baseline source update](baseline/runtime-v2/README.md) and its separate
 absent-filter schema. The earlier [baseline construction](baseline/README.md)
 remains historical evidence and does not satisfy the current full runtime gate.
 
@@ -36,6 +36,31 @@ avoiding alignment with the deterministic miss schedule.
 Batch latency is per 64-key request, not per key. Whole-workflow Go `ns/op` is
 not a read-throughput result. No phase is a cold-device measurement: placement
 scans/full proof precede the explicitly warm read phase.
+
+Update acknowledgements retain chronological nanoseconds for each successful
+1000-key `WriteSync`, excluding batch construction, Set, Close and checkpoints.
+Full cells have40 samples (10 per update phase); pilots have8 (2 per phase).
+Count, raw sum, p99/p99.9/max and per-phase containment are mandatory. At this
+sample count, both empirical p99 and p99.9 equal the maximum; this is not a
+statistically resolved production p99.9 or a latency SLO.
+
+One fixed owned-public-Get reader runs across the four update/checkpoint
+intervals, after a first full-value-validated-read handshake. It uses present
+even keys, permutation7919, and full generation0-or1 byte validation. This
+composition is separate from the warm uniform/Zipf/miss/GetMany64 query table.
+Every17th request beginning with the first is sampled, with a fixed65536 sample
+capacity and fail-closed overflow. Maximum covers all successful reads. Raw
+samples, count, p99/p99.9/max and checked stop/join are retained. Reader failures
+remain fatal and deferred cleanup joins before owner close on failure paths.
+The fourth checkpoint phase includes reader stop/join; earlier phase stats
+observe the concurrent process and are not isolated writer-only measurements.
+
+Each named phase and the process carry `/proc/self/io` before/after counters,
+with explicit unsupported empty maps on Darwin. Retained Linux validation
+requires complete integer counters and monotonicity. These are kernel process
+observations, including concurrent owner/helper activity, not device-write or
+cold-device evidence. File lengths still do not measure allocated FS blocks;
+pin/GC and native-maintenance recovery-debt evidence remain separate artifacts.
 
 The query table stores only key IDs and CRCs (8 bytes/read), not the payload
 corpus. Its explicit allocation is separate from engine retention. Update
@@ -78,8 +103,11 @@ python3 scripts/treedb_quicksilver_capture.py validate \
   --prepared /tmp/quicksilver-prepared --output /tmp/quicksilver-pilot --negative-checks
 ```
 
-The runnable negative check removes a phase, value proof, binary identity and
-latency count from the valid packet and requires rejection. The fixture test is
+The runnable negative check also rejects missing/bad acknowledgement samples,
+units/counts/sums/quantiles/phase containment, incomplete reader support, wrong
+reader tails/join and malformed IO support. Focused source tests are
+`python3 docs/benchmarks/treedb_quicksilver_workflow/test_capture.py` and
+`GOWORK=off go test ./TreeDB -run '^TestQuicksilverUpdateReader$' -count=1`. The fixture test is
 `GOWORK=off go test ./TreeDB -run '^TestQuicksilverWorkflowFixture$' -count=1 -timeout=2m`.
 The reused capture self-check covers counter/owner/storage/header completeness.
 

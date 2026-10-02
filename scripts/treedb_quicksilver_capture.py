@@ -42,6 +42,82 @@ def packet_from(stderr):
     return json.loads(lines[0])
 
 
+def quantile(samples, fraction):
+    return sorted(samples)[min(int(len(samples) * fraction), len(samples) - 1)]
+
+
+def positive_int(value):
+    return type(value) is int and value > 0
+
+
+def check_io(pair, required):
+    memory.require(set(pair) == {"before", "after"}, "incomplete process IO pair")
+    names = {"rchar", "wchar", "syscr", "syscw", "read_bytes", "write_bytes", "cancelled_write_bytes"}
+    for sample in pair.values():
+        memory.require(type(sample.get("supported")) is bool and type(sample.get("counters")) is dict, "invalid process IO support")
+        counters = sample["counters"]
+        memory.require(all(type(n) is int and n >= 0 for n in counters.values()), "invalid process IO counters")
+        memory.require(sample["supported"] or counters == {}, "fabricated unsupported process IO")
+        memory.require(not required or (sample["supported"] and names <= set(counters)), "missing retained Linux process IO")
+        memory.require(not sample["supported"] or names <= set(counters), "incomplete supported process IO")
+    memory.require(pair["before"]["supported"] == pair["after"]["supported"], "changed process IO support")
+    memory.require(all(pair["after"]["counters"].get(k, -1) >= v for k, v in pair["before"]["counters"].items()), "reversed process IO counters")
+
+
+def check_update_observations(packet, updates, retained):
+    samples = packet["update_ack_samples_ns"]
+    count = updates // 1000
+    memory.require(type(samples) is list and len(samples) == count and all(positive_int(n) for n in samples), "invalid acknowledgement samples")
+    for key, value in {"update_ack_count": count, "update_ack_batch_ops": 1000,
+                       "update_ack_latency_unit": "ns per 1000-key WriteSync", "update_ack_ns": sum(samples),
+                       "update_ack_p99_ns": quantile(samples, .99), "update_ack_p999_ns": quantile(samples, .999),
+                       "update_ack_max_ns": max(samples), "final_checkpoint_includes_reader_join": True,
+                       "process_io_scope": "kernel process counters; includes concurrent owner and helper work, not device writes"}.items():
+        memory.require(type(packet.get(key)) is type(value) and packet[key] == value, "wrong/missing update field: " + key)
+    per_phase = count // 4
+    for part in range(4):
+        memory.require(sum(samples[part * per_phase:(part + 1) * per_phase]) <= packet["phases"][4 + part * 2]["elapsed_ns"], "acknowledgements exceed update phase")
+    reader = packet["concurrent_owned_reads"]
+    expected = {"api": "owned Get", "readers": 1, "key_domain": "present even keys; permutation 7919", "allowed_generations": [0, 1],
+                "sample_stride": LATENCY_SAMPLE_STRIDE, "sample_capacity": 65536, "full_values_validated": True, "joined": True, "error": ""}
+    for key, value in expected.items():
+        memory.require(type(reader.get(key)) is type(value) and reader[key] == value, "wrong/missing concurrent reader field: " + key)
+    memory.require(all(type(generation) is int for generation in reader["allowed_generations"]), "invalid generation types")
+    raw = reader["samples_ns"]
+    memory.require(positive_int(reader["reads"]) and type(raw) is list and
+                   len(raw) == (reader["reads"] + LATENCY_SAMPLE_STRIDE - 1) // LATENCY_SAMPLE_STRIDE and
+                   0 < len(raw) <= reader["sample_capacity"] and all(positive_int(n) for n in raw), "incomplete concurrent read samples")
+    memory.require(positive_int(reader["elapsed_ns"]) and positive_int(reader["max_ns"]) and
+                   type(reader["p99_ns"]) is int and type(reader["p999_ns"]) is int and
+                   reader["p99_ns"] == quantile(raw, .99) and reader["p999_ns"] == quantile(raw, .999) and
+                   max(raw) <= reader["max_ns"] <= reader["elapsed_ns"], "invalid concurrent read tails")
+    memory.require(reader["elapsed_ns"] >= sum(phase["elapsed_ns"] for phase in packet["phases"][4:11]), "concurrent reader missed update/checkpoint interval")
+    check_io(packet["process_io"], retained)
+    memory.require(set(packet["phase_process_io"]) == set(PHASES), "incomplete phase process IO")
+    for pair in packet["phase_process_io"].values():
+        check_io(pair, retained)
+
+
+def extension_negative_packets(packet):
+    cases = []
+    for key in ("update_ack_samples_ns", "update_ack_count", "concurrent_owned_reads", "process_io", "phase_process_io"):
+        wrong = copy.deepcopy(packet); del wrong[key]; cases.append(wrong)
+    for key, value in (("update_ack_samples_ns", packet["update_ack_samples_ns"][:-1]),
+                       ("update_ack_count", True), ("update_ack_ns", 1), ("update_ack_p999_ns", 0),
+                       ("update_ack_max_ns", 0), ("update_ack_batch_ops", 1), ("update_ack_latency_unit", "ns per key")):
+        wrong = copy.deepcopy(packet); wrong[key] = value; cases.append(wrong)
+    for value in (False, 0, -1, 1.5):
+        wrong = copy.deepcopy(packet); wrong["update_ack_samples_ns"][0] = value; cases.append(wrong)
+    wrong = copy.deepcopy(packet); wrong["phases"][4]["elapsed_ns"] = 1; cases.append(wrong)
+    for key, value in (("reads", 0), ("samples_ns", []), ("sample_stride", 1), ("sample_capacity", 1),
+                       ("max_ns", 0), ("p99_ns", 0), ("full_values_validated", False), ("joined", False),
+                       ("error", "injected"), ("allowed_generations", [1]), ("elapsed_ns", 1), ("api", "GetMany64")):
+        wrong = copy.deepcopy(packet); wrong["concurrent_owned_reads"][key] = value; cases.append(wrong)
+    wrong = copy.deepcopy(packet); wrong["phase_process_io"].pop(PHASES[0]); cases.append(wrong)
+    wrong = copy.deepcopy(packet); wrong["process_io"]["before"] = {"supported": False, "counters": {"rchar": 0}}; cases.append(wrong)
+    return cases
+
+
 def check_packet(packet, freeze, process, controls, retained):
     env = freeze["environment"]
     pilot, keys, updates, reads, filter_bytes = workload(env, controls)
@@ -85,6 +161,7 @@ def check_packet(packet, freeze, process, controls, retained):
             memory.require(type(phase[name]) is int and phase[name] > 0, "missing positive phase sample: " + name)
         for name in ("allocated_bytes", "allocations"):
             memory.require(type(phase[name]) is int and phase[name] >= 0, "invalid phase allocation: " + name)
+    check_update_observations(packet, updates, retained)
     memory.check_observations(packet, leaf, filter_bytes, (packet["post_reopen_gc_stats"],))
     memory.require(type(packet["read_checksum"]) is int and packet["read_checksum"] > 0, "missing consumed read checksum")
     memory.require(0 < packet["read_p99_ns"] <= packet["read_p999_ns"] <= packet["read_max_ns"] <= packet["phases"][3]["elapsed_ns"], "invalid read latency samples")
@@ -161,7 +238,7 @@ def validate(args):
     if args.negative_checks:
         wrong = copy.deepcopy(packet)
         wrong["phases"].pop()
-        cases = [wrong]
+        cases = [wrong] + extension_negative_packets(packet)
         for key, value in (("all_values_and_interleaved_misses_verified", False), ("binary_sha256", "wrong"), ("latency_samples", 0)):
             wrong = copy.deepcopy(packet)
             wrong[key] = value

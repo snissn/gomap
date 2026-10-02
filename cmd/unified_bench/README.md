@@ -790,3 +790,9 @@ The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_wo
 reuses the package fixture and main-cache freeze for explicit public read/update
 phases. Its JSON/raw logs and standalone Go profiles have their own schema;
 they are not unified-bench profile-dir artifacts or benchprof inputs.
+
+The standalone Quicksilver workflow packet also retains40 (pilot8)
+WriteSync-only update acknowledgement samples, a separate fixed-present owned
+Get concurrent reader, and explicitly scoped process IO counters. See
+[its measured boundaries](../../docs/benchmarks/treedb_quicksilver_workflow/README.md);
+these package packets are not benchprof profile-dir artifacts.
