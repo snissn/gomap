@@ -20,7 +20,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const powerLossOracleSeed = uint64(3674)
@@ -348,10 +350,10 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	durableAcknowledged := false
 	durableSequence := uint64(0)
 	phase := "baseline"
-	currentTargetSequence := baseSequence
-	currentTargetState := baseState
+	var observerMu sync.Mutex
+	var pendingPublication powerlossoracle.Generation
 	latestSealedSequence := baseSequence
-	currentAppliedLSN := publicAppliedCommandLSN(t, db)
+	baseAppliedLSN := publicAppliedCommandLSN(t, db)
 	sealWriteObserved := false
 	var dependencyPaths []string
 	var commandFrames []observedPowerLossCommandFrame
@@ -359,12 +361,14 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 		Sequence:    baseSequence,
 		Recoverable: true,
 		Resources:   completePowerLossClosure("baseline"),
-		AppliedLSN:  currentAppliedLSN,
+		AppliedLSN:  baseAppliedLSN,
 	}}
 	expectedByAppliedLSN := map[uint64]map[string]map[string]string{
-		currentAppliedLSN: cloneExpectedPowerLossState(baseState),
+		baseAppliedLSN: cloneExpectedPowerLossState(baseState),
 	}
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observerMu.Lock()
+		defer observerMu.Unlock()
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
@@ -391,25 +395,35 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 		if event.Point == durabilitycut.AfterDependencyFileSync {
 			dependencyPaths = appendUniquePaths(dependencyPaths, event.Path, event.Paths...)
 		}
-		if event.Point == durabilitycut.AfterAppliedLSNAdvance {
-			currentAppliedLSN = event.LSN
+		if event.Point == durabilitycut.BeforePublicationSealWrite {
+			sealWriteObserved = false
 		}
 		if event.Point == durabilitycut.AfterPublicationSealWrite {
 			sealWriteObserved = true
 		}
-		if event.Point == durabilitycut.AfterMetaSync && currentTargetSequence > latestSealedSequence {
-			resources, err := observedPowerLossClosure(model, dir, event.Path, dependencyPaths, sealWriteObserved, currentAppliedLSN, true)
+		if event.Point == durabilitycut.AfterMetaWrite {
+			record, err := readPowerLossPublication(event)
 			if err != nil {
 				return err
 			}
-			latestSealedSequence = currentTargetSequence
-			generations = append(generations, powerlossoracle.Generation{
-				Sequence:    currentTargetSequence,
-				Recoverable: true,
-				Resources:   resources,
-				AppliedLSN:  currentAppliedLSN,
-			})
-			expectedByAppliedLSN[currentAppliedLSN] = cloneExpectedPowerLossState(currentTargetState)
+			pendingPublication = powerlossoracle.Generation{Sequence: record.CommitSeq, AppliedLSN: record.AppliedCommandLSN, Recoverable: true}
+			t.Logf("publication phase=%s meta-offset=%d commit=%d durable=%d parent=%d applied-lsn=%d", phase, event.Offset, record.CommitSeq, record.DurableSeq, record.ParentCommitSeq, record.AppliedCommandLSN)
+		}
+		if event.Point == durabilitycut.AfterMetaSync {
+			if pendingPublication.Sequence <= latestSealedSequence {
+				return fmt.Errorf("meta sync generation=%d does not advance latest sealed generation=%d", pendingPublication.Sequence, latestSealedSequence)
+			}
+			if _, known := expectedByAppliedLSN[pendingPublication.AppliedLSN]; !known {
+				return fmt.Errorf("meta sync generation=%d has unmodeled applied LSN=%d", pendingPublication.Sequence, pendingPublication.AppliedLSN)
+			}
+			resources, err := observedPowerLossClosure(model, dir, event.Path, dependencyPaths, sealWriteObserved, pendingPublication.AppliedLSN, true)
+			if err != nil {
+				return err
+			}
+			pendingPublication.Resources = resources
+			latestSealedSequence = pendingPublication.Sequence
+			generations = append(generations, pendingPublication)
+			pendingPublication = powerlossoracle.Generation{}
 		}
 		events[event.Point] = append(events[event.Point], event)
 		snapshots[event.Point] = append(snapshots[event.Point], cutSnapshot{
@@ -436,55 +450,55 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 			t.Fatalf("actual batch Set %d: %v", i, err)
 		}
 	}
-	// A relaxed command-WAL batch does not publish a new index generation.
-	// Its keys become part of the next synchronous publication.
+	// Commands and root publications have independent sequence spaces. A flush
+	// may publish roots during either command; record the actual meta above.
+	observerMu.Lock()
 	phase = "relaxed-batch"
-	currentTargetSequence = baseSequence
-	currentTargetState = batchState
+	observerMu.Unlock()
 	if err := batch.Write(); err != nil {
 		restore()
 		_ = db.Close()
 		t.Fatalf("actual batch Write: %v", err)
 	}
-	batchSequence := publicCommitSequence(t, db)
-	if batchSequence != currentTargetSequence {
-		restore()
-		_ = db.Close()
-		t.Fatalf("actual batch sequence=%d want modeled target=%d", batchSequence, currentTargetSequence)
-	}
-	currentTargetSequence = batchSequence
-	currentTargetState = durableState
+	observerMu.Lock()
 	phase = "durable-set-sync"
+	observerMu.Unlock()
 	if err := db.SetSync([]byte("actual/durable"), bytes.Repeat([]byte("d"), 2048)); err != nil {
 		restore()
 		_ = db.Close()
 		t.Fatalf("actual durable SetSync: %v", err)
 	}
-	if sequence := publicCommitSequence(t, db); sequence != currentTargetSequence {
-		restore()
-		_ = db.Close()
-		t.Fatalf("actual durable index sequence=%d want unchanged command-WAL base=%d", sequence, currentTargetSequence)
-	}
 	// Acknowledgement sequences are logical operation order, independent of
 	// whether recovery obtains the operation from a newer root or WAL replay.
+	observerMu.Lock()
 	if durableSequence == 0 {
+		observerMu.Unlock()
 		restore()
 		_ = db.Close()
 		t.Fatal("durable SetSync emitted no command-WAL LSN")
 	}
 	durableAcknowledged = true
-	currentTargetState = durableState
-	currentTargetSequence = batchSequence + 1
 	phase = "checkpoint"
-	sealWriteObserved = false
+	observerMu.Unlock()
 	if err := db.Checkpoint(); err != nil {
 		restore()
 		_ = db.Close()
 		t.Fatalf("actual Checkpoint: %v", err)
 	}
+	// A second checkpoint refreshes the fallback with another publication at
+	// the same applied LSN. This guards against assigning checkpoint's roots a
+	// predicted generation or inferring their LSN from a preceding hook.
+	if err := db.Checkpoint(); err != nil {
+		restore()
+		_ = db.Close()
+		t.Fatalf("actual fallback Checkpoint: %v", err)
+	}
 	restore()
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close actual-cut fixture: %v", err)
+	}
+	if len(events[durabilitycut.AfterMetaSync]) < 2 {
+		t.Fatal("actual-cut fixture did not exercise multiple root publications")
 	}
 	for _, cut := range powerlossoracle.CutPoints {
 		cut := cut
@@ -1622,9 +1636,63 @@ func publicAppliedCommandLSN(t *testing.T, db *treedb.DB) uint64 {
 	return applied
 }
 
+// readPowerLossPublication reads the exact meta slot emitted by the real
+// publication path, then follows its checksummed durable-root record for the
+// applied command frontier. Applied-LSN events can precede a different root.
+func readPowerLossPublication(event durabilitycut.Event) (rootpublication.DurableRootRecordV1, error) {
+	if event.Resource != durabilitycut.ResourceMeta || (event.Offset != 0 && event.Offset != page.PageSize) || event.Length != page.PageSize {
+		return rootpublication.DurableRootRecordV1{}, fmt.Errorf("invalid meta publication range offset=%d length=%d resource=%s", event.Offset, event.Length, event.Resource)
+	}
+	file, err := os.Open(event.Path)
+	if err != nil {
+		return rootpublication.DurableRootRecordV1{}, err
+	}
+	defer file.Close()
+	image := make([]byte, page.PageSize)
+	if _, err := file.ReadAt(image, event.Offset); err != nil {
+		return rootpublication.DurableRootRecordV1{}, err
+	}
+	meta, err := page.DecodeDurableMetaV1(image[page.PageHeaderSize:])
+	if err != nil {
+		return rootpublication.DurableRootRecordV1{}, err
+	}
+	if _, err := file.ReadAt(image, int64(meta.RootRecordPageID)*page.PageSize); err != nil {
+		return rootpublication.DurableRootRecordV1{}, err
+	}
+	record, err := rootpublication.DecodeDurableRootRecordV1(image, meta.RootRecordPageID, meta.RootRecordDigest)
+	if err != nil {
+		return rootpublication.DurableRootRecordV1{}, err
+	}
+	if record.CommitSeq != meta.CommitSeq || record.DurableSeq != meta.DurableSeq || record.MetaProjectionDigest != meta.MetaProjectionDigest {
+		return rootpublication.DurableRootRecordV1{}, fmt.Errorf("meta and root record publication disagree at offset=%d", event.Offset)
+	}
+	return record, nil
+}
+
 func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, cut powerlossoracle.CutPoint, occurrence int, readOnly bool, generations []powerlossoracle.Generation, latestSealedSequence uint64, expectedByAppliedLSN map[uint64]map[string]map[string]string, observedCommandFrames []observedPowerLossCommandFrame, durableSequence uint64, durableAcknowledged bool) {
 	t.Helper()
+	// Post-open counters cannot identify the selected root when publications
+	// share an applied LSN. The first recovery publication links its actual
+	// predecessor; with no publication, Open's sequence is the selected root.
+	var recoveryMu sync.Mutex
+	var selectedSequence uint64
+	selectionObserved := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		recoveryMu.Lock()
+		defer recoveryMu.Unlock()
+		if event.Point != durabilitycut.AfterMetaWrite || selectionObserved {
+			return nil
+		}
+		record, err := readPowerLossPublication(event)
+		if err != nil {
+			return err
+		}
+		selectedSequence = record.ParentCommitSeq
+		selectionObserved = true
+		return nil
+	})
 	result, reopened, closeFn, err := powerlossreopen.Stable(model, opts, readOnly)
+	restore()
 	if err != nil {
 		t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t materialize/public Open: %v", powerLossOracleSeed, cut, occurrence, readOnly, err)
 	}
@@ -1665,10 +1733,11 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 	if !knownAppliedLSN {
 		t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t public Open reached unmodeled applied LSN=%d (commit sequence=%d)", powerLossOracleSeed, cut, occurrence, readOnly, result.AppliedLSN, result.CommitSeq)
 	}
-	selectedSequence, err := inferSelectedSequence(generations, latestSealedSequence, result.CommitSeq, result.AppliedLSN)
-	if err != nil {
-		t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t infer selected root: %v", powerLossOracleSeed, cut, occurrence, readOnly, err)
+	recoveryMu.Lock()
+	if !selectionObserved {
+		selectedSequence = result.CommitSeq
 	}
+	recoveryMu.Unlock()
 	observed := map[string]map[string]string{
 		"stable/": {},
 		"actual/": {},
@@ -2237,58 +2306,6 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 	if got := contiguousCompletePowerLossCommandLSN(frames, 1); got != 4 {
 		t.Fatalf("value-log stable-RID frontier=%d, want 4", got)
 	}
-}
-
-// The raw-KV fixture publishes one commit sequence per replayed command frame.
-// Use the public post-open counters plus each modeled root's applied frontier to
-// infer which sealed root production selected before replay.
-func TestInferSelectedSequenceTracksGenerationZero(t *testing.T) {
-	t.Run("selects generation zero", func(t *testing.T) {
-		got, err := inferSelectedSequence([]powerlossoracle.Generation{{
-			Sequence:    0,
-			AppliedLSN:  0,
-			Recoverable: true,
-		}}, 0, 0, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != 0 {
-			t.Fatalf("selected sequence=%d, want 0", got)
-		}
-	})
-
-	t.Run("detects ambiguity after generation zero", func(t *testing.T) {
-		_, err := inferSelectedSequence([]powerlossoracle.Generation{
-			{Sequence: 0, AppliedLSN: 0, Recoverable: true},
-			{Sequence: 1, AppliedLSN: 1, Recoverable: true},
-		}, 1, 1, 1)
-		if err == nil || !strings.Contains(err.Error(), "ambiguous candidates 0 and 1") {
-			t.Fatalf("error=%v, want generation-zero ambiguity", err)
-		}
-	})
-}
-
-func inferSelectedSequence(generations []powerlossoracle.Generation, latestSealedSequence, openedSequence, openedAppliedLSN uint64) (uint64, error) {
-	var selected uint64
-	found := false
-	for _, generation := range generations {
-		if !generation.Recoverable || generation.Sequence > latestSealedSequence || generation.AppliedLSN > openedAppliedLSN {
-			continue
-		}
-		replayed := openedAppliedLSN - generation.AppliedLSN
-		if generation.Sequence > ^uint64(0)-replayed || generation.Sequence+replayed != openedSequence {
-			continue
-		}
-		if found {
-			return 0, fmt.Errorf("ambiguous candidates %d and %d for public-open sequence=%d applied-lsn=%d", selected, generation.Sequence, openedSequence, openedAppliedLSN)
-		}
-		selected = generation.Sequence
-		found = true
-	}
-	if !found {
-		return 0, fmt.Errorf("no candidate at-or-below seal=%d for public-open sequence=%d applied-lsn=%d", latestSealedSequence, openedSequence, openedAppliedLSN)
-	}
-	return selected, nil
 }
 
 func observedPowerLossClosure(model *powerlossoracle.Model, root, indexPath string, dependencyPaths []string, sealWriteObserved bool, appliedLSN uint64, commandWALRequired bool) ([]powerlossoracle.Resource, error) {
