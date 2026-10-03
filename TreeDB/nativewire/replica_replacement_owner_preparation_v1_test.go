@@ -122,7 +122,7 @@ func TestImmutableOwnerReplacementInstalledAssetsTailAndRestartV1(t *testing.T) 
 		t.Fatal(err)
 	}
 	runtimes[target] = nil
-	reopened, err := OpenFixedPeerTCPRuntimeV1(configs[target])
+	reopened, err := fixedPeerOpenTestRuntimeV1(t, configs[target])
 	if err != nil {
 		t.Fatal(err)
 	}

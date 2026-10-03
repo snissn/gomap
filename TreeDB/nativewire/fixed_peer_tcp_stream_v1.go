@@ -60,6 +60,11 @@ func newFixedPeerTCPTransportOwnedV1(listen string, advertised net.Addr, timeout
 	if err != nil {
 		return nil, nil, err
 	}
+	return newFixedPeerTCPTransportListenerV1(listener, advertised, timeout, security, peers, admission, scope)
+}
+
+func newFixedPeerTCPTransportListenerV1(listener net.Listener, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string) (*hraft.NetworkTransport, *fixedPeerTCPStreamV1, error) {
+	var err error
 	if admission != nil {
 		listener, err = admission.listener(listener)
 		if err != nil {

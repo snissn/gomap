@@ -556,7 +556,7 @@ func fixedPeerCatalogConsumerConfigBoundariesV1(t *testing.T, configs []FixedPee
 			if _, err := NewPeerTransportV1(config); !errors.Is(err, errPeerAuthenticationV1) {
 				t.Fatalf("invalid consumer transport credentials admitted: %v", err)
 			}
-			if _, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+			if _, err := fixedPeerOpenTestRuntimeV1(t, config); !errors.Is(err, errPeerAuthenticationV1) {
 				t.Fatalf("invalid consumer runtime credentials admitted: %v", err)
 			}
 			assertNoStorage(t)

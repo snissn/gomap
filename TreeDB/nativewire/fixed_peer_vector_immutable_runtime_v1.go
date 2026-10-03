@@ -332,7 +332,7 @@ func (r *fixedPeerVectorRuntimeV1) buildImmutableTopologyV1(ctx context.Context,
 			return nil, nil, err
 		}
 		shardService.postSearchGuard = guard
-		shardListener, err = net.Listen("tcp", vector.ShardAddresses[r.dataGroup][r.parent.config.NodeID])
+		shardListener, err = r.parent.takeListenerV1(vector.ShardAddresses[r.dataGroup][r.parent.config.NodeID])
 		if err != nil {
 			_ = source.Close()
 			return nil, nil, err

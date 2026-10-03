@@ -146,6 +146,8 @@ type FixedPeerTCPRuntimeV1 struct {
 	}
 	server       *http.Server
 	listener     net.Listener
+	listenersMu  sync.Mutex
+	listeners    map[string]net.Listener
 	reopened     bool
 	closeOnce    sync.Once
 	closeErr     error
@@ -433,6 +435,19 @@ func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV
 }
 
 func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntimeV1, error) {
+	return openFixedPeerTCPRuntimeV1(config, nil)
+}
+
+func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string]net.Listener) (runtime *FixedPeerTCPRuntimeV1, openErr error) {
+	defer func() {
+		if openErr != nil {
+			for _, listener := range listeners {
+				if listener != nil {
+					_ = listener.Close()
+				}
+			}
+		}
+	}()
 	client, err := NewFixedPeerTCPClientV1(config)
 	if err != nil {
 		return nil, err
@@ -480,6 +495,14 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err := syncFixedPeerDirectoryV1(r.config.RaftRoot); err != nil {
 		return fail(err)
 	}
+	// Bind every local role before providers can initiate outbound TCP. Unused
+	// shard listeners remain owned until their backend starts or the runtime closes.
+	r.listeners, err = bindFixedPeerTCPListenersV1(r.config, listeners)
+	listeners = nil // bind owns cleanup from this point, including its failure.
+	if err != nil {
+		return fail(err)
+	}
+	reserveFixedPeerDormantListenersV1(r.config, r.listeners)
 	var localEntries, routedEntries []raftcluster.GroupSubmitterV1
 	for i, g := range append([]FixedPeerTCPGroupV1{r.config.Catalog}, r.config.Groups...) {
 		if i > 0 {
@@ -512,7 +535,11 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if client.peerTransport != nil {
 			admission = client.peerTransport.admission
 		}
-		transport, stream, e := newFixedPeerTCPTransportOwnedV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
+		listener, e := r.takeListenerV1(listen)
+		if e != nil {
+			return fail(e)
+		}
+		transport, stream, e := newFixedPeerTCPTransportListenerV1(listener, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
 		if e != nil {
 			return fail(e)
 		}
@@ -574,7 +601,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return fail(err)
 	}
-	r.listener, err = net.Listen("tcp", r.config.ListenAddress)
+	r.listener, err = r.takeListenerV1(r.config.ListenAddress)
 	if err != nil {
 		return fail(err)
 	}
@@ -628,6 +655,12 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		transports := slices.Clone(r.transports)
 		r.groupsMu.Unlock()
 		var errs []error
+		r.listenersMu.Lock()
+		for address, listener := range r.listeners {
+			errs = append(errs, listener.Close())
+			delete(r.listeners, address)
+		}
+		r.listenersMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
 		defer cancel()
 		if r.client != nil && r.client.peerTransport != nil {
