@@ -77,43 +77,8 @@ func initializationTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
 	for i := range catalog.Peers {
 		catalog.Peers[i].Capabilities = features
 	}
-	// The base helper has already released its control/Raft reservations. Do
-	// not let a new vector reservation reuse one of those configured endpoints.
-	used := map[string]bool{}
-	for _, node := range configs[0].Nodes {
-		used[node.Address] = true
-	}
-	for _, fixed := range []FixedPeerTCPGroupV1{catalog, group} {
-		for _, peer := range fixed.Peers {
-			used[peer.Address] = true
-		}
-	}
-	var listeners []net.Listener
-	defer func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
-	}()
-	address := func() string {
-		for attempts := 0; attempts < 64; attempts++ {
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			endpoint := listener.Addr().String()
-			if used[endpoint] {
-				if err := listener.Close(); err != nil {
-					t.Fatal(err)
-				}
-				continue
-			}
-			used[endpoint] = true
-			listeners = append(listeners, listener)
-			return endpoint
-		}
-		t.Fatal("could not reserve a vector endpoint distinct from configured endpoints")
-		return ""
-	}
+	// Retain every role until the runtime adopts its exact reserved socket.
+	address := func() string { return fixedPeerReserveTestAddressV1(t, nil) }
 	intent := &FixedPeerTCPVectorInitializationV1{SourceGroupID: group.ID,
 		Collection:      raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"},
 		IndexDefinition: collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph},
@@ -356,12 +321,20 @@ func TestFixedPeerVectorInitializationRootIdentityV1(t *testing.T) {
 func TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1(t *testing.T) {
 	configs := initializationTestConfigsV1(t)
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
+	reserved := make([]map[string]net.Listener, len(configs))
 	open := func() {
 		for i := range configs {
 			var err error
-			nodes[i], err = OpenFixedPeerTCPRuntimeV1(configs[i])
+			nodes[i], err = fixedPeerOpenTestRuntimeV1(t, configs[i])
 			if err != nil {
 				t.Fatal(err)
+			}
+			reserved[i] = make(map[string]net.Listener)
+			for _, address := range []string{configs[i].VectorInitialization.PublicAddresses[configs[i].NodeID], configs[i].VectorInitialization.ShardAddresses[configs[i].Groups[0].ID][configs[i].NodeID]} {
+				reserved[i][address] = fixedPeerReservedTestListenerV1(nodes[i], address)
+				if reserved[i][address] == nil || reserved[i][address].Addr().String() != address {
+					t.Fatalf("initialization did not reserve vector address %s", address)
+				}
 			}
 		}
 	}
@@ -496,7 +469,7 @@ func TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1(t *testing.T)
 			}
 			return true
 		})
-		for _, node := range nodes {
+		for i, node := range nodes {
 			status, err := node.Status(ctx)
 			if err != nil || status.VectorPhase != FixedPeerVectorPhaseInitializingV1 || reopened && status.RecoveryState != "reopened" {
 				t.Fatalf("initializing status: %+v %v", status, err)
@@ -509,11 +482,10 @@ func TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1(t *testing.T)
 				t.Fatal("initialization opened vector runtime")
 			}
 			for _, address := range []string{node.config.VectorInitialization.PublicAddresses[node.config.NodeID], node.config.VectorInitialization.ShardAddresses[group.ID][node.config.NodeID]} {
-				conn, err := net.DialTimeout("tcp", address, 50*time.Millisecond)
-				if err == nil {
-					_ = conn.Close()
-					t.Fatalf("initialization opened reserved vector address %s", address)
+				if fixedPeerReservedTestListenerV1(node, address) != reserved[i][address] {
+					t.Fatalf("initialization replaced reserved vector socket %s", address)
 				}
+				fixedPeerAssertDormantRefusalV1(t, address)
 			}
 			for _, action := range []fixedPeerVectorLifecycleActionV1{fixedPeerVectorLifecycleEnsureImmutableV1, fixedPeerVectorLifecycleStageImmutableV1, fixedPeerVectorLifecycleWarmImmutableV1, fixedPeerVectorLifecycleCaptureSourceV1} {
 				if _, err := client.call(ctx, node.config.NodeID, "vector-lifecycle", fixedPeerRequestV1{VectorLifecycle: &fixedPeerVectorLifecycleRequestV1{Action: action}}, true); err == nil {

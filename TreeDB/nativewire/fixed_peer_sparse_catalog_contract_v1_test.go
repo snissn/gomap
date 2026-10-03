@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,7 +75,7 @@ func TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1(t *testing.T) {
 			case "features":
 				c.Catalog.Features.Required = make([]raftcluster.RequiredFeature, 65)
 			}
-			runtime, err := OpenFixedPeerTCPRuntimeV1(c)
+			runtime, err := fixedPeerOpenTestRuntimeV1(t, c)
 			if err == nil {
 				runtime.Close()
 				t.Fatal("accepted inadmissible resource inventory")
@@ -94,7 +93,7 @@ func TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1(t *testing.T) {
 func TestSparseCatalogExplicitIdentityRequiresExactReopenV1(t *testing.T) {
 	c := sparseCatalogTestConfigsV1(t)[3]
 	c.ClusterID = "sparse-catalog-test"
-	runtime, err := OpenFixedPeerTCPRuntimeV1(c)
+	runtime, err := fixedPeerOpenTestRuntimeV1(t, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +104,7 @@ func TestSparseCatalogExplicitIdentityRequiresExactReopenV1(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err = OpenFixedPeerTCPRuntimeV1(c)
+	runtime, err = fixedPeerOpenTestRuntimeV1(t, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +123,7 @@ func TestSparseCatalogExplicitIdentityRequiresExactReopenV1(t *testing.T) {
 			changed.Nodes = append([]FixedPeerTCPNodeV1(nil), c.Nodes...)
 			changed.Nodes = append(changed.Nodes, FixedPeerTCPNodeV1{ID: "new-node", Address: "127.4.0.1:19000"})
 		}
-		opened, err := OpenFixedPeerTCPRuntimeV1(changed)
+		opened, err := fixedPeerOpenTestRuntimeV1(t, changed)
 		if opened != nil {
 			opened.Close()
 		}
@@ -237,24 +236,11 @@ func fixedPeerFixtureUsedAddressesV1(configs []FixedPeerTCPConfigV1) map[string]
 func fixedPeerFixtureUnusedAddressesV1(t testing.TB, configs []FixedPeerTCPConfigV1, count int) []string {
 	t.Helper()
 	used := fixedPeerFixtureUsedAddressesV1(configs)
-	var reserved []net.Listener
-	defer func() {
-		for _, listener := range reserved {
-			_ = listener.Close()
-		}
-	}()
 	addresses := make([]string, 0, count)
 	for len(addresses) < count {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		reserved = append(reserved, listener)
-		address := listener.Addr().String()
-		if !used[address] {
-			used[address] = true
-			addresses = append(addresses, address)
-		}
+		address := fixedPeerReserveTestAddressV1(t, used)
+		used[address] = true
+		addresses = append(addresses, address)
 	}
 	return addresses
 }
@@ -323,7 +309,7 @@ func TestFixedPeerSourceFollowerFixtureInspectV1(t *testing.T) {
 func TestSparseCatalogConsumerRejectsTamperedRouteV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	configs := sparseCatalogTestConfigsV1(t)
+	configs := sparseCatalogTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))
 	_, client, catalog := sparseCatalogStartV1(t, ctx, configs, []raftplacement.CollectionPlacementV1{sparseCatalogPlacementV1("sparse-users", "group-b")})
 	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "sparse-users", Shape: ClusterRouteShapeCollection}
 	route, err := client.Route(ctx, "consumer", request)
@@ -402,9 +388,10 @@ func TestSparseCatalogConsumerRejectsTamperedRouteV1(t *testing.T) {
 func TestSparseCatalogNonVoterDataOwnerFailoverAndAuthorityLossV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
-	configs := sparseCatalogTestConfigsV1(t)
+	allocate := fixedPeerSubprocessAllocatorV1(t)
+	configs := sparseCatalogTestConfigsV1(t, allocate)
 	consumer := &configs[3]
-	address := sparseCatalogUnusedAddressV1(t, configs)
+	address := allocate("consumer")
 	group := FixedPeerTCPGroupV1{ID: "group-c", BootstrapNode: consumer.NodeID, Peers: []raftcluster.Peer{{ID: consumer.NodeID, Address: address}}}
 	consumer.RaftListen[group.ID] = address
 	for i := range configs {
@@ -549,7 +536,7 @@ func TestSparseCatalogSaturationPreservesAuthoritativeReadProgressV1(t *testing.
 	}
 	runtimes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	for i, config := range configs {
-		runtime, err := OpenFixedPeerTCPRuntimeV1(config)
+		runtime, err := fixedPeerOpenTestRuntimeV1(t, config)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -116,7 +116,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 		t.Helper()
 		for i := range configs {
 			var err error
-			nodes[i], err = OpenFixedPeerTCPRuntimeV1(configs[i])
+			nodes[i], err = fixedPeerOpenTestRuntimeV1(t, configs[i])
 			if err != nil {
 				t.Fatalf("open %s node %s: %v", round, configs[i].NodeID, err)
 			}
