@@ -64,8 +64,14 @@ def plan(manifest, run_id):
         if not config.get("Credentials") or not intent or len(config.get("Groups", [])) != 1:
             raise ValueError("authenticated single-group initialization required")
         definition = intent["IndexDefinition"]
-        if definition.get("field") != "embedding" or definition.get("dimensions") != 2 or not 3 <= intent["MaxSourceRows"] <= 512:
-            raise ValueError("fixture requires embedding dimensions=2 and bound3..512")
+        expected = {"name": "embedding_graph", "field": "embedding", "metric": "cosine",
+                    "dimensions": 2, "m": 2, "ef_construction": 8, "ef_search": 8,
+                    "strategy": "column_graph"}
+        if (definition != expected or intent.get("Generation") != 1 or intent.get("CatalogEpoch") != 1
+                or intent.get("Collection") != {"Database": "default", "Catalog": "default", "Collection": "docs"}
+                or intent.get("SourceGroupID") != config["Groups"][0]["ID"]
+                or not 3 <= intent["MaxSourceRows"] <= 512):
+            raise ValueError("requires canonical generation1 default.docs embedding_graph fixture and bound3..512")
         identity = {key: config.get(key) for key in ("ClusterID", "Nodes", "Catalog", "Groups", "VectorInitialization")}
         if shared is not None and identity != shared:
             raise ValueError("all node inventories and immutable intents must agree")
@@ -85,6 +91,11 @@ def plan(manifest, run_id):
     if ids != {n["ID"] for n in shared["Nodes"]}:
         raise ValueError("manifest must name all configured voters")
     return result
+
+
+def require_running(inspected, name):
+    if len(inspected) != 1 or inspected[0].get("State", {}).get("Running") is not True:
+        raise RuntimeError("daemon is not running: " + name)
 
 
 def main():
@@ -202,6 +213,8 @@ def main():
                     docker(node, "restart-" + node["node"], ["start", node["name"]])
         for node in nodes:
             docker(node, "logs-" + node["node"], ["logs", node["name"]])
+            inspected = json.loads(docker(node, "final-state-" + node["node"], ["inspect", node["name"]]))
+            require_running(inspected, node["name"])
     (output / "result.json").write_text(json.dumps({"status": "PASS", "scope": public_plan}, indent=2))
     print(str(output / "result.json"))
 
