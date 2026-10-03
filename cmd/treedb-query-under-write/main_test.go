@@ -402,3 +402,42 @@ func TestExplicitRetrySplitProofStaysUnknownBeforePostSearch(t *testing.T) {
 		t.Fatalf("counts=%+v", result.Counts)
 	}
 }
+
+func TestReadinessRetainsErrorsAndUsesRemainingRounds(t *testing.T) {
+	config := nativewire.FixedPeerTCPConfigV1{Nodes: []nativewire.FixedPeerTCPNodeV1{{ID: "node"}}, Groups: []nativewire.FixedPeerTCPGroupV1{{ID: "group"}}}
+	for _, mode := range []string{"transient", "exhausted", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			r := report{RPCTimeout: time.Second}
+			read := func(_ context.Context, node nativewire.FixedPeerTCPNodeV1) (nativewire.FixedPeerReadinessV1, error) {
+				calls++
+				if calls == 1 || mode != "transient" {
+					if mode == "canceled" {
+						cancel()
+					}
+					return nativewire.FixedPeerReadinessV1{}, errors.New("transient observation failure")
+				}
+				state := nativewire.FixedPeerReadinessV1{NodeID: node.ID, Live: true, Ready: true, VectorPhase: "active"}
+				state.Groups = append(state.Groups, nativewire.FixedPeerGroupReadinessV1{GroupID: config.Groups[0].ID, Ready: true, LocalAppliedIndex: 42})
+				return state, nil
+			}
+			err := readinessWith(ctx, read, config, &r, 42, 2)
+			if len(r.Readiness) != calls || r.Readiness[0].Error == "" {
+				t.Fatal("lost failed observation")
+			}
+			if mode == "transient" {
+				if err != nil || calls != 2 {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			} else if mode == "exhausted" {
+				if err == nil || calls != 2 {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			} else if !errors.Is(err, context.Canceled) || calls != 1 {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}

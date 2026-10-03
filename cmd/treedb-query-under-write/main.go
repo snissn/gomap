@@ -372,11 +372,17 @@ func readJSON(path string, value any, bound int64) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 func readiness(ctx context.Context, client *nativewire.FixedPeerTCPClientV1, config nativewire.FixedPeerTCPConfigV1, r *report, prefix uint64, rounds int) error {
+	return readinessWith(ctx, func(call context.Context, node nativewire.FixedPeerTCPNodeV1) (nativewire.FixedPeerReadinessV1, error) {
+		return client.ReadinessV1(call, node.ID)
+	}, config, r, prefix, rounds)
+}
+
+func readinessWith(ctx context.Context, read func(context.Context, nativewire.FixedPeerTCPNodeV1) (nativewire.FixedPeerReadinessV1, error), config nativewire.FixedPeerTCPConfigV1, r *report, prefix uint64, rounds int) error {
 	for round := 0; round < rounds; round++ {
 		ready := true
 		for _, node := range config.Nodes {
 			call, cancel := context.WithTimeout(ctx, r.RPCTimeout)
-			state, err := client.ReadinessV1(call, node.ID)
+			state, err := read(call, node)
 			cancel()
 			item := observation{Round: round, RequestedNode: string(node.ID), State: state}
 			if err != nil {
@@ -385,7 +391,11 @@ func readiness(ctx context.Context, client *nativewire.FixedPeerTCPClientV1, con
 			}
 			r.Readiness = append(r.Readiness, item)
 			if err != nil {
-				return err
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				ready = false
+				continue
 			}
 			if state.NodeID != node.ID || !state.Live || !state.Ready || state.Draining || state.VectorPhase != "active" ||
 				len(state.Groups) != 1 || state.Groups[0].GroupID != config.Groups[0].ID || !state.Groups[0].Ready ||
