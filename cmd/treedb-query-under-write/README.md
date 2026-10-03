@@ -304,3 +304,41 @@ Root validation: normal/race checks of this package, especially `TestWindow*`
 and unchanged `TestRecall*`. Source-only tests do not establish runtime window
 qualification. This checkpoint leaves concurrent writes and the broader #4250
 serving/capacity gates OPEN.
+
+### Optional resource boundary handshake
+
+`-read-resource-gate-dir /run-resource-gate` enables a trusted fresh run-local
+read/write directory mounted into the driver. The default empty flag preserves
+the existing flow and emits no gate files. Root must precreate an empty regular
+directory, retain it after every outcome, and never reuse it. A symlink directory,
+nonempty directory, unexpected entry, changed receipt, malformed/stale token or
+wrong run/phase/nonce fails closed. The driver creates exclusive `claim.json`,
+then `ready.json` after successful warmup and before measured origin. It waits
+for `ready.ack`; after all voters and the client are sampled, the collector must
+atomically rename an exact byte copy of `ready.json` to `ready.ack`. Place any
+collector temporary file outside the gate directory. A partially published
+acknowledgment is invalid, rather than a signal to retry a workload.
+
+Measurement starts only after ready acknowledgment. After measured admission
+and in-flight drain fix ActualDurationNS/QPS, the driver publishes `done.json`
+and waits for an exact-byte `done.ack` while its native clients and process stay
+alive. Root samples the same client/voter cgroups, retains the raw counters and
+sample times, then acknowledges done. Normal after-readiness/result/close follow.
+A measured failure also reaches done when the overall context still permits it;
+a total timeout/cancellation refuses the wait and retains ordinary failure output.
+Missing acknowledgments use the existing total timeout; there is no independent
+extension. Both waits, receipt I/O and polling are outside measured QPS and call
+latency. Polling is only acknowledgment discovery, never a resource guarantee.
+
+Each regular token is bounded to2048 bytes. Receipts bind Version1, RunID, phase,
+a fresh128-bit nonce, publish UTC, measured origin/duration and stop reason;
+acknowledgments copy those bytes exactly, including newline. The report retains
+small ResourceBoundaries with acknowledgment UTC and wait durations; it never
+writes another full result to the gate. Directory inventory is bounded to six
+entries (five allowed). Root retains all tokens and raw resource samples. The
+boundary counter interval encloses actual measurement plus release/publication
+and sampling overhead; it is not an exact measured-only resource delta or a
+whole-lifetime resource peak. Wall-clock alignment and external collection remain
+root's responsibility. This trusted local filesystem protocol is not hardened
+against hostile path replacement or a blocking filesystem; existing outer
+process timeout remains required. No server/public API or endpoint is changed.
