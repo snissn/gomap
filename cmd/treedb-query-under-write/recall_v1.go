@@ -69,6 +69,7 @@ type recallProvenance struct {
 	RootAccepted, InitializationSucceeded, CleanReopenSucceeded, ExclusiveWriterStopped bool
 }
 type recallQuery struct {
+	scorer                                            *collections.CanonicalVectorPartitionCosineScorerV1 // immutable after setup; safe across read-window workers
 	QueryID, RequestSHA256, Outcome, ErrorCode, Error string
 	Request                                           public.SearchRequestV1
 	StartNS, EndNS                                    int64
@@ -647,7 +648,7 @@ func recallPlan(ctx context.Context, in *recallInput, r *recallReport) error {
 		request := public.SearchRequestV1{Version: 1, Generation: r.Generation, Query: q, Metric: public.MetricCosineV1, TopK: 10, Probes: 1,
 			EfSearch: in.config.VectorInitialization.IndexDefinition.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1,
 			Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 32}}
-		r.Queries = append(r.Queries, recallQuery{QueryID: fmt.Sprintf("query-%06d", i), RequestSHA256: hashJSON(request), Outcome: "unissued", Request: request, CorpusTruth: corpus, Truth: truth})
+		r.Queries = append(r.Queries, recallQuery{scorer: scorer, QueryID: fmt.Sprintf("query-%06d", i), RequestSHA256: hashJSON(request), Outcome: "unissued", Request: request, CorpusTruth: corpus, Truth: truth})
 	}
 	return ctx.Err()
 }
@@ -657,9 +658,13 @@ func recallValidateResponse(q *recallQuery, response public.SearchResponseV1, ve
 		c.ExactScanPartitions != 0 || c.ReadProofs == 0 {
 		return 0, errors.New("native top10 generation/proof/fallback mismatch")
 	}
-	scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(q.Request.Query)
-	if err != nil {
-		return 0, err
+	scorer := q.scorer
+	if scorer == nil {
+		var err error
+		scorer, err = collections.NewCanonicalVectorPartitionCosineScorerV1(q.Request.Query)
+		if err != nil {
+			return 0, err
+		}
 	}
 	seen := map[string]bool{}
 	truth := map[string]bool{}
@@ -789,89 +794,8 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 		// Preserve failure evidence after cancellation; root bounds blocking output externally.
 		runErr = errors.Join(runErr, recallEmit(context.WithoutCancel(ctx), output, "result", &r))
 	}()
-	if err := validateProbeTimeouts(o.Timeout, o.RPCTimeout); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if o.Config == "" || o.Bootstrap == "" || o.Dataset == "" || o.Provenance == "" || !asciiID(o.RunID) ||
-		(o.Phase != "pre" && o.Phase != "post-only") || (o.Phase == "pre" && o.Probe != "") || (o.Phase == "post-only" && o.Probe == "") {
-		return errors.New("recall requires config/bootstrap/dataset/provenance/run-id and pre or post-only with matching probe input")
-	}
 	var in recallInput
-	var budget recallBudget
-	var err error
-	if r.ConfigSHA256, err = budget.json(ctx, o.Config, &in.config, 8<<20); err != nil {
-		return err
-	}
-	if r.BootstrapSHA256, err = budget.json(ctx, o.Bootstrap, &in.bootstrap, 4<<20); err != nil {
-		return err
-	}
-	if r.ConfigIdentity, err = nativewire.InspectFixedPeerTCPConfigV1(in.config); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if r.Generation, err = admitBootstrap(in.config, in.bootstrap); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err = recallReadDataset(ctx, &budget, o.Dataset, &in, &r); err != nil {
-		return err
-	}
-	if r.ProvenanceSHA256, err = budget.json(ctx, o.Provenance, &r.Provenance, 64<<10); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err = recallValidateProvenance(&in, &r); err != nil {
-		return err
-	}
-	for id, v := range map[string][]float32{"seed-x": oracleVector(128, 1, 0), "seed-minus-x": oracleVector(128, -1, 0), "seed-minus-y": oracleVector(128, 0, -1), in.bootstrap.Insert.VisibleID: oracleVector(128, 0, 1)} {
-		in.vectors[id] = v
-	}
-	r.HighestCommitIndex = in.bootstrap.Retry.CommitIndex
-	if o.Phase == "post-only" {
-		raw, err := budget.read(ctx, o.Probe, 16<<20)
-		if err != nil {
-			return err
-		}
-		r.ProbeSHA256 = recallSHA(raw)
-		if r.ProbeSHA256 != r.Provenance.ProbeSHA256 {
-			return errors.New("probe file/provenance hash mismatch")
-		}
-		if err := recallAdmitProbe(ctx, raw, &in, &r); err != nil {
-			return err
-		}
-	}
-	if err := recallPlan(ctx, &in, &r); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	f, err := os.Open(executable)
-	if err != nil {
-		return err
-	}
-	h := sha256.New()
-	_, err = io.Copy(h, recallContextReader{ctx: ctx, reader: f})
-	closeErr := f.Close()
-	if err != nil || closeErr != nil {
-		return errors.Join(err, closeErr)
-	}
-	r.BinarySHA256 = hex.EncodeToString(h.Sum(nil))
-	recallFinish(&r)
-	if err := ctx.Err(); err != nil {
+	if err := recallPrepare(ctx, o, &in, &r); err != nil {
 		return err
 	}
 	if err := recallEmit(ctx, output, "planned", &r); err != nil {
@@ -918,5 +842,94 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 		return err
 	}
 	r.Verdict = "ACCEPT_QUIESCENT_RECALL_OBSERVATION"
+	return nil
+}
+
+// recallPrepare freezes and validates the accepted inputs and oracle before networking.
+func recallPrepare(ctx context.Context, o recallOptions, in *recallInput, r *recallReport) error {
+	if err := validateProbeTimeouts(o.Timeout, o.RPCTimeout); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if o.Config == "" || o.Bootstrap == "" || o.Dataset == "" || o.Provenance == "" || !asciiID(o.RunID) ||
+		(o.Phase != "pre" && o.Phase != "post-only") || (o.Phase == "pre" && o.Probe != "") || (o.Phase == "post-only" && o.Probe == "") {
+		return errors.New("recall requires config/bootstrap/dataset/provenance/run-id and pre or post-only with matching probe input")
+	}
+	var budget recallBudget
+	var err error
+	if r.ConfigSHA256, err = budget.json(ctx, o.Config, &in.config, 8<<20); err != nil {
+		return err
+	}
+	if r.BootstrapSHA256, err = budget.json(ctx, o.Bootstrap, &in.bootstrap, 4<<20); err != nil {
+		return err
+	}
+	if r.ConfigIdentity, err = nativewire.InspectFixedPeerTCPConfigV1(in.config); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.Generation, err = admitBootstrap(in.config, in.bootstrap); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err = recallReadDataset(ctx, &budget, o.Dataset, in, r); err != nil {
+		return err
+	}
+	if r.ProvenanceSHA256, err = budget.json(ctx, o.Provenance, &r.Provenance, 64<<10); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err = recallValidateProvenance(in, r); err != nil {
+		return err
+	}
+	for id, v := range map[string][]float32{"seed-x": oracleVector(128, 1, 0), "seed-minus-x": oracleVector(128, -1, 0), "seed-minus-y": oracleVector(128, 0, -1), in.bootstrap.Insert.VisibleID: oracleVector(128, 0, 1)} {
+		in.vectors[id] = v
+	}
+	r.HighestCommitIndex = in.bootstrap.Retry.CommitIndex
+	if o.Phase == "post-only" {
+		raw, err := budget.read(ctx, o.Probe, 16<<20)
+		if err != nil {
+			return err
+		}
+		r.ProbeSHA256 = recallSHA(raw)
+		if r.ProbeSHA256 != r.Provenance.ProbeSHA256 {
+			return errors.New("probe file/provenance hash mismatch")
+		}
+		if err := recallAdmitProbe(ctx, raw, in, r); err != nil {
+			return err
+		}
+	}
+	if err := recallPlan(ctx, in, r); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(executable)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	_, err = io.Copy(h, recallContextReader{ctx: ctx, reader: f})
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+	r.BinarySHA256 = hex.EncodeToString(h.Sum(nil))
+	recallFinish(r)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return nil
 }

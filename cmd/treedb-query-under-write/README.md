@@ -215,3 +215,92 @@ the output/filesystem; root must preserve an outer-timeout failure packet.
 Root validation: existing driver normal/race checks plus tests named
 TestRecall*. Source-only construction does not establish runtime qualification.
 The full #4959 sustained windows and #4250 serving/capacity gates remain open.
+
+
+## Representative read-only window (source checkpoint)
+
+`-mode read-window` reuses the exact quiescent-recall input admission,
+provenance, bootstrap/probe population, and canonical oracle above. `-phase pre`
+or `post-only` carries the same meaning and requires the same root-attested
+writer exclusion for the entire observation. This checkpoint issues no writes;
+concurrent paced writes remain OPEN under #4959. The existing default workload
+and sixteen-call quiescent-recall mode remain available.
+
+    treedb-query-under-write -mode read-window \
+      -config /inputs/node-c.json -bootstrap-receipt /receipts/qualify.json \
+      -dataset /inputs/dataset -provenance /receipts/recall-provenance.json \
+      -phase post-only -probe-receipt /receipts/probe.jsonl \
+      -run-id readwindow01 -read-concurrency 4 \
+      -timeout 120s -rpc-timeout 10s > /receipts/read-window.jsonl
+
+`-read-concurrency` is mandatory and accepts only 1 or 4. Each worker owns one
+independently dialed persistent strict native client across warmup and measurement.
+Default warmup is 64 requests total, assigned by ordinal=worker+n*concurrency;
+with four workers each receives 16. Warmup must finish successfully before the
+measured clock starts. `-read-warmup` accepts 0..1024. Every phase cycles query
+ordinal%16 through the frozen TopK=10/probes=1/configured-EfSearch requests. No
+socket is shared across workers, no search is retried, and no fallback occurs.
+
+Default admission window is 60s; `-read-window` accepts 1s..60s for bounded
+checks. The closed loop admits another call after each worker returns, validates,
+and retains its previous response. At normal cutoff, admission stops and calls
+already issued drain under their remaining per-call and overall timeout. The
+actual duration includes that drain. A genuine call/validation failure cancels
+all workers, joins them, and retains every returned attempt, including sibling
+cancellations. Setup, input reads, oracle scoring, executable hashing, all-voter
+readiness, connection Hello and warmup are outside measured latency/QPS, and
+inside the total mode-entry timeout. Root must still impose an outer process
+wall timeout for blocking output/OS I/O and preserve an outer-timeout packet.
+
+`fixed_cluster_read_window_v1` planned/result events include the admitted
+sixteen request hashes, vectors, corpus/augmented truth and population identity
+once in `Admission.Queries`. Per-attempt records refer to those immutable query
+IDs/hashes and retain actual deadline, worker, ordinal, phase, monotonic call
+start/return nanoseconds, outcome/error, recall and a private bounded response
+copy with generation/neighbors/native counters/server stages. Query scorer
+normalization is prepared once and read-only across workers; validation still
+checks canonical score bits for every returned neighbor. Client API latency
+excludes client validation/retention; loop QPS includes those costs and drain.
+This is an observed closed-loop rate at stated concurrency, not saturation or
+capacity. Server stage totals are nested/per-shard sums as defined by the public
+response; they must not be added into a purported exclusive latency breakdown.
+
+Measured and warmup counts are separate. `Planned` describes the finite maximum
+possible attempts, `Unissued` includes budget slots unused at normal cutoff,
+and `Completions` counts every issued API return regardless of outcome.
+Attempted=succeeded+failed+canceled+unknown; Planned=Attempted+Unissued.
+The report retains per-query measured coverage, actual elapsed duration,
+attempt/success QPS, nearest-rank p50/p95/p99 nanoseconds for successful calls
+and non-success calls separately, and mean recall over measured successes when
+untruncated. Empty latency populations have Samples=0. Warmup and oracle are
+excluded from these summaries; low recall is observed, not an invented gate.
+
+Default measured cap is 65536 attempts (`-read-max-attempts` accepts 1..65536).
+Default encoded pair budget is 128 MiB (`-read-output-bytes` accepts 1 MiB..256 MiB,
+including both event newlines); each response is bounded at 32 KiB and errors
+reuse the 2 KiB/full-hash summary. Retention charges actual encoded attempt bytes
+and reserves space for readiness/errors and at most four response-free terminal
+records. On aggregate byte exhaustion the terminal record retains response
+byte length/SHA but omits its response, marks Truncated and stops the workers.
+Both final events are checked against the actual encoded pair budget. Hitting
+an attempt/byte cap before normal cutoff refuses sustained-window acceptance.
+A successful verdict also requires successful measured coverage of all sixteen
+query IDs, zero measured failures/cancellations/unknowns, complete returned
+attempt accounting, and authenticated all-four ACTIVE readiness before/after
+through the same pinned highest acknowledged prefix. Prefix readiness does not
+prove writer exclusion or individual search applied-index/live-revision.
+
+No additional diagnostics endpoint or resource sampler is introduced. Root
+collects existing authenticated diagnostics and external voter/client cgroup
+CPU/RSS/swap/FD/I/O/network/event evidence separately, bound to the admitted
+runtime/config/source/ELF and the measured interval. Client socket ownership,
+request response copies, JSON marshaling, canonical neighbor validation and the
+short admission/retention lock are harness costs; retention can consume the
+stated byte budget plus Go object/slice overhead, transient JSON buffers and
+final serialization buffers. Limits and elapsed time do not prove whole-lifetime
+peaks. Preserve raw failed/capped packets; never turn a cap into a capacity claim.
+
+Root validation: normal/race checks of this package, especially `TestWindow*`
+and unchanged `TestRecall*`. Source-only tests do not establish runtime window
+qualification. This checkpoint leaves concurrent writes and the broader #4250
+serving/capacity gates OPEN.

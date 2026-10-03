@@ -551,7 +551,7 @@ func admitBootstrap(config nativewire.FixedPeerTCPConfigV1, bootstrap nativewire
 }
 func runArgs(parent context.Context, args []string, output io.Writer) (runErr error) {
 	flags := flag.NewFlagSet("treedb-query-under-write", flag.ContinueOnError)
-	mode := flags.String("mode", "query-under-write", "query-under-write or read-only quiescent-recall")
+	mode := flags.String("mode", "query-under-write", "query-under-write, quiescent-recall, or read-window")
 	dataset := flags.String("dataset", "", "unchanged representative exported dataset directory")
 	phase := flags.String("phase", "", "recall phase: pre or post-only")
 	provenance := flags.String("provenance", "", "root-accepted quiescence/runtime/input provenance JSON")
@@ -562,8 +562,28 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	runID := flags.String("run-id", "", "unique 1..64 ASCII identity; never reuse after any mutation attempt")
 	timeout := flags.Duration("timeout", 120*time.Second, "whole checkpoint deadline, 1s..10m; default 120s")
 	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..1m; default 10s")
+	readConcurrency := flags.Int("read-concurrency", 0, "read-window requires explicit independent workers: 1 or 4")
+	readWindow := flags.Duration("read-window", 60*time.Second, "read-window measured admission interval, 1s..60s")
+	readWarmup := flags.Int("read-warmup", 64, "read-window warmup attempts outside measurement, 0..1024")
+	readMaxAttempts := flags.Int("read-max-attempts", 65536, "read-window measured attempt cap, 1..65536; hitting cap refuses verdict")
+	readOutputBytes := flags.Int("read-output-bytes", 128<<20, "read-window aggregate planned/result byte cap, 1MiB..256MiB")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	readFlags, freshFlag := false, false
+	flags.Visit(func(f *flag.Flag) {
+		readFlags = readFlags || strings.HasPrefix(f.Name, "read-")
+		freshFlag = freshFlag || f.Name == "fresh-inserts"
+	})
+	if *mode == "read-window" {
+		if freshFlag || flags.NArg() != 0 {
+			return errors.New("read-window refuses mutation flags and positional arguments")
+		}
+		return runReadWindow(parent, windowOptions{Admission: recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout},
+			Concurrency: *readConcurrency, Warmup: *readWarmup, Duration: *readWindow, MaxAttempts: *readMaxAttempts, OutputBytes: *readOutputBytes}, output)
+	}
+	if readFlags {
+		return errors.New("read-window flags require -mode read-window")
 	}
 	if *mode == "quiescent-recall" {
 		conflict := false
