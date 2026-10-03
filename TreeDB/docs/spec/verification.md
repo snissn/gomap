@@ -2437,6 +2437,16 @@ Coverage:
   checkpoint/close/reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
+- `TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1` verifies
+  an ordinary cold manager restores an acknowledged durable overlay before the
+  next actual prepared Append and preserves both owners and the exact durable
+  preparation completion through warm publication, cold publication and reopen,
+  with zero graph rebuilds. `TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1`
+  acknowledges an actual live insert before a real provider snapshot and retains
+  the fixture's tail, exact-retry, close/reopen, visibility and strict-search
+  checks. It also checks each voter retains its exact local durable completion
+  before the snapshot and after tail recovery, and activates serving under the
+  existing current-DB/catalog guards. It does not add snapshot persistence commands.
 - The V2-focused structural and concurrency gates
   `TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2`,
   `TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2`,
@@ -3460,6 +3470,22 @@ or proof of serving activation. Existing nil-intent runtime/security/readiness
 regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
 configuration path; startup overhead should be compared at the exact base/head.
 
+
+The Prepare convergence/resume witness is
+`TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1`.
+It cancels after a genuine committed-applied source acknowledgment, observes
+that actual prefix on all voters with no preparation completion, then resumes
+the identical request. It retains the transient source-mismatch reread,
+partial completion resume, changed-source refusal before append, completed
+command/asset/source disagreement refusals, cancellation, and actual durable
+completion controls. Private reply interception controls observations; it
+does not establish scheduler-induced follower lag.
+`TestSingleGroupSubmitterStalePrepareRequiresKnownReplayV1` separately checks
+the shared stale-guard gate with exact source/prepare entries, unknown keys,
+changed source/operation, malformed entries, missing idempotency authority,
+and ordinary stale mutations. Its preflight is a deterministic stand-in;
+the native fixture supplies the real FSM/Raft witness. These tests do not
+establish performance, RF4 qualification, or broader readiness.
 
 ### Bounded RF4 initialization (#4944)
 

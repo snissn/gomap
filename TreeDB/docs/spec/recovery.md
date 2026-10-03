@@ -299,8 +299,15 @@ Standalone vector-partition live bindings use
 name payload shared by vector-index rebuild commands. Its replay handler is
 carrier-only: it reads the exact active ready immutable manifest and restores or
 publishes the matching empty live-overlay carrier from its existing router.
+An ordinary prepared mutation on a cold collection handle restores any durable
+carrier before buffered primary publication or command assignment, under schema
+and exclusive native admission. This load-only step includes existing durable
+live overlays and refuses stale or corrupt coverage before Append; an unprepared
+ColumnGraph with no native carrier root remains a valid initialization input.
+Physical Raft snapshots need no extra carrier Save or unrepresented local LSN.
 Each later foreground or replayed command-WAL document mutation includes the
-carrier's compact binding/revision/coverage metadata, changed owner record, and
+carrier's compact binding/revision/coverage metadata, its exact immutable
+preparation completion, changed owner record, and
 dirty native HNSW records from only the touched logical domains in the
 mutation's ordered
 document/column/locator/system-root publication. Replay never scans collection

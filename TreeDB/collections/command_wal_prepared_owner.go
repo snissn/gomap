@@ -48,6 +48,9 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 	admissionState := collectionCommandWALAdmission{collection: c, acquire: acquire, release: acquire(), prepared: true}
 	admission := &admissionState
 	defer admission.unlock()
+	if err := c.loadVectorPartitionLiveCarriersBeforeMutationV1(); err != nil {
+		return err
+	}
 	mutation := c.lockMutation()
 	held := true
 	defer func() {

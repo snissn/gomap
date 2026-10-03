@@ -1334,6 +1334,13 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 	sourceState := before.sourceDocumentState
 	sourceStateValid := before.sourceDocumentStateValid
 	persistedBytesDisk := before.persistedBytesDisk
+	// Atomic document publication rewrites native metadata. Retain the exact
+	// committed preparation receipt that authorizes serving after recovery.
+	var preparation *VectorPartitionPrepareCompletionV1
+	if before.partitionPreparation != nil {
+		completion := *before.partitionPreparation
+		preparation = &completion
+	}
 	old := before.partitionLive
 	live := &vectorIndexPartitionLiveStateV1{
 		indexDefinitionDigest: old.indexDefinitionDigest, source: old.source, generation: old.generation,
@@ -1370,6 +1377,7 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 
 	idx.mu.Lock()
 	idx.partitionLive = live
+	idx.partitionPreparation = preparation
 	idx.sourceDocumentGeneration = sourceGeneration
 	idx.sourceDocumentRootsValid = sourceValid
 	idx.sourceDocumentState = sourceState
@@ -1723,6 +1731,32 @@ func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDef
 		return idx, VectorIndexLoadStatus{Loaded: true}, nil
 	}
 	return c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+}
+
+// loadVectorPartitionLiveCarriersBeforeMutationV1 runs under schema read and
+// exclusive native admission, before mutation or raw staging ownership. Warm
+// and non-ColumnGraph collections need no snapshot or load.
+func (c *Collection) loadVectorPartitionLiveCarriersBeforeMutationV1() error {
+	needsLoad := false
+	for _, def := range c.metadataForIngress().VectorIndexes {
+		if def.Strategy == VectorIndexStrategyColumnGraph && c.registeredVectorIndex(def.Name) == nil {
+			needsLoad = true
+			break
+		}
+	}
+	if !needsLoad {
+		return nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer snap.Close()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return err
+	}
+	return c.loadVectorPartitionLiveCarriersForReplayV1(catalog)
 }
 
 // loadVectorPartitionLiveCarriersForReplayV1 restores checkpointed carriers

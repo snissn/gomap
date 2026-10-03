@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -24,24 +26,229 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3, false)
 }
+
+// This recovery witness acknowledges a live overlay before the physical Raft
+// snapshot, then retains the ordinary tail/retry/close/reopen assertions below.
+func TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3, true)
+}
+
 func TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 4)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 4, false)
+}
+
+// Pause after coordinator planning, then delegate to the actual TCP shard and
+// its real Raft ReadIndex. No production hook or fabricated search result.
+func TestFixedPeerVectorOwnerSearchAdmissionRealRaftV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3, false, func(t *testing.T, parent context.Context, nodes []*FixedPeerTCPRuntimeV1) {
+		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+		defer cancel()
+		group := nodes[0].config.Groups[0]
+		leader, err := nodes[0].client.leader(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var owner *FixedPeerTCPRuntimeV1
+		for _, node := range nodes {
+			if node.config.NodeID == leader {
+				owner = node
+			}
+		}
+		if owner == nil || owner.vector == nil {
+			t.Fatal("missing actual prepared owner")
+		}
+		backend, err := owner.vector.ensureBackendV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator := backend.opts.Topology.Coordinator()
+		delegate := coordinator.dispatcher
+		planned := make(chan VectorPartitionShardSearchRequestV1, 2)
+		resume := make(chan struct{})
+		var release sync.Once
+		unpause := func() { release.Do(func() { close(resume) }) }
+		defer unpause()
+		var calls atomic.Int32
+		var workers sync.WaitGroup
+		defer func() {
+			cancel()
+			unpause()
+			workers.Wait()
+		}()
+		// Installed before either request; later requests bypass the two pauses.
+		coordinator.dispatcher = VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			if calls.Add(1) <= 2 {
+				select {
+				case planned <- request:
+				case <-callCtx.Done():
+					return VectorPartitionShardSearchResponseV1{}, callCtx.Err()
+				}
+				select {
+				case <-resume:
+				case <-callCtx.Done():
+					return VectorPartitionShardSearchResponseV1{}, callCtx.Err()
+				}
+			}
+			return delegate.DispatchVectorPartitionShardSearchV1(callCtx, request)
+		})
+		generation := public.GenerationIDV1{Index: owner.config.VectorInitialization.IndexDefinition.Name, Generation: owner.config.VectorInitialization.Generation}
+		request := public.SearchRequestV1{Version: 1, Generation: generation, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 8, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}, Deadline: time.Now().Add(30 * time.Second)}
+		type searchReply struct {
+			response public.SearchResponseV1
+			err      error
+		}
+		searches := make(chan searchReply, 2)
+		for i := 0; i < 2; i++ {
+			reader, err := DialContext(ctx, "tcp", owner.servingVectorConfigV1().PublicAddresses[owner.config.NodeID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				response, err := reader.VectorSearchStrictV1(ctx, request)
+				searches <- searchReply{response, err}
+			}()
+		}
+		plans := make([]VectorPartitionShardSearchRequestV1, 2)
+		for i := range plans {
+			select {
+			case plans[i] = <-planned:
+			case <-ctx.Done():
+				t.Fatal("two concurrent readers did not reach the real shard boundary")
+			}
+		}
+		if plans[0].LiveCoverage == 0 || plans[0].LiveRevision != plans[1].LiveRevision || plans[0].LiveCoverage != plans[1].LiveCoverage {
+			t.Fatalf("readers did not plan the same covered live identity: %+v %+v", plans[0], plans[1])
+		}
+		// Deterministic old-source witness: both genuine plans leave the old
+		// mutation mutex available for publication at this exact boundary.
+		if owner.vector.mutationMu.TryLock() {
+			owner.vector.mutationMu.Unlock()
+			t.Fatal("planned strict searches did not exclude actual owner publication")
+		}
+		writer, err := DialContext(ctx, "tcp", owner.servingVectorConfigV1().PublicAddresses[owner.config.NodeID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer writer.Close()
+		insert := public.InsertRequestV1{Version: 1, Generation: generation, IdempotencyKey: []byte("owner-search-admission"), ID: []byte("admission-minus-x-plus-y"), Vector: []float32{-1, 1}, Document: []byte("{\"embedding\":[-1,1],\"kind\":\"admission\"}"), Deadline: time.Now().Add(30 * time.Second)}
+		type insertReply struct {
+			response public.InsertResponseV1
+			err      error
+		}
+		inserted := make(chan insertReply, 1)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			response, err := writer.VectorInsertV1(ctx, insert)
+			inserted <- insertReply{response, err}
+		}()
+		// The existing exclusive Lock queues behind both reader leases. Probe
+		// its RW reader-side behavior without making the old test-only overlay
+		// require a new method on the old sync.Mutex.
+		rw, ok := any(&owner.vector.mutationMu).(interface {
+			TryRLock() bool
+			RUnlock()
+		})
+		if !ok {
+			t.Fatal("owner admission does not preserve concurrent readers")
+		}
+		tick := time.NewTicker(time.Millisecond)
+		for rw.TryRLock() {
+			rw.RUnlock()
+			select {
+			case <-ctx.Done():
+				tick.Stop()
+				t.Fatal("actual public insert did not queue exclusive admission")
+			case <-tick.C:
+			}
+		}
+		tick.Stop()
+		select {
+		case reply := <-inserted:
+			t.Fatalf("insert completed before planned readers retired: %+v err=%v", reply.response, reply.err)
+		default:
+		}
+		// No retry: each response uses its original plan and actual native shard.
+		unpause()
+		for i := 0; i < 2; i++ {
+			select {
+			case reply := <-searches:
+				c := reply.response.Counters
+				if reply.err != nil || reply.response.Generation != generation || len(reply.response.Neighbors) != 1 || reply.response.Neighbors[0].ID != "base-x" || reply.response.Neighbors[0].Score != 1 || c.SelectedPartitions == 0 || c.HNSWServedPartitions != c.SelectedPartitions || c.ExactScanPartitions != 0 || c.ReadProofs == 0 {
+					t.Fatalf("planned native proof search failed: %+v err=%v", reply.response, reply.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("native searches did not finish")
+			}
+		}
+		var mutation public.InsertResponseV1
+		select {
+		case reply := <-inserted:
+			mutation = reply.response
+			if reply.err != nil {
+				t.Fatal(reply.err)
+			}
+		case <-ctx.Done():
+			t.Fatal("actual insert did not finish after reader retirement")
+		}
+		if err := public.ValidateInsertResponseV1(insert, mutation); err != nil || mutation.LiveRevision <= plans[0].LiveRevision || mutation.OwnerGroup != string(group.ID) {
+			t.Fatalf("insert lacks later committed applied visibility: %+v err=%v", mutation, err)
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				state, err := node.Status(ctx)
+				if err != nil || len(state.Groups) != 1 || state.Groups[0].Applied.Index < mutation.CommitIndex {
+					return false
+				}
+			}
+			return true
+		})
+		self := request
+		self.Query = []float32{-1, 1}
+		current, err := writer.VectorSearchStrictV1(ctx, self)
+		c := current.Counters
+		if err != nil || current.Generation != generation || len(current.Neighbors) != 1 || current.Neighbors[0].ID != string(insert.ID) || current.Neighbors[0].Score < .99999 || current.Neighbors[0].Score > 1.00001 || c.SelectedPartitions == 0 || c.HNSWServedPartitions != c.SelectedPartitions || c.ExactScanPartitions != 0 || c.ReadProofs == 0 {
+			t.Fatalf("post-insert native search did not observe acknowledged row: %+v err=%v", current, err)
+		}
+		// Use the actual owner entrypoint while a writer holds admission.
+		owner.vector.mutationMu.Lock()
+		blockedCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+		refused, err := owner.searchVectorPartitionStrictV1(blockedCtx, request)
+		stop()
+		owner.vector.mutationMu.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) || len(refused.Neighbors) != 0 {
+			t.Fatalf("deadline-bound writer-held search was not refused: %+v err=%v", refused, err)
+		}
+		// Retirement must leave no leaked reader lease.
+		if !owner.vector.mutationMu.TryLock() {
+			t.Fatal("canceled search leaked owner admission")
+		}
+		owner.vector.mutationMu.Unlock()
+	})
 }
 
 func TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, true, false, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, true, false, false, 3, false)
 }
 
 func TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, true, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, true, false, 3, false)
+}
+
+func TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, true, 3, false)
 }
 
 // Reuse genuinely committed preparation and its covered FSM result. The view
@@ -118,7 +325,7 @@ func checkPreparedVectorCatalogRecoveryV1(t *testing.T, ctx context.Context, nod
 	}
 }
 
-func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical bool, replicas int) {
+func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, pollRegression bool, replicas int, preSnapshotOverlay bool, servingChecks ...func(*testing.T, context.Context, []*FixedPeerTCPRuntimeV1)) {
 	var configs []FixedPeerTCPConfigV1
 	if replicas == 4 {
 		configs = fourNodeInitializationTestConfigsV1(t)
@@ -397,12 +604,241 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			t.Fatal(err)
 		}
 	}
-	completion, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "prepare-first-generation")
+	// Intercept only replies on a private client copy; all submissions and
+	// status reads still reach the real authenticated runtimes. The successful
+	// submit replies distinguish source polling from completion polling.
+	controlledClient := func(edit func(string, *fixedPeerReplyV1)) *FixedPeerTCPClientV1 {
+		t.Helper()
+		copyClient := *client
+		wrap := func(original *http.Client) *http.Client {
+			copyHTTP := *original
+			base, ok := original.Transport.(*http.Transport)
+			if !ok {
+				t.Fatal("fixture requires its runtime-owned HTTP transport")
+			}
+			copyHTTP.Transport = splitInsertRoundTripperV1{Transport: base, roundTrip: func(request *http.Request) (*http.Response, error) {
+				response, err := base.RoundTrip(request)
+				if err != nil || (request.URL.Path != "/v1/vector-prepare-status" && request.URL.Path != "/v1/submit") {
+					return response, err
+				}
+				raw, readErr := io.ReadAll(response.Body)
+				if err := errors.Join(readErr, response.Body.Close()); err != nil {
+					return nil, err
+				}
+				var reply fixedPeerReplyV1
+				if err := json.Unmarshal(raw, &reply); err != nil {
+					return nil, err
+				}
+				edit(request.URL.Path, &reply)
+				raw, err = json.Marshal(reply)
+				if err != nil {
+					return nil, err
+				}
+				response.Body = io.NopCloser(bytes.NewReader(raw))
+				response.ContentLength = int64(len(raw))
+				response.Header.Set("Content-Length", fmt.Sprint(len(raw)))
+				return response, nil
+			}}
+			return &copyHTTP
+		}
+		copyClient.readHTTP, copyClient.http = wrap(client.readHTTP), wrap(client.http)
+		return &copyClient
+	}
+	// Cancel only after the real source submit has acknowledged committed apply.
+	// Resume the same public request without altering status guards or entries.
+	if pollRegression {
+		sourceCtx, sourceCancel := context.WithCancel(ctx)
+		defer sourceCancel()
+		cancelledSubmits := 0
+		var cancelledSourceIndex uint64
+		cancelClient := controlledClient(func(path string, reply *fixedPeerReplyV1) {
+			if path == "/v1/submit" && reply.Error == "" && reply.Submit.CommittedApplied && reply.Submit.CommittedRecoverable {
+				cancelledSubmits++
+				cancelledSourceIndex = reply.Submit.Evidence.Index
+				sourceCancel()
+			}
+		})
+		got, err := cancelClient.PrepareVectorInitializationV1(sourceCtx, configs[0].NodeID, "prepare-first-generation")
+		if !errors.Is(err, context.Canceled) || cancelledSubmits != 1 || got != (collections.VectorPartitionPrepareCompletionV1{}) {
+			t.Fatalf("cancel after committed source: completion=%+v submits=%d err=%v", got, cancelledSubmits, err)
+		}
+		if cancelledSourceIndex == 0 {
+			t.Fatal("cancelled source has no genuine applied position")
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				status, err := node.Status(ctx)
+				if err != nil || len(status.Groups) != 1 || status.Groups[0].Applied.Index < cancelledSourceIndex {
+					return false
+				}
+				state, err := node.vectorPrepareStatusV1(ctx)
+				if err != nil || state == nil || state.Source.RowCount != 3 {
+					return false
+				}
+				if state.Completion != nil {
+					t.Fatalf("source-only cancellation published completion: state=%+v", state)
+				}
+			}
+			return true
+		})
+	}
+	prepareClient := client
+	var sourceSubmits, followerReads int
+	var sourceMismatch bool
+	if pollRegression {
+		prepareClient = controlledClient(func(path string, reply *fixedPeerReplyV1) {
+			if path == "/v1/submit" && reply.Error == "" && reply.Submit.CommittedApplied && reply.Submit.CommittedRecoverable {
+				sourceSubmits++
+			}
+			state := reply.VectorPreparation
+			if path != "/v1/vector-prepare-status" || sourceSubmits != 1 || reply.NodeID != group.Peers[1].ID || reply.Error != "" || state == nil || state.Completion != nil || state.Source.RowCount == 0 {
+				return
+			}
+			followerReads++
+			if !sourceMismatch {
+				// Model one stale but nonempty follower source after owner
+				// rebuild apply. The next read returns its actual durable tuple.
+				state.Source.Checksum ^= 1
+				sourceMismatch = true
+			}
+		})
+	}
+	completion, err := prepareClient.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "prepare-first-generation")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if completion.Command.Term == 0 || completion.Command.IndexPosition == 0 || completion.Command.SourceRowCount != 3 || completion.AssetSetDigest == "" {
 		t.Fatalf("no committed prepare evidence: %+v", completion)
+	}
+	if pollRegression {
+		if !sourceMismatch || followerReads < 2 || sourceSubmits != 2 {
+			t.Fatalf("source convergence did not cross real rebuild/prepare commits: injected=%v followerReads=%d submits=%d", sourceMismatch, followerReads, sourceSubmits)
+		}
+		// One missing follower completion must resume through both actual submits,
+		// rather than relying on the all-completed fast path.
+		partialSubmits, partialProbe := 0, false
+		partialClient := controlledClient(func(path string, reply *fixedPeerReplyV1) {
+			if path == "/v1/submit" && reply.Error == "" && reply.Submit.CommittedApplied && reply.Submit.CommittedRecoverable {
+				partialSubmits++
+			}
+			if path == "/v1/vector-prepare-status" && partialSubmits == 0 && !partialProbe &&
+				reply.NodeID == group.Peers[1].ID && reply.Error == "" && reply.VectorPreparation != nil && reply.VectorPreparation.Completion != nil {
+				reply.VectorPreparation.Completion = nil
+				partialProbe = true
+			}
+		})
+		partial, err := partialClient.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "prepare-first-generation")
+		if err != nil || partial != completion || !partialProbe || partialSubmits != 2 {
+			t.Fatalf("partial completion resume: completion=%+v probe=%v submits=%d err=%v", partial, partialProbe, partialSubmits, err)
+		}
+		// A changed frozen source under the same prepare key must fail before
+		// append even though the original durable guard can be recovered.
+		current, err := client.Status(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := completion.Command
+		v.Term, v.IndexPosition, v.CommandDigest = 0, 0, ""
+		v.SourceChecksum ^= 1
+		payload, err := commitlog.EncodeVectorPreparePayloadV1(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sections := []iwire.Section{
+			{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandVectorPrepareV1, Version: 1})},
+			collectionNameRef("docs"),
+			{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, current.Groups[0].CatalogVersion)},
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte("prepare-first-generation/prepare")},
+			{ID: iwire.SectionVectorPrepareV1, Bytes: payload},
+		}
+		validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conflictEntry, err := iwire.AppendDeterministicEntry(nil, validated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		route, err := client.Route(ctx, owner, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+		ApplyClusterRouteMetadata(&metadata, request, route)
+		before, err := client.Status(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Submit(ctx, owner, conflictEntry, metadata); err == nil || !strings.Contains(err.Error(), "prepare resume idempotency key conflicts") {
+			t.Fatalf("changed source reused durable prepare identity: %v", err)
+		}
+		after, err := client.Status(ctx, owner)
+		if err != nil || before.Groups[0].LastIndex != after.Groups[0].LastIndex || before.Groups[0].Applied != after.Groups[0].Applied || before.Groups[0].CatalogVersion != after.Groups[0].CatalogVersion {
+			t.Fatalf("changed-source refusal appended/applied: before=%+v after=%+v err=%v", before.Groups[0], after.Groups, err)
+		}
+		for _, arm := range []string{"command", "assets", "source", "cancel-source"} {
+			t.Run("poll-"+arm, func(t *testing.T) {
+				armCtx, armCancel := context.WithCancel(ctx)
+				defer armCancel()
+				submits := 0
+				initialProbe, injected := false, false
+				probe := controlledClient(func(path string, reply *fixedPeerReplyV1) {
+					if path == "/v1/submit" && reply.Error == "" && reply.Submit.CommittedApplied && reply.Submit.CommittedRecoverable {
+						submits++
+					}
+					state := reply.VectorPreparation
+					if path != "/v1/vector-prepare-status" || reply.Error != "" || state == nil || state.Completion == nil {
+						return
+					}
+					if submits == 0 && !initialProbe {
+						// Bypass only the completed fast path. The source and
+						// prepare submissions are real exact-idempotency retries.
+						state.Completion = nil
+						initialProbe = true
+						return
+					}
+					if reply.NodeID != group.Peers[1].ID || injected {
+						return
+					}
+					if arm == "cancel-source" && submits == 1 {
+						state.Source.Checksum ^= 1
+						injected = true
+						armCancel()
+					} else if arm != "cancel-source" && submits == 2 {
+						// Mutation occurs only after the real prepare submit
+						// succeeded, so this necessarily exercises poll(true).
+						switch arm {
+						case "command":
+							state.Completion.Command.Term++
+						case "assets":
+							state.Completion.AssetSetDigest += "-divergent"
+						case "source":
+							state.Source.Checksum ^= 1
+						}
+						injected = true
+					}
+				})
+				got, err := probe.PrepareVectorInitializationV1(armCtx, configs[0].NodeID, "prepare-first-generation")
+				wantSubmits := 2
+				if arm == "cancel-source" {
+					wantSubmits = 1
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("incomplete source did not honor cancellation: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "vector prepare voters disagree") {
+					t.Fatalf("completed voter disagreement was not refused: %v", err)
+				}
+				if !initialProbe || !injected || submits != wantSubmits || got != (collections.VectorPartitionPrepareCompletionV1{}) {
+					t.Fatalf("poll regression did not refuse with zero completion at intended phase: initial=%v injected=%v submits=%d got=%+v", initialProbe, injected, submits, got)
+				}
+				for _, node := range nodes {
+					actual, err := node.vectorPrepareStatusV1(ctx)
+					if err != nil || actual == nil || actual.Completion == nil || *actual.Completion != completion {
+						t.Fatalf("controlled reply altered real durable completion: status=%+v err=%v", actual, err)
+					}
+				}
+			})
+		}
 	}
 	retry, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "prepare-first-generation")
 	if err != nil || retry.Command != completion.Command || retry.AssetSetDigest != completion.AssetSetDigest {
@@ -411,13 +847,28 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 	if _, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "different-prepare"); err == nil {
 		t.Fatal("conflicting preparation request was adopted")
 	}
-	for _, node := range nodes {
+	localCompletions := make([]collections.VectorPartitionPrepareCompletionV1, len(nodes))
+	for i, node := range nodes {
 		local, err := node.vectorPrepareStatusV1(ctx)
 		if err != nil || local.Completion == nil || local.Completion.Command != completion.Command || local.Completion.AssetSetDigest != completion.AssetSetDigest {
 			t.Fatalf("voter completion=%+v err=%v", local, err)
 		}
+		localCompletions[i] = *local.Completion
 		if node.vector != nil || node.config.Vector != nil || node.vectorInitializationPhaseV1() != FixedPeerVectorPhaseInitializingV1 {
 			t.Fatal("prepare activated live pointers before restart")
+		}
+	}
+	checkDurableCompletions := func(stage string) {
+		t.Helper()
+		for i, node := range nodes {
+			c, _, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID, MinAppliedIndex: completion.Command.IndexPosition}, "docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, present, err := c.VectorPartitionPrepareCompletionV1(completion.Command.Index)
+			if err != nil || !present || actual != localCompletions[i] {
+				t.Fatalf("%s voter %s durable completion=%+v want=%+v present=%v err=%v", stage, node.config.NodeID, actual, localCompletions[i], present, err)
+			}
 		}
 	}
 	if loseResult {
@@ -458,7 +909,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 		t.Helper()
 		publicClient, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("strict search %s dial/HELLO: %v", id, err)
 		}
 		defer publicClient.Close()
 		result, err := publicClient.VectorSearchStrictV1(ctx, searchRequest(query))
@@ -501,6 +952,34 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			t.Fatalf("restart changed immutable intent/config: %v", err)
 		}
 	}
+	if preSnapshotOverlay {
+		request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: configs[0].VectorInitialization.IndexDefinition.Name, Generation: configs[0].VectorInitialization.Generation}, IdempotencyKey: []byte("pre-snapshot-overlay"), ID: []byte("pre-snapshot-overlay"), Vector: []float32{-1, -1}, Document: []byte(`{"embedding":[-1,-1],"kind":"pre-snapshot"}`), Deadline: time.Now().Add(30 * time.Second)}
+		client, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, insertErr := client.VectorInsertV1(ctx, request)
+		closeErr := client.Close()
+		if err := errors.Join(insertErr, closeErr); err != nil {
+			t.Fatal(err)
+		}
+		if err := public.ValidateInsertResponseV1(request, response); err != nil || response.CommitIndex <= completion.Command.IndexPosition {
+			t.Fatalf("pre-snapshot insert lacks actual visibility: %+v err=%v", response, err)
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				state, err := node.Status(ctx)
+				if err != nil || len(state.Groups) != 1 || state.Groups[0].Applied.Index < response.CommitIndex {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	for _, check := range servingChecks {
+		check(t, ctx, nodes)
+	}
+	checkDurableCompletions("before provider snapshot")
 	// Force an actual provider snapshot at the prepared/ACTIVE prefix. Fresh
 	// insert below is a genuine Raft tail entry after this snapshot.
 	for _, node := range nodes {
@@ -621,7 +1100,19 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 	// A known leader and a successful routed search do not prove that every
 	// local follower FSM has caught up. Keep the real retry prefix required.
 	waitInsertPrefix(replay.CommitIndex)
+	checkDurableCompletions("snapshot-plus-tail reopen")
+	for _, node := range nodes {
+		if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
+			t.Fatalf("voter %s did not recover prepared serving state", node.config.NodeID)
+		}
+		if err := errors.Join(node.requirePreparedVectorCurrentDBV1(), node.requirePreparedVectorCatalogV1()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	search("fresh-y", []float32{0, 1})
+	if preSnapshotOverlay {
+		search("pre-snapshot-overlay", []float32{-1, -1})
+	}
 	for i, node := range nodes {
 		c, _, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID, MinAppliedIndex: replay.CommitIndex}, "docs")
 		if err != nil {
