@@ -24,13 +24,14 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 3, false)
 }
 
 // This recovery witness acknowledges a live overlay before the physical Raft
@@ -40,15 +41,208 @@ func TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1(t *testi
 }
 
 func TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 4)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 4, false)
+}
+
+// Pause after coordinator planning, then delegate to the actual TCP shard and
+// its real Raft ReadIndex. No production hook or fabricated search result.
+func TestFixedPeerVectorOwnerSearchAdmissionRealRaftV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 3, false, func(t *testing.T, parent context.Context, nodes []*FixedPeerTCPRuntimeV1) {
+		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+		defer cancel()
+		group := nodes[0].config.Groups[0]
+		leader, err := nodes[0].client.leader(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var owner *FixedPeerTCPRuntimeV1
+		for _, node := range nodes {
+			if node.config.NodeID == leader {
+				owner = node
+			}
+		}
+		if owner == nil || owner.vector == nil {
+			t.Fatal("missing actual prepared owner")
+		}
+		backend, err := owner.vector.ensureBackendV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator := backend.opts.Topology.Coordinator()
+		delegate := coordinator.dispatcher
+		planned := make(chan VectorPartitionShardSearchRequestV1, 2)
+		resume := make(chan struct{})
+		var release sync.Once
+		unpause := func() { release.Do(func() { close(resume) }) }
+		defer unpause()
+		var calls atomic.Int32
+		var workers sync.WaitGroup
+		defer func() {
+			cancel()
+			unpause()
+			workers.Wait()
+		}()
+		// Installed before either request; later requests bypass the two pauses.
+		coordinator.dispatcher = VectorPartitionShardSearchDispatcherFuncV1(func(callCtx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+			if calls.Add(1) <= 2 {
+				select {
+				case planned <- request:
+				case <-callCtx.Done():
+					return VectorPartitionShardSearchResponseV1{}, callCtx.Err()
+				}
+				select {
+				case <-resume:
+				case <-callCtx.Done():
+					return VectorPartitionShardSearchResponseV1{}, callCtx.Err()
+				}
+			}
+			return delegate.DispatchVectorPartitionShardSearchV1(callCtx, request)
+		})
+		generation := public.GenerationIDV1{Index: owner.config.VectorInitialization.IndexDefinition.Name, Generation: owner.config.VectorInitialization.Generation}
+		request := public.SearchRequestV1{Version: 1, Generation: generation, Query: []float32{1, 0}, Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 8, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}, Deadline: time.Now().Add(30 * time.Second)}
+		type searchReply struct {
+			response public.SearchResponseV1
+			err      error
+		}
+		searches := make(chan searchReply, 2)
+		for i := 0; i < 2; i++ {
+			reader, err := DialContext(ctx, "tcp", owner.servingVectorConfigV1().PublicAddresses[owner.config.NodeID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				response, err := reader.VectorSearchStrictV1(ctx, request)
+				searches <- searchReply{response, err}
+			}()
+		}
+		plans := make([]VectorPartitionShardSearchRequestV1, 2)
+		for i := range plans {
+			select {
+			case plans[i] = <-planned:
+			case <-ctx.Done():
+				t.Fatal("two concurrent readers did not reach the real shard boundary")
+			}
+		}
+		if plans[0].LiveCoverage == 0 || plans[0].LiveRevision != plans[1].LiveRevision || plans[0].LiveCoverage != plans[1].LiveCoverage {
+			t.Fatalf("readers did not plan the same covered live identity: %+v %+v", plans[0], plans[1])
+		}
+		// Deterministic old-source witness: both genuine plans leave the old
+		// mutation mutex available for publication at this exact boundary.
+		if owner.vector.mutationMu.TryLock() {
+			owner.vector.mutationMu.Unlock()
+			t.Fatal("planned strict searches did not exclude actual owner publication")
+		}
+		writer, err := DialContext(ctx, "tcp", owner.servingVectorConfigV1().PublicAddresses[owner.config.NodeID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer writer.Close()
+		insert := public.InsertRequestV1{Version: 1, Generation: generation, IdempotencyKey: []byte("owner-search-admission"), ID: []byte("admission-minus-x-plus-y"), Vector: []float32{-1, 1}, Document: []byte("{\"embedding\":[-1,1],\"kind\":\"admission\"}"), Deadline: time.Now().Add(30 * time.Second)}
+		type insertReply struct {
+			response public.InsertResponseV1
+			err      error
+		}
+		inserted := make(chan insertReply, 1)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			response, err := writer.VectorInsertV1(ctx, insert)
+			inserted <- insertReply{response, err}
+		}()
+		// The existing exclusive Lock queues behind both reader leases. Probe
+		// its RW reader-side behavior without making the old test-only overlay
+		// require a new method on the old sync.Mutex.
+		rw, ok := any(&owner.vector.mutationMu).(interface {
+			TryRLock() bool
+			RUnlock()
+		})
+		if !ok {
+			t.Fatal("owner admission does not preserve concurrent readers")
+		}
+		tick := time.NewTicker(time.Millisecond)
+		for rw.TryRLock() {
+			rw.RUnlock()
+			select {
+			case <-ctx.Done():
+				tick.Stop()
+				t.Fatal("actual public insert did not queue exclusive admission")
+			case <-tick.C:
+			}
+		}
+		tick.Stop()
+		select {
+		case reply := <-inserted:
+			t.Fatalf("insert completed before planned readers retired: %+v err=%v", reply.response, reply.err)
+		default:
+		}
+		// No retry: each response uses its original plan and actual native shard.
+		unpause()
+		for i := 0; i < 2; i++ {
+			select {
+			case reply := <-searches:
+				c := reply.response.Counters
+				if reply.err != nil || reply.response.Generation != generation || len(reply.response.Neighbors) != 1 || reply.response.Neighbors[0].ID != "base-x" || reply.response.Neighbors[0].Score != 1 || c.SelectedPartitions == 0 || c.HNSWServedPartitions != c.SelectedPartitions || c.ExactScanPartitions != 0 || c.ReadProofs == 0 {
+					t.Fatalf("planned native proof search failed: %+v err=%v", reply.response, reply.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("native searches did not finish")
+			}
+		}
+		var mutation public.InsertResponseV1
+		select {
+		case reply := <-inserted:
+			mutation = reply.response
+			if reply.err != nil {
+				t.Fatal(reply.err)
+			}
+		case <-ctx.Done():
+			t.Fatal("actual insert did not finish after reader retirement")
+		}
+		if err := public.ValidateInsertResponseV1(insert, mutation); err != nil || mutation.LiveRevision <= plans[0].LiveRevision || mutation.OwnerGroup != string(group.ID) {
+			t.Fatalf("insert lacks later committed applied visibility: %+v err=%v", mutation, err)
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				state, err := node.Status(ctx)
+				if err != nil || len(state.Groups) != 1 || state.Groups[0].Applied.Index < mutation.CommitIndex {
+					return false
+				}
+			}
+			return true
+		})
+		self := request
+		self.Query = []float32{-1, 1}
+		current, err := writer.VectorSearchStrictV1(ctx, self)
+		c := current.Counters
+		if err != nil || current.Generation != generation || len(current.Neighbors) != 1 || current.Neighbors[0].ID != string(insert.ID) || current.Neighbors[0].Score < .99999 || current.Neighbors[0].Score > 1.00001 || c.SelectedPartitions == 0 || c.HNSWServedPartitions != c.SelectedPartitions || c.ExactScanPartitions != 0 || c.ReadProofs == 0 {
+			t.Fatalf("post-insert native search did not observe acknowledged row: %+v err=%v", current, err)
+		}
+		// Use the actual owner entrypoint while a writer holds admission.
+		owner.vector.mutationMu.Lock()
+		blockedCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+		refused, err := owner.searchVectorPartitionStrictV1(blockedCtx, request)
+		stop()
+		owner.vector.mutationMu.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) || len(refused.Neighbors) != 0 {
+			t.Fatalf("deadline-bound writer-held search was not refused: %+v err=%v", refused, err)
+		}
+		// Retirement must leave no leaked reader lease.
+		if !owner.vector.mutationMu.TryLock() {
+			t.Fatal("canceled search leaked owner admission")
+		}
+		owner.vector.mutationMu.Unlock()
+	})
 }
 
 func TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, true, false, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, true, false, 3, false)
 }
 
 func TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, true, 3)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, true, 3, false)
 }
 
 // Reuse genuinely committed preparation and its covered FSM result. The view
@@ -125,7 +319,7 @@ func checkPreparedVectorCatalogRecoveryV1(t *testing.T, ctx context.Context, nod
 	}
 }
 
-func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical bool, replicas int, preSnapshotOverlay ...bool) {
+func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical bool, replicas int, preSnapshotOverlay bool, servingChecks ...func(*testing.T, context.Context, []*FixedPeerTCPRuntimeV1)) {
 	var configs []FixedPeerTCPConfigV1
 	if replicas == 4 {
 		configs = fourNodeInitializationTestConfigsV1(t)
@@ -523,7 +717,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			t.Fatalf("restart changed immutable intent/config: %v", err)
 		}
 	}
-	if len(preSnapshotOverlay) != 0 && preSnapshotOverlay[0] {
+	if preSnapshotOverlay {
 		request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: configs[0].VectorInitialization.IndexDefinition.Name, Generation: configs[0].VectorInitialization.Generation}, IdempotencyKey: []byte("pre-snapshot-overlay"), ID: []byte("pre-snapshot-overlay"), Vector: []float32{-1, -1}, Document: []byte(`{"embedding":[-1,-1],"kind":"pre-snapshot"}`), Deadline: time.Now().Add(30 * time.Second)}
 		client, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
 		if err != nil {
@@ -546,6 +740,9 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			}
 			return true
 		})
+	}
+	for _, check := range servingChecks {
+		check(t, ctx, nodes)
 	}
 	checkDurableCompletions("before provider snapshot")
 	// Force an actual provider snapshot at the prepared/ACTIVE prefix. Fresh
@@ -678,7 +875,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 		}
 	}
 	search("fresh-y", []float32{0, 1})
-	if len(preSnapshotOverlay) != 0 && preSnapshotOverlay[0] {
+	if preSnapshotOverlay {
 		search("pre-snapshot-overlay", []float32{-1, -1})
 	}
 	for i, node := range nodes {
