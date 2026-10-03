@@ -119,7 +119,7 @@ def main():
     public_plan = {"provisional": True, "workflow": ["inspect3", "serve3", "initialize", "stop3", "start3", "qualify"],
                    "image": manifest["image"], "binary_sha256": manifest["binary_sha256"],
                    "nodes": [{k: n[k] for k in ("host", "image", "node", "root", "name")} for n in nodes],
-                   "driver_node": driver["node"], "source_rows": 3, "max_total_documents": 4}
+                   "driver_node": driver["node"], "planned_source_rows": 3, "planned_total_documents": 4}
     if not args.execute:
         print(json.dumps(public_plan, indent=2))
         return

@@ -4,6 +4,10 @@ import copy
 import importlib.util
 import json
 import pathlib
+import contextlib
+import io
+import sys
+from unittest import mock
 import tempfile
 
 spec = importlib.util.spec_from_file_location("harness", pathlib.Path(__file__).with_name("treedb_fixed_cluster_2host.py"))
@@ -45,6 +49,15 @@ def main():
 
         write_configs(configs)
         assert len(harness.plan(manifest, "offline")) == 3
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["harness", "--manifest", str(manifest_path), "--run-id", "offline"]):
+            with contextlib.redirect_stdout(output):
+                harness.main()
+        public_plan = json.loads(output.getvalue())
+        assert public_plan["planned_source_rows"] == 3 and public_plan["planned_total_documents"] == 4
+        assert "source_rows" not in public_plan and "max_total_documents" not in public_plan
         for field, value in [("name", "other"), ("metric", "l2"), ("m", 3),
                              ("ef_construction", 9), ("ef_search", 9), ("strategy", "other")]:
             changed = copy.deepcopy(configs)

@@ -23,6 +23,7 @@ type FixedPeerVectorBootstrapV1 struct {
 	Prepare      collections.VectorPartitionPrepareCompletionV1
 }
 type FixedPeerVectorQualificationV1 struct {
+	Prepare       collections.VectorPartitionPrepareCompletionV1
 	Before, After public.SearchResponseV1
 	Insert, Retry public.InsertResponseV1
 	Readiness     []FixedPeerReadinessV1
@@ -252,10 +253,60 @@ func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, re
 	}
 	report.Stage = "prepare"
 	report.Prepare, err = c.PrepareVectorInitializationV1(ctx, c.config.NodeID, requestID)
+	if err == nil && report.Prepare.Command.SourceRowCount != 3 {
+		err = fmt.Errorf("fixture requires exactly3 prepared source rows; observed %d", report.Prepare.Command.SourceRowCount)
+	}
 	if err == nil {
 		report.Stage = "prepared-restart-required"
 	}
 	return
+}
+
+// fixturePreparationV1 only reads existing authenticated durable completions.
+// Missing observations may converge; completed mismatches refuse immediately.
+// This proves the frozen preparation count, not current collection cardinality.
+func (c *FixedPeerTCPClientV1) fixturePreparationV1(ctx context.Context, requestID string) (observed collections.VectorPartitionPrepareCompletionV1, err error) {
+	if _, ok := ctx.Deadline(); !ok {
+		return observed, fmt.Errorf("bounded operation context requires a deadline")
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return observed, fmt.Errorf("fixture preparation observation incomplete: %w", err)
+		}
+		var first *collections.VectorPartitionPrepareCompletionV1
+		pending := false
+		for _, peer := range c.config.Groups[0].Peers {
+			reply, e := c.call(ctx, peer.ID, "vector-prepare-status", fixedPeerRequestV1{}, false)
+			state := reply.VectorPreparation
+			if e != nil || state == nil || state.Completion == nil {
+				pending = true
+				continue
+			}
+			completion := state.Completion
+			observed = *completion
+			v := completion.Command
+			if v.ValidateV1() != nil || v.Operation != "prepare" || v.Term == 0 ||
+				state.RequestID != requestID+"/prepare" || v.SourceRowCount != 3 ||
+				state.Source != (collections.VectorPartitionSourceIdentityV1{Generation: v.SourceGeneration, Checksum: v.SourceChecksum, SchemaHash: v.SourceSchemaHash, RowCount: v.SourceRowCount}) {
+				return observed, fmt.Errorf("fixture preparation requires matching request and exactly3 prepared source rows; observed request=%q rows=%d", state.RequestID, v.SourceRowCount)
+			}
+			if first == nil {
+				first = completion
+			} else if completion.Command != first.Command || completion.AssetSetDigest != first.AssetSetDigest {
+				return observed, fmt.Errorf("fixture preparation completed voters disagree")
+			}
+		}
+		if !pending && first != nil {
+			return *first, nil
+		}
+		select {
+		case <-ctx.Done():
+			return observed, fmt.Errorf("fixture preparation observation incomplete: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // QualifyVectorFixtureV1 runs after clean restart. It verifies exact known
@@ -268,6 +319,10 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		err = fmt.Errorf("bounded operation context requires a deadline")
+		return
+	}
+	report.Prepare, err = c.fixturePreparationV1(ctx, requestID)
+	if err != nil {
 		return
 	}
 	v := c.config.VectorInitialization
