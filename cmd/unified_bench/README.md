@@ -885,10 +885,13 @@ CPU and allocation artifact phase names are `quicksilver_hits`,
 `quicksilver_misses`, `quicksilver_mixed`, and `quicksilver_concurrent`.
 `-cpuprofile-tests` and `-allocsprofile-tests` select these exact names. Checkpoint
 CPU artifacts use `quicksilver_initial` and `quicksilver_final`, selectable with
-`-checkpoint-cpuprofile-tests`; the concurrent writer's checkpoint cost appears
-in the concurrent CPU capture. Per-engine CPU captures stop after reader join,
-before quantile sorting and writer drain. Allocation delta profiles also include
-small phase orchestration, stats and summary work. Shared `block.pprof`,
+`-checkpoint-cpuprofile-tests`. The concurrent CPU capture includes writer and
+checkpoint work only while it overlaps the readers: per-engine CPU captures
+stop after reader join, before quantile sorting and writer drain. A slow final
+writer batch or checkpoint can drain after that capture ends. Allocation delta
+profiles finish after writer drain and quantile sorting, and also include phase
+orchestration, stats and summary work. Update/checkpoint timings, composition
+time and final reopen proof still cover the completed writer. Shared `block.pprof`,
 `mutex.pprof`, and `trace.out` cover the **entire suite across all selected
 engines**, including setup and verification; they are process observations.
 
@@ -902,8 +905,10 @@ are empirical samples, not a production SLO. Once a reader fills its share of
 the sample budget, its quantiles retain earlier samples; maximum still covers
 the entire successful read window. Process MemStats deltas and
 normalized B/op/allocs/op cover the reader interval, including engine background
-activity and, in the concurrent phase, the writer. They exclude fixture creation,
-quantile sorting and profiler stop; they are not isolated engine allocations.
+activity and, in the concurrent phase, writer work overlapping the readers.
+Writer tail drain after reader join is outside these process metrics. They
+exclude fixture creation, quantile sorting and profiler stop; they are not
+isolated engine allocations.
 The reusable fixture holds 65,536 IDs and both present/absent keys (4,718,592 bytes)
 plus one 8,000,000-byte sample backing buffer, partitioned across readers. No
 whole payload corpus or per-read key allocation is retained. Small goroutine,

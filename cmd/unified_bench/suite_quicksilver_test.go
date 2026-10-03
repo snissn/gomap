@@ -114,6 +114,7 @@ type quicksilverFailSnapshotDB struct {
 	active  atomic.Int32
 	entered chan struct{}
 	once    sync.Once
+	read    func([]byte) ([]byte, error)
 }
 
 func (d *quicksilverFailSnapshotDB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
@@ -123,8 +124,11 @@ func (d *quicksilverFailSnapshotDB) AcquireReadSnapshot() (kvstore.ReadSnapshot,
 
 type quicksilverFailSnapshot struct{ d *quicksilverFailSnapshotDB }
 
-func (s *quicksilverFailSnapshot) Get([]byte) ([]byte, error) {
+func (s *quicksilverFailSnapshot) Get(key []byte) ([]byte, error) {
 	s.d.once.Do(func() { close(s.d.entered) })
+	if s.d.read != nil {
+		return s.d.read(key)
+	}
 	return nil, errors.New("injected read failure")
 }
 func (s *quicksilverFailSnapshot) GetAppend(k, dst []byte) ([]byte, error) { return s.Get(k) }
@@ -146,10 +150,49 @@ func TestQuicksilverErrorJoins(t *testing.T) {
 	if d.active.Load() != 0 {
 		t.Fatal("snapshot leaked")
 	}
-	// The sibling failure path cancels and joins readers when the writer fails.
-	_, err = quicksilverReadPhase(d, c, newQuicksilverFixture(c), 3, nil, func(context.Context) error { return errors.New("injected writer failure") }, nil)
-	if err == nil || !strings.Contains(err.Error(), "injected writer failure") || d.active.Load() != 0 {
-		t.Fatalf("writer failure cleanup: %v", err)
+	// Successful reads cannot independently cancel the writer-error path.
+	c.Workers, c.Reads = 1, 257
+	memory := newBatchDeleteRangeMemoryDB("memory")
+	if err := quicksilverWrite(memory, c, 0, c.Keys, quicksilverUpdateStride(c.Keys), false); err != nil {
+		t.Fatal(err)
+	}
+	resume := make(chan struct{})
+	d = &quicksilverFailSnapshotDB{entered: make(chan struct{}), read: func(key []byte) ([]byte, error) {
+		<-resume
+		return memory.Get(key)
+	}}
+	failureCtx := make(chan context.Context, 1)
+	done := make(chan struct{})
+	var phase quicksilverPhase
+	go func() {
+		defer close(done)
+		phase, err = quicksilverReadPhase(d, c, newQuicksilverFixture(c), 0, nil, func(ctx context.Context) error {
+			<-d.entered
+			failureCtx <- ctx
+			return errors.New("injected writer failure")
+		}, nil)
+	}()
+	var ctx context.Context
+	select {
+	case ctx = <-failureCtx:
+	case <-time.After(5 * time.Second):
+		close(resume)
+		t.Fatal("writer did not reach the valid-read barrier")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Error("writer failure did not cancel the live reader context")
+	}
+	close(resume) // Let the valid first read finish after writer cancellation.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readers did not join after writer failure")
+	}
+	// Cancellation is polled every 256 reads; the 257th read must not execute.
+	if err == nil || err.Error() != "injected writer failure" || phase.Ops != 256 || d.active.Load() != 0 {
+		t.Fatalf("writer failure cleanup: ops=%d active=%d err=%v", phase.Ops, d.active.Load(), err)
 	}
 }
 
