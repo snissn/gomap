@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -22,5 +24,20 @@ func TestReadFixedPeerConfig(t *testing.T) {
 				t.Fatalf("config=%+v err=%v", config, err)
 			}
 		})
+	}
+}
+
+func TestFixedPeerFixtureCLIRejectsBeforeConfigOrNetwork(t *testing.T) {
+	for _, args := range [][]string{
+		{"-mode", "initialize"},
+		{"-mode", "qualify", "-request-id", "bad/id"},
+		{"-mode", "initialize", "-request-id", "good", "-operation-timeout", "0s"},
+		{"-mode", "qualify", "-request-id", "good", "-operation-timeout", "11m"},
+		{"-mode", "initialize", "-request-id", "good", "-trusted-network-test"},
+	} {
+		var output bytes.Buffer
+		if err := runArgs(context.Background(), args, &output); err == nil || output.Len() != 0 {
+			t.Fatalf("args=%v err=%v output=%s", args, err, output.String())
+		}
 	}
 }
