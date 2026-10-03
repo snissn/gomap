@@ -1844,6 +1844,13 @@ bytes FramePayload
   - `3`: Zstandard
   Readers must fail closed on unknown non-zero block codec ids.
 
+Raw grouping policy changes do not change this frame encoding. Ordinary WAL-on
+raw batches cap K by the largest encoded value and the configured normalized
+block byte target; see [durable raw-frame read cost](value-log-lifecycle.md#13-durable-raw-frame-read-cost).
+Single oversized values, WAL-off ingest and dedicated split-leaf lanes retain
+their respective policies. Readers still verify the complete persisted record
+CRC before selecting a subvalue.
+
 ### 7.2 Compact split-leaf payload format
 
 When TreeDB writes outer leaf pages into the split `leaf_vlog` directory, it

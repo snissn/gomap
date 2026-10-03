@@ -558,6 +558,19 @@ Coverage:
   - `TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint`
   - `TestValuePlacement_PerDomainThreshold_ReopenDurability`
 
+- `TreeDB/caching/vlog_raw_read_amplification_test.go`:
+  - `TestValueLogRawFrames_DurableSizingAndFallback` checks persisted raw grouping
+    for ordinary and queued planners, small/mixed/oversized values, configured
+    byte targets, explicit off and auto raw selection, missing-dictionary and
+    writer-capability fallback, exact reads after writer close/reopen, and
+    checksum rejection of changed persisted payloads. It also characterizes the
+    separate auto block-bootstrap rejection policy, which can persist raw frames
+    exceeding the chooser-selected raw byte target.
+- `TreeDB/caching/vlog_compression_selector_test.go`:
+  - `TestChooseValueLogRawWriteK_WALOffRawPolicyUnchanged` preserves ingest K.
+  - `TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads`
+    preserves the dedicated leaf-lane cap.
+
 ## 2. Recovery Coherence
 
 Invariant:

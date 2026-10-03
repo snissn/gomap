@@ -1908,7 +1908,7 @@ func (db *DB) clampLiveLeafLogFrameK(l *lane, k int) int {
 	return k
 }
 
-func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, paused bool) int {
+func (db *DB) chooseValueLogRawWriteK(l *lane, records, maxPayloadBytes int, autoRawBypass, paused bool) int {
 	if records <= 1 {
 		return 1
 	}
@@ -1935,6 +1935,17 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, pause
 	}
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
+	}
+	if db != nil && !db.disableJournal && !db.isLiveLeafLogLane(l) && maxPayloadBytes > 0 {
+		// Verified point reads checksum the whole raw frame. Use the largest
+		// value, not the average, so mixed batches also respect the byte target.
+		maxK := valuelog.NormalizeBlockTargetCompressedBytes(db.valueLogBlockTargetBytes) / maxPayloadBytes
+		if maxK < 1 {
+			maxK = 1
+		}
+		if k > maxK {
+			k = maxK
+		}
 	}
 	return db.clampLiveLeafLogFrameK(l, k)
 }

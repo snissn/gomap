@@ -581,7 +581,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, 4096, tc.autoRawBypass, tc.paused)
 			if got != leafLogBlockMaxK {
 				t.Fatalf("live leaf-log raw K=%d, want capped K=%d", got, leafLogBlockMaxK)
 			}
@@ -589,7 +589,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 	}
 }
 
-func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
+func TestChooseValueLogRawWriteK_WALOffRawPolicyUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		configure     func(*DB)
@@ -608,6 +608,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 		{
 			name: "off current raw K",
 			configure: func(db *DB) {
+				db.disableJournal = true
 				db.valueLogDictCurrentK.Store(uint32(leafLogBlockMaxK * 4))
 			},
 			want: leafLogBlockMaxK * 4,
@@ -621,7 +622,8 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 			want: 16,
 		},
 		{
-			name:          "auto raw bypass",
+			name:          "wal-off auto raw bypass",
+			configure:     func(db *DB) { db.disableJournal = true },
 			autoRawBypass: true,
 			want:          valuelog.MaxFrameK,
 		},
@@ -633,7 +635,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, 4096, tc.autoRawBypass, tc.paused)
 			if got != tc.want {
 				t.Fatalf("non-leaf raw K=%d, want %d", got, tc.want)
 			}
