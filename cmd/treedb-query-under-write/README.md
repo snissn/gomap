@@ -100,3 +100,118 @@ native overlap. Write-phase cost attribution and broader resource qualification
 remain pending; no sustained performance or whole-lifetime peak is claimed.
 #4250 still owns sustained throughput, p99, representative recall and resource
 claims; RF4 on two hosts with two voters each cannot survive either host loss.
+
+## Quiescent representative recall (#4959 first checkpoint)
+
+The optional `-mode quiescent-recall` is read-only. It admits the unchanged
+10,000-row/128D export with sixteen canonical queries and topK10, then makes
+exactly sixteen serial public `VectorSearchStrictV1` calls. Default workload
+flags and populations remain unchanged. Supported phases are `pre` (after
+successful dataset qualification, before any probe writes) and `post-only`
+(after a complete successful probe). This mode does not compare paired packets,
+issue mutations, retry searches, compute concurrent recall, or qualify sustained
+latency/QPS/p99. Low recall is an observed quality value, not an invented gate.
+
+    treedb-query-under-write -mode quiescent-recall \
+      -config /inputs/node-c.json -bootstrap-receipt /receipts/qualify.json \
+      -dataset /inputs/dataset -provenance /receipts/recall-provenance.json \
+      -phase post-only -probe-receipt /receipts/probe.jsonl \
+      -run-id recall01 -timeout 120s -rpc-timeout 10s
+
+For `pre`, omit `-probe-receipt`. Explicit `-fresh-inserts` refuses in this
+mode. Configured EfSearch must be at least10. Queries retain configured EfSearch,
+probes1, generation_snapshot, request/response1MiB, candidates8MiB and merge32
+limits; setup and all-voter readiness stay outside per-call intervals.
+
+The manifest, every file length/SHA, finite normalized FP32 bytes, IDs and
+sixteen imported truth rows are frozen before networking. Input caps are:
+config8MiB, qualifier4MiB, manifest/provenance/truth64KiB each, probe16MiB,
+aggregate32MiB. Only the exact 10k/128D/16/top10 schema is supported. The oracle
+uses `collections.VectorPartitionCanonicalScoreContractV1` and its exported
+scorer: FP32 normalization, binary64 dot accumulation, FP32 score rounding,
+score-descending/stable-ID-ascending ordering. Corpus-only exact IDs must match
+the unchanged export. Augmented truth adds the three seed anchors, qualification
+fresh-y and every proven unique ordinary probe insert; exact retry adds no row.
+
+Root supplies strict JSON provenance with these case-sensitive exported keys:
+
+    {
+      "Version": 1, "Phase": "post-only",
+      "CampaignID": "rf4trial10", "BootstrapRequestID": "rf4trial10",
+      "ConfigSHA256": "<raw config SHA256>",
+      "BootstrapSHA256": "<raw qualify JSON SHA256>",
+      "ManifestSHA256": "<raw manifest SHA256>",
+      "RuntimeSourceHead": "<40 lowercase hex>",
+      "ServerBinarySHA256": "<64 lowercase hex>",
+      "QualificationSourceSHA256": "750dde6bc3866287e3201e62be9b88dc6f5e0d7b2a947d16da0e5efba074e769",
+      "InitializationReceiptSHA256": "<complete successful initialize receipt>",
+      "CleanReopenReceiptSHA256": "<successful all-voter clean-reopen receipt>",
+      "ProbeSHA256": "<raw successful planned/result JSONL SHA256>",
+      "ProbeBinarySHA256": "<that probe executable SHA256>",
+      "ProbeRunID": "<that mutation run ID>",
+      "Roots": {"node-a":"/owned/a","node-b":"/owned/b","node-c":"/owned/c","node-d":"/owned/d"},
+      "Hosts": {"node-a":"host1","node-b":"host1","node-c":"host2","node-d":"host2"},
+      "RootAccepted": true, "InitializationSucceeded": true,
+      "CleanReopenSucceeded": true, "ExclusiveWriterStopped": true
+    }
+
+Pre provenance has Phase=pre and empty/omitted ProbeSHA256, ProbeBinarySHA256,
+ProbeRunID. Root must inspect and accept the referenced complete create/seed/
+chunk/prepare/clean-reopen receipts, exact source/ELF/config/owned roots and writer
+inventory before authoring this attestation. References and booleans are operator
+evidence bindings, not independent cryptographic proof or serving capabilities.
+The initialization source tuple/completion and actual qualifier dataset identity
+are cross-checked. Qualification responses omit original request/vector bytes,
+so this slice reconstructs only the explicitly pinned qualifier source algorithm
+and exact namespace `<BootstrapRequestID>/dataset-<ManifestSHA256>-fresh-y`,
+with vector [0,1,0,...]. Changed qualifier source contracts require a reviewed
+harness update; arbitrary missing insert-vector provenance refuses.
+
+Post-only requires exactly the existing successful planned/result probe events,
+matching frozen config/bootstrap/executable/run, every supported planned request,
+logical hashes excluding operation deadlines, all succeeded counts, valid
+single-owner next-revision/increasing-commit receipts, byte-identical logical
+retry, overlap accounting and final all-voter ACTIVE/applied-prefix observations.
+Any UNKNOWN, failed, canceled, unissued, missing, extra or conflicting write
+population refuses. The probe executable identity is separate from this new
+recall executable identity. The actual document embedding must match its public
+insert vector. There is no prefix-only acceptance of a failed probe.
+
+Root stops/joins the prior driver and excludes every other writer for the whole
+recall observation. Current authenticated all-four ACTIVE readiness is captured
+before and after through the highest acknowledged commit (including retry).
+Those observations prove prefix readiness; they do not prove writer exclusion
+or attach an applied-index/live-revision watermark to an individual search.
+The public response has no such watermark. Quiescence is operationally enforced
+and retained in root's campaign evidence. Running trial10 cannot produce a
+retrospective pre receipt; its successful ledger may support post-only evidence.
+
+Distinct `fixed_cluster_quiescent_recall_v1` planned/result events retain source/
+input/runtime/provenance identities, deterministic live-population digest/count,
+corpus and augmented scored truth, full bounded responses/counters/timings,
+request hashes/deadlines, monotonic call intervals, per-query recall and counts.
+Generation, exactly10 distinct known IDs, canonical scores/order, native HNSW
+for every selected partition, zero exact scans and positive read proofs are
+correctness requirements. Returning an approximate set with recall<1 is allowed
+and recorded. No exact service fallback exists; exact oracle work is client-side
+setup. Failures stop at the first call, retain its response when bounded, and
+leave subsequent queries unissued. Mean recall is supplied only for sixteen
+successful calls. Each event contains at most 512 KiB of JSON plus one newline
+(pair <= 1 MiB + 2 bytes); each retained
+response at32KiB and error summaries at2KiB plus a full-error SHA256.
+
+The overall recall timeout starts at mode entry, before input/executable reads,
+JSON admission, FP32 conversion, oracle construction, planned output, readiness
+and native searches. One context is shared across those stages; synchronous read
+checks and per-row/operation/query oracle checks stop subsequent work after
+cancellation. No goroutine is created to race an I/O call against a timer.
+An already blocking OS open/read/write/close, bounded buffered JSON decode,
+hash or sort must return before the next cancellation check; the flag is not a
+hard process wall-time/preemption guarantee. Root retains an outer process
+wall-time limit. Failure-result output and cleanup remain best-effort after
+cancellation so partial evidence can be retained, and can themselves block on
+the output/filesystem; root must preserve an outer-timeout failure packet.
+
+Root validation: existing driver normal/race checks plus tests named
+TestRecall*. Source-only construction does not establish runtime qualification.
+The full #4959 sustained windows and #4250 serving/capacity gates remain open.
