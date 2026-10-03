@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -158,7 +161,7 @@ func TestWindowWarmupOracleExcludedAndNormalCutoffDrains(t *testing.T) {
 	if r.WarmupCounts.Succeeded != 64 || r.WarmupCompletions != 64 || r.Counts.Attempted != 0 || !r.MeasuredOriginUTC.IsZero() {
 		t.Fatalf("warmup leaked: %+v", r)
 	}
-	if err := windowPhase(context.Background(), clients, &in, &r, false, &budget); err != nil {
+	if err := windowMeasure(context.Background(), clients, &in, &r, &budget, nil); err != nil {
 		t.Fatal(err)
 	}
 	windowSummarize(&r)
@@ -369,5 +372,162 @@ func TestWindowCanceledSetupAndConnectRetainUnissued(t *testing.T) {
 	clients, err := windowConnect(ctx, 4, time.Second, func(context.Context) (ownedVectorClient, error) { calls++; return nil, errors.New("must not dial") })
 	if !errors.Is(err, context.Canceled) || len(clients) != 0 || calls != 0 {
 		t.Fatalf("canceled connect clients=%d calls=%d err=%v", len(clients), calls, err)
+	}
+}
+
+// Read a complete driver receipt, then atomically install its exact bytes as
+// acknowledgment. Temporary files live outside the gate's strict inventory.
+func windowTestGateReceipt(t *testing.T, ctx context.Context, dir, phase string) ([]byte, windowResourceBoundary) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		raw, err := os.ReadFile(filepath.Join(dir, phase+".json"))
+		var b windowResourceBoundary
+		if err == nil && json.Unmarshal(raw, &b) == nil {
+			return raw, b
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+			return nil, b
+		case <-ticker.C:
+		}
+	}
+}
+func windowTestGateAck(t *testing.T, dir, phase string, raw []byte) {
+	t.Helper()
+	temporary := filepath.Join(t.TempDir(), "ack")
+	if err := os.WriteFile(temporary, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, filepath.Join(dir, phase+".ack")); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestWindowResourceGateBoundariesExcludeWaitAndKeepClient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	gate, err := newWindowResourceGate(ctx, dir, "gate-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, r := windowTestReport(t)
+	r.RequestedDuration = 50 * time.Millisecond
+	client := &windowTestClient{fakeClient: fakeClient{search: func(call context.Context, _ public.SearchRequestV1) (public.SearchResponseV1, error) {
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-call.Done():
+			return public.SearchResponseV1{}, call.Err()
+		}
+		return windowTestResponse(&r.Admission), nil
+	}}}
+	budget := 1 << 20
+	complete := make(chan error, 1)
+	go func() { complete <- windowMeasure(ctx, []ownedVectorClient{client}, &in, &r, &budget, gate) }()
+	readyRaw, ready := windowTestGateReceipt(t, ctx, dir, "ready")
+	if !ready.MeasuredOriginUTC.IsZero() || ready.ActualDurationNS != 0 || ready.RunID != "gate-test" || ready.Phase != "ready" {
+		t.Fatalf("ready=%+v", ready)
+	}
+	// A gate is released by a matching acknowledgment, never by elapsed time.
+	select {
+	case err := <-complete:
+		t.Fatalf("ready wait escaped: %v", err)
+	default:
+	}
+	release := time.Now()
+	windowTestGateAck(t, dir, "ready", readyRaw)
+	doneRaw, done := windowTestGateReceipt(t, ctx, dir, "done")
+	if done.MeasuredOriginUTC.Before(release) || done.ActualDurationNS < int64(75*time.Millisecond) || done.Phase != "done" || done.Nonce != ready.Nonce {
+		t.Fatalf("done=%+v", done)
+	}
+	if client.closed.Load() != 0 {
+		t.Fatal("client closed before done acknowledgment")
+	}
+	select {
+	case err := <-complete:
+		t.Fatalf("done wait escaped: %v", err)
+	default:
+	}
+	windowTestGateAck(t, dir, "done", doneRaw)
+	if err := <-complete; err != nil {
+		t.Fatal(err)
+	}
+	if r.ActualDurationNS != done.ActualDurationNS || r.MeasuredOriginUTC != done.MeasuredOriginUTC || r.AttemptsQPS != float64(r.Counts.Attempted)/(float64(done.ActualDurationNS)/float64(time.Second)) {
+		t.Fatal("done wait changed measured duration/QPS")
+	}
+	if len(r.ResourceBoundaries) != 2 || r.ResourceBoundaries[0].AcknowledgedUTC.IsZero() || r.ResourceBoundaries[1].AcknowledgedUTC.IsZero() {
+		t.Fatal("missing acknowledgment evidence")
+	}
+	if _, err := newWindowResourceGate(ctx, dir, "another-run"); err == nil {
+		t.Fatal("reused gate directory accepted")
+	}
+}
+func TestWindowResourceGateBindingBoundsAndCancellation(t *testing.T) {
+	for _, kind := range []string{"wrong_run", "wrong_phase", "wrong_nonce", "oversized", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			dir := t.TempDir()
+			g, err := newWindowResourceGate(ctx, dir, "bound-run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var r windowReport
+			result := make(chan error, 1)
+			go func() { result <- g.wait(ctx, "ready", &r) }()
+			raw, b := windowTestGateReceipt(t, ctx, dir, "ready")
+			switch kind {
+			case "wrong_run":
+				b.RunID = "stale-run"
+				raw, _ = json.Marshal(b)
+			case "wrong_phase":
+				b.Phase = "done"
+				raw, _ = json.Marshal(b)
+			case "wrong_nonce":
+				b.Nonce = "stale-nonce"
+				raw, _ = json.Marshal(b)
+			case "oversized":
+				raw = bytes.Repeat([]byte("x"), windowResourceTokenBytes+1)
+			case "symlink":
+				if err := os.Symlink(filepath.Join(dir, "ready.json"), filepath.Join(dir, "ready.ack")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind != "symlink" {
+				windowTestGateAck(t, dir, "ready", raw)
+			}
+			if err := <-result; err == nil {
+				t.Fatal("invalid acknowledgment accepted")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	g, err := newWindowResourceGate(ctx, t.TempDir(), "cancel-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r windowReport
+	result := make(chan error, 1)
+	go func() { result <- g.wait(ctx, "ready", &r) }()
+	bounded, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	windowTestGateReceipt(t, bounded, g.dir, "ready")
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := newWindowResourceGate(context.Background(), "", "unused"); err != nil {
+		t.Fatal("default empty gate changed admission", err)
+	}
+	var disabled *windowResourceGate
+	if err := disabled.wait(context.Background(), "ready", &windowReport{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := disabled.wait(ctx, "done", &windowReport{}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }

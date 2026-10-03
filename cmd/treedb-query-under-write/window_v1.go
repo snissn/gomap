@@ -20,6 +20,7 @@ type windowOptions struct {
 	Admission                                     recallOptions
 	Concurrency, Warmup, MaxAttempts, OutputBytes int
 	Duration                                      time.Duration
+	ResourceGateDir                               string
 }
 type windowAttempt struct {
 	Ordinal, Worker                                          int
@@ -53,6 +54,8 @@ type windowReport struct {
 	Truncated                                                bool
 	RetainedAttemptBytes, PlannedEventBytes                  int
 	Error                                                    string
+	ResourceGateDir                                          string                   `json:",omitempty"`
+	ResourceBoundaries                                       []windowResourceBoundary `json:",omitempty"`
 }
 
 func windowValidate(o windowOptions) error {
@@ -372,7 +375,7 @@ func runReadWindow(parent context.Context, o windowOptions, output io.Writer) (r
 	ctx, cancel := context.WithTimeout(parent, o.Admission.Timeout)
 	defer cancel()
 	r := windowReport{Version: 1, Kind: "fixed_cluster_read_window_v1", Verdict: "FAILED", Concurrency: o.Concurrency,
-		WarmupPlanned: o.Warmup, MaxAttempts: o.MaxAttempts, OutputBytes: o.OutputBytes, RequestedDuration: o.Duration,
+		ResourceGateDir: o.ResourceGateDir, WarmupPlanned: o.Warmup, MaxAttempts: o.MaxAttempts, OutputBytes: o.OutputBytes, RequestedDuration: o.Duration,
 		Scope:        "operationally quiescent read-only closed-loop native observation; paced concurrent writes OPEN; no saturation/capacity/whole-lifetime resource peak claim",
 		Schedule:     "warmup ordinal=worker+n*concurrency; measured global admission ordinal; query=ordinal%16; budgets describe possible attempts, not promised issued population",
 		LatencyBasis: "one monotonic clock per phase; strict native client API call start/return only; loop QPS includes validation/retention and final drain, excludes input/oracle/dial/readiness/warmup",
@@ -397,6 +400,10 @@ func runReadWindow(parent context.Context, o windowOptions, output io.Writer) (r
 	}
 	r.Counts = counts{Planned: o.MaxAttempts, Unissued: o.MaxAttempts}
 	r.WarmupCounts = counts{Planned: o.Warmup, Unissued: o.Warmup}
+	gate, err := newWindowResourceGate(ctx, o.ResourceGateDir, o.Admission.RunID)
+	if err != nil {
+		return err
+	}
 	var in recallInput
 	if err := recallPrepare(ctx, o.Admission, &in, &r.Admission); err != nil {
 		return err
@@ -456,7 +463,7 @@ func runReadWindow(parent context.Context, o windowOptions, output io.Writer) (r
 	if err := windowPhase(ctx, clients, &in, &r, true, &budget); err != nil {
 		return err
 	}
-	if err := windowPhase(ctx, clients, &in, &r, false, &budget); err != nil {
+	if err := windowMeasure(ctx, clients, &in, &r, &budget, gate); err != nil {
 		return err
 	}
 	windowSummarize(&r)
