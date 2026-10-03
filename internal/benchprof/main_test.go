@@ -573,19 +573,19 @@ func TestQuicksilverProfileNamesFromExport(t *testing.T) {
 
 func TestQuicksilverThroughputInsights(t *testing.T) {
 	dir := t.TempDir()
-	raw := `{"runs":[{"results":{"quicksilver_mixed":{"TreeDB":42},"quicksilver_hits":{"LMDB":99,"TreeDB":100},"random_read":{"TreeDB":5}}}]}`
+	raw := `{"runs":[{"results":{"quicksilver_mixed":{"TreeDB":42},"quicksilver_hits":{"LMDB":99,"TreeDB":100,"TreeDB (bench_unsafe)":200},"random_read":{"TreeDB":5}}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), []byte(raw), 0644); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := loadQuicksilverOps(dir)
-	if err != nil || len(rows) != 3 {
+	if err != nil || len(rows) != 4 {
 		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
 	if rows[0].Phase != "quicksilver_hits" || rows[0].Engine != "LMDB" || rows[0].OpsPerSec != 99 {
 		t.Fatalf("unstable rows: %+v", rows)
 	}
 	md := renderMarkdown(report{QuicksilverOps: rows})
-	if !strings.Contains(md, "## Quicksilver Point Reads") || !strings.Contains(md, "| quicksilver_mixed | TreeDB | 42") {
+	if !strings.Contains(md, "## Quicksilver Point Reads") || !strings.Contains(md, "| quicksilver_mixed | TreeDB | 42") || !strings.Contains(md, "| quicksilver_hits | TreeDB (bench_unsafe) | 200") {
 		t.Fatalf("missing point read table: %s", md)
 	}
 }

@@ -380,7 +380,9 @@ these package packets are not benchprof profile-dir artifacts.
 The native `unified-bench -suite quicksilver` exports ordinary results and
 per-engine `quicksilver_hits/misses/mixed/concurrent` CPU/allocation captures.
 Initial/final checkpoint labels are loaded from `checkpoint_durations_seconds`
-so underscore-containing engine names parse correctly. `quicksilver_results.json`
+so underscore-containing engine names parse correctly. `TreeDB` and
+`TreeDB (bench_unsafe)` remain separate canonical result, stats, checkpoint and
+throughput-table labels when both adapters are selected. `quicksilver_results.json`
 contains the detailed workload oracle, timing, latency and process-allocation
 observations; it is supplementary to the canonical benchprof inputs. Shared
 block/mutex/trace artifacts cover the whole multi-engine suite, including setup

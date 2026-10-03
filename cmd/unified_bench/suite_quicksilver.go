@@ -756,6 +756,11 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		switch name {
 		case "leveldb", "leveldb_block_comp_on", "leveldb_block_comp_off":
 			return "", fmt.Errorf("quicksilver: %s is unsupported: its checkpoint closes/reopens the DB handle while concurrent readers are active", name)
+		case "lmdb":
+			// Each worker can hold one read transaction; the adapter uses LMDB's default reader table.
+			if c.Workers > 126 {
+				return "", fmt.Errorf("quicksilver: LMDB supports at most 126 read workers (default reader slots); got %d", c.Workers)
+			}
 		}
 	}
 	for _, selection := range []map[string]struct{}{cfg.CPUProfileTests, cfg.AllocsProfileTests} {

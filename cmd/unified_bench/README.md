@@ -822,13 +822,15 @@ keys are absent. `-keys` bounds either case for smoke runs.
 
 ```sh
 GOWORK=off go build -o bin/unified-bench ./cmd/unified_bench
-GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable
-# Fixed aggregate trace and counts at every reader width; GOMAXPROCS is independent.
-GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable \
+# durable is the cross-DB benchmark preset; TreeDB resolves command_wal_durable.
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable
+# The cross-DB preset keeps aggregate counts fixed; reader width and GOMAXPROCS are independent.
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
   -read-workers 32 -quicksilver-case structured256
 # Bounded correctness/profile rehearsal (not a throughput qualification).
 OUT=$(mktemp -d /tmp/quicksilver_profiles_XXXXXX)
-GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable \
+# durable is the cross-DB benchmark preset.
+GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
   -keys 8192 -read-workers 4 -quicksilver-reads 65536 \
   -quicksilver-duration 200ms -profile-dir "$OUT"
 ./bin/benchprof -profiles-dir "$OUT"
@@ -848,7 +850,10 @@ or exclude LevelDB. `Batcher` and `Checkpoint` are also required. Unsupported en
 names fail instead of disappearing from the selected set. LMDB remains optional:
 `GOWORK=off go build -tags lmdb -o bin/unified-bench ./cmd/unified_bench`. Its
 normal adapter provides owned snapshot reads and a force-sync checkpoint; the
-suite pins write-batch creation through commit/close to one OS thread.
+suite pins write-batch creation through commit/close to one OS thread. LMDB
+selections accept at most 126 read workers, its default reader-slot limit, for
+both snapshot and ordinary Get modes. Wider selections fail before any engine
+opens or loads data; the suite allows up to 1024 workers for other engines.
 
 Concurrent mixed readers run for `-quicksilver-duration` (default 4s). A paced
 writer updates `-quicksilver-updates` distinct keys (default min(40,000,keys)),
@@ -865,7 +870,9 @@ The suite prints its effective settings banner on stderr and a JSON array on
 stdout. With `-profile-dir`, benchprof prints artifact notices on stderr and
 also writes detailed `quicksilver_results.json` and canonical
 `benchprof_results.json/md`, then requires benchprof `insights.json/md/html`, including a point-read throughput
-table.
+table. The unsafe TreeDB adapter uses the distinct `TreeDB (bench_unsafe)`
+label in engine columns, results, stats, and checkpoint maps, so selecting it
+alongside `treedb` preserves both variants.
 The JSON records actual fixture/workers/GOMAXPROCS/stride, phase counts, latency
 quantiles/max, load/checkpoint/reopen/update timings, full proof counts, engine
 stats before/after phases, actual relative-file logical sizes, and registered

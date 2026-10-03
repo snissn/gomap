@@ -219,10 +219,24 @@ func TestQuicksilverReaderTimerExcludesWriterDrain(t *testing.T) {
 func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
 	c := quicksilverSmokeConfig()
 	reports := []quicksilverResult{
-		{Engine: "first", DBName: "First", wrapper: &fixedNameDB{name: "First"}, InitialCheckpointMS: 10, FinalCheckpointMS: 20, FinalStats: map[string]string{"test": "first"}},
-		{Engine: "second", DBName: "Second", wrapper: &fixedNameDB{name: "Second"}, InitialCheckpointMS: 30, FinalCheckpointMS: 40, FinalStats: map[string]string{"test": "second"}},
+		{Engine: "treedb", InitialCheckpointMS: 10, FinalCheckpointMS: 20},
+		{Engine: "treedb_bench_unsafe", InitialCheckpointMS: 30, FinalCheckpointMS: 40},
 	}
 	for engine := range reports {
+		open, err := GetDBFactory(reports[engine].Engine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reports[engine].wrapper = db
+		reports[engine].DBName = db.Name()
+		reports[engine].FinalStats = quicksilverStats(db)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
 		for phase, name := range quicksilverPhaseNames {
 			reports[engine].Phases = append(reports[engine].Phases, quicksilverPhase{Name: name, OpsPerSec: float64((engine+1)*100 + phase)})
 		}
@@ -239,7 +253,7 @@ func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		lines[strings.Join(strings.Fields(line), " ")] = true
 	}
-	if !lines["Test First Second"] {
+	if !lines["Test TreeDB TreeDB (bench_unsafe)"] {
 		t.Fatalf("missing engine columns: %s", raw[:min(len(raw), 1500)])
 	}
 	for phase, name := range quicksilverPhaseNames {
@@ -260,6 +274,9 @@ func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
 		t.Fatalf("fixed workload must export one run containing both engines: %s", data)
 	}
 	run := quicksilverBenchprofRuns(BenchConfig{}, c, reports)[0]
+	if run.TreeDBStats["TreeDB"]["treedb.profile.bench_unsafe"] != "false" || run.TreeDBStats["TreeDB (bench_unsafe)"]["treedb.profile.bench_unsafe"] != "true" {
+		t.Fatalf("variant settings lost: %+v", run.TreeDBStats)
+	}
 	if len(run.TreeDBStats) != 2 || len(run.CheckpointDurations["quicksilver_initial"]) != 2 || len(run.CheckpointDurations["quicksilver_final"]) != 2 {
 		t.Fatalf("engine metadata dropped: %+v", run)
 	}
