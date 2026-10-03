@@ -547,3 +547,45 @@ func TestBuildInvestigations_IteratorOverheadInference(t *testing.T) {
 		t.Fatalf("expected DB iterator target in %+v", targets)
 	}
 }
+
+func TestQuicksilverProfileNamesFromExport(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"runs":[{"results":{"quicksilver_hits":{"TreeDB":100}},"checkpoint_durations_seconds":{"quicksilver_initial":{"TreeDB":0.1},"quicksilver_final":{"TreeDB":0.1}}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	known := loadKnownTests(dir)
+	for _, tc := range []struct{ name, test, engine string }{
+		{"cpu_quicksilver_hits_treedb_public_command_wal.pprof", "quicksilver_hits", "treedb_public_command_wal"},
+		{"checkpoint_cpu_checkpoint_quicksilver_initial_treedb_public_command_wal.pprof", "checkpoint/quicksilver_initial", "treedb_public_command_wal"},
+		{"checkpoint_cpu_checkpoint_quicksilver_final_lmdb.pprof", "checkpoint/quicksilver_final", "lmdb"},
+	} {
+		got, ok := parseCPUProfileFilename(tc.name, known)
+		if !ok || got.Test != tc.test || got.DBTag != tc.engine {
+			t.Fatalf("%s parsed %+v/%v", tc.name, got, ok)
+		}
+	}
+	got, ok := parseAllocsProfileFilename("allocs_quicksilver_hits_treedb_public_command_wal.pprof", known)
+	if !ok || got.Test != "quicksilver_hits" || got.DBTag != "treedb_public_command_wal" {
+		t.Fatalf("allocation name: %+v/%v", got, ok)
+	}
+}
+
+func TestQuicksilverThroughputInsights(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"runs":[{"results":{"quicksilver_mixed":{"TreeDB":42},"quicksilver_hits":{"LMDB":99,"TreeDB":100,"TreeDB (bench_unsafe)":200},"random_read":{"TreeDB":5}}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := loadQuicksilverOps(dir)
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if rows[0].Phase != "quicksilver_hits" || rows[0].Engine != "LMDB" || rows[0].OpsPerSec != 99 {
+		t.Fatalf("unstable rows: %+v", rows)
+	}
+	md := renderMarkdown(report{QuicksilverOps: rows})
+	if !strings.Contains(md, "## Quicksilver Point Reads") || !strings.Contains(md, "| quicksilver_mixed | TreeDB | 42") || !strings.Contains(md, "| quicksilver_hits | TreeDB (bench_unsafe) | 200") {
+		t.Fatalf("missing point read table: %s", md)
+	}
+}
