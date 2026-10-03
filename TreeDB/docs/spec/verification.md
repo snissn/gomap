@@ -2437,6 +2437,16 @@ Coverage:
   checkpoint/close/reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
+- `TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1` verifies
+  an ordinary cold manager restores an acknowledged durable overlay before the
+  next actual prepared Append and preserves both owners and the exact durable
+  preparation completion through warm publication, cold publication and reopen,
+  with zero graph rebuilds. `TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1`
+  acknowledges an actual live insert before a real provider snapshot and retains
+  the fixture's tail, exact-retry, close/reopen, visibility and strict-search
+  checks. It also checks each voter retains its exact local durable completion
+  before the snapshot and after tail recovery, and activates serving under the
+  existing current-DB/catalog guards. It does not add snapshot persistence commands.
 - The V2-focused structural and concurrency gates
   `TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2`,
   `TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2`,
@@ -3476,3 +3486,45 @@ changed source/operation, malformed entries, missing idempotency authority,
 and ordinary stale mutations. Its preflight is a deterministic stand-in;
 the native fixture supplies the real FSM/Raft witness. These tests do not
 establish performance, RF4 qualification, or broader readiness.
+
+### Bounded RF4 initialization (#4944)
+
+`TestFixedPeerVectorInitializationRF4LayoutV1` first validates the ordinary
+four-voter authenticated single-group configuration, then checks initialization
+admission and identical normalized identity from all four node configs. On the
+original RF3-only source it fails at initialization admission after the ordinary
+control passes. `TestFixedPeerVectorInitializationRF4RosterBoundsV1` keeps valid
+ordinary one/two/five/six-node controls while refusing those initialization
+sizes, and refuses incomplete RF4 catalog/data/address rosters or missing
+authentication. Existing RF3 identity, scope, source-bound, endpoint, two-group
+six-node and replacement refusal tests remain required.
+
+`TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1`
+reuses the RF3 real fixture with four actual catalog/data voters: production
+create/ingest, all-voter source rebuild/prepare, restart and strict search,
+fresh insert/exact retry, provider snapshot-plus-tail reopen and retained
+current-DB guard. Its terminal lower-FSM replacement remains quiescent after
+all-voter prefix observation and provider shutdown. Unsupported publication
+platforms retain pre-Append refusal assertions; they do not prove RF4 serving.
+`TestFixedPeerVectorFixtureRF4RealRaftV1` runs the public initialize/qualify
+client across four real peers, requiring readiness from all four after reopen.
+
+The offline command `python3 scripts/treedb_fixed_cluster_2host_test.py` checks
+RF3 2+1 and RF4 2+2 orchestration, immutable per-host images, exact roster checks,
+container caps, graceful exit checks and fail-stop behavior. It launches no
+SSH/Docker operation and is not two-host runtime evidence. Actual RF4 evidence
+requires four resident SERVER containers, two on each host, pinned source,
+binary/image/config identities, fresh roots, cross-host private shards, full
+initialize/reopen/search/insert/retry/readiness receipts and owned teardown.
+
+Use existing `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` for a matched
+baseline/candidate ordinary config/client guardrail. The additional
+`BenchmarkFixedPeerVectorInitializationClientV1/RF3` and `/RF4` measure only
+public config normalization, credential loading and NewClient/Close; certificate
+and socket/root fixture setup are untimed. Compare RF3 on the same base/head
+harness, then candidate RF3 versus RF4 for incremental B/op and allocs/op.
+Neither benchmark measures election, preparation or four-daemon RSS. Retain
+actual container footprint separately. These are proposed checks until executed
+on the final integrated source; no 100K, sustained mutation, throughput or
+physical-host failure acceptance follows. Source rows512 and completed inserts64
+remain unchanged, and RF4 quorum3 cannot survive either host loss in 2+2.

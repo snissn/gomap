@@ -13,7 +13,7 @@ import (
 
 // FixedPeerTCPVectorInitializationV1 is an immutable first-boot intent, not
 // prepared assets, an accepted manifest, or permission to serve vectors.
-// V1 admits one RF3 group; all three nodes are catalog voters.
+// V1 admits one RF3 or RF4 group; every data voter is also a catalog voter.
 // Collection must use default/default, the existing consensus command scope.
 // MaxSourceRows bounds the future preparation input; it is not an ingest quota.
 type FixedPeerTCPVectorInitializationV1 struct {
@@ -74,9 +74,10 @@ func validateFixedPeerVectorInitializationV1(config *FixedPeerTCPConfigV1, addre
 	if intent.Collection.Database != raftplacement.DefaultDatabase || intent.Collection.Catalog != raftplacement.DefaultCatalog {
 		return errors.New("vector initialization requires default database and catalog")
 	}
-	// Prepare and serving activation currently support exactly one RF3 group.
-	invalid := errors.New("invalid bounded RF3 vector initialization intent")
-	if config.Vector != nil || config.Credentials == nil || len(config.Groups) != 1 || len(config.Nodes) != 3*len(config.Groups) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > 512 {
+	// Prepare and serving activation support one group with exactly three or
+	// four colocated catalog/data voters; no spare or second group is admitted.
+	invalid := errors.New("invalid bounded RF3/RF4 vector initialization intent")
+	if config.Vector != nil || config.Credentials == nil || len(config.Groups) != 1 || (len(config.Nodes) != 3 && len(config.Nodes) != 4) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > 512 {
 		return invalid
 	}
 	// No spare/dormant destination or differing catalog/data voter roster.
@@ -99,7 +100,7 @@ func validateFixedPeerVectorInitializationV1(config *FixedPeerTCPConfigV1, addre
 	assigned := map[raftcluster.NodeID]bool{}
 	source := false
 	for _, group := range config.Groups {
-		if len(group.Peers) != 3 {
+		if len(group.Peers) != len(config.Nodes) {
 			return invalid
 		}
 		source = source || group.ID == intent.SourceGroupID

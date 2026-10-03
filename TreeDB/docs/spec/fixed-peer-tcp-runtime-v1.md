@@ -385,8 +385,13 @@ persistent-root markers. It must be present before the first root is opened;
 adding, removing, or changing it on existing roots is refused. Omitted intent
 preserves the existing non-vector configuration identity and behavior.
 
-The bounded v1 layout is one RF3 data group and three nodes, with every node
-also a catalog voter and hosting that data group. Two-group/six-node
+The bounded v1 layout admits exactly three (RF3) or four (RF4) nodes in one
+data group, with every node also a catalog voter and hosting that data group.
+The catalog and data voter rosters must match the complete immutable node
+inventory; no other replication factor is admitted. RF4 needs a quorum of
+three. A two-host 2+2 placement loses quorum after either host is lost and
+does not increase the source (512) or completed-insert (64) bounds.
+Two-group/six-node
 initialization is refused before persistent roots open because prepare and
 serving activation do not support it yet; it remains follow-up work under #4250.
 Ordinary replica replacement is refused for initialization runtimes, including
