@@ -214,6 +214,14 @@ and does not perform conflict detection.
 - `Get(key)` returns `(nil, nil)` when key is absent.
 - Returned bytes are safe copies.
 
+Backend point reads search the leaf once, then decode value/pointer flags and
+entry revision without materializing the matched key on columnar-v2 and
+columnar+prefix-v2 leaves. The search validates key bounds and prefix metadata;
+the value decoder validates value/pointer and revision bounds. Other encodings
+retain their full entry decoder. This preserves owned results, present-empty and
+tombstone behavior, checksum policy, and snapshot/leaf-view lease lifetimes.
+`GetEntry` and iterators still materialize keys when their caller needs them.
+
 ### 2.2 `GetMany` and `GetManyView`
 
 - `GetMany(keys)` returns one entry per input key. Missing keys are returned as

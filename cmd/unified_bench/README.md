@@ -810,6 +810,28 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
   --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 ```
 
+### Leaf point lookup microprofiles
+
+Capture `BenchmarkLeafPointMetadata`, `BenchmarkLeafCommonPrefixSuffixSearch`
+(`TreeDB/node`) and `BenchmarkPointValueMetadata` (`TreeDB/tree`) sequentially in
+fresh Go test processes:
+
+```sh
+RUN_DIR=/tmp/treedb_point_lookup_profiles scripts/treedb_point_lookup_profile.sh
+# Bounded artifact smoke check; this does not measure throughput:
+BENCHTIME=1x RUN_DIR=/tmp/treedb_point_lookup_smoke scripts/treedb_point_lookup_profile.sh
+```
+
+The default is `BENCHTIME=200ms`, count 1, with `GOWORK=off`. Each benchmark family
+writes `<name>.txt` (Go benchmark stdout/stderr), `<name>.test` (test binary),
+`<name>_cpu.pprof`, `<name>_allocs.pprof`, and matching `_cpu_top.txt` /
+`_allocs_top.txt` reports. Names are `node_metadata`, `node_search`, and
+`tree_metadata`. `source-head.txt`, `source-status.txt`, `source-diff.patch`,
+`go-version.txt`, and `settings.txt` record source/toolchain provenance.
+Profiles include fixture setup and the whole test process; compare unprofiled
+benchmark timing separately. These standalone Go profiles are **not benchprof
+inputs** or unified-bench profile-dir artifacts; inspect them with `go tool pprof`.
+
 ## Canonical Quicksilver workflow
 
 The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
@@ -867,6 +889,18 @@ suite pins write-batch creation through commit/close to one OS thread. LMDB
 selections accept at most 126 read workers, its default reader-slot limit, for
 both snapshot and ordinary Get modes. Wider selections fail before any engine
 opens or loads data; the suite allows up to 1024 workers for other engines.
+
+RocksDB is optional: install the native RocksDB headers/shared library, then
+`GOWORK=off CGO_ENABLED=1 go build -tags 'lmdb rocksdb' -o bin/unified-bench ./cmd/unified_bench`
+and select `-dbs treedb,lmdb,rocksdb`. The `rocksdb` adapter uses the native C API,
+64 MiB write buffer, 64 MiB LRU block cache, 10 bits/key whole-key Bloom filters,
+Snappy compression, checksum verification and synchronous WAL writes (including
+ordinary `Set`/batch `Commit`). Its checkpoint waits for a native flush while
+preserving the live DB handle and read snapshots. Close snapshots before their
+DB owner. `Name`/stats report the build-time header version; use a matching shared
+library and record its package version in benchmark provenance. Go allocation
+metrics exclude RocksDB's native allocations; reported cache/memtable properties
+are current engine observations, not peak RSS or a total native-memory budget.
 
 Concurrent mixed readers run for `-quicksilver-duration` (default 4s). A paced
 writer updates `-quicksilver-updates` distinct keys (default min(40,000,keys)),

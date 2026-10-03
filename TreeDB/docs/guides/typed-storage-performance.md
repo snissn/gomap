@@ -83,6 +83,32 @@ conditions.
 
 ## Benchmark commands
 
+### Leaf point metadata and common-prefix search
+
+Columnar-v2 point reads use value/revision metadata after the matched search,
+avoiding a discarded key reconstruction. Columnar+prefix-v2 search also compares
+validated constant-prefix keys by their final eight ordered bytes. Arbitrary
+binary prefixes qualify; changing lengths or prefixes retain the generic path.
+Owned response copies and value-log work remain separate costs.
+
+```sh
+GOWORK=off go test ./TreeDB/node -run '^$' \
+  -bench '^BenchmarkLeaf(PointMetadata|CommonPrefixSuffixSearch)$' \
+  -benchmem -benchtime=200ms -count=5
+GOWORK=off go test ./TreeDB/tree -run '^$' \
+  -bench '^BenchmarkPointValueMetadata$' -benchmem -benchtime=200ms -count=5
+```
+
+`LeafPointMetadata` compares key-bearing and value-only access after identical
+searches on fresh node views, isolating the scratch allocation. The search
+benchmark separates numeric-eight-byte, namespace, variable-length fallback,
+and long-prefix shapes, each with hit/miss/mixed queries. The tree benchmark
+measures revision-aware appends into reusable caller storage. Compare the same
+benchmarks at exact source heads on one host; these local microbenchmarks do not
+rank public workloads. Use the native Quicksilver harness for public owned-read
+and durable update/checkpoint qualification. Go test output/profiles are not
+`benchprof_results.json` artifacts.
+
 ### Persistent value-log decode scratch
 
 Retained document and outer-leaf reads can reach the shared value-log
