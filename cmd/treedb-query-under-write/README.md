@@ -87,9 +87,16 @@ its 10s RPC deadline. Larger explicit budgets permit a bounded followup but do
 not themselves fix admission contention. The failed packet and ambiguous
 outcome remain retained; there is no automatic retry or paced reinterpretation.
 
-The reader-intent admission regression and fix belong to #4958. Representative
-unpaced >64-write reconciliation, write-phase cost attribution and resource
-qualification remain pending fresh frozen collection. A sequential/alternating
-65-write control would prove only the growth behavior it actually exercises.
+The reader-intent admission regression and fix belong to #4958. Fresh trial10
+completed the unchanged 198-operation plan: 65 distinct ordinary inserts, one
+identical retry and 132 native searches, with verified client-call overlap and
+all four voters applied through commit 154. All attempts succeeded; all four
+servers stopped cleanly without OOM and their stores remain preserved. Its
+independently reviewed sealed archive is
+`91333f496872113c8b1942c173a43218810eaf0322921677e6cd53086814aa17`.
+The driver renews idle connections before the planned retry and post-write
+phases; failed mutations never retry. This proves bounded ordinary growth and
+native overlap. Write-phase cost attribution and broader resource qualification
+remain pending; no sustained performance or whole-lifetime peak is claimed.
 #4250 still owns sustained throughput, p99, representative recall and resource
 claims; RF4 on two hosts with two voters each cannot survive either host loss.
