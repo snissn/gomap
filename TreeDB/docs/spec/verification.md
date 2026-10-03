@@ -3459,3 +3459,20 @@ vector operations before and after reopen. This is not cluster qualification
 or proof of serving activation. Existing nil-intent runtime/security/readiness
 regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
 configuration path; startup overhead should be compared at the exact base/head.
+
+
+The Prepare convergence/resume witness is
+`TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1`.
+It cancels after a genuine committed-applied source acknowledgment, observes
+that actual prefix on all voters with no preparation completion, then resumes
+the identical request. It retains the transient source-mismatch reread,
+partial completion resume, changed-source refusal before append, completed
+command/asset/source disagreement refusals, cancellation, and actual durable
+completion controls. Private reply interception controls observations; it
+does not establish scheduler-induced follower lag.
+`TestSingleGroupSubmitterStalePrepareRequiresKnownReplayV1` separately checks
+the shared stale-guard gate with exact source/prepare entries, unknown keys,
+changed source/operation, malformed entries, missing idempotency authority,
+and ordinary stale mutations. Its preflight is a deterministic stand-in;
+the native fixture supplies the real FSM/Raft witness. These tests do not
+establish performance, RF4 qualification, or broader readiness.
