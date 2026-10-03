@@ -390,7 +390,8 @@ data group, with every node also a catalog voter and hosting that data group.
 The catalog and data voter rosters must match the complete immutable node
 inventory; no other replication factor is admitted. RF4 needs a quorum of
 three. A two-host 2+2 placement loses quorum after either host is lost and
-does not increase the source (512) or completed-insert (64) bounds.
+does not itself establish corpus or serving capacity; dataset preparation has
+its separately enforced16,384-row/32-MiB input envelope.
 Two-group/six-node
 initialization is refused before persistent roots open because prepare and
 serving activation do not support it yet; it remains follow-up work under #4250.
@@ -398,7 +399,7 @@ Ordinary replica replacement is refused for initialization runtimes, including
 removal, completion, and reconciliation, so the retained roster stays immutable. No
 spare or dormant destination is admitted. The intent binds `SourceGroupID`,
 `Collection`, `IndexDefinition`, `CatalogEpoch` (1), nonzero `Generation`,
-`MaxSourceRows` (1..512), and complete `PublicAddresses`/`ShardAddresses` maps.
+`MaxSourceRows` (1..16384), and complete `PublicAddresses`/`ShardAddresses` maps.
 `Collection.Database` and `Collection.Catalog` must both be `default`, the
 scope supported by the existing routed consensus create/ingest commands. Other
 scopes are refused during config validation before persistent roots are opened.
@@ -437,3 +438,10 @@ listener, or transition to serving. The next checkpoint must validate real
 committed source/schema/index evidence, prepare and durably accept assets, then
 bind serving to this retained intent without editing root identity or weakening
 FSM/WAL coverage, root authentication, or snapshot catch-up requirements.
+
+
+Dataset initialization remains on this authenticated fixed-peer runtime, with one
+mutable owner. Optional `-dataset` initialize/qualify modes use real routed chunk
+commits and durable prepare/restart proofs; they never import benchmark runtime
+or configured applied-index evidence. See
+[dataset admission](fixed-cluster-vector-prepare-v1.md#dataset-preparation-admission-4956).

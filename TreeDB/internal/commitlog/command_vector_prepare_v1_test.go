@@ -25,7 +25,7 @@ func TestVectorPreparePayloadV1CanonicalAndBounded(t *testing.T) {
 		}
 	}
 	cases := []VectorPrepareV1{v, v, v, v, v, v, v}
-	cases[0].MaxSourceRows = 513
+	cases[0].MaxSourceRows = VectorPrepareMaxSourceRowsV1 + 1
 	cases[1].SourceRowCount = 513
 	cases[2].Group = ""
 	cases[3].Term = 1

@@ -109,7 +109,7 @@ func (owner *CommandWALAdmittedCollection) preflightVectorPrepareV1(v commitlog.
 	}
 	// Count the authoritative primary rows before any build allocation. Admission
 	// and mutation are held; the prepare source must include every primary row.
-	count, err := owner.vectorPrepareDocumentCountV1(v.MaxSourceRows)
+	count, err := owner.vectorPrepareDocumentCountV1(v.MaxSourceRows, def.Dimensions)
 	if err != nil {
 		return err
 	}
@@ -217,7 +217,7 @@ func (owner *CommandWALAdmittedCollection) ApplyVectorPrepareWithCommandWALInten
 		}
 		return nil
 	}
-	source, rows, err := c.ReadVectorPartitionRouterSourceRowsV1(v.Index)
+	source, rows, err := c.readVectorPartitionRouterSourceRowsBoundedV1(v.Index, v.MaxSourceRows, commitlog.VectorPrepareMaxSourceBytesV1, commitlog.VectorPrepareMaxDocumentIDBytesV1)
 	if err != nil {
 		return err
 	}
@@ -232,8 +232,9 @@ func (owner *CommandWALAdmittedCollection) ApplyVectorPrepareWithCommandWALInten
 		PrepareOrigin: &VectorPartitionPrepareOriginV1{Term: v.Term, Index: v.IndexPosition, CommandDigest: v.CommandDigest},
 		Placements:    []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: v.Group}},
 	}
-	input := VectorPartitionSearchAssetV1{Source: source, Generation: v.Generation, PartitionID: 0, Dimensions: len(rows[0].Values)}
-	partition := internalrouter.RouterPartitionV1{PartitionID: 0}
+	input := VectorPartitionSearchAssetV1{Source: source, Generation: v.Generation, PartitionID: 0, Dimensions: len(rows[0].Values), IDs: make([]string, 0, len(rows)), Vectors: make([][]float32, 0, len(rows)), Kinds: make([]VectorPartitionMembershipKindV1, 0, len(rows))}
+	partition := internalrouter.RouterPartitionV1{PartitionID: 0, Vectors: make([]internalrouter.RouterVectorV1, 0, len(rows))}
+	building.Memberships = make([]VectorPartitionMembershipV1, 0, len(rows))
 	for i, row := range rows {
 		if row.VectorOrdinal != uint64(i) {
 			return errors.New("collections: vector prepare source ordinal differs")
@@ -442,7 +443,7 @@ func (owner *CommandWALAdmittedCollection) validateVectorPrepareSourceManifestV1
 	return nil
 }
 
-func (owner *CommandWALAdmittedCollection) vectorPrepareDocumentCountV1(max uint64) (uint64, error) {
+func (owner *CommandWALAdmittedCollection) vectorPrepareDocumentCountV1(max uint64, dimensions int) (uint64, error) {
 	c := owner.collection
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -465,8 +466,17 @@ func (owner *CommandWALAdmittedCollection) vectorPrepareDocumentCountV1(max uint
 	}
 	defer it.Close()
 	count := uint64(0)
+	inputBytes := uint64(0)
 	for it.Valid() {
 		if !it.IsDeleted() {
+			idBytes := len(it.UnsafeKey())
+			if idBytes == 0 || idBytes > commitlog.VectorPrepareMaxDocumentIDBytesV1 {
+				return count, errors.New("collections: vector prepare document ID exceeds input admission")
+			}
+			inputBytes += uint64(dimensions)*4 + uint64(idBytes)
+			if inputBytes > commitlog.VectorPrepareMaxSourceBytesV1 {
+				return count, errors.New("collections: vector prepare source bytes exceed input admission")
+			}
 			count++
 			if count > max {
 				return count, nil

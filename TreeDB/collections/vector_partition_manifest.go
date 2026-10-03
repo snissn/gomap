@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -295,8 +296,11 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 		l = DefaultVectorPartitionManifestLimits()
 	}
 	if m.PrepareOrigin != nil {
+		// Command-owned BUILD/READY encode, replay and reopen share preparation
+		// row admission. Actual FP32+ID bytes are checked before source rebuilding
+		// and materialization; this manifest does not carry those input bytes.
 		origin := m.PrepareOrigin
-		if origin.Term == 0 || origin.Index == 0 || !isSHA256VPM(origin.CommandDigest) || m.SourceRowCount > 512 || m.PartitionCount != 1 || m.PagedRootV2 != nil || m.Format == VectorPartitionManifestFormatV2 {
+		if origin.Term == 0 || origin.Index == 0 || !isSHA256VPM(origin.CommandDigest) || m.SourceRowCount > commitlog.VectorPrepareMaxSourceRowsV1 || m.PartitionCount != 1 || m.PagedRootV2 != nil || m.Format == VectorPartitionManifestFormatV2 {
 			return fmt.Errorf("%w: bounded prepare origin", ErrVectorPartitionManifestInvalid)
 		}
 	}

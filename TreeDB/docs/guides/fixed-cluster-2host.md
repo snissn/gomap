@@ -2,7 +2,7 @@
 
 This provisional #4250 operator path admits one colocated RF3 or RF4 data group with an identical catalog voter roster. RF4 runs two SERVER daemons on each of 192.168.0.111 and 192.168.0.185, plus a separate driver container on185. The existing RF3 path remains two daemons on111 and one on185. Clients, drivers and standby processes do not count as servers. WAL, immutable initialization and prepare predecessors, final-base integration, review, CI and retained runtime validation remain gates. This source is not merged operational evidence.
 
-The fixture creates three known 2D cosine vectors and one fresh write. Product preparation is bounded at512 source documents; this helper deliberately seeds3. It makes no100K capacity, throughput, elastic membership, split owner, replacement, delete or arbitrary crash-repair claim. RF4 needs three voters for quorum, so either host loss in the 2+2 layout loses quorum. In RF3, loss of111 loses quorum; loss of185 retains the mathematical majority but loses this driver. Neither layout establishes host-failure or AZ resilience. RF4 does not raise the completed-insert limit of64 or qualify sustained writes or capacity.
+The fixture creates three known 2D cosine vectors and one fresh write. Preparation admits at most16,384 source rows and32MiB of actual FP32+ID input; this helper defaults to3 seeds and optionally consumes a validated frozen dataset. It makes no100K capacity, throughput, elastic membership, split owner, replacement, delete or arbitrary crash-repair claim. RF4 needs three voters for quorum, so either host loss in the 2+2 layout loses quorum. In RF3, loss of111 loses quorum; loss of185 retains the mathematical majority but loses this driver. Neither layout establishes host-failure or AZ resilience. The earlier64 ordinary-write population was a qualification limit; RF4 alone qualifies no sustained writes or capacity.
 
 ## Prepare existing inputs
 
@@ -21,7 +21,7 @@ An RF4 example port inventory is (omit node-d and its complete roster/address en
 
 Reserve these ports. ListenAddress, advertised control addresses and local RaftListen must agree with actual host placement. Containers use Linux host networking. Public addresses remain loopback-only. Use canonical private shard endpoints reachable from both hosts under the existing authenticated transport; loopback shard addresses are accepted only for a local-host fixture and do not prove cross-host routing. The existing authenticated control path forwards public operations to the actual owner leader. The driver uses node-c's config and public address, permitting a leader on111 without exposing public ingress remotely.
 
-Set VectorInitialization source to the single group, Collection to default/default/docs, CatalogEpoch1, Generation1, MaxSourceRows3..512, and complete public/shard maps. Use this production index definition; omitted encoding gets the validated FP32 default:
+Set VectorInitialization source to the single group, Collection to default/default/docs, CatalogEpoch1, Generation1, MaxSourceRows3..16384, and complete public/shard maps. Use this production index definition; omitted encoding gets the validated FP32 default:
 
 ```json
 {"name":"embedding_graph","field":"embedding","metric":"cosine","dimensions":2,"m":2,"ef_construction":8,"ef_search":8,"strategy":"column_graph"}
@@ -71,3 +71,30 @@ treedb-fixed-peer -config /config.json -mode qualify -request-id trial01 -operat
 ```
 
 Initialize requires fresh empty catalog and collection state. Qualification assumes the known fixture and no intervening mutations. Runtime, normal/race tests and final-base evidence are still required.
+
+
+## Dataset checkpoint (#4956)
+
+The existing initializer/qualifier optionally consumes a frozen dataset; empty
+`-dataset` preserves the three-row fixture. The shared preparation envelope is
+16,384 rows / 32 MiB actual FP32+IDs / 1,024-byte individual IDs, enforced before
+owned source materialization. The initial packet counts 10,000 unchanged128D
+rows plus three separated oracle anchors. See
+[the preparation contract](../spec/fixed-cluster-vector-prepare-v1.md#dataset-preparation-admission-4956)
+for exact input eligibility, stream/chunk identities, UNKNOWN/fail-stop behavior,
+restart proofs and allocation evidence gates. The optional65-new-ID public
+probe reconciles historical64 ordinary-write qualification claims; it changes
+no split identity capacity and establishes no sustained throughput or broad
+mutation/recall guarantee. #4250/#4810 remain open.
+
+
+For the dataset packet, export the existing representative corpus with exactly
+10,000 unchanged128D rows. Set all four immutable initialization definitions to
+128 dimensions and agreed bounded M/construction/search effort, with
+MaxSourceRows>=10003 (three counted anchors). Run the same plan/execute command
+with `--dataset /absolute/frozen-export`; the plan retains manifest/vector hashes,
+count, actual input bytes and plane eligibility. The driver bundle snapshots
+only `manifest.json` and `documents.f32`, verifies their hashes before SSH, and
+mounts them read-only. The initializer independently freezes and validates them
+before mutation. Do not change or substitute a corpus after a refusal. Keep
+this functional packet separate from sustained #4250 collection.

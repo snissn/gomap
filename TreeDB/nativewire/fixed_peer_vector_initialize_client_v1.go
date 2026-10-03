@@ -2,12 +2,15 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
@@ -21,12 +24,15 @@ type FixedPeerVectorBootstrapV1 struct {
 	Catalog      raftplacement.CatalogMetaStatusV1
 	Create, Seed raftcluster.SubmitResultV1
 	Prepare      collections.VectorPartitionPrepareCompletionV1
+	Dataset      *FixedPeerVectorDatasetIdentityV1 `json:",omitempty"`
+	Chunks       []FixedPeerVectorSeedChunkV1      `json:",omitempty"`
 }
 type FixedPeerVectorQualificationV1 struct {
 	Prepare       collections.VectorPartitionPrepareCompletionV1
 	Before, After public.SearchResponseV1
 	Insert, Retry public.InsertResponseV1
 	Readiness     []FixedPeerReadinessV1
+	Dataset       *FixedPeerVectorDatasetIdentityV1 `json:",omitempty"`
 }
 
 func validateFixedPeerFixtureV1(config FixedPeerTCPConfigV1, requestID string) error {
@@ -38,13 +44,13 @@ func validateFixedPeerFixtureV1(config FixedPeerTCPConfigV1, requestID string) e
 	if v.Generation != 1 || v.CatalogEpoch != 1 ||
 		v.Collection != (raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}) ||
 		v.SourceGroupID == "" || v.SourceGroupID != config.Groups[0].ID ||
-		v.MaxSourceRows < 3 || v.MaxSourceRows > 512 ||
+		v.MaxSourceRows < 3 || v.MaxSourceRows > commitlog.VectorPrepareMaxSourceRowsV1 ||
 		def.Name != "embedding_graph" || def.Field != "embedding" || def.Metric != collections.VectorMetricCosine ||
 		def.Dimensions != 2 || def.M != 2 || def.EfConstruction != 8 || def.EfSearch != 8 ||
 		def.Strategy != collections.VectorIndexStrategyColumnGraph ||
 		def.Encoding != collections.VectorIndexEncodingFloat32 ||
 		def.Representation != "" || def.SchemaGeneration != 0 || len(def.QuantizedIndexes) != 0 {
-		return fmt.Errorf("fixture requires canonical generation1/epoch1 default.default.docs embedding_graph and MaxSourceRows3..512")
+		return fmt.Errorf("fixture requires canonical generation1/epoch1 default.default.docs embedding_graph and MaxSourceRows3..16384")
 	}
 	if requestID == "" || len(requestID) > 64 || strings.Trim(requestID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
 		return fmt.Errorf("request ID must contain 1..64 ASCII letters, digits, underscores or hyphens")
@@ -101,7 +107,7 @@ func fixtureMetaV1(v *FixedPeerTCPVectorInitializationV1) (collections.Collectio
 		DocumentFormat: collections.DocumentFormatJSON,
 		ColumnStore: &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{
 			{Name: "kind", Path: "kind", ValueType: collections.ColumnStoreValueString},
-			{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 2},
+			{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: v.IndexDefinition.Dimensions},
 		}}}, VectorIndexes: []collections.VectorIndexDefinition{v.IndexDefinition}})
 }
 
@@ -109,9 +115,32 @@ func fixtureMetaV1(v *FixedPeerTCPVectorInitializationV1) (collections.Collectio
 // physical schema, and seeds three vectors through actual routed Raft commands.
 // Mutations are never automatically retried: an ambiguous commit needs operator
 // investigation. A successful prepare requires clean restart before serving.
-func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, requestID string) (report FixedPeerVectorBootstrapV1, err error) {
-	if err = validateFixedPeerFixtureV1(c.config, requestID); err != nil {
-		return
+func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, requestID string) (FixedPeerVectorBootstrapV1, error) {
+	if err := validateFixedPeerFixtureV1(c.config, requestID); err != nil {
+		return FixedPeerVectorBootstrapV1{}, err
+	}
+	return c.initializeVectorV1(ctx, requestID, nil)
+}
+
+func (c *FixedPeerTCPClientV1) InitializeVectorDatasetV1(ctx context.Context, requestID, path string) (FixedPeerVectorBootstrapV1, error) {
+	if err := validateFixedPeerDatasetConfigV1(c.config, requestID); err != nil {
+		return FixedPeerVectorBootstrapV1{}, err
+	}
+	dataset, err := readFixedPeerVectorDatasetV1(path, c.config)
+	if err != nil {
+		return FixedPeerVectorBootstrapV1{Stage: "dataset-admission"}, err
+	}
+	return c.initializeVectorV1(ctx, fixedPeerVectorDatasetRequestIDV1(requestID, dataset.identity.ManifestSHA256), dataset)
+}
+func (c *FixedPeerTCPClientV1) initializeVectorV1(ctx context.Context, requestID string, dataset *fixedPeerVectorDatasetV1) (report FixedPeerVectorBootstrapV1, err error) {
+	expectedRows := uint64(3)
+	if dataset != nil {
+		report.Dataset = &dataset.identity
+		expectedRows = dataset.identity.SourceRows
+		for first := 0; first < dataset.identity.Rows; first += dataset.chunkRows {
+			count := min(dataset.chunkRows, dataset.identity.Rows-first)
+			report.Chunks = append(report.Chunks, FixedPeerVectorSeedChunkV1{Ordinal: len(report.Chunks), FirstRow: first, Rows: count, RequestID: fmt.Sprintf("%s/dataset/%06d", requestID, len(report.Chunks)), Outcome: "unissued"})
+		}
 	}
 	v := c.config.VectorInitialization
 	report.Stage = "fresh-cluster-check"
@@ -171,11 +200,7 @@ func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, re
 	if err != nil {
 		return
 	}
-	submit := func(command iwire.CommandID, sections []iwire.Section) (raftcluster.SubmitResultV1, error) {
-		entry, e := fixtureEntryV1(command, sections)
-		if e != nil {
-			return raftcluster.SubmitResultV1{}, e
-		}
+	submitEntry := func(entry []byte) (raftcluster.SubmitResultV1, error) {
 		request := ClusterRouteRequest{Database: v.Collection.Database, Catalog: v.Collection.Catalog, Collection: v.Collection.Collection, Shape: ClusterRouteShapeCollection}
 		route, e := c.Route(ctx, c.config.NodeID, request)
 		if e != nil {
@@ -188,6 +213,13 @@ func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, re
 			e = fmt.Errorf("missing real committed/apply evidence")
 		}
 		return result, e
+	}
+	submit := func(command iwire.CommandID, sections []iwire.Section) (raftcluster.SubmitResultV1, error) {
+		entry, e := fixtureEntryV1(command, sections)
+		if e != nil {
+			return raftcluster.SubmitResultV1{}, e
+		}
+		return submitEntry(entry)
 	}
 	meta, e := fixtureMetaV1(v)
 	if e != nil {
@@ -238,23 +270,80 @@ func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, re
 		err = fmt.Errorf("missing source-group status")
 		return
 	}
+	seedDocuments := make([][]byte, 3)
+	for i, coordinates := range [][2]float32{{1, 0}, {-1, 0}, {0, -1}} {
+		seedDocuments[i], err = fixedPeerVectorJSONV1(fixedPeerOracleVectorV1(v.IndexDefinition.Dimensions, coordinates[0], coordinates[1]), "seed")
+		if err != nil {
+			return
+		}
+	}
 	report.Stage = "seed"
 	report.Seed, err = submit(iwire.CommandInsertBatch, []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(requestID + "/seed")},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, state.Groups[0].CatalogVersion)},
 		collectionNameRef(meta.Name), documentFormatSection(collections.DocumentFormatJSON),
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("seed-x"), []byte("seed-minus-x"), []byte("seed-minus-y"))},
-		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"embedding":[1,0],"kind":"seed"}`), []byte(`{"embedding":[-1,0],"kind":"seed"}`), []byte(`{"embedding":[0,-1],"kind":"seed"}`))}, ackSection(AckRaftCommitted)})
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, seedDocuments...)}, ackSection(AckRaftCommitted)})
 	if err != nil {
 		return
 	}
 	if err = c.fixturePrefixV1(ctx, report.Seed.Evidence.Index); err != nil {
 		return
 	}
+	for i := range report.Chunks {
+		chunk := &report.Chunks[i]
+		// The preceding seed/chunk reached every voter, but its apply advanced the
+		// catalog version. Observe authenticated current authority before freezing
+		// this still-unissued command; observation failure never retries a mutation.
+		owner, e = c.leader(ctx, c.config.Groups[0])
+		if e != nil {
+			err = e
+			return
+		}
+		state, e = c.Status(ctx, owner)
+		if e != nil {
+			err = e
+			return
+		}
+		if len(state.Groups) != 1 {
+			err = fmt.Errorf("missing source-group status")
+			return
+		}
+		ids, docs, e := dataset.chunkV1(chunk.FirstRow, chunk.Rows)
+		if e != nil {
+			err = e
+			return
+		}
+		sections := []iwire.Section{
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte(chunk.RequestID)},
+			{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, state.Groups[0].CatalogVersion)},
+			collectionNameRef(meta.Name), documentFormatSection(collections.DocumentFormatJSON),
+			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
+			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)}, ackSection(AckRaftCommitted)}
+		entry, e := fixtureEntryV1(iwire.CommandInsertBatch, sections)
+		if e != nil {
+			err = e
+			return
+		}
+		digest := sha256.Sum256(entry)
+		chunk.EntrySHA256 = hex.EncodeToString(digest[:])
+		report.Stage = "dataset-seed"
+		chunk.Outcome = "unknown"
+		chunk.Result, err = submitEntry(entry)
+		if err != nil {
+			chunk.Error = err.Error()
+			return
+		}
+		chunk.Outcome = "committed-applied"
+		if err = c.fixturePrefixV1(ctx, chunk.Result.Evidence.Index); err != nil {
+			chunk.Error = err.Error()
+			return
+		}
+	}
 	report.Stage = "prepare"
 	report.Prepare, err = c.PrepareVectorInitializationV1(ctx, c.config.NodeID, requestID)
-	if err == nil && report.Prepare.Command.SourceRowCount != 3 {
-		err = fmt.Errorf("fixture requires exactly3 prepared source rows; observed %d", report.Prepare.Command.SourceRowCount)
+	if err == nil && report.Prepare.Command.SourceRowCount != expectedRows {
+		err = fmt.Errorf("fixture requires exactly%d prepared source rows; observed %d", expectedRows, report.Prepare.Command.SourceRowCount)
 	}
 	if err == nil {
 		report.Stage = "prepared-restart-required"
@@ -265,7 +354,10 @@ func (c *FixedPeerTCPClientV1) InitializeVectorFixtureV1(ctx context.Context, re
 // fixturePreparationV1 only reads existing authenticated durable completions.
 // Missing observations may converge; completed mismatches refuse immediately.
 // This proves the frozen preparation count, not current collection cardinality.
-func (c *FixedPeerTCPClientV1) fixturePreparationV1(ctx context.Context, requestID string) (observed collections.VectorPartitionPrepareCompletionV1, err error) {
+func (c *FixedPeerTCPClientV1) fixturePreparationV1(ctx context.Context, requestID string) (collections.VectorPartitionPrepareCompletionV1, error) {
+	return c.vectorPreparationRowsV1(ctx, requestID, 3)
+}
+func (c *FixedPeerTCPClientV1) vectorPreparationRowsV1(ctx context.Context, requestID string, expectedRows uint64) (observed collections.VectorPartitionPrepareCompletionV1, err error) {
 	if _, ok := ctx.Deadline(); !ok {
 		return observed, fmt.Errorf("bounded operation context requires a deadline")
 	}
@@ -288,9 +380,9 @@ func (c *FixedPeerTCPClientV1) fixturePreparationV1(ctx context.Context, request
 			observed = *completion
 			v := completion.Command
 			if v.ValidateV1() != nil || v.Operation != "prepare" || v.Term == 0 ||
-				state.RequestID != requestID+"/prepare" || v.SourceRowCount != 3 ||
+				state.RequestID != requestID+"/prepare" || v.SourceRowCount != expectedRows ||
 				state.Source != (collections.VectorPartitionSourceIdentityV1{Generation: v.SourceGeneration, Checksum: v.SourceChecksum, SchemaHash: v.SourceSchemaHash, RowCount: v.SourceRowCount}) {
-				return observed, fmt.Errorf("fixture preparation requires matching request and exactly3 prepared source rows; observed request=%q rows=%d", state.RequestID, v.SourceRowCount)
+				return observed, fmt.Errorf("fixture preparation requires matching request and exactly%d prepared source rows; observed request=%q rows=%d", expectedRows, state.RequestID, v.SourceRowCount)
 			}
 			if first == nil {
 				first = completion
@@ -313,15 +405,33 @@ func (c *FixedPeerTCPClientV1) fixturePreparationV1(ctx context.Context, request
 // top-one cosine results, authentic fresh-write/retry receipts, all-voter
 // applied-prefix visibility and readiness. Retry consensus progress can advance;
 // it does not replace the retained original Insert response.
-func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, requestID string) (report FixedPeerVectorQualificationV1, err error) {
-	if err = validateFixedPeerFixtureV1(c.config, requestID); err != nil {
-		return
+func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, requestID string) (FixedPeerVectorQualificationV1, error) {
+	if err := validateFixedPeerFixtureV1(c.config, requestID); err != nil {
+		return FixedPeerVectorQualificationV1{}, err
+	}
+	return c.qualifyVectorV1(ctx, requestID, nil)
+}
+func (c *FixedPeerTCPClientV1) QualifyVectorDatasetV1(ctx context.Context, requestID, path string) (FixedPeerVectorQualificationV1, error) {
+	if err := validateFixedPeerDatasetConfigV1(c.config, requestID); err != nil {
+		return FixedPeerVectorQualificationV1{}, err
+	}
+	dataset, err := readFixedPeerVectorDatasetV1(path, c.config)
+	if err != nil {
+		return FixedPeerVectorQualificationV1{}, err
+	}
+	return c.qualifyVectorV1(ctx, fixedPeerVectorDatasetRequestIDV1(requestID, dataset.identity.ManifestSHA256), &dataset.identity)
+}
+func (c *FixedPeerTCPClientV1) qualifyVectorV1(ctx context.Context, requestID string, dataset *FixedPeerVectorDatasetIdentityV1) (report FixedPeerVectorQualificationV1, err error) {
+	expectedRows := uint64(3)
+	if dataset != nil {
+		report.Dataset = dataset
+		expectedRows = dataset.SourceRows
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		err = fmt.Errorf("bounded operation context requires a deadline")
 		return
 	}
-	report.Prepare, err = c.fixturePreparationV1(ctx, requestID)
+	report.Prepare, err = c.vectorPreparationRowsV1(ctx, requestID, expectedRows)
 	if err != nil {
 		return
 	}
@@ -346,12 +456,12 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 		return short
 	}
 	search := func(query []float32) (public.SearchResponseV1, error) {
-		return client.VectorSearchStrictV1(ctx, public.SearchRequestV1{Version: 1, Generation: generation, Query: query, Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 8, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}, Deadline: deadline()})
+		return client.VectorSearchStrictV1(ctx, public.SearchRequestV1{Version: 1, Generation: generation, Query: query, Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: v.IndexDefinition.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}, Deadline: deadline()})
 	}
 	// Read-only recovery observations may retry; writes below never do.
 	err = fixturePollV1(ctx, func() (bool, error) {
 		var e error
-		report.Before, e = search([]float32{1, 0})
+		report.Before, e = search(fixedPeerOracleVectorV1(v.IndexDefinition.Dimensions, 1, 0))
 		if e != nil {
 			return false, e
 		}
@@ -366,7 +476,13 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 	if err != nil {
 		return
 	}
-	request := public.InsertRequestV1{Version: 1, Generation: generation, IdempotencyKey: []byte(requestID + "/fresh"), ID: []byte(requestID + "-fresh-y"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"fresh"}`), Deadline: deadline()}
+	freshVector := fixedPeerOracleVectorV1(v.IndexDefinition.Dimensions, 0, 1)
+	freshDocument, e := fixedPeerVectorJSONV1(freshVector, "fresh")
+	if e != nil {
+		err = e
+		return
+	}
+	request := public.InsertRequestV1{Version: 1, Generation: generation, IdempotencyKey: []byte(requestID + "/fresh"), ID: []byte(requestID + "-fresh-y"), Vector: freshVector, Document: freshDocument, Deadline: deadline()}
 	report.Insert, err = client.VectorInsertV1(ctx, request)
 	if err != nil {
 		return
@@ -389,7 +505,7 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 	if err = c.fixturePrefixV1(ctx, report.Retry.CommitIndex); err != nil {
 		return
 	}
-	report.After, err = search([]float32{0, 1})
+	report.After, err = search(fixedPeerOracleVectorV1(v.IndexDefinition.Dimensions, 0, 1))
 	if err != nil {
 		return
 	}

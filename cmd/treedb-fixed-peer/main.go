@@ -62,6 +62,7 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	mode := flags.String("mode", "serve", "serve, inspect, status, ready, diagnostics, initialize, qualify, or version")
 	trusted := flags.Bool("trusted-network-test", false, "explicitly allow plaintext legacy test fixtures")
 	expected := flags.String("expected-binary-sha256", "", "require this executable SHA-256 before any stores or network activity")
+	datasetPath := flags.String("dataset", "", "frozen system-export-dataset directory for dataset initialize/qualify; empty preserves three-row fixture")
 	requestID := flags.String("request-id", "", "stable ASCII fixture identity for initialize/qualify")
 	operationTimeout := flags.Duration("operation-timeout", 2*time.Minute, "initialize/qualify deadline, 1s..10m")
 	interval := flags.Duration("diagnostics-interval", 0, "emit diagnostics while serving; zero disables, minimum 1s")
@@ -75,6 +76,9 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	case "serve", "inspect", "status", "ready", "diagnostics", "initialize", "qualify", "version":
 	default:
 		return fmt.Errorf("unknown mode %q", *mode)
+	}
+	if *datasetPath != "" && *mode != "initialize" && *mode != "qualify" {
+		return fmt.Errorf("-dataset is supported only for initialize/qualify")
 	}
 	if *interval < 0 || (*interval > 0 && *interval < time.Second) || *interval > time.Hour {
 		return fmt.Errorf("diagnostics interval must be zero or 1s..1h")
@@ -143,13 +147,25 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 			operation, cancel := context.WithTimeout(ctx, *operationTimeout)
 			defer cancel()
 			if *mode == "initialize" {
-				report, e := client.InitializeVectorFixtureV1(operation, *requestID)
+				var report nativewire.FixedPeerVectorBootstrapV1
+				var e error
+				if *datasetPath == "" {
+					report, e = client.InitializeVectorFixtureV1(operation, *requestID)
+				} else {
+					report, e = client.InitializeVectorDatasetV1(operation, *requestID, *datasetPath)
+				}
 				if out := encoder.Encode(report); out != nil {
 					return out
 				}
 				return e
 			}
-			report, e := client.QualifyVectorFixtureV1(operation, *requestID)
+			var report nativewire.FixedPeerVectorQualificationV1
+			var e error
+			if *datasetPath == "" {
+				report, e = client.QualifyVectorFixtureV1(operation, *requestID)
+			} else {
+				report, e = client.QualifyVectorDatasetV1(operation, *requestID, *datasetPath)
+			}
 			if out := encoder.Encode(report); out != nil {
 				return out
 			}

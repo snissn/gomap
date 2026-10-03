@@ -22,9 +22,14 @@ type VectorPrepareV1 struct {
 
 const VectorPrepareMaxPayloadBytesV1 = 8192
 
+// Preparation input admission, not a serving capacity or retained heap promise.
+const VectorPrepareMaxSourceRowsV1 = 16384
+const VectorPrepareMaxSourceBytesV1 = 32 << 20
+const VectorPrepareMaxDocumentIDBytesV1 = 1024
+
 func (v VectorPrepareV1) ValidateV1() error {
 	bounded := func(s string) bool { return len(s) > 0 && len(s) <= 1024 }
-	if v.Version != 1 || !bounded(v.Collection) || !bounded(v.Index) || !bounded(v.Group) || v.Generation == 0 || v.MaxSourceRows == 0 || v.MaxSourceRows > 512 {
+	if v.Version != 1 || !bounded(v.Collection) || !bounded(v.Index) || !bounded(v.Group) || v.Generation == 0 || v.MaxSourceRows == 0 || v.MaxSourceRows > VectorPrepareMaxSourceRowsV1 {
 		return errors.New("commitlog: invalid bounded vector prepare identity")
 	}
 	digest, err := hex.DecodeString(v.IndexDefinitionDigest)

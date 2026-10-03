@@ -3,6 +3,8 @@
 import copy
 import importlib.util
 import json
+import hashlib
+import struct
 import pathlib
 import contextlib
 import io
@@ -25,12 +27,15 @@ def rejects(call, exception):
     raise AssertionError("invalid fixture/state was accepted")
 
 
-def check_orchestration(root, manifest, size):
+def check_orchestration(root, manifest, size, dataset_path=None):
     """Exercise real orchestration argv with mocked SSH/Docker responses."""
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
+    expected_dataset = None if dataset_path is None else (dataset_path / "documents.f32").read_bytes()
     for fault in (None, "missing-image", "binary-mismatch", "digest", "ownership", "close", "driver", "timeout", "replacement"):
-        output = root / ("receipts-" + str(fault))
+        if dataset_path is not None:
+            (dataset_path / "documents.f32").write_bytes(expected_dataset)
+        output = root / ("receipts-" + ("dataset-" if dataset_path else "") + str(fault))
         calls = []
         container_ids = {}
         inspect_count = 0
@@ -39,10 +44,20 @@ def check_orchestration(root, manifest, size):
             nonlocal inspect_count
             calls.append(argv)
             if argv[0] == "scp":
+                bundle = pathlib.Path(argv[-2])
+                staged = bundle / "dataset"
+                if staged.exists():
+                    assert dataset_path is not None
+                    assert (staged / "documents.f32").read_bytes() == expected_dataset
+                    assert (staged / "documents.f32").stat().st_mode & 0o777 == 0o400
+                    assert json.loads((staged / "manifest.json").read_text())["dimensions"] == 128
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             assert argv[:3] == ["ssh", "-o", "BatchMode=yes"]
             remote = shlex.split(argv[-1])
             if remote[0] == "mkdir":
+                if dataset_path is not None:
+                    # External changes after the first network action cannot alter copied input.
+                    (dataset_path / "documents.f32").write_bytes(b"external drift after freeze")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             assert remote[0] == "docker"
             command = remote[1:]
@@ -65,6 +80,11 @@ def check_orchestration(root, manifest, size):
                 else:
                     assert mode in ("initialize", "qualify")
                     assert command[command.index("-operation-timeout") + 1] == "120s"
+                    if dataset_path is not None:
+                        assert command[command.index("-dataset") + 1] == "/dataset"
+                        assert any(value.endswith("/dataset:/dataset:ro") for value in command)
+                    else:
+                        assert "-dataset" not in command
                     if fault == "driver" and mode == "initialize":
                         code, text = 1, json.dumps({"Stage": "seed", "Error": "partial durable progress"})
                     if fault == "timeout" and mode == "initialize":
@@ -83,6 +103,8 @@ def check_orchestration(root, manifest, size):
             return types.SimpleNamespace(returncode=code, stdout=text, stderr="")
 
         argv = ["harness", "--manifest", str(manifest_path), "--run-id", "offline", "--execute", "--output", str(output)]
+        if dataset_path is not None:
+            argv += ["--dataset", str(dataset_path)]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(harness.subprocess, "run", fake), contextlib.redirect_stdout(io.StringIO()):
             if fault is None:
                 harness.main()
@@ -105,7 +127,29 @@ def check_orchestration(root, manifest, size):
         assert all("offline placeholder" not in receipt.read_text() for receipt in output.glob("*.json"))
 
 
+def check_dataset_admission():
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        vectors = struct.pack("<" + "f" * 128, *([0.0, 0.0, 1.0] + [0.0] * 125))
+        (root / "documents.f32").write_bytes(vectors)
+        manifest = {"version": 1, "docs": 1, "dimensions": 128, "metric": "cosine", "normalized": True,
+                    "document_id_pattern": "doc-%06d", "document_vectors_file": "documents.f32",
+                    "float_format": "float32_le_row_major", "files": {"documents.f32": {"bytes": len(vectors), "sha256": hashlib.sha256(vectors).hexdigest()}}}
+        (root / "manifest.json").write_text(json.dumps(manifest))
+        dataset = harness.admit_dataset(root)
+        assert dataset["SourceRows"] == 4 and dataset["Dimensions"] == 128
+        assert dataset["InputBytes"] == 4*128*4 + len("doc-000000seed-xseed-minus-xseed-minus-y")
+        for field, value in (("docs", 16382), ("dimensions", 4097), ("float_format", "bad")):
+            changed = dict(manifest, **{field: value})
+            (root / "manifest.json").write_text(json.dumps(changed))
+            rejects(lambda: harness.admit_dataset(root), ValueError)
+        (root / "manifest.json").write_text(json.dumps(manifest))
+        (root / "documents.f32").write_bytes(b"changed")
+        rejects(lambda: harness.admit_dataset(root), ValueError)
+
+
 def main():
+    check_dataset_admission()
     for size in (3, 4):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -198,6 +242,30 @@ def main():
             duplicate.write_text('{"a":1,"a":2}')
             rejects(lambda: harness.read_json(duplicate), ValueError)
             check_orchestration(root, manifest, size)
+            dataset_path = root / "dataset"
+            dataset_path.mkdir()
+            vectors = struct.pack("<" + "f" * 128, *([0.0, 0.0, 1.0] + [0.0] * 125))
+            (dataset_path / "documents.f32").write_bytes(vectors)
+            dataset_manifest = {"version": 1, "docs": 1, "dimensions": 128, "metric": "cosine", "normalized": True,
+                                "document_id_pattern": "doc-%06d", "document_vectors_file": "documents.f32",
+                                "float_format": "float32_le_row_major", "files": {"documents.f32": {"bytes": len(vectors), "sha256": hashlib.sha256(vectors).hexdigest()}}}
+            (dataset_path / "manifest.json").write_text(json.dumps(dataset_manifest))
+            dataset_configs = copy.deepcopy(configs)
+            for config in dataset_configs:
+                config["VectorInitialization"]["IndexDefinition"].update(dimensions=128, m=16, ef_construction=128, ef_search=128)
+            write_configs(dataset_configs)
+            check_orchestration(root, manifest, size, dataset_path)
+            # Drift between full admission and private staging refuses before any network work.
+            (dataset_path / "documents.f32").write_bytes(vectors)
+            original_admit = harness.admit_dataset
+            def drifting_admit(path):
+                admitted = original_admit(path)
+                (dataset_path / "documents.f32").write_bytes(b"changed before private freeze")
+                return admitted
+            drift_argv = ["harness", "--manifest", str(manifest_path), "--dataset", str(dataset_path),
+                          "--run-id", "offline", "--execute", "--output", str(root / "drift-refusal")]
+            with mock.patch.object(sys, "argv", drift_argv), mock.patch.object(harness, "admit_dataset", drifting_admit), mock.patch.object(harness.subprocess, "run", side_effect=AssertionError("drift reached network")):
+                rejects(harness.main, ValueError)
     container_id = "c" * 64
     owned = {"Id": container_id, "Config": {"Labels": {"treedb.fixed-cluster.run": "offline"}},
              "State": {"Running": True}}

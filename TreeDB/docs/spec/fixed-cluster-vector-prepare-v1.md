@@ -2,15 +2,15 @@
 
 This provisional checkpoint supports one RF3 or RF4 data group and a catalog
 with the exact same three or four voters, one generation and one physical partition, with a nonempty source of at most
-512 documents. The collection uses the production column_graph cosine float32
+16,384 documents within the actual32-MiB FP32+ID input envelope. The collection uses the production column_graph cosine float32
 definition and a physical typed float32 vector column. Dimensions are capped
 at 4096, configured M at 64, and configured construction/search ef at 4096.
 Quantized definitions, schema-generation/representation variants, split owners,
 movement, subsequent generations and automatic activation without restart are
 outside this checkpoint. RF4 is bounded operational conformance, not a larger
 capacity or fault-tolerance claim: its quorum is three and a 2+2 two-host
-placement cannot survive either host loss. Source rows remain bounded at 512
-and completed serving inserts at 64.
+placement cannot survive either host loss. Preparation admission is separate from live overlay limits. The optional ordinary
+insert probe exceeds64 distinct IDs; split mutation ledgers retain their own64 bounds.
 
 Create and InsertBatch use routed native Raft commands. Physical creation uses
 additive collection-metadata version 6 carrying the production column schema;
@@ -166,3 +166,91 @@ bytes/digest/target/catalog checks and committed coverage checks remain intact.
 Capture and storage-owner allocations are cold prepare-only costs, independent
 of the source row count. Stable capture admission may wait on maintenance, so it
 must precede the storage barrier as well as schema/native/raw acquisition.
+
+
+## Dataset preparation admission (#4956)
+
+The fixed-peer first-generation, single-data-group preparation input admits at
+most 16,384 authoritative rows, 32 MiB of actual FP32 vector bytes plus actual
+document-ID bytes, and 1,024 bytes per document ID. These limits apply to
+preparation, not ordinary insert admission or serving capacity. Primary rows
+and actual IDs are scanned without owned source-row allocation before rebuild;
+the physical source reader independently checks the same envelope before owned
+vector/ID backing buffers. Central prepared-manifest origin validation uses the
+same 16,384-row bound during encode, BUILD/READY publication, replay and reopen;
+its term/index/digest, single-partition, inline-V1 constraints remain intact.
+The manifest carries no actual FP32/ID input bytes, so those admission checks
+remain at the authoritative primary scan and physical source reader.
+Dimensions remain within the existing 4,096 bound.
+WAL and persistent value-log durability/reachability rules are unchanged.
+
+`treedb-fixed-peer -mode initialize|qualify -dataset DIR` consumes the existing
+`system-export-dataset` manifest and `documents.f32` identities. The initial
+packet targets 10,000 unchanged 128D corpus rows plus three counted oracle
+anchors (10,003 prepared rows). Each input row must be finite, nonzero,
+normalized within squared-norm tolerance 0.001, and have first-two-coordinate
+norm fraction at most 0.9. This eligibility keeps deterministic plane anchors
+and fresh self-query probes separated from the corpus. An unsuitable corpus
+is refused before mutation; it is never projected, padded, or substituted.
+
+The loader bounds declared dimensions/count/file sizes and actual FP32+ID bytes,
+freezes one private admitted raw FP32 snapshot, then validates its full SHA256
+and every row before catalog publication. External file changes cannot alter
+that accepted snapshot. Only one bounded JSON chunk is decoded/encoded at a
+time: at most 128 rows and 1 MiB of document/ID bytes, with a conservative
+per-row serialization bound reducing the row count for large dimensions.
+All seeds and corpus chunks use existing authenticated routed Raft commands,
+unique stable chunk identities, real committed/applied receipts, and all-voter
+applied-prefix waits. After each preceding prefix wait, the client observes the
+current authenticated group leader/status before freezing the next unissued
+chunk's expected catalog version; a failed observation stops without a mutation
+retry. There is no automatic mutation retry. Reports retain
+planned/unissued chunks and each actual result; a failed attempted chunk remains
+UNKNOWN and stops later chunks and Prepare. An observed committed/apply receipt
+followed by a failed all-voter wait remains distinct from proving all voters.
+Successful Prepare still requires clean restart and matching durable completion
+on every voter before native HNSW qualification. Dataset-only internal request
+prefixes are `USER/dataset-MANIFEST_SHA256`, derived after the unchanged public
+64-byte ASCII user-ID rule. The frozen manifest includes the verified vector
+hash. Initialization and qualification derive the identical prefix, and every
+voter's durable Prepare request identity must match `PREFIX/prepare` before
+public search or fresh insertion. Same-count eligible corpus replacement, or
+any changed manifest bytes, therefore refuses instead of assigning replacement
+provenance to old preparation. The expanded prefix and suffixed keys fit the
+existing 512-byte Prepare request and 1,024-byte idempotency limits. Empty
+`-dataset` preserves the
+original three-row/2D fixture and sequential qualification behavior.
+
+The query-under-write driver optionally accepts `-fresh-inserts 65`, using the
+configured dimensions and search effort, independently connected readers and
+writers, the planned identical retry, raw outcomes, and native expected-ID
+probes. The default remains 132 operations / 32 new IDs. The optional packet has
+198 operations: 132 searches and 66 mutation attempts / 65 new IDs. These probe
+an ordinary public insert population beyond 64; they do not alter mutation
+identity capacity or establish unlimited growth. The rejecting 64-identity
+ledger belongs to split inserts; catalog completion retention evicts old entries.
+Existing guide statements about 64 ordinary inserts describe older qualification
+limits and are not evidence of an ordinary-path hard refusal. Live overlay
+128-Ki-ID / 256-MiB limits remain separate.
+
+Allocation evidence must include loader freeze and JSON chunk B/op/allocs/op,
+actual setup/preparation phase totals per corpus row, server/client peaks,
+durations, and native/exact path counters, comparing unchanged fixture behavior
+on matched base/head. The loader retains one raw-vector representation and only
+one transient JSON chunk; preparation owns one contiguous vector buffer and one
+ID buffer plus row/slice headers. Native pack, router, authoritative verification,
+HNSW adjacency and persistent metadata can retain additional representations;
+32 MiB is an input limit, not a heap or RSS bound. Measured costs remain a gate. The identical old-API benchmark file
+`vector_partition_source_reader_admission_bench_test.go` runs
+`BenchmarkVectorPartitionSourceReaderAdmission512x128V1` on matched baseline and
+candidate to measure the shared reader's two ID passes and contiguous buffers.
+Candidate-only `BenchmarkFixedPeerVectorDatasetFreezeV1` (512/10,000 rows) and
+`BenchmarkFixedPeerVectorDatasetChunkV1` measure the new loader/chunk seam;
+setup is excluded and allocations are reported. These microbenchmarks do not
+replace actual four-voter preparation and container peak measurements.
+
+This checkpoint neither closes #4250/#4805 nor qualifies sustained throughput,
+tail latency, broad ANN recall, multiowner mutable serving, movement, replace,
+delete, batch serving or generic writes. Those retain #4250/#4809/#4810/#4812
+ownership. RF4 quorum three across a 2+2 host layout cannot tolerate either
+whole-host loss. Source/harness review and landing precede sustained collection.
