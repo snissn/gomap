@@ -826,7 +826,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, ErrKeyNotFound
 			}
 
-			_, val, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
+			val, ptr, flags, revision, err := n.GetLeafValueViewWithRevision(idx)
 			if err != nil {
 				if leafViewLease != nil {
 					leafViewLease.ReleaseLeafLogPageView()
