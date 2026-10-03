@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -11,15 +12,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -703,5 +708,71 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 	}
 	if _, err := retainedOwner.searchVectorPartitionStrictV1(ctx, searchRequest([]float32{0, 1})); err == nil {
 		t.Fatal("stale startup runtime served after root replacement")
+	}
+}
+
+func TestFixedPeerVectorPreparedAllVotersRejectsMissingLocalCompletionV1(t *testing.T) {
+	seed := fixedPeerVectorSeedV1(t)
+	configs := initializationTestConfigsV1(t)
+	config := configs[len(configs)-1]
+	group := config.Groups[0]
+	remote := group.Peers[0].ID
+	if remote == config.NodeID {
+		t.Fatal("fixture must compare a remote voter before the local voter")
+	}
+	dir := filepath.Join(config.DataRoot, string(group.ID))
+	if err := os.CopyFS(dir, os.DirFS(seed.dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backenddb.RebindDurableRootSnapshotV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	bootstrapFixedPeerVectorTrustedGenesisV1(t, config, seed.appliedCommandLSN)
+	database, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB:           database,
+		Cluster:      raftcluster.Config{Dir: dir, ClusterDir: config.RaftRoot, DisableSideStores: true, NodeID: config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features},
+		StoreOptions: raftapply.DurableApplyStoreOptions{DisableSync: true, AllowInitialIndexGap: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fsm.Close() })
+	view := &FixedPeerTCPRuntimeV1{
+		config: config, preparedVector: &FixedPeerTCPVectorConfigV1{},
+		data: map[raftcluster.GroupID]*fixedPeerDataV1{group.ID: {db: database, fsm: fsm}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	local, err := view.vectorPrepareStatusV1(ctx)
+	if err != nil || local == nil || local.Completion != nil || local.Source.RowCount == 0 {
+		t.Fatalf("actual unprepared local status: status=%+v err=%v", local, err)
+	}
+	// Only the remote reply is controlled. The local status comes from the
+	// actual current FSM DB; no Apply or snapshot replacement is injected.
+	var requests atomic.Int32
+	const digest = "missing-local-completion"
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(fixedPeerReplyV1{
+			NodeID: remote, ConfigDigest: digest,
+			VectorPreparation: &fixedPeerVectorPrepareStatusV1{Source: local.Source, Completion: &collections.VectorPartitionPrepareCompletionV1{}},
+		})
+	}))
+	t.Cleanup(peer.Close)
+	view.client = &FixedPeerTCPClientV1{
+		digest: digest, readHTTP: peer.Client(), readCalls: make(chan struct{}, 1),
+		addresses: map[raftcluster.NodeID]string{remote: strings.TrimPrefix(peer.URL, "http://")},
+	}
+	err = view.validatePreparedVectorAllVotersV1(ctx)
+	if err == nil || !strings.Contains(err.Error(), "local voter has no validated prepared generation") {
+		t.Fatalf("missing local completion was not refused: %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("missing local completion reached remote comparison")
 	}
 }
