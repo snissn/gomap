@@ -353,6 +353,13 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 		}
 	}
 	closeAll := func() {
+		// Retire caller-owned idle sockets before shutting down any recipient.
+		for _, node := range nodes {
+			if node != nil && node.client != nil {
+				node.client.http.CloseIdleConnections()
+				node.client.readHTTP.CloseIdleConnections()
+			}
+		}
 		for i, node := range nodes {
 			if node != nil {
 				if err := node.Close(); err != nil {
