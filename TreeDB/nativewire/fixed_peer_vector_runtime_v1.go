@@ -451,7 +451,7 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("validate vector live binding: %w", err))
 		}
 	}
-	listener, err := net.Listen("tcp", parent.config.Vector.PublicAddresses[parent.config.NodeID])
+	listener, err := parent.takeListenerV1(parent.config.Vector.PublicAddresses[parent.config.NodeID])
 	if err != nil {
 		return nil, err
 	}
@@ -676,7 +676,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 			_ = source.Close()
 			return nil, serviceErr
 		}
-		shardListener, err = net.Listen("tcp", vector.ShardAddresses[owner][r.parent.config.NodeID])
+		shardListener, err = r.parent.takeListenerV1(vector.ShardAddresses[owner][r.parent.config.NodeID])
 		if err != nil {
 			_ = source.Close()
 			return nil, err

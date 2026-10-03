@@ -234,7 +234,11 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 	if err != nil {
 		return err
 	}
-	transport, stream, err := newFixedPeerTCPTransportOwnedV1(localAddress, addr, r.config.RequestTimeout, r.client.security, group.Peers, admission, "raft:"+string(group.ID))
+	listener, err := r.takeListenerV1(localAddress)
+	if err != nil {
+		return err
+	}
+	transport, stream, err := newFixedPeerTCPTransportListenerV1(listener, addr, r.config.RequestTimeout, r.client.security, group.Peers, admission, "raft:"+string(group.ID))
 	if err != nil {
 		return err
 	}

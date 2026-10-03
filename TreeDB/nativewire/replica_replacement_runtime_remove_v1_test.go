@@ -40,7 +40,7 @@ func TestReplacementPrepareRetriesOnlyExactPreSendInstallV1(t *testing.T) {
 			cfg := fixedPeerTestConfigsV1(t)[0]
 			cfg.ClusterID = "replacement-presend-public"
 			cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
-			runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+			runtime, err := fixedPeerOpenTestRuntimeV1(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -364,7 +364,7 @@ func testReplacementCompleteAndSequentialV1(t *testing.T, ctx context.Context, c
 		if err := runtimes[i].Close(); err != nil {
 			t.Fatal(err)
 		}
-		runtime, err := OpenFixedPeerTCPRuntimeV1(configs[i])
+		runtime, err := fixedPeerOpenTestRuntimeV1(t, configs[i])
 		if err != nil {
 			t.Fatal(err)
 		}

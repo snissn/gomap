@@ -84,7 +84,7 @@ func TestAuthenticatedSplitSourceInsertCanonicalCapacityAndVisibilityV1(t *testi
 			f.processes[i].stop(t)
 		}
 	}
-	source, err := OpenFixedPeerTCPRuntimeV1(sourceConfig)
+	source, err := fixedPeerOpenTestRuntimeV1(t, sourceConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 			f.processes[i].stop(t)
 		}
 	}
-	source, err := OpenFixedPeerTCPRuntimeV1(config)
+	source, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestAuthenticatedSplitSourceInsertCommitBeforeProjectionReopenV1(t *testing
 	}
 	// Close never changes the durable intent. Successful native reopen must
 	// own one retry worker and finish without a new client mutation or ANN query.
-	reopened, err := OpenFixedPeerTCPRuntimeV1(config)
+	reopened, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestAuthenticatedSplitProofSaturationPreservesLeafReadsV1(t *testing.T) {
 	}
 	var targets []*FixedPeerTCPRuntimeV1
 	for _, config := range configs {
-		node, err := OpenFixedPeerTCPRuntimeV1(config)
+		node, err := fixedPeerOpenTestRuntimeV1(t, config)
 		if err != nil {
 			t.Fatal(err)
 		}

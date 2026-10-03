@@ -294,7 +294,7 @@ func fixedPeerVectorReadyWithSourcePlacementAuthV1(t testing.TB, ctx context.Con
 	default:
 		t.Fatalf("unsupported fixture source placement %q", mode)
 	}
-	configs := fixedPeerVectorTestConfigsV1(t, seed)
+	configs := fixedPeerVectorTestConfigsV1(t, seed, fixedPeerSubprocessAllocatorV1(t))
 	if authenticated {
 		ca := newPeerCAFixtureV1(t)
 		for i := range configs {
@@ -963,22 +963,9 @@ func bootstrapFixedPeerVectorTrustedGenesisV1(t testing.TB, config FixedPeerTCPC
 	}
 }
 
-func fixedPeerVectorTestConfigsV1(t testing.TB, seed fixedPeerVectorSeedFixtureV1) []FixedPeerTCPConfigV1 {
+func fixedPeerVectorTestConfigsV1(t testing.TB, seed fixedPeerVectorSeedFixtureV1, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	t.Helper()
-	var listeners []net.Listener
-	defer func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
-	}()
-	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		listeners = append(listeners, listener)
-		return listener.Addr().String()
-	}
+	address := fixedPeerTestAllocatorV1(t, allocate)
 	nodeIDs := []raftcluster.NodeID{"ingress", "owner-1", "owner-2", "owner-3"}
 	features := raftcluster.DefaultFeatureSet()
 	features.Required = append(features.Required,
@@ -992,16 +979,16 @@ func fixedPeerVectorTestConfigsV1(t testing.TB, seed fixedPeerVectorSeedFixtureV
 	publicAddresses := make(map[raftcluster.NodeID]string, len(nodeIDs))
 	shardAddresses := map[raftcluster.GroupID]map[raftcluster.NodeID]string{"group-b": {}}
 	for _, nodeID := range nodeIDs {
-		nodes = append(nodes, FixedPeerTCPNodeV1{ID: nodeID, Address: address()})
-		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: nodeID, Address: address(), Capabilities: features})
-		peer := raftcluster.Peer{ID: nodeID, Address: address()}
+		nodes = append(nodes, FixedPeerTCPNodeV1{ID: nodeID, Address: address(nodeID)})
+		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: nodeID, Address: address(nodeID), Capabilities: features})
+		peer := raftcluster.Peer{ID: nodeID, Address: address(nodeID)}
 		if nodeID == "ingress" {
 			groupA.Peers = append(groupA.Peers, peer)
 		} else {
 			groupB.Peers = append(groupB.Peers, peer)
-			shardAddresses["group-b"][nodeID] = address()
+			shardAddresses["group-b"][nodeID] = address(nodeID)
 		}
-		publicAddresses[nodeID] = address()
+		publicAddresses[nodeID] = address(nodeID)
 	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, seed.catalog)
 	if err != nil {
@@ -1424,7 +1411,7 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 					t.Fatalf("binding test has invalid lifecycle shape: %v", err)
 				}
 			}
-			if runtime, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) {
+			if runtime, err := fixedPeerOpenTestRuntimeV1(t, config); !errors.Is(err, raftcluster.ErrInvalidConfig) {
 				if runtime != nil {
 					_ = runtime.Close()
 				}
@@ -1503,7 +1490,7 @@ func TestFixedPeerVectorLocalDataGroupValidationPrecedesDiskCreationV1(t *testin
 	config.DataRoot = filepath.Join(root, "data")
 	config.RaftRoot = filepath.Join(root, "raft")
 
-	if runtime, err := OpenFixedPeerTCPRuntimeV1(config); err == nil || !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "requires exactly one local data group") {
+	if runtime, err := fixedPeerOpenTestRuntimeV1(t, config); err == nil || !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "requires exactly one local data group") {
 		if runtime != nil {
 			_ = runtime.Close()
 		}

@@ -256,7 +256,8 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	columnStore.RecoveryAuthoritativeManifest = nil
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
-	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta)
+	allocate := fixedPeerSubprocessAllocatorV1(t)
+	configs := fixedPeerMultiOwnerSearchConfigsV1(t, seed.manifest, meta, allocate)
 	for i := range configs {
 		configs[i].Vector.RequestBase.PartitionProbes = probes
 		if probes == 5 {
@@ -276,7 +277,7 @@ func testMultiOwnerTCPDomainSearchWithQualificationV1(t *testing.T, ctx context.
 	if separateLeaders {
 		metaLeader = "ingress"
 		if sourceFollower {
-			configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs)
+			configs = fixedPeerAddSourceFollowerMetaLeaderV1(t, configs, allocate)
 			metaLeader = "source-follower"
 		}
 	}
@@ -1124,7 +1125,7 @@ func TestMultiOwnerTCPDomainSearchRestagesElectedOwnerV1(t *testing.T) {
 	columnStore.RecoveryAuthoritativeManifest = nil
 	columnStore.RecoveryAuthoritativeAppliedCommandLSN = 0
 	meta.Options.ColumnStore = &columnStore
-	configs := fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, seed.manifest, meta, 3)
+	configs := fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, seed.manifest, meta, 3, fixedPeerSubprocessAllocatorV1(t))
 	if err := seed.database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1428,8 +1429,8 @@ func fixedPeerAssertSourceDocumentCountV1(t testing.TB, root, collectionName str
 	}
 }
 
-func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta) []FixedPeerTCPConfigV1 {
-	return fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, manifest, sourceMeta, 1)
+func fixedPeerMultiOwnerSearchConfigsV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
+	return fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t, manifest, sourceMeta, 1, allocate...)
 }
 
 func TestFixedPeerImmutableVectorConfigRejectsSourceOwnerGroupV1(t *testing.T) {
@@ -1462,25 +1463,12 @@ func TestFixedPeerImmutableVectorConfigRejectsSourceOwnerGroupV1(t *testing.T) {
 	}
 }
 
-func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta, ownerBReplicas int) []FixedPeerTCPConfigV1 {
+func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest collections.VectorPartitionManifestV1, sourceMeta collections.CollectionMeta, ownerBReplicas int, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	t.Helper()
 	if ownerBReplicas != 1 && ownerBReplicas != 3 {
 		t.Fatal("owner-b fixture requires one or three voters")
 	}
-	var listeners []net.Listener
-	defer func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
-	}()
-	address := func() string {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		listeners = append(listeners, listener)
-		return listener.Addr().String()
-	}
+	address := fixedPeerTestAllocatorV1(t, allocate)
 	ids := []raftcluster.NodeID{"ingress", "owner-b", "owner-c", "source-holder"}
 	for replica := 2; replica <= ownerBReplicas; replica++ {
 		ids = append(ids, raftcluster.NodeID(fmt.Sprintf("owner-b-%d", replica)))
@@ -1515,20 +1503,20 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 			group = "group-d"
 		}
 		groupForNode[id] = group
-		nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address()})
-		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: id, Address: address(), Capabilities: features})
+		nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address(id)})
+		meta.Peers = append(meta.Peers, raftcluster.Peer{ID: id, Address: address(id), Capabilities: features})
 		for i := range groups {
 			if groups[i].ID != group {
 				continue
 			}
-			groupRaftAddress[id] = address()
+			groupRaftAddress[id] = address(id)
 			groups[i].Peers = append(groups[i].Peers, raftcluster.Peer{ID: id, Address: groupRaftAddress[id]})
 			break
 		}
 		if group == "group-b" || group == "group-c" {
-			shardAddresses[group][id] = address()
+			shardAddresses[group][id] = address(id)
 		}
-		publicAddresses[id] = address()
+		publicAddresses[id] = address(id)
 	}
 	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: manifest.Collection}
 	catalogFeatures := raftplacement.DefaultFeatureSet()
@@ -1627,10 +1615,11 @@ func fixedPeerMultiOwnerSearchConfigsWithOwnerBReplicasV1(t testing.TB, manifest
 // Keep the router in group-a while the meta leader is a follower of group-d.
 // The source-holder remains group-d's bootstrap leader. This exposes callback
 // selection that incorrectly treats local group membership as leadership.
-func fixedPeerAddSourceFollowerMetaLeaderV1(t testing.TB, configs []FixedPeerTCPConfigV1) []FixedPeerTCPConfigV1 {
+func fixedPeerAddSourceFollowerMetaLeaderV1(t testing.TB, configs []FixedPeerTCPConfigV1, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	t.Helper()
 	const follower raftcluster.NodeID = "source-follower"
-	addresses := fixedPeerFixtureUnusedAddressesV1(t, configs, 4)
+	address := fixedPeerTestAllocatorV1(t, allocate)
+	addresses := []string{address(follower), address(follower), address(follower), address(follower)}
 	metaAddress, dataAddress, controlAddress, publicAddress := addresses[0], addresses[1], addresses[2], addresses[3]
 	meta := configs[0].Catalog
 	meta.BootstrapNode = follower
