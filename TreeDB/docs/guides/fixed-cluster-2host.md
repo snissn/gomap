@@ -20,7 +20,7 @@ An example port inventory is:
 
 Reserve these ports. ListenAddress, advertised control addresses and local RaftListen must agree with actual host placement. Containers use Linux host networking. Public/shard loopback addresses stay local. The existing authenticated control path forwards public operations to the actual owner leader. The driver uses node-c's config and public address, permitting a leader on111 without exposing public ingress remotely.
 
-Set VectorInitialization source to the single group, Collection to default/default/docs (or another fresh valid name), CatalogEpoch1, Generation1, MaxSourceRows3..512, and complete public/shard maps. Use this production index definition; omitted encoding gets the validated FP32 default:
+Set VectorInitialization source to the single group, Collection to default/default/docs, CatalogEpoch1, Generation1, MaxSourceRows3..512, and complete public/shard maps. Use this production index definition; omitted encoding gets the validated FP32 default:
 
 ```json
 {"name":"embedding_graph","field":"embedding","metric":"cosine","dimensions":2,"m":2,"ef_construction":8,"ef_search":8,"strategy":"column_graph"}
