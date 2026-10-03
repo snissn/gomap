@@ -822,13 +822,13 @@ keys are absent. `-keys` bounds either case for smoke runs.
 
 ```sh
 GOWORK=off go build -o bin/unified-bench ./cmd/unified_bench
-GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable
 # Fixed aggregate trace and counts at every reader width; GOMAXPROCS is independent.
-GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable \
   -read-workers 32 -quicksilver-case structured256
 # Bounded correctness/profile rehearsal (not a throughput qualification).
 OUT=$(mktemp -d /tmp/quicksilver_profiles_XXXXXX)
-GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile command_wal_durable \
   -keys 8192 -read-workers 4 -quicksilver-reads 65536 \
   -quicksilver-duration 200ms -profile-dir "$OUT"
 ./bin/benchprof -profiles-dir "$OUT"
