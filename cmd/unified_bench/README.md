@@ -809,3 +809,103 @@ WriteSync-only update acknowledgement samples, a separate fixed-present owned
 Get concurrent reader, and explicitly scoped process IO counters. See
 [its measured boundaries](../../docs/benchmarks/treedb_quicksilver_workflow/README.md);
 these package packets are not benchprof profile-dir artifacts.
+
+## Quicksilver shaped KV workload
+
+The native `-suite quicksilver` uses the ordinary database registry and adapters.
+It measures a local KV workload, without reproducing Cloudflare replication.
+The default fixture is `random4k`: 100,000 keys and 4096-byte deterministic random
+values. `-quicksilver-case structured256` selects 250,000 keys and 256-byte
+compressible values. Values contain big-endian key ID and generation headers;
+32-byte keys share the reference's 24-byte prefix. Even keys exist; adjacent odd
+keys are absent. `-keys` bounds either case for smoke runs.
+
+```sh
+GOWORK=off go build -o bin/unified-bench ./cmd/unified_bench
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable
+# Fixed aggregate trace and counts at every reader width; GOMAXPROCS is independent.
+GOMAXPROCS=8 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+  -read-workers 32 -quicksilver-case structured256
+# Bounded correctness/profile rehearsal (not a throughput qualification).
+OUT=$(mktemp -d /tmp/quicksilver_profiles_XXXXXX)
+GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+  -keys 8192 -read-workers 4 -quicksilver-reads 65536 \
+  -quicksilver-duration 200ms -profile-dir "$OUT"
+./bin/benchprof -profiles-dir "$OUT"
+```
+
+The workflow loads synchronous 1000-value batches, checkpoints, closes/reopens,
+and performs 50,000 deterministic untimed warmup reads. Each fixed phase executes
+**2,000,000 aggregate operations**, including reader-count remainders: hits,
+misses, and 10 misses/1 hit. Default 4 readers each reuse a snapshot for 64 owned
+`Get` reads. `-quicksilver-read-batch=1` uses ordinary owned `DB.Get`; larger
+values require `ReadSnapshotter` and fail clearly when unavailable. `Batcher`
+and `Checkpoint` are also required. Unsupported engines and unknown registry
+names fail instead of disappearing from the selected set. LMDB remains optional:
+`GOWORK=off go build -tags lmdb -o bin/unified-bench ./cmd/unified_bench`. Its
+normal adapter provides owned snapshot reads and a force-sync checkpoint; the
+suite pins write-batch creation through commit/close to one OS thread.
+
+Concurrent mixed readers run for `-quicksilver-duration` (default 4s). A paced
+writer updates `-quicksilver-updates` distinct keys (default min(40,000,keys)),
+in 1000-value batches, checkpointing at four quarter intervals (up to four when
+smoke runs have fewer batches). The reference's 7919 permutation stride is kept
+when coprime to the key count, otherwise the next coprime stride is reported.
+Every measured read validates absence or identity/length/generation. Final
+checkpoint/close/reopen is followed by byte-for-byte verification of **every**
+value and **every** adjacent absent key. Errors cancel and join all readers and
+the writer before owner close. Failed suite DBs are retained with their path in
+the error; successful DBs are removed unless `-keep` is supplied.
+
+The suite prints its effective settings banner on stderr and a JSON array on
+stdout. With `-profile-dir`, benchprof prints artifact notices on stderr and
+also writes detailed `quicksilver_results.json` and canonical
+`benchprof_results.json/md`, then requires benchprof `insights.json/md/html`, including a point-read throughput
+table.
+The JSON records actual fixture/workers/GOMAXPROCS/stride, phase counts, latency
+quantiles/max, load/checkpoint/reopen/update timings, full proof counts, engine
+stats before/after phases, actual relative-file logical sizes, and registered
+CLI flag values. Registered flags include values unused by this suite; its
+`config` is authoritative. File lengths are not allocated filesystem blocks.
+Explicit generic workload/sweep flags that cannot apply are rejected; engine
+options, profiles, `-max-wall`, `-max-rss-mb` and profiling controls remain usable.
+
+CPU and allocation artifact phase names are `quicksilver_hits`,
+`quicksilver_misses`, `quicksilver_mixed`, and `quicksilver_concurrent`.
+`-cpuprofile-tests` and `-allocsprofile-tests` select these exact names. Checkpoint
+CPU artifacts use `quicksilver_initial` and `quicksilver_final`, selectable with
+`-checkpoint-cpuprofile-tests`; the concurrent writer's checkpoint cost appears
+in the concurrent CPU capture. Per-engine CPU captures stop after reader join,
+before quantile sorting and writer drain. Allocation delta profiles also include
+small phase orchestration, stats and summary work. Shared `block.pprof`,
+`mutex.pprof`, and `trace.out` cover the **entire suite across all selected
+engines**, including setup and verification; they are process observations.
+
+`seconds` measures reader-group completion, and ops/sec uses that interval.
+`composition_seconds` separately includes checked writer drain, stats capture,
+and CPU profiler shutdown when enabled.
+Latency includes owned Get and periodic snapshot close/acquire; max covers all
+successful reads. Samples use the reference's xor-mixed 1/4 fixed-phase and 1/16
+concurrent schedule, capped at 1,000,000 aggregate samples per phase. Quantiles
+are empirical samples, not a production SLO. Once a reader fills its share of
+the sample budget, its quantiles retain earlier samples; maximum still covers
+the entire successful read window. Process MemStats deltas and
+normalized B/op/allocs/op cover the reader interval, including engine background
+activity and, in the concurrent phase, the writer. They exclude fixture creation,
+quantile sorting and profiler stop; they are not isolated engine allocations.
+The reusable fixture holds 65,536 IDs and both present/absent keys (4,718,592 bytes)
+plus one 8,000,000-byte sample backing buffer, partitioned across readers. No
+whole payload corpus or per-read key allocation is retained. Small goroutine,
+context and engine snapshot allocations are separate from those capacities.
+
+Compared with the retained scratch `quicksilver_eval_test.go`, the default is
+random4k and 64 reads/snapshot, fixed counts are explicit aggregate 2M instead of
+per-worker `QS_OPS`, arbitrary key counts retain unique updates, all absent keys
+are verified, and failures always stop/join. The PCG seeds, payload bytes,
+key trace and 10:1 schedule match. Stock registered engine tuning and integrity
+apply; private K=1, CRC-skipping, raw-engine, compaction, and filter hooks are
+not copied. Scratch/private-experiment throughput is historical evidence.
+Profiled and unprofiled runs must be labeled separately; retain three repeats
+before summarizing numerical comparisons. The standalone TreeDB workflow in
+[the canonical runbook](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
+remains a separate workload and artifact schema.

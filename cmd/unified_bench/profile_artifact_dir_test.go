@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -177,5 +180,57 @@ func TestContentionProfilePath(t *testing.T) {
 	want := filepath.Join(dir, "block_random_read_batch_treedb__vlog_off_.pprof")
 	if got != want {
 		t.Fatalf("contentionProfilePath = %q, want %q", got, want)
+	}
+}
+
+func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "unified-bench")
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+	for _, bad := range [][]string{{"-keys=0"}, {"-quicksilver-case=bad"}, {"-dbs=not_registered"}, {"-quicksilver-read-batch=0"}, {"-quicksilver-duration=0"}} {
+		args := append([]string{"-suite=quicksilver", "-dbs=treedb"}, bad...)
+		if out, err := exec.Command(binaryPath, args...).CombinedOutput(); err == nil {
+			t.Fatalf("invalid args %v succeeded: %s", bad, out)
+		}
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(binaryPath, "-suite=quicksilver", "-dbs=treedb", "-profile=durable", "-keys=17", "-read-workers=3", "-quicksilver-case=structured256", "-quicksilver-reads=41", "-quicksilver-duration=10ms", "-profile-dir="+dir)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("CLI: %v: %s", err, stderr.String())
+	}
+	var stdoutReports []quicksilverResult
+	if err := json.Unmarshal(stdout, &stdoutReports); err != nil {
+		t.Fatalf("stdout must be JSON: %v: %s", err, stdout[:min(len(stdout), 512)])
+	}
+	if len(stdoutReports) != 1 {
+		t.Fatalf("stdout reports: %s", stdout)
+	}
+	for _, name := range []string{"quicksilver_results.json", "benchprof_results.json", "benchprof_results.md", "insights.json", "insights.md", "insights.html", "block.pprof", "mutex.pprof", "trace.out", "cpu_quicksilver_hits_treedb.pprof", "allocs_quicksilver_hits_treedb.pprof", "checkpoint_cpu_checkpoint_quicksilver_initial_treedb.pprof", "checkpoint_cpu_checkpoint_quicksilver_final_treedb.pprof"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || info.Size() == 0 {
+			t.Fatalf("missing artifact %s: %v", name, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "quicksilver_results.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reports []quicksilverResult
+	if err = json.Unmarshal(raw, &reports); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || reports[0].VerifiedKeys != 17 || reports[0].VerifiedMisses != 17 || reports[0].Config.Reads != 41 {
+		t.Fatalf("incorrect artifact counts: %s", raw)
+	}
+	for _, p := range reports[0].Phases[:3] {
+		if p.Ops != 41 {
+			t.Fatalf("aggregate count %d", p.Ops)
+		}
 	}
 }
