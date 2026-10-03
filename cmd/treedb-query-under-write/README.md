@@ -55,3 +55,30 @@ loading; anchors/new probes use that plane, with zeros in remaining coordinates.
 Raw planned/result responses, ambiguity accounting, final all-voter prefix checks,
 client-overlap semantics and no automatic retry remain unchanged. This is a
 functional population probe, not sustained performance or general mutation proof.
+
+
+## Explicit probe deadlines and retained corpus failure (#4958)
+
+The defaults remain `-timeout 120s -rpc-timeout 10s`, with the default 132-operation
+population unchanged. Explicit total deadlines admit 1s..600s; explicit per-call
+deadlines admit 1ms..60s and must fit the total. Invalid bounds refuse before
+input loading, planning or network activity. Both admitted budgets and each
+attempt's actual deadline remain in the raw report. These are harness limits;
+they do not change runtime request limits or imply a latency guarantee.
+
+For the optional unchanged 10,000-row/128D corpus plus three anchors, retained
+trial08's unpaced 65-new-ID probe failed: 198 planned, 10 attempted, 8 succeeded,
+one search deadline failure, one UNKNOWN canceled mutation, and 188 unissued.
+Four acknowledged ordinary writes took 3.8..3.91s each; at that rate 65 serial
+writes would exceed 250s. The preceding successful search spent about 7.18s in
+the service adapter and about 8ms in the coordinator. A later search exhausted
+its 10s RPC deadline. Larger explicit budgets permit a bounded followup but do
+not themselves fix admission contention. The failed packet and ambiguous
+outcome remain retained; there is no automatic retry or paced reinterpretation.
+
+The reader-intent admission regression and fix belong to #4958. Representative
+unpaced >64-write reconciliation, write-phase cost attribution and resource
+qualification remain pending fresh frozen collection. A sequential/alternating
+65-write control would prove only the growth behavior it actually exercises.
+#4250 still owns sustained throughput, p99, representative recall and resource
+claims; RF4 on two hosts with two voters each cannot survive either host loss.

@@ -1664,3 +1664,31 @@ Raft Submit path before first-generation Prepare. Source admission is16,384 rows
 owner; these are not new ordinary-insert limits. Dataset/chunk identities and
 partial/UNKNOWN outcomes are operator receipt fields. See
 [the preparation contract](fixed-cluster-vector-prepare-v1.md#dataset-preparation-admission-4956).
+
+
+## Mutable fixed-peer owner admission (#4958)
+
+The ordinary single-owner strict-search path retains its RWMutex reader lease
+through coordinator/shard live pins and response/current-DB fences. An ordinary
+insert retains exclusive admission through owner proof, actual Raft submission,
+committed/applied checks and live-document proof. These boundaries are unchanged.
+
+After the first failed reader TryRLock, reader intent is registered once and
+retired on acquisition or cancellation. A later ordinary writer waits for
+registered intents to retire before queuing its existing exclusive Lock. A
+writer that already passed the zero-intent check may precede a reader registered
+concurrently; an already queued writer keeps RWMutex writer preference, so new
+readers cannot renew its gap indefinitely. Intent ends on read admission rather
+than response completion; the retained reader lease then excludes publication.
+Contended waits use a deadline-aware ticker and no background lock waiter.
+Uncontended admission creates no ticker. Waiting-reader cancellation retires
+its intent without waiting for a writer, and a writer waiting for intents can
+cancel promptly. Once a writer is queued in RWMutex, cancellation is checked
+when its already-retained reader pins retire and acquisition completes; no
+cancellable-RWMutex guarantee is added. No orphan goroutine is introduced.
+
+These local admission rules do not establish a latency bound, runtime resource
+qualification or sustained fairness under every load. #4958 owns the retained
+representative-corpus probe failure and fresh >64 ordinary-write reconciliation;
+#4250 owns sustained QPS/p99/recall/resources. Increasing explicit driver budgets
+alone cannot make the failed unpaced trial a pass.

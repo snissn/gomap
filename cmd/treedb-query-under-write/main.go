@@ -93,12 +93,18 @@ func oracleVector(dimensions int, x, y float32) []float32 {
 	v[0], v[1] = x, y
 	return v
 }
+func validateProbeTimeouts(timeout, rpcTimeout time.Duration) error {
+	if timeout < time.Second || timeout > 10*time.Minute || rpcTimeout < time.Millisecond || rpcTimeout > time.Minute || rpcTimeout > timeout {
+		return errors.New("timeout requires 1s..10m; RPC timeout requires 1ms..1m within overall timeout")
+	}
+	return nil
+}
 func makePlan(o options) ([]operation, error) {
 	if !asciiID(o.RunID) || o.BootstrapID == "" || o.Generation.Index == "" || o.Generation.Generation == 0 || o.BootstrapRevision != 1 || o.BootstrapCommitIndex == 0 || o.OwnerGroup == "" {
 		return nil, errors.New("requires a fresh, successfully qualified generation, live revision 1, and bounded ASCII run ID")
 	}
-	if o.Timeout < time.Second || o.Timeout > 2*time.Minute || o.RPCTimeout < time.Millisecond || o.RPCTimeout > 10*time.Second || o.RPCTimeout > o.Timeout {
-		return nil, errors.New("timeout requires 1s..2m; RPC timeout requires 1ms..10s within overall timeout")
+	if err := validateProbeTimeouts(o.Timeout, o.RPCTimeout); err != nil {
+		return nil, err
 	}
 	dimensions := o.Dimensions
 	if dimensions == 0 {
@@ -498,9 +504,12 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	bootstrapPath := flags.String("bootstrap-receipt", "", "retained successful sequential qualify JSON")
 	freshInserts := flags.Int("fresh-inserts", freshCount, "bounded unique ordinary insert population1..65; default preserves32")
 	runID := flags.String("run-id", "", "unique 1..64 ASCII identity; never reuse after any mutation attempt")
-	timeout := flags.Duration("timeout", 120*time.Second, "whole checkpoint deadline, 1s..2m")
-	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..10s")
+	timeout := flags.Duration("timeout", 120*time.Second, "whole checkpoint deadline, 1s..10m; default 120s")
+	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..1m; default 10s")
 	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := validateProbeTimeouts(*timeout, *rpcTimeout); err != nil {
 		return err
 	}
 	if *freshInserts < 1 || *freshInserts > 65 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -472,5 +473,49 @@ func TestReadinessRetainsErrorsAndUsesRemainingRounds(t *testing.T) {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
 		})
+	}
+}
+
+func TestExplicitProbeDeadlineEnvelopePreservesPlan(t *testing.T) {
+	base := testOptions()
+	base.Timeout, base.RPCTimeout = 120*time.Second, 10*time.Second
+	before, err := makePlan(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := base
+	large.Timeout, large.RPCTimeout = 600*time.Second, 60*time.Second
+	after, err := makePlan(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("explicit deadlines changed default requests or population")
+	}
+	large.FreshInserts, large.Dimensions = 65, 128
+	if plan, err := makePlan(large); err != nil || len(plan) != 198 {
+		t.Fatalf("explicit bounded corpus plan: operations=%d err=%v", len(plan), err)
+	}
+}
+
+func TestProbeDeadlineBoundsRefuseBeforeInputOrNetwork(t *testing.T) {
+	for _, bounds := range []struct{ timeout, rpc string }{
+		{"999ms", "1ms"}, {"600.001s", "1s"}, {"600s", "999us"},
+		{"600s", "60.001s"}, {"1s", "2s"}, {"-1s", "1ms"},
+	} {
+		t.Run(bounds.timeout+"/"+bounds.rpc, func(t *testing.T) {
+			var output strings.Builder
+			err := runArgs(context.Background(), []string{"-config", "/does-not-exist-config", "-bootstrap-receipt", "/does-not-exist-bootstrap", "-run-id", "deadline-bounds", "-timeout", bounds.timeout, "-rpc-timeout", bounds.rpc}, &output)
+			if err == nil || !strings.Contains(err.Error(), "timeout requires 1s..10m") || output.Len() != 0 {
+				t.Fatalf("invalid deadlines reached input/report work: err=%v output=%q", err, output.String())
+			}
+		})
+	}
+	for _, bounds := range []struct{ timeout, rpc time.Duration }{
+		{time.Second, time.Millisecond}, {120 * time.Second, 10 * time.Second}, {600 * time.Second, 60 * time.Second},
+	} {
+		if err := validateProbeTimeouts(bounds.timeout, bounds.rpc); err != nil {
+			t.Fatalf("valid boundary rejected: %+v err=%v", bounds, err)
+		}
 	}
 }

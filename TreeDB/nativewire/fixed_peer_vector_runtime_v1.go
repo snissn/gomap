@@ -133,14 +133,15 @@ type fixedPeerVectorRuntimeV1 struct {
 	source     *CollectionVectorPartitionGenerationSourceV1
 	backend    *VectorPartitionPublicBackendV1
 
-	servingGuard func() error
-	initDone     chan struct{}
-	initCancel   context.CancelFunc
-	closed       atomic.Bool
-	initMu       sync.Mutex
-	mutationMu   sync.RWMutex
-	closeOnce    sync.Once
-	closeErr     error
+	servingGuard    func() error
+	initDone        chan struct{}
+	initCancel      context.CancelFunc
+	closed          atomic.Bool
+	initMu          sync.Mutex
+	mutationMu      sync.RWMutex
+	waitingSearches atomic.Int64
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 type fixedPeerVectorBuilderV1 struct {
@@ -1103,10 +1104,16 @@ func fixedPeerImmutableVectorStandbyV1(config FixedPeerTCPConfigV1) bool {
 }
 
 // lockSearchAdmissionV1 preserves concurrent readers without a waiting goroutine.
+// Contention registers reader intent before waiting. A later ordinary writer
+// leaves these readers a publication gap; active reader pins still use RWMutex.
 // Contention alone allocates a timer; cancellation never waits for a writer.
 func (r *fixedPeerVectorRuntimeV1) lockSearchAdmissionV1(ctx context.Context) error {
 	var wait *time.Ticker
+	registered := false
 	defer func() {
+		if registered {
+			r.waitingSearches.Add(-1)
+		}
 		if wait != nil {
 			wait.Stop()
 		}
@@ -1122,6 +1129,10 @@ func (r *fixedPeerVectorRuntimeV1) lockSearchAdmissionV1(ctx context.Context) er
 			}
 			return nil
 		}
+		if !registered {
+			r.waitingSearches.Add(1)
+			registered = true
+		}
 		if wait == nil {
 			wait = time.NewTicker(time.Millisecond)
 		}
@@ -1131,6 +1142,42 @@ func (r *fixedPeerVectorRuntimeV1) lockSearchAdmissionV1(ctx context.Context) er
 		case <-wait.C:
 		}
 	}
+}
+
+// lockMutationAdmissionV1 lets previously contended readers acquire their pins
+// before queuing the next exclusive writer. Once Lock queues, RWMutex keeps its
+// existing writer preference; new reads cannot indefinitely renew this gap.
+// A writer that passed the zero-intent check before a reader registered may
+// precede that reader. Canceling a read retires its intent without a goroutine.
+func (r *fixedPeerVectorRuntimeV1) lockMutationAdmissionV1(ctx context.Context) error {
+	var wait *time.Ticker
+	defer func() {
+		if wait != nil {
+			wait.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if r.waitingSearches.Load() == 0 {
+			break
+		}
+		if wait == nil {
+			wait = time.NewTicker(time.Millisecond)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait.C:
+		}
+	}
+	r.mutationMu.Lock()
+	if err := ctx.Err(); err != nil {
+		r.mutationMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // searchVectorPartitionStrictV1 keeps mutable search on the single owner whose
@@ -1328,7 +1375,9 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if request.SourceGroup != "" {
 		return r.applySplitVectorSourceInsertV1(ctx, request)
 	}
-	r.vector.mutationMu.Lock()
+	if err := r.vector.lockMutationAdmissionV1(ctx); err != nil {
+		return public.InsertResponseV1{}, err
+	}
 	defer r.vector.mutationMu.Unlock()
 	if err := r.validateVectorInsertOwnerV1(ctx, request); err != nil {
 		return public.InsertResponseV1{}, err

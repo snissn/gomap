@@ -10,7 +10,8 @@ movement, subsequent generations and automatic activation without restart are
 outside this checkpoint. RF4 is bounded operational conformance, not a larger
 capacity or fault-tolerance claim: its quorum is three and a 2+2 two-host
 placement cannot survive either host loss. Preparation admission is separate from live overlay limits. The optional ordinary
-insert probe exceeds64 distinct IDs; split mutation ledgers retain their own64 bounds.
+insert probe plans65 distinct IDs; its unpaced corpus completion is not yet
+qualified. Split mutation ledgers retain their own64 bounds.
 
 Create and InsertBatch use routed native Raft commands. Physical creation uses
 additive collection-metadata version 6 carrying the production column schema;
@@ -254,3 +255,24 @@ tail latency, broad ANN recall, multiowner mutable serving, movement, replace,
 delete, batch serving or generic writes. Those retain #4250/#4809/#4810/#4812
 ownership. RF4 quorum three across a 2+2 host layout cannot tolerate either
 whole-host loss. Source/harness review and landing precede sustained collection.
+
+
+## Ordinary search/write admission followup (#4958)
+
+Loading/prepare/reopen/qualification of the representative 10,000-row/128D
+source plus three anchors is a corpus checkpoint. It does not establish the
+optional 198-operation query-under-write probe. Retained trial08 stopped after
+10 attempts: eight successes, one 10s strict-search deadline failure, one UNKNOWN
+mutation canceled by that failure, and 188 unissued operations. Four ordinary
+writes acknowledged actual committed/applied indexes89..92 and took3.8..3.91s.
+No retry of that ambiguous trial is implicit in this followup.
+
+The driver keeps default120s total/10s RPC budgets, while admitting explicit
+1s..600s total and1ms..60s RPC budgets within that total. At the observed write
+cost,65 serial writes alone exceed250s. Larger budgets do not establish fairness
+or hide the retained unpaced failure. Reader-intent admission protects a waiting
+reader's gap before a later ordinary writer queues; authoritative consensus,
+current-DB, generation/revision pins and live-document visibility stay intact.
+Root normal/race checks and a frozen fresh unpaced runtime packet remain gates.
+Historical64 ordinary-write qualification is not a hard ordinary ledger cap;
+actual >64 completion remains unresolved here until #4958 supplies evidence.
