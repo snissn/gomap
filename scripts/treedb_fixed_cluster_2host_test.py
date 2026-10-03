@@ -59,10 +59,17 @@ def main():
                 config["VectorInitialization"][field] = value
             write_configs(changed)
             rejects(lambda: harness.plan(manifest, "offline"), ValueError)
-    harness.require_running([{"State": {"Running": True}}], "offline")
-    for state in ([], [{}], [{"State": {"Running": False, "ExitCode": 0}}],
-                  [{"State": {"Running": False, "ExitCode": 1}}]):
-        rejects(lambda: harness.require_running(state, "offline"), RuntimeError)
+    container_id = "c" * 64
+    owned = {"Id": container_id, "Config": {"Labels": {"treedb.fixed-cluster.run": "offline"}},
+             "State": {"Running": True}}
+    harness.require_running([owned], "offline", container_id, "offline")
+    for state in ([], [{}], [dict(owned, State={"Running": False, "ExitCode": 0})],
+                  [dict(owned, State={"Running": False, "ExitCode": 1})],
+                  [{key: value for key, value in owned.items() if key != "Id"}],
+                  [dict(owned, Id="d" * 64)],
+                  [dict(owned, Config={"Labels": {"treedb.fixed-cluster.run": "foreign"}})],
+                  [dict(owned, Config={"Labels": None})]):
+        rejects(lambda: harness.require_running(state, "offline", container_id, "offline"), RuntimeError)
     print("PASS canonical fixture and final daemon-state regressions")
 
 

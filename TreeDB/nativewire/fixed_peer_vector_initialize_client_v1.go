@@ -30,9 +30,20 @@ type FixedPeerVectorQualificationV1 struct {
 
 func validateFixedPeerFixtureV1(config FixedPeerTCPConfigV1, requestID string) error {
 	v := config.VectorInitialization
-	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || len(config.Nodes) != 3 ||
-		v.IndexDefinition.Dimensions != 2 || v.IndexDefinition.Field != "embedding" || v.MaxSourceRows < 3 {
-		return fmt.Errorf("fixture requires authenticated single-group RF3 initialization, embedding dimensions=2 and MaxSourceRows>=3")
+	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || len(config.Nodes) != 3 {
+		return fmt.Errorf("fixture requires authenticated single-group RF3 initialization")
+	}
+	def := v.IndexDefinition
+	if v.Generation != 1 || v.CatalogEpoch != 1 ||
+		v.Collection != (raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}) ||
+		v.SourceGroupID == "" || v.SourceGroupID != config.Groups[0].ID ||
+		v.MaxSourceRows < 3 || v.MaxSourceRows > 512 ||
+		def.Name != "embedding_graph" || def.Field != "embedding" || def.Metric != collections.VectorMetricCosine ||
+		def.Dimensions != 2 || def.M != 2 || def.EfConstruction != 8 || def.EfSearch != 8 ||
+		def.Strategy != collections.VectorIndexStrategyColumnGraph ||
+		def.Encoding != collections.VectorIndexEncodingFloat32 ||
+		def.Representation != "" || def.SchemaGeneration != 0 || len(def.QuantizedIndexes) != 0 {
+		return fmt.Errorf("fixture requires canonical generation1/epoch1 default.default.docs embedding_graph and MaxSourceRows3..512")
 	}
 	if requestID == "" || len(requestID) > 64 || strings.Trim(requestID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
 		return fmt.Errorf("request ID must contain 1..64 ASCII letters, digits, underscores or hyphens")

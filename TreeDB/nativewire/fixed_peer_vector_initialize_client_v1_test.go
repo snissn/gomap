@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,22 +49,91 @@ func TestFixedPeerVectorFixturePhysicalCreateV1(t *testing.T) {
 	}
 }
 func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
-	config := FixedPeerTCPConfigV1{Credentials: &PeerCredentialsV1{}, Nodes: make([]FixedPeerTCPNodeV1, 3), Groups: make([]FixedPeerTCPGroupV1, 1), VectorInitialization: &FixedPeerTCPVectorInitializationV1{MaxSourceRows: 3, IndexDefinition: collections.VectorIndexDefinition{Field: "embedding", Dimensions: 2}}}
+	config := initializationTestConfigsV1(t)[0]
+	client, err := NewFixedPeerTCPClientV1(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := validateFixedPeerFixtureV1(client.config, "run_1"); err != nil {
+		t.Fatalf("normalized FP32 fixture rejected: %v", err)
+	}
 	for _, id := range []string{"", "slash/id", " space", "é"} {
 		if validateFixedPeerFixtureV1(config, id) == nil {
 			t.Fatalf("accepted %q", id)
 		}
 	}
-	if err := validateFixedPeerFixtureV1(config, "run_1"); err != nil {
-		t.Fatal(err)
+	for _, bound := range []uint64{3, 4, 512} {
+		config.VectorInitialization.MaxSourceRows = bound
+		if err := validateFixedPeerFixtureV1(config, "run_1"); err != nil {
+			t.Fatalf("bound=%d: %v", bound, err)
+		}
 	}
-	config.VectorInitialization.MaxSourceRows = 2
-	if validateFixedPeerFixtureV1(config, "run_1") == nil {
-		t.Fatal("accepted insufficient preparation bound")
+	for _, bound := range []uint64{2, 513} {
+		config.VectorInitialization.MaxSourceRows = bound
+		if validateFixedPeerFixtureV1(config, "run_1") == nil {
+			t.Fatalf("accepted preparation bound %d", bound)
+		}
 	}
 	called := false
 	if fixturePollV1(context.Background(), func() (bool, error) { called = true; return true, nil }) == nil || called {
 		t.Fatal("unbounded operation reached work")
+	}
+}
+
+func TestFixedPeerVectorFixtureCanonicalIntentBeforeNetworkV1(t *testing.T) {
+	config := initializationTestConfigsV1(t)[0]
+	// These valid production intents must still be refused by both standalone
+	// fixture modes. A canceled context prevents network activity on regression;
+	// checking the fixture error and empty stage proves admission happened first.
+	for _, tc := range []struct {
+		name   string
+		change func(*FixedPeerTCPVectorInitializationV1)
+	}{
+		{"generation", func(v *FixedPeerTCPVectorInitializationV1) { v.Generation = 2 }},
+		{"collection", func(v *FixedPeerTCPVectorInitializationV1) { v.Collection.Collection = "other" }},
+		{"name", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.Name = "other" }},
+		{"field", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.Field = "other" }},
+		{"dimensions", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.Dimensions = 3 }},
+		{"m", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.M = 3 }},
+		{"ef-construction", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.EfConstruction = 9 }},
+		{"ef-search", func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.EfSearch = 9 }},
+		{"source-bound", func(v *FixedPeerTCPVectorInitializationV1) { v.MaxSourceRows = 2 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := config
+			changed.VectorInitialization = cloneFixedPeerVectorInitializationV1(config.VectorInitialization)
+			tc.change(changed.VectorInitialization)
+			client, err := NewFixedPeerTCPClientV1(changed)
+			if err != nil {
+				t.Fatalf("valid production intent rejected before fixture admission: %v", err)
+			}
+			defer client.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			initialized, err := client.InitializeVectorFixtureV1(ctx, "canonical")
+			if err == nil || !strings.Contains(err.Error(), "fixture requires canonical") || initialized.Stage != "" {
+				t.Fatalf("initialize reached work: stage=%q err=%v", initialized.Stage, err)
+			}
+			if _, err := client.QualifyVectorFixtureV1(ctx, "canonical"); err == nil || !strings.Contains(err.Error(), "fixture requires canonical") {
+				t.Fatalf("qualify reached work: %v", err)
+			}
+		})
+	}
+	for _, change := range []func(*FixedPeerTCPVectorInitializationV1){
+		func(v *FixedPeerTCPVectorInitializationV1) { v.CatalogEpoch = 2 },
+		func(v *FixedPeerTCPVectorInitializationV1) { v.Collection.Database = "other" },
+		func(v *FixedPeerTCPVectorInitializationV1) { v.Collection.Catalog = "other" },
+		func(v *FixedPeerTCPVectorInitializationV1) { v.SourceGroupID = "other" },
+		func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.Metric = collections.VectorMetricL2 },
+		func(v *FixedPeerTCPVectorInitializationV1) { v.IndexDefinition.Strategy = "" },
+	} {
+		changed := config
+		changed.VectorInitialization = cloneFixedPeerVectorInitializationV1(config.VectorInitialization)
+		change(changed.VectorInitialization)
+		if validateFixedPeerFixtureV1(changed, "canonical") == nil {
+			t.Fatalf("accepted noncanonical intent: %+v", changed.VectorInitialization)
+		}
 	}
 }
 
