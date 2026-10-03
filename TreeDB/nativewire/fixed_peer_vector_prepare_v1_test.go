@@ -35,41 +35,6 @@ func TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1(t
 	runFixedPeerVectorPrepareRealRaftV1(t, false, true)
 }
 
-type fixedPeerVectorSnapshotSwapSubmitResultV1 struct {
-	result      raftcluster.SubmitResultV1
-	callbackErr error
-	swapErr     error
-}
-
-type fixedPeerVectorSnapshotSwapSubmitterV1 struct {
-	raftcluster.CommandSubmitterV1
-	beforePreCommit bool
-	swap            func() error
-	observed        chan fixedPeerVectorSnapshotSwapSubmitResultV1
-}
-
-func (s *fixedPeerVectorSnapshotSwapSubmitterV1) SubmitCommandEntryWithPreCommitV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1, preCommit func(context.Context) error) (raftcluster.SubmitResultV1, error) {
-	var callbackErr, swapErr error
-	delegate := s.CommandSubmitterV1.(raftcluster.CommandSubmitterWithPreCommitV1)
-	result, err := delegate.SubmitCommandEntryWithPreCommitV1(ctx, entry, metadata, func(commitCtx context.Context) error {
-		if s.beforePreCommit {
-			if swapErr = s.swap(); swapErr != nil {
-				return swapErr
-			}
-		}
-		callbackErr = preCommit(commitCtx)
-		return callbackErr
-	})
-	if !s.beforePreCommit && err == nil {
-		swapErr = s.swap()
-		if swapErr != nil {
-			err = swapErr
-		}
-	}
-	s.observed <- fixedPeerVectorSnapshotSwapSubmitResultV1{result: result, callbackErr: callbackErr, swapErr: swapErr}
-	return result, err
-}
-
 // Reuse genuinely committed preparation and its covered FSM result. The view
 // below has no catalog authority; deriving expected configuration must not
 // publish catalog state, initialize a backend, or claim readiness.
@@ -656,129 +621,64 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 			t.Fatalf("voter %s recovered original covered result=%+v want=%+v found=%v err=%v", node.config.NodeID, original, beforeRetry[i].original, found, err)
 		}
 	}
-	for _, beforePreCommit := range []bool{true, false} {
-		name := "snapshot-after-commit"
-		if beforePreCommit {
-			name = "snapshot-before-precommit"
-		}
-		t.Run(name, func(t *testing.T) {
-			leaderID, err := client.leader(ctx, group)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var owner *FixedPeerTCPRuntimeV1
-			for _, node := range nodes {
-				if node.config.NodeID == leaderID {
-					owner = node
-				}
-			}
-			if owner == nil || owner.vector == nil {
-				t.Fatal("missing real prepared owner")
-			}
-			data := owner.data[group.ID]
-			originalRegistry := owner.localRegistry
-			base, ok := originalRegistry.Lookup(group.ID)
-			if !ok {
-				t.Fatal("missing real submitter")
-			}
-			if _, ok := base.(raftcluster.CommandSubmitterWithPreCommitV1); !ok {
-				t.Fatal("real submitter has no precommit boundary")
-			}
-			wrapper := &fixedPeerVectorSnapshotSwapSubmitterV1{
-				CommandSubmitterV1: base, beforePreCommit: beforePreCommit,
-				observed: make(chan fixedPeerVectorSnapshotSwapSubmitResultV1, 1),
-				swap: func() error {
-					snapshot, err := data.fsm.ExportRaftSnapshotV1()
-					if err != nil {
-						return err
-					}
-					archive, err := snapshot.OpenArchive()
-					if err != nil {
-						return errors.Join(err, snapshot.Release())
-					}
-					payload, readErr := io.ReadAll(archive)
-					if err := errors.Join(readErr, archive.Close(), snapshot.Release()); err != nil {
-						return err
-					}
-					return data.fsm.InstallRaftSnapshotV1(bytes.NewReader(payload))
-				},
-			}
-			entries := make([]raftcluster.GroupSubmitterV1, 0, len(originalRegistry.GroupIDs()))
-			for _, id := range originalRegistry.GroupIDs() {
-				submitter, _ := originalRegistry.Lookup(id)
-				if id == group.ID {
-					submitter = wrapper
-				}
-				entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: id, Submitter: submitter})
-			}
-			registry, err := raftcluster.NewGroupSubmitterRegistryV1(entries)
-			if err != nil {
-				t.Fatal(err)
-			}
-			owner.localRegistry = registry
-			defer func() { owner.localRegistry = originalRegistry }()
-			request := insert
-			request.ID = []byte(name)
-			request.IdempotencyKey = []byte(name)
-			request.Vector = []float32{0.5, 0.5}
-			request.Document = []byte(`{"embedding":[0.5,0.5],"kind":"snapshot-fence"}`)
-			request.Deadline = time.Now().Add(30 * time.Second)
-			publicClient, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer publicClient.Close()
-			response, insertErr := publicClient.VectorInsertV1(ctx, request)
-			var observed fixedPeerVectorSnapshotSwapSubmitResultV1
-			select {
-			case observed = <-wrapper.observed:
-			default:
-				t.Fatalf("real submitter seam not reached: %v", insertErr)
-			}
-			if observed.swapErr != nil || data.fsm.HasCurrentDBV1(owner.vector.boundDB) {
-				t.Fatalf("real snapshot did not replace retained DB: %v", observed.swapErr)
-			}
-			if insertErr == nil || !reflect.DeepEqual(response, public.InsertResponseV1{}) {
-				t.Fatalf("snapshot-replaced runtime returned success: %+v %v", response, insertErr)
-			}
-			var publicErr *public.ErrorV1
-			if beforePreCommit {
-				if !errors.Is(observed.callbackErr, ErrFixedPeerVectorProofStaleV1) || observed.result.CommittedEntry.Term != 0 || observed.result.CommittedEntry.Index != 0 || observed.result.Evidence.ProvesProductionConsensus() {
-					t.Fatalf("stale precommit was not a definitive refusal before offering commit: %+v callback=%v", observed.result, observed.callbackErr)
-				}
-				if errors.As(insertErr, &publicErr) && publicErr.Code == public.ErrorCommitAmbiguousV1 {
-					t.Fatalf("precommit refusal was classified as committed: %v", insertErr)
-				}
-			} else {
-				if observed.result.CommittedEntry.Term == 0 || observed.result.CommittedEntry.Index == 0 || !observed.result.CommittedApplied || !observed.result.Evidence.ProvesProductionConsensus() {
-					t.Fatalf("postcommit cut did not follow real applied consensus: %+v", observed.result)
-				}
-				if !errors.As(insertErr, &publicErr) || publicErr.Code != public.ErrorCommitAmbiguousV1 {
-					t.Fatalf("postcommit snapshot refusal lost ambiguity: %v", insertErr)
-				}
-			}
-		})
-		if t.Failed() {
-			return
-		}
-		// Authenticate a new serving handle; never repair/rebind the stale one.
-		closeAll()
-		open("snapshot-fence-" + name)
-		client = nodes[0].client
-		fixedPeerWaitV1(t, ctx, func() bool {
-			for _, node := range nodes {
-				state, err := node.Status(ctx)
-				if err != nil || state.Catalog.Epoch != record.Epoch || state.Catalog.Digest != record.Digest || len(state.Groups) != 1 || state.Groups[0].LeaderID == "" {
-					return false
-				}
-			}
-			return true
-		})
-		search("fresh-y", []float32{0, 1})
+	// Capture a valid owner proof while the real providers are still running.
+	leaderID, err := client.leader(ctx, group)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Native snapshot replacement must invalidate an existing retained runtime.
-	// It may serve again only after a new clean process open authenticates it.
-	data := nodes[0].data[group.ID]
+	var retainedOwner *FixedPeerTCPRuntimeV1
+	for _, node := range nodes {
+		if node.config.NodeID == leaderID {
+			retainedOwner = node
+		}
+	}
+	if retainedOwner == nil || retainedOwner.vector == nil {
+		t.Fatal("missing real prepared owner")
+	}
+	ownerBackend, err := retainedOwner.vector.ensureBackendV1(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofRequest := insert
+	proofRequest.Deadline = time.Now().Add(30 * time.Second)
+	coordinator := ownerBackend.opts.Topology.Coordinator()
+	lease, err := coordinator.acquireRouterSessionV1(ctx, proofRequest.Generation.Index, proofRequest.Generation.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerStatus := lease.session.router.Status()
+	readySetDigest, proofErr := coordinator.validateReplicatedLifecycle(ctx, routerStatus)
+	lease.Close()
+	if proofErr != nil {
+		t.Fatal(proofErr)
+	}
+	routed := VectorPartitionRoutedInsertV1{
+		Request: proofRequest, Identity: ownerBackend.opts.Identity,
+		CatalogProof:   raftplacement.CatalogProofV1{Epoch: ownerBackend.opts.Identity.Index.CatalogEpoch, Digest: ownerBackend.opts.Identity.Index.CatalogDigest},
+		ReadySetDigest: readySetDigest, RouterModelDigest: routerStatus.ModelDigest,
+		PartitionID: inserted.PartitionID, OwnerGroup: group.ID,
+	}
+	if err := retainedOwner.validateVectorInsertOwnerV1(ctx, routed); err != nil {
+		t.Fatalf("current owner rejected valid routed proof: %v", err)
+	}
+	// InstallRaftSnapshotV1 requires no concurrent Apply. First prove the known
+	// committed retry prefix on every voter, then join every data provider.
+	waitInsertPrefix(replay.CommitIndex)
+	for _, node := range nodes {
+		provider := node.data[group.ID].provider
+		if err := provider.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.Close(); err != nil {
+			t.Fatalf("provider close was not idempotent: %v", err)
+		}
+		if !node.data[group.ID].fsm.HasCurrentDBV1(node.vector.boundDB) {
+			t.Fatal("provider shutdown closed the caller-owned FSM database")
+		}
+	}
+	// Only the quiescent lower FSM is replaced. Never restore behind a running
+	// provider or repair/rebind the retained serving handle.
+	data := retainedOwner.data[group.ID]
 	snapshot, err := data.fsm.ExportRaftSnapshotV1()
 	if err != nil {
 		t.Fatal(err)
@@ -795,10 +695,13 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical b
 	if err := data.fsm.InstallRaftSnapshotV1(bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
-	if err := nodes[0].requirePreparedVectorCurrentDBV1(); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+	if err := retainedOwner.requirePreparedVectorCurrentDBV1(); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("retained runtime silently rebound: %v", err)
 	}
-	if _, err := nodes[0].searchVectorPartitionStrictV1(ctx, searchRequest([]float32{0, 1})); err == nil {
+	if err := retainedOwner.validateVectorInsertOwnerV1(ctx, routed); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("shared insert validator accepted a snapshot-replaced database: %v", err)
+	}
+	if _, err := retainedOwner.searchVectorPartitionStrictV1(ctx, searchRequest([]float32{0, 1})); err == nil {
 		t.Fatal("stale startup runtime served after root replacement")
 	}
 }
