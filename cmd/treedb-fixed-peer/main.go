@@ -59,9 +59,11 @@ func inspectBinary() (binaryIdentity, error) {
 func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("treedb-fixed-peer", flag.ContinueOnError)
 	path := flags.String("config", "", "fixed-peer JSON configuration file")
-	mode := flags.String("mode", "serve", "serve, inspect, status, ready, diagnostics, or version")
+	mode := flags.String("mode", "serve", "serve, inspect, status, ready, diagnostics, initialize, qualify, or version")
 	trusted := flags.Bool("trusted-network-test", false, "explicitly allow plaintext legacy test fixtures")
 	expected := flags.String("expected-binary-sha256", "", "require this executable SHA-256 before any stores or network activity")
+	requestID := flags.String("request-id", "", "stable ASCII fixture identity for initialize/qualify")
+	operationTimeout := flags.Duration("operation-timeout", 2*time.Minute, "initialize/qualify deadline, 1s..10m")
 	interval := flags.Duration("diagnostics-interval", 0, "emit diagnostics while serving; zero disables, minimum 1s")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -70,12 +72,23 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 		return fmt.Errorf("unexpected positional arguments")
 	}
 	switch *mode {
-	case "serve", "inspect", "status", "ready", "diagnostics", "version":
+	case "serve", "inspect", "status", "ready", "diagnostics", "initialize", "qualify", "version":
 	default:
 		return fmt.Errorf("unknown mode %q", *mode)
 	}
 	if *interval < 0 || (*interval > 0 && *interval < time.Second) || *interval > time.Hour {
 		return fmt.Errorf("diagnostics interval must be zero or 1s..1h")
+	}
+	if *mode == "initialize" || *mode == "qualify" {
+		if len(*requestID) == 0 || len(*requestID) > 64 || strings.Trim(*requestID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
+			return fmt.Errorf("-request-id requires 1..64 ASCII letters, digits, underscores or hyphens")
+		}
+		if *operationTimeout < time.Second || *operationTimeout > 10*time.Minute {
+			return fmt.Errorf("-operation-timeout must be 1s..10m")
+		}
+		if *trusted {
+			return fmt.Errorf("initialize/qualify require authenticated peer credentials")
+		}
 	}
 	binary, err := inspectBinary()
 	if err != nil {
@@ -126,6 +139,21 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 		}
 		defer client.Close()
 		switch *mode {
+		case "initialize", "qualify":
+			operation, cancel := context.WithTimeout(ctx, *operationTimeout)
+			defer cancel()
+			if *mode == "initialize" {
+				report, e := client.InitializeVectorFixtureV1(operation, *requestID)
+				if out := encoder.Encode(report); out != nil {
+					return out
+				}
+				return e
+			}
+			report, e := client.QualifyVectorFixtureV1(operation, *requestID)
+			if out := encoder.Encode(report); out != nil {
+				return out
+			}
+			return e
 		case "status":
 			report, e := client.Status(ctx, config.NodeID)
 			if e != nil {
