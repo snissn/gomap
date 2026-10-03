@@ -28,4 +28,5 @@ func BenchmarkVectorPartitionSourceReaderAdmission512x128V1(b *testing.B) {
 			b.Fatalf("source=%+v rows=%d err=%v", source, len(owned), err)
 		}
 	}
+	b.StopTimer()
 }
