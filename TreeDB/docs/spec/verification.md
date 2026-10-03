@@ -3454,7 +3454,7 @@ removal, completion, and reconciliation before replacement publication.
 fresh authenticated RF3 cluster, commits a real catalog and indexed collection
 create plus a fresh document insert, observes the document and actual applied
 progress on all three replicas, and reopens matching roots. It also checks
-initializing status, non-readiness, unopened reserved listeners, and refused
+initializing status, non-readiness, bound reserved listeners that refuse traffic, and refused
 vector operations before and after reopen. This is not cluster qualification
 or proof of serving activation. Existing nil-intent runtime/security/readiness
 regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
