@@ -7,15 +7,16 @@ import (
 	"io"
 )
 
-// Limits of the bounded physical-schema nativewire checkpoint.
+// Limits of the bounded physical-schema nativewire create request.
 const ColumnStoreWireMaxBytesV1 = 16 << 10
 const ColumnStoreWireMaxColumnsV1 = 32
 
 // DecodeColumnStoreWireConfigV1 shares normalization across metadata readers,
 // deterministic create validation and actual Raft create lowering. Responses
-// preserve durable state; create requests may only supply schema.
+// preserve durable state under the enclosing nativewire frame limits; create
+// requests may only supply schema and retain the stricter checkpoint bounds.
 func DecodeColumnStoreWireConfigV1(collection string, raw []byte, create bool) (*ColumnStoreConfig, error) {
-	if len(raw) == 0 || len(raw) > ColumnStoreWireMaxBytesV1 {
+	if len(raw) == 0 || (create && len(raw) > ColumnStoreWireMaxBytesV1) {
 		return nil, errors.New("collections: column_store wire schema exceeds bounded byte limit")
 	}
 	var cfg *ColumnStoreConfig
@@ -28,8 +29,11 @@ func DecodeColumnStoreWireConfigV1(collection string, raw []byte, create bool) (
 	if err := dec.Decode(&extra); err != io.EOF {
 		return nil, errors.New("collections: column_store wire schema has trailing JSON")
 	}
-	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 || len(cfg.Columns) > ColumnStoreWireMaxColumnsV1 {
-		return nil, errors.New("collections: column_store wire schema requires 1..32 enabled columns")
+	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 {
+		return nil, errors.New("collections: column_store wire schema requires enabled columns")
+	}
+	if create && len(cfg.Columns) > ColumnStoreWireMaxColumnsV1 {
+		return nil, errors.New("collections: column_store create schema requires 1..32 enabled columns")
 	}
 	if create && (cfg.ActiveManifest != nil || cfg.RecoveryAuthoritativeManifest != nil || cfg.RecoveryAuthoritativeAppliedCommandLSN != 0 || cfg.PhysicalMutationParts != 0) {
 		return nil, errors.New("collections: column_store create cannot supply durable physical authority")
@@ -42,14 +46,14 @@ func DecodeColumnStoreWireConfigV1(collection string, raw []byte, create bool) (
 	if err != nil {
 		return nil, err
 	}
-	if len(canonical) > ColumnStoreWireMaxBytesV1 {
+	if create && len(canonical) > ColumnStoreWireMaxBytesV1 {
 		return nil, errors.New("collections: normalized column_store wire schema exceeds bounded byte limit")
 	}
 	return normalized, nil
 }
 
-// EncodeColumnStoreWireConfigV1 reports normalization and bounds errors through
-// the existing metadata error path. It does not drop configuration on failure.
+// EncodeColumnStoreWireConfigV1 preserves normalized durable response metadata.
+// Create requests additionally enforce the bounded physical-schema checkpoint.
 func EncodeColumnStoreWireConfigV1(collection string, cfg *ColumnStoreConfig, create bool) ([]byte, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -63,7 +67,7 @@ func EncodeColumnStoreWireConfigV1(collection string, cfg *ColumnStoreConfig, cr
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > ColumnStoreWireMaxBytesV1 {
+	if create && len(raw) > ColumnStoreWireMaxBytesV1 {
 		return nil, errors.New("collections: normalized column_store wire schema exceeds bounded byte limit")
 	}
 	return raw, nil
