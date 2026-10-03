@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -210,5 +213,54 @@ func TestQuicksilverReaderTimerExcludesWriterDrain(t *testing.T) {
 	}
 	if p.Seconds >= p.CompositionSeconds/2 || p.CompositionSeconds < .04 {
 		t.Fatalf("writer drain entered reader denominator: %+v", p)
+	}
+}
+
+func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	reports := []quicksilverResult{
+		{Engine: "first", DBName: "First", wrapper: &fixedNameDB{name: "First"}, InitialCheckpointMS: 10, FinalCheckpointMS: 20, FinalStats: map[string]string{"test": "first"}},
+		{Engine: "second", DBName: "Second", wrapper: &fixedNameDB{name: "Second"}, InitialCheckpointMS: 30, FinalCheckpointMS: 40, FinalStats: map[string]string{"test": "second"}},
+	}
+	for engine := range reports {
+		for phase, name := range quicksilverPhaseNames {
+			reports[engine].Phases = append(reports[engine].Phases, quicksilverPhase{Name: name, OpsPerSec: float64((engine+1)*100 + phase)})
+		}
+	}
+	dir := t.TempDir()
+	if err := writeBenchprofArtifacts(dir, "", quicksilverBenchprofRuns(BenchConfig{}, c, reports)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "benchprof_results.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		lines[strings.Join(strings.Fields(line), " ")] = true
+	}
+	if !lines["Test First Second"] {
+		t.Fatalf("missing engine columns: %s", raw[:min(len(raw), 1500)])
+	}
+	for phase, name := range quicksilverPhaseNames {
+		expected := name + " " + formatFloat(float64(100+phase)) + " " + formatFloat(float64(200+phase))
+		if !lines[expected] {
+			t.Fatalf("missing actual engine values %q: %s", expected, raw[:min(len(raw), 1500)])
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported benchprofExport
+	if err := json.Unmarshal(data, &exported); err != nil {
+		t.Fatal(err)
+	}
+	if len(exported.Runs) != 1 || len(exported.Runs[0].Results[quicksilverPhaseNames[0]]) != 2 {
+		t.Fatalf("fixed workload must export one run containing both engines: %s", data)
+	}
+	run := quicksilverBenchprofRuns(BenchConfig{}, c, reports)[0]
+	if len(run.TreeDBStats) != 2 || len(run.CheckpointDurations["quicksilver_initial"]) != 2 || len(run.CheckpointDurations["quicksilver_final"]) != 2 {
+		t.Fatalf("engine metadata dropped: %+v", run)
 	}
 }

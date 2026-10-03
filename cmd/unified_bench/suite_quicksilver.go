@@ -770,7 +770,6 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 	}
 	defer func() { err = errors.Join(err, finish()) }()
 	reports := make([]quicksilverResult, 0, len(names))
-	runs := make([]BenchRun, 0, len(names))
 	flags := map[string]string{}
 	flag.VisitAll(func(f *flag.Flag) { flags[f.Name] = f.Value.String() })
 	for _, name := range names {
@@ -795,21 +794,6 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 			}
 		}
 		reports = append(reports, report)
-		runCfg := cfg
-		runCfg.Keys = c.Keys
-		runCfg.ValueSize = c.valueSize()
-		runCfg.ReadWorkers = c.Workers
-		runCfg.BatchSize = 1000
-		runCfg.KeyShape = "shared_prefix24_be8"
-		runCfg.ValuePattern = c.Case
-		runCfg.SeedUsed = 24
-		runCfg.TestsArg = strings.Join(quicksilverPhaseNames, ",")
-		run := BenchRun{Config: runCfg, Instances: []*DBInstance{{Name: name, Wrapper: report.wrapper, Dir: dir}}, TestOrder: quicksilverPhaseNames, DisplayNames: map[string]string{}, Results: map[string]map[string]float64{}, TreeDBStats: map[string]map[string]string{report.DBName: report.FinalStats}, CheckpointDurations: map[string]map[string]time.Duration{"quicksilver_initial": {report.DBName: time.Duration(report.InitialCheckpointMS * float64(time.Millisecond))}, "quicksilver_final": {report.DBName: time.Duration(report.FinalCheckpointMS * float64(time.Millisecond))}}}
-		for _, p := range report.Phases {
-			run.Results[p.Name] = map[string]float64{report.DBName: p.OpsPerSec}
-			run.DisplayNames[p.Name] = p.Name
-		}
-		runs = append(runs, run)
 	}
 	if err = finish(); err != nil {
 		return "", err
@@ -822,7 +806,7 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		if err = os.WriteFile(filepath.Join(profileDir, "quicksilver_results.json"), raw, 0644); err != nil {
 			return "", err
 		}
-		if err = writeBenchprofArtifacts(profileDir, *pathLabel, runs); err != nil {
+		if err = writeBenchprofArtifacts(profileDir, *pathLabel, quicksilverBenchprofRuns(cfg, c, reports)); err != nil {
 			return "", err
 		}
 		if err = runBenchprofStrict(profileDir); err != nil {
@@ -830,4 +814,32 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		}
 	}
 	return string(raw) + "\n", nil
+}
+
+// A fixed workload is one canonical run with a column for every selected engine.
+// Separate runs represent key-count sweeps and would lose later-engine columns.
+func quicksilverBenchprofRuns(cfg BenchConfig, c quicksilverConfig, reports []quicksilverResult) []BenchRun {
+	cfg.Keys = c.Keys
+	cfg.ValueSize = c.valueSize()
+	cfg.ReadWorkers = c.Workers
+	cfg.BatchSize = 1000
+	cfg.KeyShape = "shared_prefix24_be8"
+	cfg.ValuePattern = c.Case
+	cfg.SeedUsed = 24
+	cfg.TestsArg = strings.Join(quicksilverPhaseNames, ",")
+	run := BenchRun{Config: cfg, Instances: make([]*DBInstance, 0, len(reports)), TestOrder: quicksilverPhaseNames, DisplayNames: map[string]string{}, Results: map[string]map[string]float64{}, TreeDBStats: map[string]map[string]string{}, CheckpointDurations: map[string]map[string]time.Duration{"quicksilver_initial": {}, "quicksilver_final": {}}}
+	for _, report := range reports {
+		run.Instances = append(run.Instances, &DBInstance{Name: report.Engine, Wrapper: report.wrapper, Dir: report.DataDir})
+		run.TreeDBStats[report.DBName] = report.FinalStats
+		run.CheckpointDurations["quicksilver_initial"][report.DBName] = time.Duration(report.InitialCheckpointMS * float64(time.Millisecond))
+		run.CheckpointDurations["quicksilver_final"][report.DBName] = time.Duration(report.FinalCheckpointMS * float64(time.Millisecond))
+		for _, p := range report.Phases {
+			if run.Results[p.Name] == nil {
+				run.Results[p.Name] = map[string]float64{}
+			}
+			run.Results[p.Name][report.DBName] = p.OpsPerSec
+			run.DisplayNames[p.Name] = p.Name
+		}
+	}
+	return []BenchRun{run}
 }
