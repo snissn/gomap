@@ -547,6 +547,14 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 		paused        bool
 	}{
 		{
+			name: "external command-WAL raw",
+			configure: func(db *DB) {
+				db.disableJournal = true
+				db.externalCommandWAL = true
+				db.forceValueLogPointers = true
+			},
+		},
+		{
 			name: "paused wal-off raw",
 			configure: func(db *DB) {
 				db.disableJournal = true
@@ -581,7 +589,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, 4096, tc.autoRawBypass, tc.paused)
 			if got != leafLogBlockMaxK {
 				t.Fatalf("live leaf-log raw K=%d, want capped K=%d", got, leafLogBlockMaxK)
 			}
@@ -589,7 +597,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 	}
 }
 
-func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
+func TestChooseValueLogRawWriteK_WALOffRawPolicyUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		configure     func(*DB)
@@ -608,6 +616,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 		{
 			name: "off current raw K",
 			configure: func(db *DB) {
+				db.disableJournal = true
 				db.valueLogDictCurrentK.Store(uint32(leafLogBlockMaxK * 4))
 			},
 			want: leafLogBlockMaxK * 4,
@@ -621,7 +630,8 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 			want: 16,
 		},
 		{
-			name:          "auto raw bypass",
+			name:          "wal-off auto raw bypass",
+			configure:     func(db *DB) { db.disableJournal = true },
 			autoRawBypass: true,
 			want:          valuelog.MaxFrameK,
 		},
@@ -633,7 +643,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, 4096, tc.autoRawBypass, tc.paused)
 			if got != tc.want {
 				t.Fatalf("non-leaf raw K=%d, want %d", got, tc.want)
 			}
@@ -1543,5 +1553,21 @@ func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_outer_leaf_codec.stored_ratio.none"]; got != "1.000000" {
 		t.Fatalf("outer-leaf codec none stored ratio stat=%q", got)
+	}
+}
+
+func TestChooseValueLogRawWriteK_ExternalCommandWAL(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		rawBypass, paused bool
+	}{
+		{"off", false, false}, {"auto raw bypass", true, false}, {"paused", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{disableJournal: true, externalCommandWAL: true, forceValueLogPointers: true, valueLogBlockTargetBytes: 4096}
+			if got := db.chooseValueLogRawWriteK(&lane{}, 32, 4096, tc.rawBypass, tc.paused); got != 1 {
+				t.Fatalf("external command-WAL raw K=%d, want 1", got)
+			}
+		})
 	}
 }

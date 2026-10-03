@@ -16316,7 +16316,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 					k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
 				}
 			} else {
-				k = db.chooseValueLogRawWriteK(l, end-i, false, rawPaused)
+				k = db.chooseValueLogRawWriteK(l, end-i, maxValLen, false, rawPaused)
 			}
 		}
 		if limits.MaxRecordSize > 0 && maxValLen > 0 {
@@ -17563,8 +17563,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	)
 
 	rawPayloadBytes := 0
+	maxPayloadBytes := 0
 	for i := range records {
-		rawPayloadBytes += len(records[i].Value)
+		n := len(records[i].Value)
+		rawPayloadBytes += n
+		if n > maxPayloadBytes {
+			maxPayloadBytes = n
+		}
 	}
 	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
@@ -17579,8 +17584,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	if dictID == 0 || templatePrepass {
 		records, _ = db.valueLogTemplateEncodeRecords(records)
 		rawPayloadBytes = 0
+		maxPayloadBytes = 0
 		for i := range records {
-			rawPayloadBytes += len(records[i].Value)
+			n := len(records[i].Value)
+			rawPayloadBytes += n
+			if n > maxPayloadBytes {
+				maxPayloadBytes = n
+			}
 		}
 	}
 
@@ -17718,7 +17728,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		k = db.chooseValueLogRawWriteK(l, len(records), autoRawBypass, paused)
+		k = db.chooseValueLogRawWriteK(l, len(records), maxPayloadBytes, autoRawBypass, paused)
 	}
 	if dictID != 0 && len(dict) > 0 && db.disableJournal {
 		// When the redo/journal log is disabled (ingest-mode), favor maximum frame

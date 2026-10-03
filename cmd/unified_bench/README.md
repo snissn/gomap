@@ -1,5 +1,18 @@
 # unified_bench
 
+Raw value-log frame read amplification has a standalone production-planner
+microbenchmark:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkValueLogRawFrameRead$' -benchmem -benchtime=1s -count=3
+```
+
+It reports owned sealed-mmap read allocations and CRC bytes/checks per result.
+See [the lifecycle runbook](../../TreeDB/docs/spec/value-log-lifecycle.md#13-durable-raw-frame-read-cost)
+for its boundaries. Its Go benchmark text/profiles are not benchprof inputs;
+use the public native Quicksilver harness for durability and workload guardrails.
+
+
 Standalone checkpointed point-read allocation/throughput qualification:
 
 ```sh
