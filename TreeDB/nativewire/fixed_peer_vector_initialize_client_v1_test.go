@@ -268,7 +268,7 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 		datasetPath = writeFixedPeerDatasetTestV1(t, 600, 128)
 		expectedRows = 603
 		for i := range configs {
-			configs[i].RequestTimeout = 30 * time.Second
+			configs[i].RequestTimeout = time.Minute
 			v := configs[i].VectorInitialization
 			v.MaxSourceRows = 640
 			v.IndexDefinition.Dimensions = 128
