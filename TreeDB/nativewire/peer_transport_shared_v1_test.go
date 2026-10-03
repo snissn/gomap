@@ -12,7 +12,7 @@ import (
 func TestPeerSecuritySharedControlClientOwnsOnlyItsPoolsV1(t *testing.T) {
 	fixture, config := peerTransportFixtureV1(t)
 	fixture.Close()
-	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	node, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}

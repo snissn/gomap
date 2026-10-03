@@ -23,7 +23,7 @@ import (
 func TestSparseCatalogNonVoterIngressRoutesWithVerifiedProofV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	configs := sparseCatalogTestConfigsV1(t)
+	configs := sparseCatalogTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))
 	client, err := NewFixedPeerTCPClientV1(configs[3])
 	if err != nil {
 		t.Fatalf("nonvoting ingress configuration must be accepted: %v", err)
@@ -169,9 +169,9 @@ func TestSparseCatalogNonVoterIngressRoutesWithVerifiedProofV1(t *testing.T) {
 	}
 }
 
-func sparseCatalogTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
+func sparseCatalogTestConfigsV1(t testing.TB, allocate ...func(raftcluster.NodeID) string) []FixedPeerTCPConfigV1 {
 	t.Helper()
-	configs := fixedPeerTestConfigsV1(t)
+	configs := fixedPeerTestConfigsV1(t, allocate...)
 	used := make(map[string]bool)
 	for _, c := range configs {
 		used[c.ListenAddress] = true
@@ -179,22 +179,7 @@ func sparseCatalogTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
 			used[address] = true
 		}
 	}
-	var address string
-	for attempt := 0; attempt < 32; attempt++ {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		candidate := listener.Addr().String()
-		listener.Close()
-		if !used[candidate] {
-			address = candidate
-			break
-		}
-	}
-	if address == "" {
-		t.Fatal("could not allocate a distinct consumer endpoint")
-	}
+	address := fixedPeerTestAllocatorV1(t, allocate)("consumer")
 	root := t.TempDir()
 	consumer := configs[0]
 	consumer.NodeID = "consumer"

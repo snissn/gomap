@@ -95,7 +95,7 @@ func TestUnknownPeerCannotSubmitOrInstallSnapshotV1(t *testing.T) {
 	config.Groups = config.Groups[:1]
 	config.ClusterID = "security-conformance"
 	config.Credentials = peerCredentialsFixtureV1(t, config.ClusterID, string(config.NodeID))
-	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	node, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,7 +27,7 @@ func TestSparseCatalogRuntimeCloseInterruptsIdleRaftConnectionV1(t *testing.T) {
 	config.Nodes = config.Nodes[:1]
 	config.Catalog.Peers = config.Catalog.Peers[:1]
 	config.Groups = config.Groups[:1]
-	node, err := OpenFixedPeerTCPRuntimeV1(config)
+	node, err := fixedPeerOpenTestRuntimeV1(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}
