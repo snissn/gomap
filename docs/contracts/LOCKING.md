@@ -50,7 +50,14 @@ callback. An already assigned intent retains its append owner's guards.
 External append/apply callers, including Raft executors, use
 `WithPreparedCommandWALMutation` or `WithPreparedCommandWALSplitMutationV1`.
 These own schema, vector admission/coverage and mutation before append through
-apply and `Finalize` or `Abort`. After draining, they retain the actual raw staging
+apply and `Finalize` or `Abort`. Declared `column_graph` mutations take the
+existing exclusive native admission even before a serving handle registers a
+carrier. Under schema read and native admission, prepared mutation restores a
+cold durable carrier using the existing load mutex before taking mutation or raw
+staging ownership. It does not upgrade a read lease, scan rows, rebuild a graph,
+or publish an additional carrier command. Atomic mutation candidates copy the
+exact immutable preparation completion under the existing carrier read lock, so
+native metadata publication retains the same recovery authority. Warm carriers avoid the load path. After draining, they retain the actual raw staging
 and teardown guards through the callback. `CommandWALAppendOptions` passes that
 same-DB owner capability in Append Options; Append consumes it once and transfers
 it to the existing handle. This capability retains the DB-minted typed staging

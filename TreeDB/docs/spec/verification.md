@@ -2437,6 +2437,16 @@ Coverage:
   checkpoint/close/reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
+- `TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1` verifies
+  an ordinary cold manager restores an acknowledged durable overlay before the
+  next actual prepared Append and preserves both owners and the exact durable
+  preparation completion through warm publication, cold publication and reopen,
+  with zero graph rebuilds. `TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1`
+  acknowledges an actual live insert before a real provider snapshot and retains
+  the fixture's tail, exact-retry, close/reopen, visibility and strict-search
+  checks. It also checks each voter retains its exact local durable completion
+  before the snapshot and after tail recovery, and activates serving under the
+  existing current-DB/catalog guards. It does not add snapshot persistence commands.
 - The V2-focused structural and concurrency gates
   `TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2`,
   `TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2`,

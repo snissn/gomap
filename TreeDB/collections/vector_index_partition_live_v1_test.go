@@ -17,6 +17,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
@@ -3451,4 +3452,186 @@ func newVectorPartitionLiveProductionFixtureWithPartitionsV1(t *testing.T, extra
 		t.Fatal(err)
 	}
 	return dir, database, collection, def, ready
+}
+
+func TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0}}, {id: "b", vector: []float32{0, 1}}}
+	requireVectorPartitionPersistenceV1(t)
+	dir, database, collection, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	defer func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	}()
+	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := collection.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := commitlog.VectorPrepareV1{Version: 1, Operation: "prepare", Collection: collection.name, Index: def.Name, Group: "group-a", IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def), Generation: 1, MaxSourceRows: 8, SourceGeneration: source.Generation, SourceChecksum: source.Checksum, SourceSchemaHash: source.SchemaHash, SourceRowCount: source.RowCount, Term: 3, IndexPosition: 17, CommandDigest: strings.Repeat("c", 64)}
+	preparePayload, err := commitlog.EncodeVectorPreparePayloadV1(prepare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareFrame := commandwalapply.LoweredFrame{Class: commandwalapply.LoweredFrameClassCollectionVectorPrepareV1, Kind: commitlog.CommandKindCollectionVectorPrepareV1, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionVectorPrepareV1, Payload: preparePayload}
+	if err := collection.WithPreparedCommandWALVectorPrepareV1(t.Context(), prepare, func(owner *CommandWALAdmittedCollection) error {
+		opts, err := owner.CommandWALAppendOptions(true)
+		if err != nil {
+			return err
+		}
+		handle, _, err := commandwalapply.Append(database, prepareFrame, commandwalapply.ApplyMetadata{}, opts)
+		if err != nil {
+			return err
+		}
+		defer commandwalapply.Abort(database, handle)
+		capture, err := handle.BorrowStableResourceCaptureLeaseV1()
+		if err != nil {
+			return err
+		}
+		defer capture.Release()
+		if err := owner.SetVectorPrepareCaptureLeaseV1(capture); err != nil {
+			return err
+		}
+		if err := owner.ApplyVectorPrepareWithCommandWALIntentV1(t.Context(), prepare, handle.CommandWALIntent(), false); err != nil {
+			return err
+		}
+		_, err = commandwalapply.Finalize(database, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completion, present, err := collection.VectorPartitionPrepareCompletionV1(def.Name)
+	if err != nil || !present || completion.Command != prepare {
+		t.Fatalf("durable preparation=%+v present=%v err=%v", completion, present, err)
+	}
+	checkCompletion := func(stage string) {
+		t.Helper()
+		actual, present, err := collection.VectorPartitionPrepareCompletionV1(def.Name)
+		if err != nil || !present || actual != completion {
+			t.Fatalf("%s changed durable preparation: actual=%+v want=%+v present=%v err=%v", stage, actual, completion, present, err)
+		}
+	}
+	rebuilds := 0
+	restoreHook := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { rebuilds++ })
+	defer restoreHook()
+
+	// Publish one acknowledged overlay before closing. Each later ordinary
+	// manager starts cold; no serving plan or explicit load precedes Append.
+	for _, id := range []string{"precut", "tail"} {
+		if id == "tail" {
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			database = nil
+			database = openCollectionCommandWALDB(t, dir)
+			collection, err = NewCollectionManager(database).OpenCollection("docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkCompletion("cold before tail")
+			if collection.registeredVectorIndex(def.Name) != nil {
+				t.Fatal("ordinary open eagerly loaded the carrier; cold path was not exercised")
+			}
+		}
+		document := []byte(`{"time_us":3,"kind":"vector","did":"` + id + `","embedding":[0.5,0.5]}`)
+		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("docs", []commitlog.CollectionDocument{{ID: []byte(id), Document: document}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := commandwalapply.CollectionInsertBatchByIDFrame(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = collection.WithPreparedCommandWALMutation(func(owner *CommandWALAdmittedCollection) error {
+			loaded := collection.registeredVectorIndex(def.Name)
+			if loaded == nil || !loaded.isPartitionLiveCarrier() || !loaded.hasValidSourceDocumentRoots() {
+				return errors.New("durable live carrier missing before ordinary Append")
+			}
+			if id == "tail" {
+				loaded.mu.RLock()
+				_, present := loaded.partitionLive.ownerV1("precut")
+				loaded.mu.RUnlock()
+				if !present {
+					return errors.New("cold carrier lost acknowledged precut owner")
+				}
+			}
+			opts, err := owner.CommandWALAppendOptions(true)
+			if err != nil {
+				return err
+			}
+			handle, _, err := commandwalapply.Append(database, frame, commandwalapply.ApplyMetadata{}, opts)
+			if err != nil {
+				return err
+			}
+			defer commandwalapply.Abort(database, handle)
+			if _, err := owner.InsertBatchWithCommandWALIntent([][]byte{[]byte(id)}, [][]byte{document}, false, handle.CommandWALIntent()); err != nil {
+				return err
+			}
+			_, err = commandwalapply.Finalize(database, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+			return err
+		})
+		if err != nil {
+			t.Fatalf("prepared %s: %v", id, err)
+		}
+		checkCompletion(id)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	database = openCollectionCommandWALDB(t, dir)
+	collection, err = NewCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkCompletion("reopened after tail")
+	if err := collection.WithPreparedCommandWALMutation(func(*CommandWALAdmittedCollection) error {
+		loaded := collection.registeredVectorIndex(def.Name)
+		if loaded == nil || !loaded.hasValidSourceDocumentRoots() {
+			return errors.New("reopened carrier has invalid coverage")
+		}
+		loaded.mu.RLock()
+		defer loaded.mu.RUnlock()
+		if loaded.partitionLive.revision != 2 {
+			return errors.New("reopened carrier lost the two acknowledged revisions")
+		}
+		for _, id := range []string{"precut", "tail"} {
+			owner, present := loaded.partitionLive.ownerV1(id)
+			if !present || owner.deleted {
+				return errors.New("reopened carrier lost inserted owner")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An unnotified primary-only fixture deliberately makes the durable graph
+	// stale. Cold ownership must reject it before user code can assign a frame.
+	collection.UnregisterVectorIndex(def.Name)
+	if _, err := collection.insertBatchWithCommandWALIntent([][]byte{[]byte("unnotified")}, [][]byte{[]byte(`{"time_us":4,"kind":"vector","did":"unnotified","embedding":[1,0]}`)}, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	database = openCollectionCommandWALDB(t, dir)
+	collection, err = NewCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, applied := database.CommandWALNextLSN(), database.State().AppliedCommandLSN
+	called := false
+	err = collection.WithPreparedCommandWALMutation(func(*CommandWALAdmittedCollection) error { called = true; return nil })
+	if !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) || called || database.CommandWALNextLSN() != next || database.State().AppliedCommandLSN != applied {
+		t.Fatalf("stale cold carrier reached assignment: callback=%v next=%d/%d applied=%d/%d err=%v", called, database.CommandWALNextLSN(), next, database.State().AppliedCommandLSN, applied, err)
+	}
+	if rebuilds != 0 {
+		t.Fatalf("cold mutation rebuilt graph %d times", rebuilds)
+	}
 }
