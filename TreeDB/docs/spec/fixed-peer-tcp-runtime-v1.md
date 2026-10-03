@@ -341,18 +341,22 @@ persistent-root markers. It must be present before the first root is opened;
 adding, removing, or changing it on existing roots is refused. Omitted intent
 preserves the existing non-vector configuration identity and behavior.
 
-The bounded v1 layout is one or two disjoint RF3 data groups, three or six nodes,
-with every node also a catalog voter and hosting exactly one data group. No
+The bounded v1 layout is one RF3 data group and three nodes, with every node
+also a catalog voter and hosting that data group. Two-group/six-node
+initialization is refused before persistent roots open because prepare and
+serving activation do not support it yet; it remains follow-up work under #4250.
+Ordinary replica replacement is refused for initialization runtimes, including
+removal, completion, and reconciliation, so the retained roster stays immutable. No
 spare or dormant destination is admitted. The intent binds `SourceGroupID`,
 `Collection`, `IndexDefinition`, `CatalogEpoch` (1), nonzero `Generation`,
 `MaxSourceRows` (1..512), and complete `PublicAddresses`/`ShardAddresses` maps.
 `Collection.Database` and `Collection.Catalog` must both be `default`, the
 scope supported by the existing routed consensus create/ingest commands. Other
 scopes are refused during config validation before persistent roots are opened.
-Reserved vector addresses use the existing authenticated mutable-vector
-loopback boundary and must be distinct from all configured endpoints. They are
-not opened during initialization. A six-container two-host placement does not
-guarantee quorum after either physical host is lost.
+Public vector addresses remain loopback-only; shard addresses require canonical
+private or loopback IP endpoints under the authenticated transport boundary.
+Both must be distinct from all configured endpoints and are not opened during
+initialization. A two-host placement does not guarantee quorum after either physical host is lost.
 
 The index uses the existing collection definition normalizer and is limited to
 cosine float32 `column_graph`, dimensions up to 4096, M up to 64, and construction

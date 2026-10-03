@@ -17,6 +17,7 @@ import (
 // This is local WAL replay evidence only. The real-peer test owns actual FSM
 // term/index/result validation; these fixture positions authenticate stage reuse.
 func TestVectorPartitionPrepareLocalWALPartialStageReplayV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	for _, caseName := range []string{"before_checkpoint_install", "after_checkpoint_install", "after_delta_install", "after_checkpoint_install_corrupt"} {
 		cut := strings.TrimSuffix(caseName, "_corrupt")
 		corrupt := caseName != cut
@@ -202,6 +203,7 @@ func TestVectorPartitionPrepareLocalWALPartialStageReplayV1(t *testing.T) {
 // manager. Actual DB.Open must mint the active replay token and publish under
 // ordinary startup ownership without appending a duplicate frame.
 func TestVectorPartitionPrepareLocalWALRebuildReplayV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	rows := []columnGraphRebuildInputRowV2A{{id: "x", vector: []float32{1, 0}}, {id: "y", vector: []float32{0, 1}}, {id: "minus-x", vector: []float32{-1, 0}}}
 	dir, d, c, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
 	defer func() {
