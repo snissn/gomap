@@ -30,6 +30,38 @@ type vectorClient interface {
 	VectorSearchStrictV1(context.Context, public.SearchRequestV1) (public.SearchResponseV1, error)
 	VectorInsertV1(context.Context, public.InsertRequestV1) (public.InsertResponseV1, error)
 }
+
+// phaseClients prepares fresh connections before the serial phases. Preparation
+// never retries an operation and remains outside its dispatch/timing record.
+type phaseClients struct {
+	writer, reader func(context.Context) (vectorClient, error)
+}
+type ownedVectorClient interface {
+	vectorClient
+	Close() error
+}
+
+// renewPhaseClient retires an idle client before dialing, never after a failed
+// mutation. Clearing ownership prevents deferred cleanup from closing it twice.
+func renewPhaseClient(ctx context.Context, current *ownedVectorClient, dial func(context.Context) (ownedVectorClient, error)) (vectorClient, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	previous := *current
+	*current = nil
+	if previous != nil {
+		if err := previous.Close(); err != nil {
+			return nil, err
+		}
+	}
+	next, err := dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	*current = next
+	return next, nil
+}
+
 type operation struct {
 	Ordinal                                int
 	Phase, Kind, ExpectedID, RequestSHA256 string
@@ -290,7 +322,7 @@ func finish(r *report) {
 		}
 	}
 }
-func runWorkload(parent context.Context, writer, reader vectorClient, o options, r *report) error {
+func runWorkload(parent context.Context, writer, reader vectorClient, o options, r *report, phases phaseClients) error {
 	freshN := effectiveFreshCount(o)
 	plan, err := makePlan(o)
 	if err != nil {
@@ -349,6 +381,21 @@ func runWorkload(parent context.Context, writer, reader vectorClient, o options,
 	if err := errors.Join(a, b); err != nil {
 		return fail(err)
 	}
+	prepare := func(connect func(context.Context) (vectorClient, error), current vectorClient) (vectorClient, error) {
+		if connect == nil {
+			return current, nil
+		}
+		call, cancel := context.WithTimeout(ctx, o.RPCTimeout)
+		defer cancel()
+		if err := call.Err(); err != nil {
+			return nil, err
+		}
+		return connect(call)
+	}
+	writer, err = prepare(phases.writer, writer)
+	if err != nil {
+		return fail(fmt.Errorf("prepare explicit retry client: %w", err))
+	}
 	retryIndex := 2 + freshN + concurrentSearchCount
 	if err := execute(ctx, writer, &r.Operations[retryIndex], origin, o.RPCTimeout); err != nil {
 		return fail(err)
@@ -360,6 +407,10 @@ func runWorkload(parent context.Context, writer, reader vectorClient, o options,
 		r.Operations[retryIndex].ErrorCode = string(public.ErrorCommitAmbiguousV1)
 		r.Operations[retryIndex].Error = "explicit retry did not preserve original exact-ID live identity with new consensus evidence"
 		return fail(errors.New(r.Operations[retryIndex].Error))
+	}
+	reader, err = prepare(phases.reader, reader)
+	if err != nil {
+		return fail(fmt.Errorf("prepare post-write search client: %w", err))
 	}
 	for i := retryIndex + 1; i < len(r.Operations); i++ {
 		if err := execute(ctx, reader, &r.Operations[i], origin, o.RPCTimeout); err != nil {
@@ -523,6 +574,9 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	defer func() {
 		if runErr != nil {
 			r.Error = runErr.Error()
+			if r.Verdict == "ACCEPT_BOUNDED_FUNCTIONAL_CLIENT_OVERLAP" {
+				r.Verdict = "FAILED"
+			}
 		}
 		finish(&r)
 		if err := json.NewEncoder(output).Encode(struct {
@@ -584,17 +638,32 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	if err := readiness(ctx, control, config, &r, bootstrap.Retry.CommitIndex, 1); err != nil {
 		return err
 	}
-	writer, err := nativewire.DialContext(ctx, "tcp", v.PublicAddresses[config.NodeID])
+	dial := func(call context.Context) (ownedVectorClient, error) {
+		return nativewire.DialContext(call, "tcp", v.PublicAddresses[config.NodeID])
+	}
+	writer, err := dial(ctx)
 	if err != nil {
 		return err
 	}
-	defer writer.Close()
-	reader, err := nativewire.DialContext(ctx, "tcp", v.PublicAddresses[config.NodeID])
+	defer func() {
+		if writer != nil {
+			runErr = errors.Join(runErr, writer.Close())
+		}
+	}()
+	reader, err := dial(ctx)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
-	if err := runWorkload(ctx, writer, reader, o, &r); err != nil {
+	defer func() {
+		if reader != nil {
+			runErr = errors.Join(runErr, reader.Close())
+		}
+	}()
+	phases := phaseClients{
+		writer: func(call context.Context) (vectorClient, error) { return renewPhaseClient(call, &writer, dial) },
+		reader: func(call context.Context) (vectorClient, error) { return renewPhaseClient(call, &reader, dial) },
+	}
+	if err := runWorkload(ctx, writer, reader, o, &r, phases); err != nil {
 		return err
 	}
 	if err := readiness(ctx, control, config, &r, r.HighestCommitIndex, 64); err != nil {

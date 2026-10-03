@@ -27,6 +27,17 @@ Every fresh insert is checked immediately, before the next insert: complete shar
 
 ## Failure and overlap semantics
 
+After both concurrent streams complete successfully, the driver closes the
+original writer and dials/handshakes one fresh writer before the scheduled
+identical retry. After that retry succeeds, it closes the original reader and
+prepares one fresh reader before post-write searches. A finished stream may
+otherwise leave its socket idle beyond the server's configured timeout while
+waiting for the other stream. Each connection preparation fits the remaining
+overall deadline and per-call budget, remains outside API operation timestamps,
+and does not issue a mutation. Preparation or close failure stops the checkpoint
+with the next operations still unissued. No failed operation is redialed or
+retried; close errors are retained in the failed result.
+
 Any failed operation cancels the workload context and joins both workers before reporting. No new writes continue after failure; no automatic retry occurs. A commit-ambiguous or unclassified mutation error is UNKNOWN. Malformed insert responses share invalid_request classification with some local refusals in the existing native API; the runner conservatively retains all mutation invalid_request outcomes as UNKNOWN rather than assert noncommit. Its original typed code remains recorded. Invalid successful receipt/sequence is also unknown. Unknown IDs are neither counted as absent nor used to construct a supposedly complete corpus. Failed/canceled/unknown/unissued counts reconcile with every planned attempt.
 
 Successful independent client calls are timed by one driver's monotonic clock. Acceptance requires a successful concurrent strict query to complete while an insert API call remains outstanding; every intersecting pair and whether the query finished before the insert are retained. If all operations succeed but that witness is absent, verdict is INCONCLUSIVE_OVERLAP and exit is nonzero. No samples are replaced.
