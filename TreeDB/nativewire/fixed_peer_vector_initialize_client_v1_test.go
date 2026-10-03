@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestFixedPeerVectorFixturePhysicalCreateV1(t *testing.T) {
@@ -67,6 +68,9 @@ func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
 }
 
 func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
+		t.Skip("vector partition namespace persistence unsupported on this platform")
+	}
 	configs := initializationTestConfigsV1(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -115,5 +119,28 @@ func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
 	qualified, err := client.QualifyVectorFixtureV1(ctx, "operator-fixture")
 	if err != nil || len(qualified.Readiness) != 3 {
 		t.Fatalf("qualify=%+v err=%v", qualified, err)
+	}
+}
+
+func TestFixedPeerVectorFixtureNativeGraphSearchV1(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		selected, hnsw, exact uint64
+		valid                 bool
+	}{
+		{"native", 1, 1, 0, true},
+		{"multiple-native", 2, 2, 0, true},
+		{"empty", 0, 0, 0, false},
+		{"exact-fallback", 1, 0, 1, false},
+		{"mixed", 2, 2, 1, false},
+		{"missing-native", 2, 1, 0, false},
+		{"excess-native", 1, 2, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := public.SearchResponseV1{Counters: public.SearchCountersV1{SelectedPartitions: tc.selected, HNSWServedPartitions: tc.hnsw, ExactScanPartitions: tc.exact}, Neighbors: []public.NeighborV1{{ID: "seed-x", Score: 1}}}
+			if err := fixtureNativeGraphSearchV1(response); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v response=%+v err=%v", tc.valid, response, err)
+			}
+		})
 	}
 }

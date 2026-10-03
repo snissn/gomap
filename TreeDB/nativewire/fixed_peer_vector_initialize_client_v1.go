@@ -289,6 +289,9 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 		if e != nil {
 			return false, e
 		}
+		if e = fixtureNativeGraphSearchV1(report.Before); e != nil {
+			return false, e
+		}
 		if len(report.Before.Neighbors) != 1 || report.Before.Neighbors[0].ID != "seed-x" || report.Before.Neighbors[0].Score != 1 {
 			return false, fmt.Errorf("exact seed cosine oracle mismatch")
 		}
@@ -324,6 +327,9 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 	if err != nil {
 		return
 	}
+	if err = fixtureNativeGraphSearchV1(report.After); err != nil {
+		return
+	}
 	if len(report.After.Neighbors) != 1 || report.After.Neighbors[0].ID != string(request.ID) || report.After.Neighbors[0].Score != 1 {
 		err = fmt.Errorf("exact fresh-write cosine oracle mismatch")
 		return
@@ -343,4 +349,12 @@ func (c *FixedPeerTCPClientV1) QualifyVectorFixtureV1(ctx context.Context, reque
 		return true, nil
 	})
 	return
+}
+
+func fixtureNativeGraphSearchV1(response public.SearchResponseV1) error {
+	c := response.Counters
+	if c.SelectedPartitions == 0 || c.ExactScanPartitions != 0 || c.HNSWServedPartitions != c.SelectedPartitions {
+		return fmt.Errorf("fixture requires native HNSW for every selected partition: selected=%d hnsw=%d exact=%d", c.SelectedPartitions, c.HNSWServedPartitions, c.ExactScanPartitions)
+	}
+	return nil
 }

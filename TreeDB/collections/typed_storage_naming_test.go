@@ -343,6 +343,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/internal/raftfsm/vector_prepare_storage_order_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	{path: "TreeDB/nativewire/column_store_metadata_v6_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 8},
 	{path: "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
+	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/nativewire/metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 10},
 	// Split recovery constructs the retained public typed-column schema.
 	{path: "TreeDB/internal/raftapply/split_vector_insert_recovery_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
