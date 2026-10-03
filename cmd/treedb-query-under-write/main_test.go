@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,7 +152,7 @@ func TestWorkloadAccountsAllOperationsAndExplicitRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var result report
-	if err := runWorkload(ctx, writer, reader, o, &result); err != nil {
+	if err := runWorkload(ctx, writer, reader, o, &result, phaseClients{}); err != nil {
 		t.Fatal(err)
 	}
 	if searches != 99 || insertCalls != 33 || result.Counts != (counts{Planned: 132, Attempted: 132, Succeeded: 132}) {
@@ -173,7 +174,7 @@ func TestAmbiguousMutationStopsWritesAndPreservesUnknown(t *testing.T) {
 		return goodInsert(r, 2, 10), &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("visible commit but proof lost")}
 	}}
 	var result report
-	if err := runWorkload(context.Background(), client, client, testOptions(), &result); err == nil {
+	if err := runWorkload(context.Background(), client, client, testOptions(), &result, phaseClients{}); err == nil {
 		t.Fatal("accepted ambiguous insert")
 	}
 	if calls != 1 || result.Counts.Unknown != 1 || result.Counts.Unissued < 64 ||
@@ -195,7 +196,7 @@ func TestFreshRevisionFailureStopsBeforeNextInsert(t *testing.T) {
 			return goodInsert(r, 8, 10), nil
 		}}
 	var result report
-	if err := runWorkload(context.Background(), client, client, testOptions(), &result); err == nil {
+	if err := runWorkload(context.Background(), client, client, testOptions(), &result, phaseClients{}); err == nil {
 		t.Fatal("accepted an unexplained live revision")
 	}
 	if calls != 1 || result.Operations[2].Outcome != "unknown" || result.Counts.Unknown != 1 {
@@ -210,7 +211,7 @@ func TestCanceledCheckpointKeepsEntireUnissuedPopulation(t *testing.T) {
 		return public.SearchResponseV1{}, nil
 	}}
 	var result report
-	if err := runWorkload(ctx, client, client, testOptions(), &result); !errors.Is(err, context.Canceled) {
+	if err := runWorkload(ctx, client, client, testOptions(), &result, phaseClients{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}
 	if result.Counts != (counts{Planned: 132, Unissued: 132}) {
@@ -301,7 +302,7 @@ func TestCancellationJoinsBothOutstandingClients(t *testing.T) {
 		return public.SearchResponseV1{}, call.Err()
 	}}
 	var result report
-	if err := runWorkload(ctx, writer, reader, testOptions(), &result); err == nil {
+	if err := runWorkload(ctx, writer, reader, testOptions(), &result, phaseClients{}); err == nil {
 		t.Fatal("accepted canceled outstanding operations")
 	}
 	want := counts{Planned: 132, Attempted: 4, Succeeded: 2, Canceled: 1, Unknown: 1, Unissued: 128}
@@ -385,7 +386,7 @@ func TestExplicitRetrySplitProofStaysUnknownBeforePostSearch(t *testing.T) {
 		return goodSearch(r, "seed-x"), nil
 	}}
 	var result report
-	if err := runWorkload(context.Background(), writer, reader, o, &result); err == nil {
+	if err := runWorkload(context.Background(), writer, reader, o, &result, phaseClients{}); err == nil {
 		t.Fatal("accepted split-shaped explicit retry")
 	}
 	retry := result.Operations[98]
@@ -470,6 +471,255 @@ func TestReadinessRetainsErrorsAndUsesRemainingRounds(t *testing.T) {
 				}
 			} else if !errors.Is(err, context.Canceled) || calls != 1 {
 				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestExplicitProbeDeadlineEnvelopePreservesPlan(t *testing.T) {
+	base := testOptions()
+	base.Timeout, base.RPCTimeout = 120*time.Second, 10*time.Second
+	before, err := makePlan(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := base
+	large.Timeout, large.RPCTimeout = 600*time.Second, 60*time.Second
+	after, err := makePlan(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("explicit deadlines changed default requests or population")
+	}
+	large.FreshInserts, large.Dimensions = 65, 128
+	if plan, err := makePlan(large); err != nil || len(plan) != 198 {
+		t.Fatalf("explicit bounded corpus plan: operations=%d err=%v", len(plan), err)
+	}
+}
+
+func TestProbeDeadlineBoundsRefuseBeforeInputOrNetwork(t *testing.T) {
+	for _, bounds := range []struct{ timeout, rpc string }{
+		{"999ms", "1ms"}, {"600.001s", "1s"}, {"600s", "999us"},
+		{"600s", "60.001s"}, {"1s", "2s"}, {"-1s", "1ms"},
+	} {
+		t.Run(bounds.timeout+"/"+bounds.rpc, func(t *testing.T) {
+			var output strings.Builder
+			err := runArgs(context.Background(), []string{"-config", "/does-not-exist-config", "-bootstrap-receipt", "/does-not-exist-bootstrap", "-run-id", "deadline-bounds", "-timeout", bounds.timeout, "-rpc-timeout", bounds.rpc}, &output)
+			if err == nil || !strings.Contains(err.Error(), "timeout requires 1s..10m") || output.Len() != 0 {
+				t.Fatalf("invalid deadlines reached input/report work: err=%v output=%q", err, output.String())
+			}
+		})
+	}
+	for _, bounds := range []struct{ timeout, rpc time.Duration }{
+		{time.Second, time.Millisecond}, {120 * time.Second, 10 * time.Second}, {600 * time.Second, 60 * time.Second},
+	} {
+		if err := validateProbeTimeouts(bounds.timeout, bounds.rpc); err != nil {
+			t.Fatalf("valid boundary rejected: %+v err=%v", bounds, err)
+		}
+	}
+}
+
+// The old clients model sockets that expire after their concurrent stream.
+// Channels force a completed concurrent read while the ordinary write waits;
+// phase preparation must happen after both complete, without timing sleeps.
+func TestWorkloadPhaseConnectionsAndFailureAccounting(t *testing.T) {
+	for _, mode := range []string{"renew", "stale-control", "writer-prepare-failure", "writer-prepare-timeout", "reader-prepare-failure", "retry-unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			o := testOptions()
+			o.FreshInserts = 1
+			o.RPCTimeout = time.Second
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			writerEntered, releaseWriter := make(chan struct{}), make(chan struct{})
+			oldWrites, oldReads, newWrites, newReads := 0, 0, 0, 0
+			writerPreparations, readerPreparations := 0, 0
+			var original public.InsertRequestV1
+			var result report
+			writer := fakeClient{
+				search: func(_ context.Context, r public.SearchRequestV1) (public.SearchResponseV1, error) {
+					return goodSearch(r, "seed-x"), nil
+				},
+				insert: func(call context.Context, r public.InsertRequestV1) (public.InsertResponseV1, error) {
+					oldWrites++
+					if oldWrites > 1 {
+						return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("expired writer socket")}
+					}
+					original = r
+					close(writerEntered)
+					select {
+					case <-releaseWriter:
+					case <-call.Done():
+						return public.InsertResponseV1{}, call.Err()
+					}
+					return goodInsert(r, 2, 10), nil
+				},
+			}
+			reader := fakeClient{search: func(call context.Context, r public.SearchRequestV1) (public.SearchResponseV1, error) {
+				oldReads++
+				if oldReads == 2 {
+					select {
+					case <-writerEntered:
+					case <-call.Done():
+						return public.SearchResponseV1{}, call.Err()
+					}
+				}
+				if oldReads == 3 {
+					close(releaseWriter)
+				}
+				if oldReads > 65 {
+					return public.SearchResponseV1{}, errors.New("expired reader socket")
+				}
+				return goodSearch(r, "seed-x"), nil
+			}}
+			preparationError := errors.New("phase preparation failed")
+			checkBudget := func(call context.Context) {
+				t.Helper()
+				deadline, ok := call.Deadline()
+				if !ok || time.Until(deadline) > o.RPCTimeout {
+					t.Fatal("phase preparation lacks RPC/parent bound")
+				}
+			}
+			phases := phaseClients{
+				writer: func(call context.Context) (vectorClient, error) {
+					writerPreparations++
+					checkBudget(call)
+					if result.Operations[2].EndNS == 0 || result.Operations[66].EndNS == 0 {
+						t.Fatal("prepared before both streams joined")
+					}
+					if mode == "writer-prepare-failure" {
+						return nil, preparationError
+					}
+					if mode == "writer-prepare-timeout" {
+						<-call.Done()
+						return nil, call.Err()
+					}
+					return fakeClient{insert: func(_ context.Context, r public.InsertRequestV1) (public.InsertResponseV1, error) {
+						newWrites++
+						compare := r
+						compare.Deadline = original.Deadline
+						if !reflect.DeepEqual(compare, original) {
+							t.Fatal("phase renewal changed retry identity")
+						}
+						if mode == "retry-unknown" {
+							return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("fresh socket mutation ambiguous")}
+						}
+						return goodInsert(r, 2, 11), nil
+					}}, nil
+				},
+				reader: func(call context.Context) (vectorClient, error) {
+					readerPreparations++
+					checkBudget(call)
+					if result.Operations[67].Outcome != "succeeded" || result.Operations[67].EndNS == 0 {
+						t.Fatal("prepared reader before successful retry")
+					}
+					if mode == "reader-prepare-failure" {
+						return nil, preparationError
+					}
+					return fakeClient{search: func(_ context.Context, r public.SearchRequestV1) (public.SearchResponseV1, error) {
+						newReads++
+						id := "seed-x"
+						if r.Query[0] != 1 {
+							id = string(original.ID)
+						}
+						return goodSearch(r, id), nil
+					}}, nil
+				},
+			}
+			if mode == "stale-control" {
+				phases = phaseClients{}
+			}
+			err := runWorkload(ctx, writer, reader, o, &result, phases)
+			want := counts{Planned: 70, Attempted: 70, Succeeded: 70}
+			wp, rp, nw, nr, ow := 1, 1, 1, 2, 1
+			switch mode {
+			case "stale-control":
+				want = counts{Planned: 70, Attempted: 68, Succeeded: 67, Unknown: 1, Unissued: 2}
+				wp, rp, nw, nr, ow = 0, 0, 0, 0, 2
+			case "writer-prepare-failure", "writer-prepare-timeout":
+				want = counts{Planned: 70, Attempted: 67, Succeeded: 67, Unissued: 3}
+				rp, nw, nr = 0, 0, 0
+			case "reader-prepare-failure":
+				want = counts{Planned: 70, Attempted: 68, Succeeded: 68, Unissued: 2}
+				nr = 0
+			case "retry-unknown":
+				want = counts{Planned: 70, Attempted: 68, Succeeded: 67, Unknown: 1, Unissued: 2}
+				rp, nr = 0, 0
+			}
+			if (err == nil) != (mode == "renew") || result.Counts != want {
+				t.Fatalf("err=%v counts=%+v want=%+v", err, result.Counts, want)
+			}
+			if writerPreparations != wp || readerPreparations != rp || newWrites != nw || newReads != nr || oldWrites != ow || oldReads != 65 {
+				t.Fatalf("preparations=%d/%d calls old=%d/%d new=%d/%d", writerPreparations, readerPreparations, oldWrites, oldReads, newWrites, newReads)
+			}
+			if mode == "writer-prepare-timeout" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("lost preparation deadline: %v", err)
+			}
+			for _, op := range result.Operations {
+				if op.Outcome == "unissued" && (op.StartNS != 0 || op.EndNS != 0) {
+					t.Fatal("preparation recorded an unissued operation as dispatched")
+				}
+			}
+		})
+	}
+}
+
+type closingFakeClient struct {
+	fakeClient
+	close func() error
+}
+
+func (f *closingFakeClient) Close() error { return f.close() }
+
+func TestRenewPhaseClientRetiresOwnershipWithoutRetry(t *testing.T) {
+	for _, mode := range []string{"success", "close-failure", "dial-failure", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			closeCalls, dialCalls, newCloseCalls := 0, 0, 0
+			closeError, dialError := errors.New("close failed"), errors.New("dial failed")
+			previous := &closingFakeClient{close: func() error {
+				closeCalls++
+				if mode == "close-failure" {
+					return closeError
+				}
+				return nil
+			}}
+			next := &closingFakeClient{close: func() error { newCloseCalls++; return nil }}
+			var current ownedVectorClient = previous
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode == "canceled" {
+				cancel()
+			}
+			client, err := renewPhaseClient(ctx, &current, func(context.Context) (ownedVectorClient, error) {
+				dialCalls++
+				if mode == "dial-failure" {
+					return nil, dialError
+				}
+				return next, nil
+			})
+			switch mode {
+			case "success":
+				if err != nil || client != next || current != next || closeCalls != 1 || dialCalls != 1 {
+					t.Fatalf("ownership/result err=%v close=%d dial=%d", err, closeCalls, dialCalls)
+				}
+				if err := current.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if newCloseCalls != 1 || closeCalls != 1 {
+					t.Fatal("replacement cleanup closed stale owner")
+				}
+			case "close-failure":
+				if !errors.Is(err, closeError) || current != nil || client != nil || closeCalls != 1 || dialCalls != 0 {
+					t.Fatal("close failure lost or dialed after failed retirement")
+				}
+			case "dial-failure":
+				if !errors.Is(err, dialError) || current != nil || client != nil || closeCalls != 1 || dialCalls != 1 {
+					t.Fatal("dial failure reused/retried stale owner")
+				}
+			case "canceled":
+				if !errors.Is(err, context.Canceled) || current != previous || closeCalls != 0 || dialCalls != 0 {
+					t.Fatal("canceled preparation changed ownership")
+				}
 			}
 		})
 	}

@@ -27,6 +27,17 @@ Every fresh insert is checked immediately, before the next insert: complete shar
 
 ## Failure and overlap semantics
 
+After both concurrent streams complete successfully, the driver closes the
+original writer and dials/handshakes one fresh writer before the scheduled
+identical retry. After that retry succeeds, it closes the original reader and
+prepares one fresh reader before post-write searches. A finished stream may
+otherwise leave its socket idle beyond the server's configured timeout while
+waiting for the other stream. Each connection preparation fits the remaining
+overall deadline and per-call budget, remains outside API operation timestamps,
+and does not issue a mutation. Preparation or close failure stops the checkpoint
+with the next operations still unissued. No failed operation is redialed or
+retried; close errors are retained in the failed result.
+
 Any failed operation cancels the workload context and joins both workers before reporting. No new writes continue after failure; no automatic retry occurs. A commit-ambiguous or unclassified mutation error is UNKNOWN. Malformed insert responses share invalid_request classification with some local refusals in the existing native API; the runner conservatively retains all mutation invalid_request outcomes as UNKNOWN rather than assert noncommit. Its original typed code remains recorded. Invalid successful receipt/sequence is also unknown. Unknown IDs are neither counted as absent nor used to construct a supposedly complete corpus. Failed/canceled/unknown/unissued counts reconcile with every planned attempt.
 
 Successful independent client calls are timed by one driver's monotonic clock. Acceptance requires a successful concurrent strict query to complete while an insert API call remains outstanding; every intersecting pair and whether the query finished before the insert are retained. If all operations succeed but that witness is absent, verdict is INCONCLUSIVE_OVERLAP and exit is nonzero. No samples are replaced.
@@ -55,3 +66,37 @@ loading; anchors/new probes use that plane, with zeros in remaining coordinates.
 Raw planned/result responses, ambiguity accounting, final all-voter prefix checks,
 client-overlap semantics and no automatic retry remain unchanged. This is a
 functional population probe, not sustained performance or general mutation proof.
+
+
+## Explicit probe deadlines and retained corpus failure (#4958)
+
+The defaults remain `-timeout 120s -rpc-timeout 10s`, with the default 132-operation
+population unchanged. Explicit total deadlines admit 1s..600s; explicit per-call
+deadlines admit 1ms..60s and must fit the total. Invalid bounds refuse before
+input loading, planning or network activity. Both admitted budgets and each
+attempt's actual deadline remain in the raw report. These are harness limits;
+they do not change runtime request limits or imply a latency guarantee.
+
+For the optional unchanged 10,000-row/128D corpus plus three anchors, retained
+trial08's unpaced 65-new-ID probe failed: 198 planned, 10 attempted, 8 succeeded,
+one search deadline failure, one UNKNOWN canceled mutation, and 188 unissued.
+Four acknowledged ordinary writes took 3.8..3.91s each; at that rate 65 serial
+writes would exceed 250s. The preceding successful search spent about 7.18s in
+the service adapter and about 8ms in the coordinator. A later search exhausted
+its 10s RPC deadline. Larger explicit budgets permit a bounded followup but do
+not themselves fix admission contention. The failed packet and ambiguous
+outcome remain retained; there is no automatic retry or paced reinterpretation.
+
+The reader-intent admission regression and fix belong to #4958. Fresh trial10
+completed the unchanged 198-operation plan: 65 distinct ordinary inserts, one
+identical retry and 132 native searches, with verified client-call overlap and
+all four voters applied through commit 154. All attempts succeeded; all four
+servers stopped cleanly without OOM and their stores remain preserved. Its
+independently reviewed sealed archive is
+`91333f496872113c8b1942c173a43218810eaf0322921677e6cd53086814aa17`.
+The driver renews idle connections before the planned retry and post-write
+phases; failed mutations never retry. This proves bounded ordinary growth and
+native overlap. Write-phase cost attribution and broader resource qualification
+remain pending; no sustained performance or whole-lifetime peak is claimed.
+#4250 still owns sustained throughput, p99, representative recall and resource
+claims; RF4 on two hosts with two voters each cannot survive either host loss.

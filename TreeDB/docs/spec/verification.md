@@ -3548,6 +3548,52 @@ coverage admits16,384, refuses16,385 and preserves the other origin constraints.
 These are proposed checks until root executes the exact final candidate; the
 failed staged packet did not establish a corpus-identity causal red.
 The optional65-new-ID public
-probe reconciles historical64 ordinary-write qualification claims; it changes
-no split identity capacity and establishes no sustained throughput or broad
-mutation/recall guarantee. #4250/#4810 remain open.
+probe plans reconciliation of historical64 ordinary-write qualification claims.
+Its retained trial08 corpus run failed after10 attempts; actual unpaced >64
+completion remains pending #4958. It changes no split identity capacity and
+establishes no sustained throughput or broad mutation/recall guarantee.
+#4250/#4810 remain open.
+
+
+## Ordinary owner admission progress (#4958)
+
+`TestFixedPeerVectorWaitingSearchPrecedesNextWriterRealRaftV1` retains a real
+prepared owner, observes a contended reader through a test-only context's Done
+boundary, then submits the next actual public ordinary insert. On the unchanged
+source it failed because that writer acknowledged commit8 before the waiting
+reader acquired admission. The fix registers intent only after read contention
+and retires it on admission or cancellation; later writers wait before their
+existing RWMutex exclusive queue. The existing
+`TestFixedPeerVectorOwnerSearchAdmissionRealRaftV1` retains genuine native shard
+plans, concurrent reader pins and committed/applied publication exclusion.
+Existing ordinary-owner recovery tests retain cold-initialization safety.
+
+Focused admission checks also cover canceled reader intent cleanup, canceled
+intent-waiting writer progress, cancellation after a queued writer acquires the
+mutex, and a later reader not preempting an already queued writer. Uncontended
+search and mutation admission must allocate zero times. The identical overlay
+`fixed_peer_vector_admission_bench_v1_test.go` compares old/candidate admission
+cost using `BenchmarkFixedPeerVectorAdmissionUncontendedV1/{search,mutation}`;
+setup is excluded and its results do not measure Raft or whole public latency.
+Root executes the exact formatted candidate in normal/race modes before these
+checks can be treated as passing evidence.
+
+Driver deadline tests admit explicit600s total/60s RPC limits without changing
+logical request bytes, stable hashes or tiny default population, and reject
+invalid bounds before input/network work. The larger limits do not themselves
+prove admission fairness. Retained trial08's unpaced198-operation plan failed
+with8 successes/1 failed search/1 UNKNOWN mutation/188 unissued, leaving actual
+>64 ordinary growth pending a reviewed frozen fresh packet at that point.
+Fresh trial10 subsequently passed all 198 attempts on the unchanged
+10,000-row/128D corpus: 65 distinct ordinary inserts, one identical retry and
+132 native searches, with verified client-call overlap and all four voters
+applied through commit 154. No failed, UNKNOWN or unissued operations occurred;
+all four servers stopped exit 0 without OOM and their stores remain preserved.
+The independently reviewed sealed archive is
+`91333f496872113c8b1942c173a43218810eaf0322921677e6cd53086814aa17`.
+Its daemon retains source `47aa6ab` / ELF `1a9c7061` and its phase-renewal driver retains
+source `f231933` / ELF `940752c0`; later ancestry-only integration does not relabel them.
+This qualifies bounded ordinary growth and native client-call overlap, not
+sustained throughput, representative recall, broad mutation support, whole-host
+failure tolerance or unobserved whole-lifetime resource peaks. Write-phase cost
+attribution and broader resource qualification remain open with #4959/#4250.
