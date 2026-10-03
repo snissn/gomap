@@ -151,3 +151,13 @@ artifact parser. Profile collection does not replace unprofiled timing pairs.
 Validation requires one process/phase IO support state, enclosing process counter
 containment and chronological monotonicity for all seven counters, plus exact
 configuration keys, types and values. Unsupported IO remains explicitly empty.
+
+## Native multi-engine CLI workload
+
+`unified-bench -suite quicksilver` integrates the later retained concurrent KV
+one-off through the normal registry, owned snapshots and profile-dir/benchprof
+pipeline. See [its contract and runnable commands](../../../cmd/unified_bench/README.md#quicksilver-shaped-kv-workload).
+It has four aggregate read phases with independently controlled reader widths
+and GOMAXPROCS. Its payload/trace/defaults and JSON schema differ from the
+standalone `BenchmarkQuicksilverWorkflow` described here. Keep their artifacts
+and measurements separate; neither establishes a Cloudflare service replacement.

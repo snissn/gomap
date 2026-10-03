@@ -32,7 +32,7 @@ func NewLMDB(dir string) (kvstore.DB, error) {
 	if err := env.SetMaxDBs(10); err != nil {
 		return nil, err
 	}
-	var flags uint = 0
+	var flags uint = lmdb.NoTLS
 	if *lmdbNoSync {
 		flags |= lmdb.NoSync
 	}
@@ -103,6 +103,41 @@ func (l *LMDBWrapper) Delete(key []byte) error {
 		}
 		return err
 	})
+}
+
+// Checkpoint is an explicit force-sync boundary, including NoSync experiments.
+func (l *LMDBWrapper) Checkpoint() error { return l.env.Sync(true) }
+
+type lmdbReadSnapshot struct {
+	txn *lmdb.Txn
+	dbi lmdb.DBI
+}
+
+func (l *LMDBWrapper) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
+	txn, err := l.env.BeginTxn(nil, lmdb.Readonly)
+	if err != nil {
+		return nil, err
+	}
+	txn.RawRead = true
+	return &lmdbReadSnapshot{txn: txn, dbi: l.dbi}, nil
+}
+func (s *lmdbReadSnapshot) Get(key []byte) ([]byte, error) { return s.GetAppend(key, nil) }
+func (s *lmdbReadSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	v, err := s.txn.Get(s.dbi, key)
+	if lmdb.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return append(dst, v...), nil
+}
+func (s *lmdbReadSnapshot) Close() error {
+	if s.txn != nil {
+		s.txn.Abort()
+		s.txn = nil
+	}
+	return nil
 }
 
 // LMDB Iterator
