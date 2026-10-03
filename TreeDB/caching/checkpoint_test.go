@@ -71,8 +71,15 @@ func TestLockCheckpointMutexContextCancellationLeavesNoWaiters(t *testing.T) {
 	}
 	callers.Wait()
 
-	runtime.Gosched()
+	// Done runs before the caller goroutine fully exits. Allow bounded time
+	// for retirement while keeping mu locked, so parked mutex waiters cannot
+	// disappear by acquiring it.
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
 	blockedGoroutines := runtime.NumGoroutine()
+	for blockedGoroutines > baselineGoroutines+waiters/4 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		blockedGoroutines = runtime.NumGoroutine()
+	}
 	mu.Unlock()
 	if blockedGoroutines > baselineGoroutines+waiters/4 {
 		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled flush waiters remain parked", blockedGoroutines, baselineGoroutines)

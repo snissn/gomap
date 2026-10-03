@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollectionMetaNilColumnStoreExactV5Bytes(t *testing.T) {
@@ -157,4 +161,152 @@ func encodeCollectionMetaLegacyV5ForTest(meta collections.CollectionMeta) []byte
 		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, 5)
 	}
 	return dst
+}
+
+func TestMetadataDurableColumnStoreExceedsCreateBounds(t *testing.T) {
+	t.Run("columns", func(t *testing.T) {
+		cfg := &collections.ColumnStoreConfig{Enabled: true}
+		for i := 0; i <= collections.ColumnStoreWireMaxColumnsV1; i++ {
+			name := fmt.Sprintf("value_%d", i)
+			cfg.Columns = append(cfg.Columns, collections.ColumnStoreColumn{Name: name, Path: name, ValueType: collections.ColumnStoreValueString})
+		}
+		client, server, mgr, _ := serveCollectionPipeWithServer(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := client.Hello(ctx); err != nil {
+			t.Fatal(err)
+		}
+		// A real durable 33-column schema must remain available in metadata
+		// responses without widening the bounded native create request.
+		_, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{ColumnStore: cfg}})
+		if err != nil {
+			t.Fatalf("create durable schema: %v", err)
+		}
+		col, err := mgr.OpenCollection("docs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := col.Meta().Options.ColumnStore
+		check := func(meta collections.CollectionMeta) {
+			t.Helper()
+			if !reflect.DeepEqual(meta.Options.ColumnStore, want) {
+				t.Fatal("metadata response changed the durable column schema")
+			}
+		}
+		listed, err := client.ListCollections(ctx)
+		if err != nil || len(listed) != 1 {
+			t.Fatalf("ListCollections: len=%d err=%v", len(listed), err)
+		}
+		check(listed[0])
+		if _, ok := server.catalogMetadataFingerprint(); !ok {
+			t.Fatal("durable schema prevented catalog fingerprinting")
+		}
+		if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "rejected", Options: collections.CollectionOptions{ColumnStore: cfg}}); err == nil {
+			t.Fatal("native create accepted an oversized schema")
+		}
+		// Bypass client normalization to exercise actual server admission.
+		hostile, err := encodeCollectionMeta(collections.CollectionMeta{Name: "rejected", Options: collections.CollectionOptions{ColumnStore: cfg}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refusedVersion := clientCatalogVersion(t, client, ctx)
+		_, err = server.handleCreateCollection([]iwire.Section{
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte("oversized-create-columns")},
+			{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, refusedVersion)},
+			{ID: iwire.SectionCollectionMeta, Bytes: hostile},
+		})
+		wantReason := "requires 1..32 enabled columns"
+		if err == nil || nativeCodeOf(err) != iwire.ErrInvalidCommand || !strings.Contains(err.Error(), wantReason) {
+			t.Fatalf("server create did not reject the oversized schema: err=%v want reason %q", err, wantReason)
+		}
+		if got := clientCatalogVersion(t, client, ctx); got != refusedVersion {
+			t.Fatalf("rejected create changed catalog version=%d want %d", got, refusedVersion)
+		}
+		if _, err := mgr.OpenCollection("rejected"); err == nil {
+			t.Fatal("rejected native create published a collection")
+		}
+		def := collections.IndexDefinition{Name: "tag", Field: "tag", ValueType: collections.IndexValueString}
+		version := clientCatalogVersion(t, client, ctx)
+		createCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("large-create-index")), version)
+		first, err := client.CreateIndex(createCtx, "docs", def)
+		if err != nil {
+			t.Fatalf("CreateIndex committed response: %v", err)
+		}
+		check(first)
+		replay, err := client.CreateIndex(createCtx, "docs", def)
+		if err != nil || !reflect.DeepEqual(first, replay) {
+			t.Fatalf("CreateIndex replay: %v", err)
+		}
+		if got := clientCatalogVersion(t, client, ctx); got != version+1 {
+			t.Fatalf("CreateIndex catalog version=%d want %d", got, version+1)
+		}
+		version = clientCatalogVersion(t, client, ctx)
+		dropCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("large-drop-index")), version)
+		first, err = client.DropIndex(dropCtx, "docs", "tag")
+		if err != nil {
+			t.Fatalf("DropIndex committed response: %v", err)
+		}
+		check(first)
+		replay, err = client.DropIndex(dropCtx, "docs", "tag")
+		if err != nil || !reflect.DeepEqual(first, replay) {
+			t.Fatalf("DropIndex replay: %v", err)
+		}
+		if got := clientCatalogVersion(t, client, ctx); got != version+1 {
+			t.Fatalf("DropIndex catalog version=%d want %d", got, version+1)
+		}
+		col, err = mgr.OpenCollection("docs")
+		if err != nil || len(col.Meta().Indexes) != 0 {
+			t.Fatalf("DropIndex durable state: err=%v", err)
+		}
+		if _, ok := server.catalogMetadataFingerprint(); !ok {
+			t.Fatal("index mutations prevented catalog fingerprinting")
+		}
+	})
+}
+
+func TestMetadataOversizedColumnStoreBytesRefusesCreate(t *testing.T) {
+	client, server, mgr, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise response decoding and create admission independently of disk
+	// storage: the system-root catalog publisher currently emits inline values.
+	cfg := &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{
+		{Name: "value", Path: strings.Repeat("x", collections.ColumnStoreWireMaxBytesV1), ValueType: collections.ColumnStoreValueString},
+	}}
+	meta := collections.CollectionMeta{Name: "rejected", Options: collections.CollectionOptions{ColumnStore: cfg}}
+	raw, err := encodeCollectionMeta(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) <= collections.ColumnStoreWireMaxBytesV1 {
+		t.Fatal("fixture does not exceed the create byte bound")
+	}
+	decoded, err := decodeCollectionMeta(raw)
+	if err != nil || decoded.Options.ColumnStore == nil || len(decoded.Options.ColumnStore.Columns) != 1 {
+		t.Fatalf("oversized response decode: err=%v", err)
+	}
+	if decoded.Options.ColumnStore.Columns[0].Path != cfg.Columns[0].Path {
+		t.Fatal("response decoding changed the oversized path")
+	}
+	if _, err := client.CreateCollection(ctx, meta); err == nil {
+		t.Fatal("client create accepted oversized schema bytes")
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	_, err = server.handleCreateCollection([]iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("oversized-create-bytes")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+		{ID: iwire.SectionCollectionMeta, Bytes: raw},
+	})
+	if err == nil || nativeCodeOf(err) != iwire.ErrInvalidCommand || !strings.Contains(err.Error(), "exceeds bounded byte limit") {
+		t.Fatalf("server did not refuse oversized schema bytes: %v", err)
+	}
+	if got := clientCatalogVersion(t, client, ctx); got != version {
+		t.Fatalf("rejected create changed catalog version=%d want %d", got, version)
+	}
+	if _, err := mgr.OpenCollection(meta.Name); err == nil {
+		t.Fatal("rejected create published a durable collection")
+	}
 }

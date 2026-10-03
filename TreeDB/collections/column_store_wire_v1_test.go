@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -63,5 +64,58 @@ func TestColumnStoreWireConfigV1PreservesRealResponseAuthority(t *testing.T) {
 	}
 	if _, err := DecodeColumnStoreWireConfigV1(c.name, raw, true); err == nil {
 		t.Fatal("response authority accepted in create")
+	}
+}
+
+func TestColumnStoreWireConfigV1DurableResponseExceedsCreateBounds(t *testing.T) {
+	for _, arm := range []string{"columns", "bytes"} {
+		t.Run(arm, func(t *testing.T) {
+			cfg := &ColumnStoreConfig{Enabled: true}
+			if arm == "columns" {
+				for i := 0; i <= ColumnStoreWireMaxColumnsV1; i++ {
+					name := fmt.Sprintf("value_%d", i)
+					cfg.Columns = append(cfg.Columns, ColumnStoreColumn{Name: name, Path: name, ValueType: ColumnStoreValueString})
+				}
+			} else {
+				cfg.Columns = []ColumnStoreColumn{{Name: "value", Path: strings.Repeat("x", ColumnStoreWireMaxBytesV1), ValueType: ColumnStoreValueString}}
+			}
+			raw, err := EncodeColumnStoreWireConfigV1("docs", cfg, false)
+			if err != nil {
+				t.Fatalf("encode durable response: %v", err)
+			}
+			if arm == "bytes" && len(raw) <= ColumnStoreWireMaxBytesV1 {
+				t.Fatal("fixture does not exceed the create byte limit")
+			}
+			decoded, err := DecodeColumnStoreWireConfigV1("docs", raw, false)
+			if err != nil {
+				t.Fatalf("decode durable response: %v", err)
+			}
+			again, err := EncodeColumnStoreWireConfigV1("docs", decoded, false)
+			if err != nil || !bytes.Equal(raw, again) {
+				t.Fatalf("durable response did not round-trip: err=%v", err)
+			}
+			if len(decoded.Columns) != len(cfg.Columns) {
+				t.Fatal("durable response changed column count")
+			}
+			for i := range cfg.Columns {
+				if decoded.Columns[i].Name != cfg.Columns[i].Name || decoded.Columns[i].Path != cfg.Columns[i].Path || decoded.Columns[i].ValueType != cfg.Columns[i].ValueType {
+					t.Fatal("durable response changed column semantics")
+				}
+			}
+			if _, err := EncodeColumnStoreWireConfigV1("docs", cfg, true); err == nil {
+				t.Fatal("create encoder accepted an oversized schema")
+			}
+			if _, err := DecodeColumnStoreWireConfigV1("docs", raw, true); err == nil {
+				t.Fatal("create decoder accepted an oversized schema")
+			}
+			for _, invalid := range [][]byte{
+				append(append([]byte(nil), raw...), []byte(" {}")...),
+				append([]byte("{\"unknown\":true,"), raw[1:]...),
+			} {
+				if _, err := DecodeColumnStoreWireConfigV1("docs", invalid, false); err == nil {
+					t.Fatal("response decoder accepted malformed metadata")
+				}
+			}
+		})
 	}
 }
