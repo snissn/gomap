@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"strings"
 	"time"
 )
 
@@ -228,6 +229,86 @@ func (r *FixedPeerTCPRuntimeV1) validatePreparedVectorAllVotersV1(ctx context.Co
 	return nil
 }
 
+// Resume uses the original guard only from a covered durable result. Restoring
+// that guard must reconstruct the entire original digest; a reused key cannot
+// authorize a changed source, payload, operation, or command header.
+func (r *FixedPeerTCPRuntimeV1) vectorPrepareResumeEntryV1(ctx context.Context, raw []byte, metadata raftentry.RequestMetadataV1) ([]byte, error) {
+	// Match the FSM's bounded scheduling selector: ordinary entries take no
+	// additional decode or allocation. This prefix grants no command authority.
+	magic := iwire.DeterministicEntryMagic
+	if r.config.VectorInitialization == nil || len(raw) < len(magic) || string(raw[:len(magic)]) != magic {
+		return raw, nil
+	}
+	version, n := binary.Uvarint(raw[len(magic):])
+	if n <= 0 || version != iwire.DeterministicEntryVersion {
+		return raw, nil
+	}
+	command, n := binary.Uvarint(raw[len(magic)+n:])
+	if n <= 0 || iwire.CommandID(command) != iwire.CommandVectorPrepareV1 {
+		return raw, nil
+	}
+	entry, err := raftentry.DecodeCommandEntryV1(raw, raftentry.DecodeOptions{})
+	if err != nil {
+		return nil, err
+	}
+	decoded := entry.Decoded
+	var payload []byte
+	for _, section := range decoded.Sections {
+		if section.ID == iwire.SectionVectorPrepareV1 {
+			payload = section.Bytes
+		}
+	}
+	v, err := commitlog.DecodeVectorPreparePayloadV1(payload)
+	if err != nil {
+		return nil, err
+	}
+	suffix := "/prepare"
+	if v.Operation == "rebuild" {
+		suffix = "/source"
+	}
+	key := string(entry.IdempotencyKey)
+	requestID, shaped := strings.CutSuffix(key, suffix)
+	// Other producers retain their ordinary exact-entry replay contract.
+	if !shaped || requestID == "" || len(requestID) > 512 {
+		return raw, nil
+	}
+	intent := r.config.VectorInitialization
+	if len(r.config.Groups) != 1 || metadata.ClusterRouteGroupID != string(intent.SourceGroupID) ||
+		v.Group != string(intent.SourceGroupID) || v.Collection != intent.Collection.Collection ||
+		v.Index != intent.IndexDefinition.Name || v.IndexDefinitionDigest != collections.VectorIndexDefinitionDigestV1(intent.IndexDefinition) ||
+		v.Generation != intent.Generation || v.MaxSourceRows != intent.MaxSourceRows || v.Term != 0 || v.IndexPosition != 0 || v.CommandDigest != "" {
+		return nil, errors.New("nativewire: prepare resume differs from immutable initialization")
+	}
+	data := r.localDataV1(intent.SourceGroupID)
+	if data == nil || data.fsm == nil {
+		// An ingress without the group forwards unchanged to the actual owner.
+		return raw, nil
+	}
+	guard, digest, known, err := data.fsm.AppliedIdempotencyGuardV1(ctx, entry.IdempotencyKey)
+	if err != nil || !known {
+		return raw, err
+	}
+	sections := []iwire.Section{{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: decoded.CommandID, Version: decoded.CommandVersion, Flags: decoded.CommandFlags})}}
+	for _, section := range decoded.Sections {
+		if section.ID == iwire.SectionExpectedCatalogVersion {
+			section.Bytes = binary.AppendUvarint(nil, guard)
+		}
+		sections = append(sections, section)
+	}
+	validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		return nil, err
+	}
+	replay, err := iwire.AppendDeterministicEntry(nil, validated)
+	if err != nil {
+		return nil, err
+	}
+	if raftentry.CommandDigestV1ForBytes(replay, raftentry.DecodeOptions{}) != digest {
+		return nil, errors.New("nativewire: prepare resume idempotency key conflicts with original command")
+	}
+	return replay, nil
+}
+
 // PrepareVectorInitializationV1 performs real routed Raft source rebuild then
 // prepare. Every source voter must agree on the frozen source and completion.
 // Successful return requires a clean restart for serving; immutable config is
@@ -323,6 +404,11 @@ func (c *FixedPeerTCPClientV1) PrepareVectorInitializationV1(ctx context.Context
 				}
 				if first == nil {
 					first = state
+				} else if !wantCompletion && state.Source != first.Source {
+					// Committed rebuild apply on the submitting owner does not
+					// imply every follower has reached that source yet.
+					accepted = false
+					break
 				} else if state.Source != first.Source || wantCompletion && (state.Completion.Command != first.Completion.Command || state.Completion.AssetSetDigest != first.Completion.AssetSetDigest) {
 					return nil, errors.New("nativewire: vector prepare voters disagree")
 				}

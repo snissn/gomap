@@ -68,12 +68,29 @@ def plan(manifest, run_id):
         roster = {n["ID"] for n in config["Nodes"]}
         catalog = [p["ID"] for p in config["Catalog"]["Peers"]]
         peers = [p["ID"] for p in config["Groups"][0]["Peers"]]
-        if len(roster) != len(nodes) or len(config["Nodes"]) != len(nodes) or len(catalog) != len(nodes) or len(peers) != len(nodes) or set(catalog) != roster or set(peers) != roster:
+        if (len(roster) != len(nodes) or len(config["Nodes"]) != len(nodes)
+                or len(catalog) != len(nodes) or len(peers) != len(nodes)
+                or set(catalog) != roster or set(peers) != roster):
             raise ValueError("single data group and catalog must contain the exact three or four server voters")
-        definition = intent["IndexDefinition"]
-        if definition.get("field") != "embedding" or definition.get("dimensions") != 2 or not 3 <= intent["MaxSourceRows"] <= 512:
-            raise ValueError("fixture requires embedding dimensions=2 and bound3..512")
+        definition = dict(intent["IndexDefinition"])
+        encoding = definition.pop("encoding", "float32")
+        if not ((type(encoding) is int and encoding == 0)
+                or (isinstance(encoding, str) and encoding.strip().lower() == "float32")):
+            raise ValueError("fixture requires canonical FP32 encoding")
+        for key, values in (("representation", (None, "")), ("schema_generation", (None, 0)),
+                            ("quantized_indexes", (None, []))):
+            if key in definition and any(type(definition[key]) is type(value) and definition[key] == value for value in values):
+                del definition[key]
+        expected = {"name": "embedding_graph", "field": "embedding", "metric": "cosine",
+                    "dimensions": 2, "m": 2, "ef_construction": 8, "ef_search": 8,
+                    "strategy": "column_graph"}
+        if (definition != expected or intent.get("Generation") != 1 or intent.get("CatalogEpoch") != 1
+                or intent.get("Collection") != {"Database": "default", "Catalog": "default", "Collection": "docs"}
+                or intent.get("SourceGroupID") != config["Groups"][0]["ID"]
+                or not 3 <= intent["MaxSourceRows"] <= 512):
+            raise ValueError("requires canonical generation1 default.docs embedding_graph fixture and bound3..512")
         identity = {key: config.get(key) for key in ("ClusterID", "Nodes", "Catalog", "Groups", "VectorInitialization")}
+        identity["VectorInitialization"] = dict(intent, IndexDefinition=definition)
         if shared is not None and identity != shared:
             raise ValueError("all node inventories and immutable intents must agree")
         shared = identity
@@ -94,6 +111,14 @@ def plan(manifest, run_id):
     return result
 
 
+def require_running(inspected, name, container_id, run_id):
+    if (len(inspected) != 1 or inspected[0].get("Id") != container_id
+            or ((inspected[0].get("Config") or {}).get("Labels") or {}).get("treedb.fixed-cluster.run") != run_id):
+        raise RuntimeError("daemon identity or ownership mismatch: " + name)
+    if inspected[0].get("State", {}).get("Running") is not True:
+        raise RuntimeError("daemon is not running: " + name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
@@ -112,7 +137,7 @@ def main():
     public_plan = {"provisional": True, "workflow": [f"inspect{len(nodes)}", f"serve{len(nodes)}", "initialize", f"stop{len(nodes)}", f"start{len(nodes)}", "qualify"],
                    "image": manifest["image"], "binary_sha256": manifest["binary_sha256"],
                    "nodes": [{k: n[k] for k in ("host", "image", "node", "root", "name")} for n in nodes],
-                   "driver_node": driver["node"], "source_rows": 3, "max_total_documents": 4}
+                   "driver_node": driver["node"], "planned_source_rows": 3, "planned_total_documents": 4}
     if not args.execute:
         print(json.dumps(public_plan, indent=2))
         return
@@ -189,8 +214,11 @@ def main():
                 raise RuntimeError("actual normalized config identities disagree")
             shared_digest = identity["SharedSHA256"]
         for node in nodes:
-            docker(node, "serve-" + node["node"], ["run", "-d", "--restart=no", "--entrypoint", manifest["binary"], "--name", node["name"],
-                   "--label", "treedb.fixed-cluster.run=" + args.run_id] + mounts(node) + [node["image"]] + cli("serve"))
+            container_id = docker(node, "serve-" + node["node"], ["run", "-d", "--restart=no", "--entrypoint", manifest["binary"], "--name", node["name"],
+                   "--label", "treedb.fixed-cluster.run=" + args.run_id] + mounts(node) + [node["image"]] + cli("serve")).strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+                raise RuntimeError("serve did not return a full container ID: " + node["name"])
+            node["container_id"] = container_id
 
         for mode in ("initialize", "qualify"):
             docker(driver, mode, ["run", "--rm", "--entrypoint", manifest["binary"], "--name", "treedb-4250-" + args.run_id + "-driver-" + mode] +
@@ -198,17 +226,19 @@ def main():
             if mode == "initialize":
                 for node in nodes:
                     label = docker(node, "ownership-" + node["node"],
-                                   ["inspect", "--format", '{{index .Config.Labels "treedb.fixed-cluster.run"}}', node["name"]]).strip()
+                                   ["inspect", "--format", '{{index .Config.Labels "treedb.fixed-cluster.run"}}', node["container_id"]]).strip()
                     if label != args.run_id:
                         raise RuntimeError("container ownership mismatch")
-                    docker(node, "stop-" + node["node"], ["stop", "-t", "60", node["name"]])
-                    code = docker(node, "close-exit-" + node["node"], ["inspect", "--format", "{{.State.ExitCode}}", node["name"]]).strip()
+                    docker(node, "stop-" + node["node"], ["stop", "-t", "60", node["container_id"]])
+                    code = docker(node, "close-exit-" + node["node"], ["inspect", "--format", "{{.State.ExitCode}}", node["container_id"]]).strip()
                     if code != "0":
                         raise RuntimeError("daemon did not close cleanly: " + node["name"])
                 for node in nodes:
-                    docker(node, "restart-" + node["node"], ["start", node["name"]])
+                    docker(node, "restart-" + node["node"], ["start", node["container_id"]])
         for node in nodes:
-            docker(node, "logs-" + node["node"], ["logs", node["name"]])
+            docker(node, "logs-" + node["node"], ["logs", node["container_id"]])
+            inspected = json.loads(docker(node, "final-state-" + node["node"], ["inspect", node["container_id"]]))
+            require_running(inspected, node["name"], node["container_id"], args.run_id)
     (output / "result.json").write_text(json.dumps({"status": "PASS", "scope": public_plan}, indent=2))
     print(str(output / "result.json"))
 
