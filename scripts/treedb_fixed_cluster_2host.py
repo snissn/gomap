@@ -63,7 +63,15 @@ def plan(manifest, run_id):
         intent = config.get("VectorInitialization")
         if not config.get("Credentials") or not intent or len(config.get("Groups", [])) != 1:
             raise ValueError("authenticated single-group initialization required")
-        definition = intent["IndexDefinition"]
+        definition = dict(intent["IndexDefinition"])
+        encoding = definition.pop("encoding", "float32")
+        if not ((type(encoding) is int and encoding == 0)
+                or (isinstance(encoding, str) and encoding.strip().lower() == "float32")):
+            raise ValueError("fixture requires canonical FP32 encoding")
+        for key, values in (("representation", (None, "")), ("schema_generation", (None, 0)),
+                            ("quantized_indexes", (None, []))):
+            if key in definition and any(type(definition[key]) is type(value) and definition[key] == value for value in values):
+                del definition[key]
         expected = {"name": "embedding_graph", "field": "embedding", "metric": "cosine",
                     "dimensions": 2, "m": 2, "ef_construction": 8, "ef_search": 8,
                     "strategy": "column_graph"}
@@ -73,6 +81,7 @@ def plan(manifest, run_id):
                 or not 3 <= intent["MaxSourceRows"] <= 512):
             raise ValueError("requires canonical generation1 default.docs embedding_graph fixture and bound3..512")
         identity = {key: config.get(key) for key in ("ClusterID", "Nodes", "Catalog", "Groups", "VectorInitialization")}
+        identity["VectorInitialization"] = dict(intent, IndexDefinition=definition)
         if shared is not None and identity != shared:
             raise ValueError("all node inventories and immutable intents must agree")
         shared = identity

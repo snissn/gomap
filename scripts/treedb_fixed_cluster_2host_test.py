@@ -58,6 +58,21 @@ def main():
         public_plan = json.loads(output.getvalue())
         assert public_plan["planned_source_rows"] == 3 and public_plan["planned_total_documents"] == 4
         assert "source_rows" not in public_plan and "max_total_documents" not in public_plan
+        defaults = copy.deepcopy(configs)
+        defaults[0]["VectorInitialization"]["IndexDefinition"].update(
+            encoding="float32", representation="", schema_generation=0, quantized_indexes=[])
+        defaults[1]["VectorInitialization"]["IndexDefinition"].update(encoding=" FLOAT32 ", representation=None, schema_generation=None, quantized_indexes=None)
+        defaults[2]["VectorInitialization"]["IndexDefinition"]["encoding"] = 0
+        write_configs(defaults)
+        assert len(harness.plan(manifest, "offline")) == 3
+        for field, value in [("encoding", "int8"), ("encoding", None), ("encoding", ""),
+                             ("encoding", False), ("encoding", 0.0), ("representation", "foreign"),
+                             ("schema_generation", 1), ("schema_generation", False), ("schema_generation", 0.0), ("quantized_indexes", [{}]), ("unknown", 0)]:
+            changed = copy.deepcopy(configs)
+            for config in changed:
+                config["VectorInitialization"]["IndexDefinition"][field] = value
+            write_configs(changed)
+            rejects(lambda: harness.plan(manifest, "offline"), ValueError)
         for field, value in [("name", "other"), ("metric", "l2"), ("m", 3),
                              ("ef_construction", 9), ("ef_search", 9), ("strategy", "other")]:
             changed = copy.deepcopy(configs)
