@@ -1,0 +1,879 @@
+{
+  "count": {
+    "count": 10000000,
+    "index": {
+      "capabilities": {
+        "benchmark_lifecycle": true,
+        "column_graph_vector_search": true,
+        "dense_vector_search": true,
+        "exact_column_graph_search": true,
+        "exact_dense_scoring": true,
+        "hybrid_metadata_filters": false,
+        "hybrid_search": true,
+        "keyword_metadata_filters": false,
+        "keyword_search": true,
+        "metadata_filters": true,
+        "no_document_vector_search": true,
+        "quantized_rerank": true,
+        "quantized_vector_search": true,
+        "rabitq_1bit_experimental": false,
+        "scalar_u8_quantized_rerank": true,
+        "vector_index_maintenance": true
+      },
+      "contract_version": "treedb-document-service/v1alpha2",
+      "dimension": 768,
+      "document_type": "treedb_document_service_v1",
+      "embedding_field": "embedding",
+      "generation": 1,
+      "metric": "cosine",
+      "name": "cohere10m_scalar_u8_post4584",
+      "quantized_indexes": [
+        {
+          "codec": "scalar_u8",
+          "name": "embedding.scalar_u8.fast",
+          "version": 1
+        }
+      ],
+      "text_field": "content",
+      "text_index_name": "content",
+      "vector_ef_construction": 300,
+      "vector_ef_search": 192,
+      "vector_index_name": "embedding",
+      "vector_m": 16,
+      "vector_strategy": "column_graph"
+    }
+  },
+  "index": {
+    "index": {
+      "capabilities": {
+        "benchmark_lifecycle": true,
+        "column_graph_vector_search": true,
+        "dense_vector_search": true,
+        "exact_column_graph_search": true,
+        "exact_dense_scoring": true,
+        "hybrid_metadata_filters": false,
+        "hybrid_search": true,
+        "keyword_metadata_filters": false,
+        "keyword_search": true,
+        "metadata_filters": true,
+        "no_document_vector_search": true,
+        "quantized_rerank": true,
+        "quantized_vector_search": true,
+        "rabitq_1bit_experimental": false,
+        "scalar_u8_quantized_rerank": true,
+        "vector_index_maintenance": true
+      },
+      "contract_version": "treedb-document-service/v1alpha2",
+      "dimension": 768,
+      "document_type": "treedb_document_service_v1",
+      "embedding_field": "embedding",
+      "generation": 1,
+      "metric": "cosine",
+      "name": "cohere10m_scalar_u8_post4584",
+      "quantized_indexes": [
+        {
+          "codec": "scalar_u8",
+          "name": "embedding.scalar_u8.fast",
+          "version": 1
+        }
+      ],
+      "text_field": "content",
+      "text_index_name": "content",
+      "vector_ef_construction": 300,
+      "vector_ef_search": 192,
+      "vector_index_name": "embedding",
+      "vector_m": 16,
+      "vector_strategy": "column_graph"
+    }
+  },
+  "searches": {
+    "10": {
+      "diagnostics": {
+        "exact_hnsw_search_pack_no_doc_route": false,
+        "fallback_reason": "none",
+        "hnsw_search_pack_cache_builds": 1,
+        "hnsw_search_pack_cache_misses": 1,
+        "hnsw_search_pack_status": "none",
+        "live_ann": {
+          "enabled": false,
+          "exact_fallbacks": 0,
+          "full_rebuilds": 0
+        },
+        "no_document_guardrails_ok": true,
+        "route": "quantized_rerank"
+      },
+      "extra": {},
+      "index": {
+        "capabilities": {
+          "benchmark_lifecycle": true,
+          "column_graph_vector_search": true,
+          "dense_vector_search": true,
+          "exact_column_graph_search": true,
+          "exact_dense_scoring": true,
+          "extra": {},
+          "hybrid_metadata_filters": false,
+          "hybrid_search": true,
+          "keyword_metadata_filters": false,
+          "keyword_search": true,
+          "metadata_filters": true,
+          "no_document_vector_search": true,
+          "quantized_rerank": true,
+          "quantized_vector_search": true,
+          "rabitq_1bit_experimental": false,
+          "scalar_u8_quantized_rerank": true,
+          "vector_index_maintenance": true
+        },
+        "contract_version": "treedb-document-service/v1alpha2",
+        "dimension": 768,
+        "document_type": "treedb_document_service_v1",
+        "embedding_field": "embedding",
+        "extra": {},
+        "generation": 1,
+        "metric": "cosine",
+        "name": "cohere10m_scalar_u8_post4584",
+        "quantized_indexes": [
+          {
+            "codec": "scalar_u8",
+            "name": "embedding.scalar_u8.fast",
+            "scalar_u8_calibration": null,
+            "version": 1
+          }
+        ],
+        "scalar_fields": [],
+        "text_field": "content",
+        "text_index_name": "content",
+        "vector_ef_construction": 300,
+        "vector_ef_search": 192,
+        "vector_index_name": "embedding",
+        "vector_m": 16,
+        "vector_strategy": "column_graph"
+      },
+      "metric": "cosine",
+      "no_documents": true,
+      "quantized_index_name": "embedding.scalar_u8.fast",
+      "quantized_rerank_candidates": 400,
+      "query_mode": "quantized_rerank",
+      "results": [
+        {
+          "id": "9004060",
+          "ordinal": 5731056,
+          "score": 0.842949390411377
+        },
+        {
+          "id": "4870944",
+          "ordinal": 5674735,
+          "score": 0.8368315696716309
+        },
+        {
+          "id": "3147147",
+          "ordinal": 4854160,
+          "score": 0.8339684009552002
+        },
+        {
+          "id": "8024994",
+          "ordinal": 775150,
+          "score": 0.8330223560333252
+        },
+        {
+          "id": "2941370",
+          "ordinal": 73462,
+          "score": 0.8312004804611206
+        },
+        {
+          "id": "843044",
+          "ordinal": 945500,
+          "score": 0.8296909928321838
+        },
+        {
+          "id": "7937392",
+          "ordinal": 1337380,
+          "score": 0.829533576965332
+        },
+        {
+          "id": "7828776",
+          "ordinal": 1927296,
+          "score": 0.8292052745819092
+        },
+        {
+          "id": "8362330",
+          "ordinal": 1337384,
+          "score": 0.8277878761291504
+        },
+        {
+          "id": "4143237",
+          "ordinal": 1043025,
+          "score": 0.8273394107818604
+        }
+      ],
+      "stats": {
+        "adjacency_bytes_read": 27360,
+        "adjacency_direct_views": 220,
+        "adjacency_mmap_direct": 220,
+        "adjacency_prepared_csr_direct_views": 220,
+        "adjacency_prepared_csr_mmap_direct": 220,
+        "candidate_fetches": 5781,
+        "candidate_rows": 10000000,
+        "candidates": 5432,
+        "edges": 6840,
+        "expansion_fetches": 220,
+        "hnsw_search_pack_cache_builds": 1,
+        "hnsw_search_pack_cache_misses": 1,
+        "norm_active_handles": 1,
+        "norm_bytes_read": 768,
+        "norm_mapped_bytes": 40000000,
+        "prepared_graph_search_views": 1,
+        "prepared_score_calls": 192,
+        "quantized_asset_active_handles": 1,
+        "quantized_asset_mapped_bytes": 7760643584,
+        "quantized_asset_mmap_direct": 1,
+        "quantized_asset_open_nanos": 15804855233,
+        "quantized_code_bytes_read": 4292352,
+        "quantized_rerank_candidates": 192,
+        "quantized_rerank_exact_score_calls": 192,
+        "quantized_score_calls": 5589,
+        "quantized_scorer_active": 1,
+        "result_fetches": 10,
+        "result_id_prepared_bytes_views": 1,
+        "result_id_typed_bytes_state": 10,
+        "row_ref_state_mmap_direct_fields": 4,
+        "row_ref_state_prepared_views": 1,
+        "row_ref_state_result_refs": 10,
+        "row_ref_vector_source_state": 1,
+        "score_batch_calls": 227,
+        "score_batch_candidates": 5781,
+        "score_batch_max_tile_size": 192,
+        "score_batch_optimized": 227,
+        "search_route_column_graph_prepared": 1,
+        "search_route_quantized_rerank": 1,
+        "typed_column_active_handles": 40,
+        "typed_column_decoded_bytes": 26680,
+        "typed_column_mapped_bytes": 30720000000,
+        "vector_bytes_read": 589824,
+        "vector_direct_views": 192,
+        "vector_mmap_direct": 192,
+        "vector_prepared_direct": 192,
+        "visited_edges": 6840,
+        "visited_nodes": 5781
+      },
+      "vector_index_name": "embedding"
+    },
+    "100": {
+      "diagnostics": {
+        "exact_hnsw_search_pack_no_doc_route": false,
+        "fallback_reason": "none",
+        "hnsw_search_pack_cache_hits": 1,
+        "hnsw_search_pack_status": "none",
+        "live_ann": {
+          "enabled": false,
+          "exact_fallbacks": 0,
+          "full_rebuilds": 0
+        },
+        "no_document_guardrails_ok": true,
+        "route": "quantized_rerank"
+      },
+      "extra": {},
+      "index": {
+        "capabilities": {
+          "benchmark_lifecycle": true,
+          "column_graph_vector_search": true,
+          "dense_vector_search": true,
+          "exact_column_graph_search": true,
+          "exact_dense_scoring": true,
+          "extra": {},
+          "hybrid_metadata_filters": false,
+          "hybrid_search": true,
+          "keyword_metadata_filters": false,
+          "keyword_search": true,
+          "metadata_filters": true,
+          "no_document_vector_search": true,
+          "quantized_rerank": true,
+          "quantized_vector_search": true,
+          "rabitq_1bit_experimental": false,
+          "scalar_u8_quantized_rerank": true,
+          "vector_index_maintenance": true
+        },
+        "contract_version": "treedb-document-service/v1alpha2",
+        "dimension": 768,
+        "document_type": "treedb_document_service_v1",
+        "embedding_field": "embedding",
+        "extra": {},
+        "generation": 1,
+        "metric": "cosine",
+        "name": "cohere10m_scalar_u8_post4584",
+        "quantized_indexes": [
+          {
+            "codec": "scalar_u8",
+            "name": "embedding.scalar_u8.fast",
+            "scalar_u8_calibration": null,
+            "version": 1
+          }
+        ],
+        "scalar_fields": [],
+        "text_field": "content",
+        "text_index_name": "content",
+        "vector_ef_construction": 300,
+        "vector_ef_search": 192,
+        "vector_index_name": "embedding",
+        "vector_m": 16,
+        "vector_strategy": "column_graph"
+      },
+      "metric": "cosine",
+      "no_documents": true,
+      "quantized_index_name": "embedding.scalar_u8.fast",
+      "quantized_rerank_candidates": 400,
+      "query_mode": "quantized_rerank",
+      "results": [
+        {
+          "id": "9004060",
+          "ordinal": 5731056,
+          "score": 0.842949390411377
+        },
+        {
+          "id": "4870944",
+          "ordinal": 5674735,
+          "score": 0.8368315696716309
+        },
+        {
+          "id": "3147147",
+          "ordinal": 4854160,
+          "score": 0.8339684009552002
+        },
+        {
+          "id": "8024994",
+          "ordinal": 775150,
+          "score": 0.8330223560333252
+        },
+        {
+          "id": "2941370",
+          "ordinal": 73462,
+          "score": 0.8312004804611206
+        },
+        {
+          "id": "843044",
+          "ordinal": 945500,
+          "score": 0.8296909928321838
+        },
+        {
+          "id": "7937392",
+          "ordinal": 1337380,
+          "score": 0.829533576965332
+        },
+        {
+          "id": "7828776",
+          "ordinal": 1927296,
+          "score": 0.8292052745819092
+        },
+        {
+          "id": "8362330",
+          "ordinal": 1337384,
+          "score": 0.8277878761291504
+        },
+        {
+          "id": "4143237",
+          "ordinal": 1043025,
+          "score": 0.8273394107818604
+        },
+        {
+          "id": "6398714",
+          "ordinal": 2672676,
+          "score": 0.8273031711578369
+        },
+        {
+          "id": "7519878",
+          "ordinal": 35178,
+          "score": 0.8267221450805664
+        },
+        {
+          "id": "3376057",
+          "ordinal": 37454,
+          "score": 0.8260998725891113
+        },
+        {
+          "id": "9295716",
+          "ordinal": 2481034,
+          "score": 0.8256478309631348
+        },
+        {
+          "id": "4099503",
+          "ordinal": 1054022,
+          "score": 0.825523853302002
+        },
+        {
+          "id": "5803417",
+          "ordinal": 1135797,
+          "score": 0.8254454731941223
+        },
+        {
+          "id": "1177522",
+          "ordinal": 1224075,
+          "score": 0.8243992328643799
+        },
+        {
+          "id": "3421881",
+          "ordinal": 784696,
+          "score": 0.8237594366073608
+        },
+        {
+          "id": "2296783",
+          "ordinal": 35186,
+          "score": 0.8237484097480774
+        },
+        {
+          "id": "45585",
+          "ordinal": 794773,
+          "score": 0.8230687975883484
+        },
+        {
+          "id": "2786553",
+          "ordinal": 36041,
+          "score": 0.8226783275604248
+        },
+        {
+          "id": "3041215",
+          "ordinal": 43786,
+          "score": 0.8222595453262329
+        },
+        {
+          "id": "7110652",
+          "ordinal": 79924,
+          "score": 0.8220317959785461
+        },
+        {
+          "id": "7856608",
+          "ordinal": 1040569,
+          "score": 0.8218345642089844
+        },
+        {
+          "id": "8095179",
+          "ordinal": 683055,
+          "score": 0.8217746615409851
+        },
+        {
+          "id": "932104",
+          "ordinal": 813454,
+          "score": 0.8215584754943848
+        },
+        {
+          "id": "2749530",
+          "ordinal": 1070401,
+          "score": 0.8213734030723572
+        },
+        {
+          "id": "5779366",
+          "ordinal": 1211129,
+          "score": 0.8212605714797974
+        },
+        {
+          "id": "7259599",
+          "ordinal": 708125,
+          "score": 0.8211877346038818
+        },
+        {
+          "id": "8893638",
+          "ordinal": 1910591,
+          "score": 0.8211531043052673
+        },
+        {
+          "id": "7534046",
+          "ordinal": 206489,
+          "score": 0.8207801580429077
+        },
+        {
+          "id": "9938843",
+          "ordinal": 1411984,
+          "score": 0.820769727230072
+        },
+        {
+          "id": "191741",
+          "ordinal": 1597731,
+          "score": 0.8207235932350159
+        },
+        {
+          "id": "4522166",
+          "ordinal": 63529,
+          "score": 0.8207105398178101
+        },
+        {
+          "id": "1947193",
+          "ordinal": 625907,
+          "score": 0.820700466632843
+        },
+        {
+          "id": "3448754",
+          "ordinal": 2448891,
+          "score": 0.8205528259277344
+        },
+        {
+          "id": "5871113",
+          "ordinal": 1303457,
+          "score": 0.8204247951507568
+        },
+        {
+          "id": "5437596",
+          "ordinal": 580353,
+          "score": 0.8201664686203003
+        },
+        {
+          "id": "4434920",
+          "ordinal": 1202317,
+          "score": 0.8201660513877869
+        },
+        {
+          "id": "4126670",
+          "ordinal": 1023293,
+          "score": 0.8201409578323364
+        },
+        {
+          "id": "5184334",
+          "ordinal": 821474,
+          "score": 0.8200448751449585
+        },
+        {
+          "id": "4549184",
+          "ordinal": 36700,
+          "score": 0.8199921250343323
+        },
+        {
+          "id": "7718386",
+          "ordinal": 521521,
+          "score": 0.8199324607849121
+        },
+        {
+          "id": "6669353",
+          "ordinal": 1159174,
+          "score": 0.8199183940887451
+        },
+        {
+          "id": "9669679",
+          "ordinal": 794767,
+          "score": 0.8198397159576416
+        },
+        {
+          "id": "964878",
+          "ordinal": 2133111,
+          "score": 0.8197021484375
+        },
+        {
+          "id": "9564696",
+          "ordinal": 723255,
+          "score": 0.8195960521697998
+        },
+        {
+          "id": "3145050",
+          "ordinal": 5052098,
+          "score": 0.8194602131843567
+        },
+        {
+          "id": "4235140",
+          "ordinal": 813451,
+          "score": 0.819338321685791
+        },
+        {
+          "id": "1232872",
+          "ordinal": 773526,
+          "score": 0.8193236589431763
+        },
+        {
+          "id": "8702637",
+          "ordinal": 547923,
+          "score": 0.819312334060669
+        },
+        {
+          "id": "4338363",
+          "ordinal": 1008467,
+          "score": 0.8193057775497437
+        },
+        {
+          "id": "6203545",
+          "ordinal": 411750,
+          "score": 0.8192020654678345
+        },
+        {
+          "id": "6635298",
+          "ordinal": 234810,
+          "score": 0.8191882967948914
+        },
+        {
+          "id": "9263658",
+          "ordinal": 682567,
+          "score": 0.8190947771072388
+        },
+        {
+          "id": "1783734",
+          "ordinal": 706166,
+          "score": 0.8190234899520874
+        },
+        {
+          "id": "715921",
+          "ordinal": 5052411,
+          "score": 0.8188616037368774
+        },
+        {
+          "id": "6636776",
+          "ordinal": 1933516,
+          "score": 0.8188364505767822
+        },
+        {
+          "id": "3344318",
+          "ordinal": 207460,
+          "score": 0.8186124563217163
+        },
+        {
+          "id": "5822753",
+          "ordinal": 686166,
+          "score": 0.8185551166534424
+        },
+        {
+          "id": "915691",
+          "ordinal": 259050,
+          "score": 0.8185296058654785
+        },
+        {
+          "id": "8217321",
+          "ordinal": 1066523,
+          "score": 0.8184937238693237
+        },
+        {
+          "id": "6907948",
+          "ordinal": 4948437,
+          "score": 0.8184049129486084
+        },
+        {
+          "id": "5490520",
+          "ordinal": 257514,
+          "score": 0.8184044361114502
+        },
+        {
+          "id": "2633271",
+          "ordinal": 1069643,
+          "score": 0.8183294534683228
+        },
+        {
+          "id": "195594",
+          "ordinal": 1288363,
+          "score": 0.8182082176208496
+        },
+        {
+          "id": "8654714",
+          "ordinal": 1337386,
+          "score": 0.8181767463684082
+        },
+        {
+          "id": "2307281",
+          "ordinal": 712753,
+          "score": 0.8178235292434692
+        },
+        {
+          "id": "6476241",
+          "ordinal": 944940,
+          "score": 0.8174772262573242
+        },
+        {
+          "id": "1901049",
+          "ordinal": 1194952,
+          "score": 0.8174222111701965
+        },
+        {
+          "id": "5027161",
+          "ordinal": 742687,
+          "score": 0.8170323371887207
+        },
+        {
+          "id": "8840731",
+          "ordinal": 1386657,
+          "score": 0.8167585730552673
+        },
+        {
+          "id": "3979261",
+          "ordinal": 5518979,
+          "score": 0.8167580962181091
+        },
+        {
+          "id": "81418",
+          "ordinal": 525170,
+          "score": 0.8165832757949829
+        },
+        {
+          "id": "5351026",
+          "ordinal": 63535,
+          "score": 0.816496729850769
+        },
+        {
+          "id": "699314",
+          "ordinal": 765719,
+          "score": 0.8163723349571228
+        },
+        {
+          "id": "1589559",
+          "ordinal": 1019252,
+          "score": 0.8163565993309021
+        },
+        {
+          "id": "6947986",
+          "ordinal": 500698,
+          "score": 0.8162617087364197
+        },
+        {
+          "id": "6352588",
+          "ordinal": 543597,
+          "score": 0.8160897493362427
+        },
+        {
+          "id": "3327029",
+          "ordinal": 1384489,
+          "score": 0.8159650564193726
+        },
+        {
+          "id": "7302204",
+          "ordinal": 945596,
+          "score": 0.8159598112106323
+        },
+        {
+          "id": "8844917",
+          "ordinal": 1011410,
+          "score": 0.815808892250061
+        },
+        {
+          "id": "3055565",
+          "ordinal": 523618,
+          "score": 0.8153026103973389
+        },
+        {
+          "id": "3690591",
+          "ordinal": 64205,
+          "score": 0.8152748346328735
+        },
+        {
+          "id": "7305553",
+          "ordinal": 1386639,
+          "score": 0.8151916861534119
+        },
+        {
+          "id": "478918",
+          "ordinal": 2448890,
+          "score": 0.8150947690010071
+        },
+        {
+          "id": "638086",
+          "ordinal": 689780,
+          "score": 0.8150320053100586
+        },
+        {
+          "id": "4120198",
+          "ordinal": 48195,
+          "score": 0.8149296045303345
+        },
+        {
+          "id": "3774248",
+          "ordinal": 271178,
+          "score": 0.8149279356002808
+        },
+        {
+          "id": "4910056",
+          "ordinal": 816357,
+          "score": 0.8147305250167847
+        },
+        {
+          "id": "5360041",
+          "ordinal": 775467,
+          "score": 0.8147196769714355
+        },
+        {
+          "id": "1400309",
+          "ordinal": 1396701,
+          "score": 0.8146120309829712
+        },
+        {
+          "id": "8636431",
+          "ordinal": 2358264,
+          "score": 0.814497709274292
+        },
+        {
+          "id": "5872884",
+          "ordinal": 144226,
+          "score": 0.8140732049942017
+        },
+        {
+          "id": "1318461",
+          "ordinal": 81818,
+          "score": 0.8139143586158752
+        },
+        {
+          "id": "3711090",
+          "ordinal": 1392722,
+          "score": 0.8137959241867065
+        },
+        {
+          "id": "8888298",
+          "ordinal": 945807,
+          "score": 0.8137772083282471
+        },
+        {
+          "id": "5233215",
+          "ordinal": 785345,
+          "score": 0.8137276768684387
+        },
+        {
+          "id": "6473633",
+          "ordinal": 837909,
+          "score": 0.8136210441589355
+        },
+        {
+          "id": "8944678",
+          "ordinal": 1914396,
+          "score": 0.8134574294090271
+        }
+      ],
+      "stats": {
+        "adjacency_bytes_read": 27360,
+        "adjacency_direct_views": 220,
+        "adjacency_mmap_direct": 220,
+        "adjacency_prepared_csr_direct_views": 220,
+        "adjacency_prepared_csr_mmap_direct": 220,
+        "candidate_fetches": 5781,
+        "candidate_rows": 10000000,
+        "candidates": 5432,
+        "edges": 6840,
+        "expansion_fetches": 220,
+        "hnsw_search_pack_cache_hits": 1,
+        "norm_active_handles": 1,
+        "norm_bytes_read": 768,
+        "norm_mapped_bytes": 40000000,
+        "prepared_graph_search_views": 1,
+        "prepared_score_calls": 192,
+        "quantized_asset_active_handles": 1,
+        "quantized_asset_mapped_bytes": 7760643584,
+        "quantized_asset_mmap_direct": 1,
+        "quantized_asset_open_nanos": 15804855233,
+        "quantized_code_bytes_read": 4292352,
+        "quantized_rerank_candidates": 192,
+        "quantized_rerank_exact_score_calls": 192,
+        "quantized_score_calls": 5589,
+        "quantized_scorer_active": 1,
+        "result_fetches": 100,
+        "result_id_prepared_bytes_views": 1,
+        "result_id_typed_bytes_state": 100,
+        "row_ref_state_mmap_direct_fields": 4,
+        "row_ref_state_prepared_views": 1,
+        "row_ref_state_result_refs": 100,
+        "row_ref_vector_source_state": 1,
+        "score_batch_calls": 227,
+        "score_batch_candidates": 5781,
+        "score_batch_max_tile_size": 192,
+        "score_batch_optimized": 227,
+        "search_route_column_graph_prepared": 1,
+        "search_route_quantized_rerank": 1,
+        "typed_column_active_handles": 40,
+        "typed_column_decoded_bytes": 26680,
+        "typed_column_mapped_bytes": 30720000000,
+        "vector_bytes_read": 589824,
+        "vector_direct_views": 192,
+        "vector_mmap_direct": 192,
+        "vector_prepared_direct": 192,
+        "visited_edges": 6840,
+        "visited_nodes": 5781
+      },
+      "vector_index_name": "embedding"
+    }
+  }
+}
