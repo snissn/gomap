@@ -27,7 +27,7 @@ type CommandWALAdmittedCollection struct {
 // mutation before the caller appends a frame, through its apply and Finalize or
 // Abort. Pre-assignment foreign drains unwind only this operation's leases.
 func (c *Collection) WithPreparedCommandWALMutation(apply func(*CommandWALAdmittedCollection) error) error {
-	return c.withPreparedCommandWALMutation(c.lockVectorIndexCoverageMutation, false, apply)
+	return c.withPreparedCommandWALMutation(func() func() { return c.lockVectorIndexCoverageMutationWithColdCarrier(true) }, false, apply)
 }
 
 func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), coveragePersistence bool, apply func(*CommandWALAdmittedCollection) error) error {
@@ -294,7 +294,7 @@ func (c *Collection) WithPreparedCommandWALSplitMutationV1(ctx context.Context, 
 	if err := c.PreflightVectorPartitionSplitInsertV1(ctx, v); err != nil {
 		return err
 	}
-	acquire := c.lockVectorIndexCoverageMutation
+	acquire := func() func() { return c.lockVectorIndexCoverageMutationWithColdCarrier(true) }
 	persistence := v.Operation != "source"
 	if persistence {
 		acquire = func() func() {
