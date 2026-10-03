@@ -241,6 +241,69 @@ func TestQuicksilverHarnessAllocations(t *testing.T) {
 	t.Logf("harness observed %.4f allocs/read, %.2f bytes/read; fixture=%d bytes samples=%d bytes", p.AllocsPerOp, p.BytesPerOp, quicksilverTraceLength*72, quicksilverSampleLimit*8)
 }
 
+type quicksilverTailStatsDB struct {
+	fixedNameDB
+	tailComplete atomic.Bool
+	statsCalled  chan struct{}
+}
+
+func (d *quicksilverTailStatsDB) Stats() map[string]string {
+	state := "pending"
+	if d.tailComplete.Load() {
+		state = "complete"
+	}
+	d.statsCalled <- struct{}{}
+	return map[string]string{"writer_tail": state}
+}
+
+func TestQuicksilverStatsAfterWriterDrain(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	c.Workers, c.ReadBatch, c.Reads = 1, 1, 1
+	d := &quicksilverTailStatsDB{statsCalled: make(chan struct{}, 2)}
+	release := make(chan struct{})
+	readersJoined := make(chan struct{})
+	done := make(chan struct{})
+	var releaseOnce sync.Once
+	var phase quicksilverPhase
+	var err error
+	go func() {
+		defer close(done)
+		phase, err = quicksilverReadPhase(d, c, newQuicksilverFixture(c), 1, nil, func(context.Context) error {
+			<-release
+			d.tailComplete.Store(true)
+			return nil
+		}, func() { close(readersJoined) })
+	}()
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("phase did not join after releasing writer tail")
+		}
+	}()
+	select {
+	case <-readersJoined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader profile did not stop before writer tail")
+	}
+	<-d.statsCalled // StatsBefore precedes reader start.
+	select {
+	case <-d.statsCalled:
+		t.Error("StatsAfter sampled before writer tail joined")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("phase did not join after releasing writer tail")
+	}
+	if err != nil || phase.StatsBefore["writer_tail"] != "pending" || phase.StatsAfter["writer_tail"] != "complete" {
+		t.Fatalf("stats do not bracket completed writer: before=%v after=%v err=%v", phase.StatsBefore, phase.StatsAfter, err)
+	}
+}
+
 func TestQuicksilverReaderTimerExcludesWriterDrain(t *testing.T) {
 	c := quicksilverSmokeConfig()
 	c.ReadBatch = 1

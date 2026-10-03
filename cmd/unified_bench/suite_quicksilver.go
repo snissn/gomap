@@ -421,8 +421,8 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	if stopProfile != nil {
 		stopProfile()
 	}
-	p.StatsAfter = quicksilverStats(db)
 	<-writerDone
+	p.StatsAfter = quicksilverStats(db)
 	p.CompositionSeconds = time.Since(clock).Seconds()
 	p.Seconds = elapsed.Seconds()
 	p.AllocatedBytes = after.TotalAlloc - before.TotalAlloc

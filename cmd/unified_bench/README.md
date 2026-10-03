@@ -876,8 +876,10 @@ alongside `treedb` preserves both variants.
 The JSON records actual fixture/workers/GOMAXPROCS/stride, phase counts, latency
 quantiles/max, load/checkpoint/reopen/update timings, full proof counts, engine
 stats before/after phases, actual relative-file logical sizes, and registered
-CLI flag values. Registered flags include values unused by this suite; its
-`config` is authoritative. File lengths are not allocated filesystem blocks.
+CLI flag values. Phase after-stats include the joined writer, while process
+MemStats metrics cover the reader interval. Registered flags include values
+unused by this suite; its `config` is authoritative. File lengths are not allocated
+filesystem blocks.
 Explicit generic workload/sweep flags that cannot apply are rejected; engine
 options, profiles, `-max-wall`, `-max-rss-mb` and profiling controls remain usable.
 
