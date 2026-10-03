@@ -28,6 +28,15 @@ func TestQuicksilverConfig(t *testing.T) {
 		}
 	}
 }
+func TestQuicksilverRejectsUnusedWorkflowFlags(t *testing.T) {
+	for _, name := range []string{"checkpoint-settle-before-tests", "checkpoint-settle-timeout", "range-span", "range-queries", "write-workers", "batch-delete-range-width", "batch-write-dict-warmup", "outdir", "format"} {
+		_, err := resolveQuicksilverConfig(BenchConfig{}, map[string]bool{name: true})
+		if err == nil || !strings.Contains(err.Error(), "-"+name+" does not apply") {
+			t.Fatalf("silently ignored -%s: %v", name, err)
+		}
+	}
+}
+
 func TestQuicksilverWorkflow(t *testing.T) {
 	c := quicksilverSmokeConfig()
 	r, err := runQuicksilverEngine(BenchConfig{}, c, "treedb", NewTreeDBPublicCommandWAL, t.TempDir())

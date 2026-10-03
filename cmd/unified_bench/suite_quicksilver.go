@@ -73,7 +73,7 @@ func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksil
 	if !isSet["quicksilver-updates"] {
 		c.Updates = min(c.Updates, c.Keys)
 	}
-	for _, name := range []string{"test", "seed", "keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "val-pattern", "val-pool-size", "read-require-hit", "checkpoint-between-tests", "checkpoint-every-ops", "checkpoint-every-bytes", "vacuum-between-tests", "settle-before-scans", "treedb-vlog-rewrite-after-run"} {
+	for _, name := range []string{"test", "seed", "keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "val-pattern", "val-pool-size", "read-require-hit", "checkpoint-between-tests", "checkpoint-every-ops", "checkpoint-every-bytes", "vacuum-between-tests", "settle-before-scans", "treedb-vlog-rewrite-after-run", "treedb-vacuum-after-vlog-rewrite-run", "checkpoint-settle-before-tests", "checkpoint-settle-timeout", "range-queries", "range-span", "write-workers", "batch-delete-range-width", "batch-delete-ranges-per-batch", "batch-delete-range-validate", "batch-delete-range-refill", "batch-write-steady-checkpoint-bytes", "batch-write-dict-warmup", "outdir", "format", "flushdrain-checkpoint-max", "treedb-cache-stats-before-reads", "treedb-cache-stats-after-tests"} {
 		if isSet[name] {
 			return c, fmt.Errorf("quicksilver: -%s does not apply to this fixed workflow", name)
 		}

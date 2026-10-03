@@ -190,7 +190,7 @@ func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
-	for _, bad := range [][]string{{"-keys=0"}, {"-quicksilver-case=bad"}, {"-dbs=not_registered"}, {"-quicksilver-read-batch=0"}, {"-quicksilver-duration=0"}} {
+	for _, bad := range [][]string{{"-keys=0"}, {"-quicksilver-case=bad"}, {"-dbs=not_registered"}, {"-quicksilver-read-batch=0"}, {"-quicksilver-duration=0"}, {"-checkpoint-settle-before-tests=all"}, {"-range-span=50"}, {"-format=markdown"}} {
 		args := append([]string{"-suite=quicksilver", "-dbs=treedb"}, bad...)
 		if out, err := exec.Command(binaryPath, args...).CombinedOutput(); err == nil {
 			t.Fatalf("invalid args %v succeeded: %s", bad, out)
