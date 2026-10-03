@@ -95,3 +95,23 @@ caller snapshot or boolean. The owner spans actual WAL Finalize/Abort and
 expires on callback exit. Ordinary Raft inserts do not acquire this barrier.
 See `TreeDB/docs/spec/fixed-cluster-vector-prepare-v1.md` for the provisional
 bounded prepare contract and validation limits.
+
+## Fixed-peer mutable owner search admission
+
+The mutable fixed-peer owner leader retains the existing vector mutation
+admission write lease from insert preflight through consensus apply and the
+final live visibility/current-database proof. Split source/project producers
+retain the same write side; background split retirement skips a busy owner.
+Strict leader-local mutable search holds a read lease from before backend
+planning through actual shard search and both visibility/current-database
+fences. Readers can coexist; an exclusive writer waits for their retirement
+and blocks new reader admission. Contended reader admission honors the caller
+context and request deadline without queuing a waiting goroutine. Foreground
+writer admission retains its existing blocking-lock policy.
+
+The Raft FSM never takes this admission lock. In particular, this is not the
+collection publication lock held across ReadIndex. Immutable multi-owner
+search, independent-node projection, restore/replay, leadership changes and
+ambiguous apply after an owner has released admission remain governed by their
+existing fail-closed identity and proof checks; this local lease does not certify
+them or add retries.

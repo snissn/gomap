@@ -138,7 +138,7 @@ type fixedPeerVectorRuntimeV1 struct {
 	initCancel   context.CancelFunc
 	closed       atomic.Bool
 	initMu       sync.Mutex
-	mutationMu   sync.Mutex
+	mutationMu   sync.RWMutex
 	closeOnce    sync.Once
 	closeErr     error
 }
@@ -1102,14 +1102,49 @@ func fixedPeerImmutableVectorStandbyV1(config FixedPeerTCPConfigV1) bool {
 		config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{})
 }
 
+// lockSearchAdmissionV1 preserves concurrent readers without a waiting goroutine.
+// Contention alone allocates a timer; cancellation never waits for a writer.
+func (r *fixedPeerVectorRuntimeV1) lockSearchAdmissionV1(ctx context.Context) error {
+	var wait *time.Ticker
+	defer func() {
+		if wait != nil {
+			wait.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if r.mutationMu.TryRLock() {
+			if err := ctx.Err(); err != nil {
+				r.mutationMu.RUnlock()
+				return err
+			}
+			return nil
+		}
+		if wait == nil {
+			wait = time.NewTicker(time.Millisecond)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait.C:
+		}
+	}
+}
+
 // searchVectorPartitionStrictV1 keeps mutable search on the single owner whose
 // Raft barrier and fresh live pin authorize it. Immutable search is coordinated
 // at the public ingress and may dispatch to several independently hosted owners.
 func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (response public.SearchResponseV1, resultErr error) {
+	var admitted *fixedPeerVectorRuntimeV1
 	defer func() {
 		if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
 			response = public.SearchResponseV1{}
 			resultErr = publicBackendErrorV1(err)
+		}
+		if admitted != nil {
+			admitted.mutationMu.RUnlock()
 		}
 	}()
 	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
@@ -1173,6 +1208,19 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
 	if leader == r.config.NodeID {
+		if deadline, hasDeadline := ctx.Deadline(); !request.Deadline.IsZero() && (!hasDeadline || request.Deadline.Before(deadline)) {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, request.Deadline)
+			defer cancel()
+		}
+		// Keep coordinator and shard live pins in the same acknowledged local
+		// mutation interval. FSM apply never takes this admission lock.
+		// ponytail: a slow admitted search delays writes until it returns or its
+		// deadline expires; narrower admission needs a retained revision pin.
+		if err := r.vector.lockSearchAdmissionV1(ctx); err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
+		admitted = r.vector
 		if err := r.requireSplitVectorVisibilityV1(ctx, request); err != nil {
 			return public.SearchResponseV1{}, publicBackendErrorV1(err)
 		}
