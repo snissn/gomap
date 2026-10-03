@@ -547,6 +547,14 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 		paused        bool
 	}{
 		{
+			name: "external command-WAL raw",
+			configure: func(db *DB) {
+				db.disableJournal = true
+				db.externalCommandWAL = true
+				db.forceValueLogPointers = true
+			},
+		},
+		{
 			name: "paused wal-off raw",
 			configure: func(db *DB) {
 				db.disableJournal = true
@@ -1545,5 +1553,21 @@ func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_outer_leaf_codec.stored_ratio.none"]; got != "1.000000" {
 		t.Fatalf("outer-leaf codec none stored ratio stat=%q", got)
+	}
+}
+
+func TestChooseValueLogRawWriteK_ExternalCommandWAL(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		rawBypass, paused bool
+	}{
+		{"off", false, false}, {"auto raw bypass", true, false}, {"paused", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{disableJournal: true, externalCommandWAL: true, forceValueLogPointers: true, valueLogBlockTargetBytes: 4096}
+			if got := db.chooseValueLogRawWriteK(&lane{}, 32, 4096, tc.rawBypass, tc.paused); got != 1 {
+				t.Fatalf("external command-WAL raw K=%d, want 1", got)
+			}
+		})
 	}
 }

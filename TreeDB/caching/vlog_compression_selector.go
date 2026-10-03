@@ -1936,9 +1936,11 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records, maxPayloadBytes int, aut
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
 	}
-	if db != nil && !db.disableJournal && !db.isLiveLeafLogLane(l) && maxPayloadBytes > 0 {
-		// Verified point reads checksum the whole raw frame. Use the largest
-		// value, not the average, so mixed batches also respect the byte target.
+	if db != nil && (!db.disableJournal || db.externalCommandWAL) && !db.isLiveLeafLogLane(l) && maxPayloadBytes > 0 {
+		// Public command-WAL protection can disable the cached journal without
+		// entering WAL-off ingest. Verified reads checksum the whole raw frame.
+		// Use the largest value, not the average, so mixed batches also respect
+		// the byte target.
 		maxK := valuelog.NormalizeBlockTargetCompressedBytes(db.valueLogBlockTargetBytes) / maxPayloadBytes
 		if maxK < 1 {
 			maxK = 1

@@ -51,7 +51,8 @@ eviction and close retain their existing lifetime rules.
 
 ### 1.3 Durable raw-frame read cost
 
-Ordinary WAL-on raw value batches bound their grouping count by the normalized
+Ordinary raw value batches protected by the cached redo/journal or the public
+command WAL bound their grouping count by the normalized
 `ValueLog.BlockTargetCompressedBytes` target (4096 bytes by default), treating
 that target as raw payload bytes when compression is off or the selector chooses
 raw. Both the queued request planner and ordinary batch append use the largest
@@ -60,8 +61,12 @@ therefore stay within the target; a single value larger than the target remains
 one record. Existing smaller record-count limits still apply. Framing bytes are
 additional to the payload target.
 
+The public command-WAL layer disables the cached redo/journal because it owns
+command append/sync durability; that is distinct from WAL-off benchmark ingest and remains
+eligible for this byte bound.
+
 This reduces whole-record CRC read amplification without skipping verification
-or caching a prior verification result. WAL-off ingest retains its existing
+or caching a prior verification result. WAL-off benchmark ingest retains its existing
 throughput grouping, and the dedicated outer-leaf lane retains its own K policy.
 Dictionary/block compression and their writer-level keep/reject decisions retain
 their existing grouping policies. In particular, an initial auto/balanced
