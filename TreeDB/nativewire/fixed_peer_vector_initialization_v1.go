@@ -13,7 +13,7 @@ import (
 
 // FixedPeerTCPVectorInitializationV1 is an immutable first-boot intent, not
 // prepared assets, an accepted manifest, or permission to serve vectors.
-// V1 admits one or two disjoint RF3 groups; every node is a catalog voter.
+// V1 admits one RF3 group; all three nodes are catalog voters.
 // Collection must use default/default, the existing consensus command scope.
 // MaxSourceRows bounds the future preparation input; it is not an ingest quota.
 type FixedPeerTCPVectorInitializationV1 struct {
