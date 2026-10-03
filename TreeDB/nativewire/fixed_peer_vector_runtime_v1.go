@@ -1386,6 +1386,11 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if request.Forwarded {
 		forwards = 1
 	}
+	// Fence the completed visibility proof against the FSM's current DB.
+	// A committed insert cannot become a definitive refusal after this point.
+	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(err)
+	}
 	return public.InsertResponseV1{
 		Generation: request.Request.Generation, PartitionID: request.PartitionID, OwnerGroup: string(request.OwnerGroup),
 		CommitTerm: result.CommittedEntry.Term, CommitIndex: result.CommittedEntry.Index, AppliedIndex: ownerStatus.RaftAppliedIndex,
@@ -1414,6 +1419,9 @@ func fixedPeerVectorSubmitErrorV1(result raftcluster.SubmitResultV1, err error) 
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context, request VectorPartitionRoutedInsertV1) error {
+	if err := r.requirePreparedVectorCurrentDBV1(); err != nil {
+		return err
+	}
 	if request.CatalogProof.Epoch == 0 || request.CatalogProof.Digest == "" || request.ReadySetDigest == "" || request.RouterModelDigest == "" {
 		return ErrFixedPeerVectorProofMissingV1
 	}
@@ -1494,7 +1502,8 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if err != nil || partitionID != request.PartitionID || owner != request.OwnerGroup {
 		return ErrFixedPeerVectorWrongOwnerV1
 	}
-	return nil
+	// Snapshot restore can invalidate the retained collection during validation.
+	return r.requirePreparedVectorCurrentDBV1()
 }
 
 func fixedPeerVectorInsertEntryV1(collection string, format collections.DocumentFormat, catalogVersion uint64, request VectorPartitionRoutedInsertV1) ([]byte, [sha256.Size]byte, error) {

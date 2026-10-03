@@ -399,8 +399,11 @@ scope supported by the existing routed consensus create/ingest commands. Other
 scopes are refused during config validation before persistent roots are opened.
 Public vector addresses remain loopback-only; shard addresses require canonical
 private or loopback IP endpoints under the authenticated transport boundary.
-Both must be distinct from all configured endpoints and are not opened during
-initialization. A two-host placement does not guarantee quorum after either physical host is lost.
+Both must be distinct from all configured endpoints. During initialization,
+the local public address and locally hosted shard addresses are bound and
+reserved; occupied addresses prevent startup. These listeners accept and close
+connections without serving traffic until preparation takes them over. A
+two-host placement does not guarantee quorum after either physical host is lost.
 
 The index uses the existing collection definition normalizer and is limited to
 cosine float32 `column_graph`, dimensions up to 4096, M up to 64, and construction
