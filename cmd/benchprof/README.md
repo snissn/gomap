@@ -364,6 +364,28 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
   --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 ```
 
+### Leaf point lookup microprofiles
+
+Capture `BenchmarkLeafPointMetadata`, `BenchmarkLeafCommonPrefixSuffixSearch`
+(`TreeDB/node`) and `BenchmarkPointValueMetadata` (`TreeDB/tree`) sequentially in
+fresh Go test processes:
+
+```sh
+RUN_DIR=/tmp/treedb_point_lookup_profiles scripts/treedb_point_lookup_profile.sh
+# Bounded artifact smoke check; this does not measure throughput:
+BENCHTIME=1x RUN_DIR=/tmp/treedb_point_lookup_smoke scripts/treedb_point_lookup_profile.sh
+```
+
+The default is `BENCHTIME=200ms`, count 1, with `GOWORK=off`. Each benchmark family
+writes `<name>.txt` (Go benchmark stdout/stderr), `<name>.test` (test binary),
+`<name>_cpu.pprof`, `<name>_allocs.pprof`, and matching `_cpu_top.txt` /
+`_allocs_top.txt` reports. Names are `node_metadata`, `node_search`, and
+`tree_metadata`. `source-head.txt`, `source-status.txt`, `source-diff.patch`,
+`go-version.txt`, and `settings.txt` record source/toolchain provenance.
+Profiles include fixture setup and the whole test process; compare unprofiled
+benchmark timing separately. These standalone Go profiles are **not benchprof
+inputs** or unified-bench profile-dir artifacts; inspect them with `go tool pprof`.
+
 ## Canonical Quicksilver workflow
 
 The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
