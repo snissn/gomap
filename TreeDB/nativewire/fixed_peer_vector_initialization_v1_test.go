@@ -106,6 +106,182 @@ func initializationTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
 	return configs
 }
 
+// RF4 retains the same immutable single source/catalog voter roster.
+func fourNodeInitializationTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
+	t.Helper()
+	configs := initializationTestConfigsV1(t)
+	base := configs[0]
+	address := func() string { return fixedPeerReserveTestAddressV1(t, nil) }
+	node := FixedPeerTCPNodeV1{ID: "owner-3", Address: address()}
+	catalog := cloneFixedPeerGroupV1(base.Catalog)
+	catalog.Peers = append(catalog.Peers, raftcluster.Peer{ID: node.ID, Address: address(), Capabilities: catalog.Features})
+	group := cloneFixedPeerGroupV1(base.Groups[0])
+	group.Peers = append(group.Peers, raftcluster.Peer{ID: node.ID, Address: address(), Capabilities: group.Peers[0].Capabilities})
+	nodes := append(append([]FixedPeerTCPNodeV1(nil), base.Nodes...), node)
+	intent := cloneFixedPeerVectorInitializationV1(base.VectorInitialization)
+	intent.PublicAddresses[node.ID] = address()
+	intent.ShardAddresses[group.ID][node.ID] = address()
+	fourth := base
+	fourth.NodeID, fourth.ListenAddress = node.ID, node.Address
+	fourth.DataRoot, fourth.RaftRoot = t.TempDir(), t.TempDir()
+	configs = append(configs, fourth)
+	ca := newPeerCAFixtureV1(t)
+	for i := range configs {
+		configs[i].Nodes = append([]FixedPeerTCPNodeV1(nil), nodes...)
+		configs[i].Catalog = cloneFixedPeerGroupV1(catalog)
+		configs[i].Groups = []FixedPeerTCPGroupV1{cloneFixedPeerGroupV1(group)}
+		configs[i].RaftListen = map[raftcluster.GroupID]string{}
+		for _, hosted := range []FixedPeerTCPGroupV1{catalog, group} {
+			for _, peer := range hosted.Peers {
+				if peer.ID == configs[i].NodeID {
+					configs[i].RaftListen[hosted.ID] = peer.Address
+				}
+			}
+		}
+		configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		configs[i].VectorInitialization = cloneFixedPeerVectorInitializationV1(intent)
+	}
+	return configs
+}
+
+func TestFixedPeerVectorInitializationRF4LayoutV1(t *testing.T) {
+	configs := fourNodeInitializationTestConfigsV1(t)
+	// Prove the four authenticated catalog/data voters and local listener maps
+	// are already valid outside initialization, so RED isolates the INIT guard.
+	var ordinaryDigest string
+	for _, config := range configs {
+		ordinary := config
+		ordinary.VectorInitialization = nil
+		ordinary.Catalog = cloneFixedPeerGroupV1(config.Catalog)
+		ordinary.Catalog.Features = raftcluster.DefaultFeatureSet()
+		ordinary.Catalog.Features.Required = append(ordinary.Catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.Version{Major: 1}})
+		for i := range ordinary.Catalog.Peers {
+			ordinary.Catalog.Peers[i].Capabilities = ordinary.Catalog.Features
+		}
+		_, digest, err := validateFixedPeerConfigV1(ordinary)
+		if err != nil || ordinaryDigest != "" && digest != ordinaryDigest {
+			t.Fatalf("invalid ordinary RF4 voter fixture on %s: digest=%s want=%s err=%v", config.NodeID, digest, ordinaryDigest, err)
+		}
+		ordinaryDigest = digest
+	}
+	t.Log("ordinary authenticated RF4 roster accepted; checking initialization admission")
+	var sharedDigest string
+	for _, config := range configs {
+		normalized, digest, err := validateFixedPeerConfigV1(config)
+		if err != nil {
+			t.Fatalf("genuine authenticated single-group RF4 initialization rejected on %s: %v", config.NodeID, err)
+		}
+		if len(normalized.Nodes) != 4 || len(normalized.Catalog.Peers) != 4 || len(normalized.Groups) != 1 || len(normalized.Groups[0].Peers) != 4 || len(normalized.RaftListen) != 2 || sharedDigest != "" && digest != sharedDigest {
+			t.Fatalf("RF4 roster or shared identity changed on %s: digest=%s want=%s", config.NodeID, digest, sharedDigest)
+		}
+		sharedDigest = digest
+	}
+}
+
+func TestFixedPeerVectorInitializationRF4RosterBoundsV1(t *testing.T) {
+	base := fourNodeInitializationTestConfigsV1(t)[0]
+	for _, count := range []int{1, 2, 5, 6} {
+		t.Run(fmt.Sprintf("nodes-%d", count), func(t *testing.T) {
+			config := base
+			config.Nodes = append([]FixedPeerTCPNodeV1(nil), base.Nodes...)
+			config.Catalog = cloneFixedPeerGroupV1(base.Catalog)
+			config.Groups = []FixedPeerTCPGroupV1{cloneFixedPeerGroupV1(base.Groups[0])}
+			config.VectorInitialization = cloneFixedPeerVectorInitializationV1(base.VectorInitialization)
+			if count < len(config.Nodes) {
+				config.Nodes = config.Nodes[:count]
+				config.Catalog.Peers = config.Catalog.Peers[:count]
+				config.Groups[0].Peers = config.Groups[0].Peers[:count]
+			} else {
+				for len(config.Nodes) < count {
+					id := raftcluster.NodeID(fmt.Sprintf("spare-%d", len(config.Nodes)))
+					address := func() string { return fixedPeerReserveTestAddressV1(t, nil) }
+					config.Nodes = append(config.Nodes, FixedPeerTCPNodeV1{ID: id, Address: address()})
+					config.Catalog.Peers = append(config.Catalog.Peers, raftcluster.Peer{ID: id, Address: address(), Capabilities: config.Catalog.Features})
+					config.Groups[0].Peers = append(config.Groups[0].Peers, raftcluster.Peer{ID: id, Address: address(), Capabilities: config.Groups[0].Peers[0].Capabilities})
+					config.VectorInitialization.PublicAddresses[id] = address()
+					config.VectorInitialization.ShardAddresses[config.Groups[0].ID][id] = address()
+				}
+			}
+			// Keep complete maps for the genuine changed roster.
+			for id := range config.VectorInitialization.PublicAddresses {
+				found := false
+				for _, node := range config.Nodes {
+					found = found || node.ID == id
+				}
+				if !found {
+					delete(config.VectorInitialization.PublicAddresses, id)
+					delete(config.VectorInitialization.ShardAddresses[config.Groups[0].ID], id)
+				}
+			}
+			ordinary := config
+			ordinary.VectorInitialization = nil
+			ordinary.Catalog = cloneFixedPeerGroupV1(config.Catalog)
+			ordinary.Catalog.Features = raftcluster.DefaultFeatureSet()
+			ordinary.Catalog.Features.Required = append(ordinary.Catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.Version{Major: 1}})
+			for i := range ordinary.Catalog.Peers {
+				ordinary.Catalog.Peers[i].Capabilities = ordinary.Catalog.Features
+			}
+			if _, _, err := validateFixedPeerConfigV1(ordinary); err != nil {
+				t.Fatalf("invalid ordinary %d-node control: %v", count, err)
+			}
+			if _, _, err := validateFixedPeerConfigV1(config); err == nil {
+				t.Fatalf("admitted unsupported %d-node initialization", count)
+			}
+		})
+	}
+	for _, name := range []string{"missing-catalog-voter", "missing-data-voter", "missing-public", "missing-shard", "unauthenticated"} {
+		t.Run(name, func(t *testing.T) {
+			config := base
+			config.Catalog = cloneFixedPeerGroupV1(base.Catalog)
+			config.Groups = []FixedPeerTCPGroupV1{cloneFixedPeerGroupV1(base.Groups[0])}
+			config.VectorInitialization = cloneFixedPeerVectorInitializationV1(base.VectorInitialization)
+			switch name {
+			case "missing-catalog-voter":
+				config.Catalog.Peers = config.Catalog.Peers[:3]
+			case "missing-data-voter":
+				config.Groups[0].Peers = config.Groups[0].Peers[:3]
+			case "missing-public":
+				delete(config.VectorInitialization.PublicAddresses, "owner-3")
+			case "missing-shard":
+				delete(config.VectorInitialization.ShardAddresses[config.Groups[0].ID], "owner-3")
+			case "unauthenticated":
+				config.Credentials = nil
+			}
+			if _, _, err := validateFixedPeerConfigV1(config); err == nil {
+				t.Fatal("incomplete RF4 roster admitted")
+			}
+		})
+	}
+}
+
+// Measures public config normalization, credential loading and client/Close.
+// Certificate generation, reserved sockets and roots are outside the timer;
+// this is not a bootstrap, Raft election or serving throughput benchmark.
+func BenchmarkFixedPeerVectorInitializationClientV1(b *testing.B) {
+	for _, replicas := range []int{3, 4} {
+		b.Run(fmt.Sprintf("RF%d", replicas), func(b *testing.B) {
+			b.StopTimer()
+			var configs []FixedPeerTCPConfigV1
+			if replicas == 4 {
+				configs = fourNodeInitializationTestConfigsV1(b)
+			} else {
+				configs = initializationTestConfigsV1(b)
+			}
+			config := configs[0]
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StartTimer()
+			for range b.N {
+				client, err := NewFixedPeerTCPClientV1(config)
+				if err != nil {
+					b.Fatal(err)
+				}
+				client.Close()
+			}
+		})
+	}
+}
+
 func TestFixedPeerVectorInitializationCloneDigestAndValidationV1(t *testing.T) {
 	configs := initializationTestConfigsV1(t)
 	normalized, digest, err := validateFixedPeerConfigV1(configs[0])

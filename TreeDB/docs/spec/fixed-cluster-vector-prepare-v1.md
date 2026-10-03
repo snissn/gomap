@@ -1,13 +1,16 @@
 # Bounded real-Raft vector initialization prepare
 
-This provisional checkpoint supports one RF3 data group and its RF3 catalog,
-one generation and one physical partition, with a nonempty source of at most
+This provisional checkpoint supports one RF3 or RF4 data group and a catalog
+with the exact same three or four voters, one generation and one physical partition, with a nonempty source of at most
 512 documents. The collection uses the production column_graph cosine float32
 definition and a physical typed float32 vector column. Dimensions are capped
 at 4096, configured M at 64, and configured construction/search ef at 4096.
 Quantized definitions, schema-generation/representation variants, split owners,
 movement, subsequent generations and automatic activation without restart are
-outside this checkpoint.
+outside this checkpoint. RF4 is bounded operational conformance, not a larger
+capacity or fault-tolerance claim: its quorum is three and a 2+2 two-host
+placement cannot survive either host loss. Source rows remain bounded at 512
+and completed serving inserts at 64.
 
 Create and InsertBatch use routed native Raft commands. Physical creation uses
 additive collection-metadata version 6 carrying the production column schema;
@@ -19,8 +22,8 @@ responses preserve durable physical state; create requests cannot supply it.
 Prepare rejects a nonphysical collection, mismatched typed raw float32 field,
 missing active/recovery manifest or unauthenticated manifest root before Raft
 Append. It reads the current persisted catalog without constructing a graph.
-The real RF3 witness creates and ingests through the wire, verifies the physical
-schema reached all replicas, then rebuilds and prepares. A separate refusal
+The RF3 and RF4 real-Raft witnesses create and ingest through the wire, verify the physical
+schema reached every voter, then rebuild and prepare. A separate refusal
 witness checks real leader log/applied positions and catalog remain unchanged,
 and the refused persisted cluster can reopen.
 `FixedPeerTCPClientV1.PrepareVectorInitializationV1` first commits a collection
@@ -113,7 +116,7 @@ Focused validation proposed for the coordinator:
 - Local WAL replay at fresh-output/before-BUILD, durable BUILD, and READY cuts:
   exact assigned coverage, origin/retained pack reuse, and validation-only live
   binding reopen. Orphans remain unreachable and are never overwritten.
-- Three actual peer create/ingest, separately committed source rebuild,
+- Three and four actual peer create/ingest, separately committed source rebuild,
   all-voter prepare, exact prepare retry/conflict, restart/ACTIVE, public strict
   search, fresh insert/exact retry, real snapshot plus insert tail and reopen.
 - Covered FSM result lookup is read only, and missing result stays absent after

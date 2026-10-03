@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan or run a bounded, fresh RF3 fixture on two existing Docker/SSH hosts."""
+"""Plan or run a bounded, fresh RF3/RF4 fixture on two existing Docker/SSH hosts."""
 import argparse
 import collections
 import json
@@ -47,8 +47,10 @@ def plan(manifest, run_id):
     if not re.fullmatch(r"[0-9a-f]{64}", manifest["binary_sha256"]):
         raise ValueError("binary_sha256 must be lowercase SHA-256")
     nodes = manifest["nodes"]
-    if len(nodes) != 3 or collections.Counter(n["host"] for n in nodes) != {HOSTS[0]: 2, HOSTS[1]: 1}:
-        raise ValueError("requires exactly two daemons on111 and one on185")
+    if not isinstance(nodes, list) or len(nodes) not in (3, 4):
+        raise ValueError("requires exactly three or four server daemons")
+    if collections.Counter(n["host"] for n in nodes) != {HOSTS[0]: 2, HOSTS[1]: len(nodes) - 2}:
+        raise ValueError("requires two daemons on111 and one (RF3) or two (RF4) on185")
     shared = None
     ids = set()
     result = []
@@ -63,6 +65,11 @@ def plan(manifest, run_id):
         intent = config.get("VectorInitialization")
         if not config.get("Credentials") or not intent or len(config.get("Groups", [])) != 1:
             raise ValueError("authenticated single-group initialization required")
+        roster = {n["ID"] for n in config["Nodes"]}
+        catalog = [p["ID"] for p in config["Catalog"]["Peers"]]
+        peers = [p["ID"] for p in config["Groups"][0]["Peers"]]
+        if len(roster) != len(nodes) or len(config["Nodes"]) != len(nodes) or len(catalog) != len(nodes) or len(peers) != len(nodes) or set(catalog) != roster or set(peers) != roster:
+            raise ValueError("single data group and catalog must contain the exact three or four server voters")
         definition = intent["IndexDefinition"]
         if definition.get("field") != "embedding" or definition.get("dimensions") != 2 or not 3 <= intent["MaxSourceRows"] <= 512:
             raise ValueError("fixture requires embedding dimensions=2 and bound3..512")
@@ -102,7 +109,7 @@ def main():
     manifest = read_json(args.manifest)
     nodes = plan(manifest, args.run_id)
     driver = next(n for n in nodes if n["host"] == HOSTS[1])
-    public_plan = {"provisional": True, "workflow": ["inspect3", "serve3", "initialize", "stop3", "start3", "qualify"],
+    public_plan = {"provisional": True, "workflow": [f"inspect{len(nodes)}", f"serve{len(nodes)}", "initialize", f"stop{len(nodes)}", f"start{len(nodes)}", "qualify"],
                    "image": manifest["image"], "binary_sha256": manifest["binary_sha256"],
                    "nodes": [{k: n[k] for k in ("host", "image", "node", "root", "name")} for n in nodes],
                    "driver_node": driver["node"], "source_rows": 3, "max_total_documents": 4}

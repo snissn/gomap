@@ -30,9 +30,9 @@ type FixedPeerVectorQualificationV1 struct {
 
 func validateFixedPeerFixtureV1(config FixedPeerTCPConfigV1, requestID string) error {
 	v := config.VectorInitialization
-	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || len(config.Nodes) != 3 ||
+	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || (len(config.Nodes) != 3 && len(config.Nodes) != 4) ||
 		v.IndexDefinition.Dimensions != 2 || v.IndexDefinition.Field != "embedding" || v.MaxSourceRows < 3 {
-		return fmt.Errorf("fixture requires authenticated single-group RF3 initialization, embedding dimensions=2 and MaxSourceRows>=3")
+		return fmt.Errorf("fixture requires authenticated single-group RF3/RF4 initialization, embedding dimensions=2 and MaxSourceRows>=3")
 	}
 	if requestID == "" || len(requestID) > 64 || strings.Trim(requestID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
 		return fmt.Errorf("request ID must contain 1..64 ASCII letters, digits, underscores or hyphens")

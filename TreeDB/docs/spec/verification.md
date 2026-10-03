@@ -3459,3 +3459,46 @@ vector operations before and after reopen. This is not cluster qualification
 or proof of serving activation. Existing nil-intent runtime/security/readiness
 regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
 configuration path; startup overhead should be compared at the exact base/head.
+
+
+### Bounded RF4 initialization (#4944)
+
+`TestFixedPeerVectorInitializationRF4LayoutV1` first validates the ordinary
+four-voter authenticated single-group configuration, then checks initialization
+admission and identical normalized identity from all four node configs. On the
+original RF3-only source it fails at initialization admission after the ordinary
+control passes. `TestFixedPeerVectorInitializationRF4RosterBoundsV1` keeps valid
+ordinary one/two/five/six-node controls while refusing those initialization
+sizes, and refuses incomplete RF4 catalog/data/address rosters or missing
+authentication. Existing RF3 identity, scope, source-bound, endpoint, two-group
+six-node and replacement refusal tests remain required.
+
+`TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1`
+reuses the RF3 real fixture with four actual catalog/data voters: production
+create/ingest, all-voter source rebuild/prepare, restart and strict search,
+fresh insert/exact retry, provider snapshot-plus-tail reopen and retained
+current-DB guard. Its terminal lower-FSM replacement remains quiescent after
+all-voter prefix observation and provider shutdown. Unsupported publication
+platforms retain pre-Append refusal assertions; they do not prove RF4 serving.
+`TestFixedPeerVectorFixtureRF4RealRaftV1` runs the public initialize/qualify
+client across four real peers, requiring readiness from all four after reopen.
+
+The offline command `python3 scripts/treedb_fixed_cluster_2host_test.py` checks
+RF3 2+1 and RF4 2+2 orchestration, immutable per-host images, exact roster checks,
+container caps, graceful exit checks and fail-stop behavior. It launches no
+SSH/Docker operation and is not two-host runtime evidence. Actual RF4 evidence
+requires four resident SERVER containers, two on each host, pinned source,
+binary/image/config identities, fresh roots, cross-host private shards, full
+initialize/reopen/search/insert/retry/readiness receipts and owned teardown.
+
+Use existing `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` for a matched
+baseline/candidate ordinary config/client guardrail. The additional
+`BenchmarkFixedPeerVectorInitializationClientV1/RF3` and `/RF4` measure only
+public config normalization, credential loading and NewClient/Close; certificate
+and socket/root fixture setup are untimed. Compare RF3 on the same base/head
+harness, then candidate RF3 versus RF4 for incremental B/op and allocs/op.
+Neither benchmark measures election, preparation or four-daemon RSS. Retain
+actual container footprint separately. These are proposed checks until executed
+on the final integrated source; no 100K, sustained mutation, throughput or
+physical-host failure acceptance follows. Source rows512 and completed inserts64
+remain unchanged, and RF4 quorum3 cannot survive either host loss in 2+2.

@@ -57,6 +57,14 @@ func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
 	if err := validateFixedPeerFixtureV1(config, "run_1"); err != nil {
 		t.Fatal(err)
 	}
+	for _, count := range []int{1, 2, 4, 5, 6} {
+		config.Nodes = make([]FixedPeerTCPNodeV1, count)
+		err := validateFixedPeerFixtureV1(config, "run_1")
+		if (err == nil) != (count == 4) {
+			t.Fatalf("fixture node count %d: %v", count, err)
+		}
+	}
+	config.Nodes = make([]FixedPeerTCPNodeV1, 3)
 	config.VectorInitialization.MaxSourceRows = 2
 	if validateFixedPeerFixtureV1(config, "run_1") == nil {
 		t.Fatal("accepted insufficient preparation bound")
@@ -68,10 +76,24 @@ func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
 }
 
 func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, 3)
+}
+
+func TestFixedPeerVectorFixtureRF4RealRaftV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, 4)
+}
+
+func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, replicas int) {
+	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
-	configs := initializationTestConfigsV1(t)
+	var configs []FixedPeerTCPConfigV1
+	if replicas == 4 {
+		configs = fourNodeInitializationTestConfigsV1(t)
+	} else {
+		configs = initializationTestConfigsV1(t)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
@@ -117,7 +139,7 @@ func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
 	}
 	defer client.Close()
 	qualified, err := client.QualifyVectorFixtureV1(ctx, "operator-fixture")
-	if err != nil || len(qualified.Readiness) != 3 {
+	if err != nil || len(qualified.Readiness) != len(configs) {
 		t.Fatalf("qualify=%+v err=%v", qualified, err)
 	}
 }

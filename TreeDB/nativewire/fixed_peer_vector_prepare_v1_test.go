@@ -25,14 +25,18 @@ import (
 )
 
 func TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 3)
 }
+func TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, 4)
+}
+
 func TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, true, false)
+	runFixedPeerVectorPrepareRealRaftV1(t, true, false, 3)
 }
 
 func TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, true)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, true, 3)
 }
 
 // Reuse genuinely committed preparation and its covered FSM result. The view
@@ -109,8 +113,13 @@ func checkPreparedVectorCatalogRecoveryV1(t *testing.T, ctx context.Context, nod
 	}
 }
 
-func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical bool) {
-	configs := initializationTestConfigsV1(t)
+func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical bool, replicas int) {
+	var configs []FixedPeerTCPConfigV1
+	if replicas == 4 {
+		configs = fourNodeInitializationTestConfigsV1(t)
+	} else {
+		configs = initializationTestConfigsV1(t)
+	}
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	open := func(round string) {
 		t.Helper()
