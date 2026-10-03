@@ -750,6 +750,14 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 	if len(names) == 0 {
 		return "", errors.New("quicksilver: no DBs selected")
 	}
+	// These adapters checkpoint by replacing a live handle, which is unsafe
+	// during the suite's concurrent readers. Reject the whole selection early.
+	for _, name := range names {
+		switch name {
+		case "leveldb", "leveldb_block_comp_on", "leveldb_block_comp_off":
+			return "", fmt.Errorf("quicksilver: %s is unsupported: its checkpoint closes/reopens the DB handle while concurrent readers are active", name)
+		}
+	}
 	for _, selection := range []map[string]struct{}{cfg.CPUProfileTests, cfg.AllocsProfileTests} {
 		for name := range selection {
 			if !contains(quicksilverPhaseNames, name) {

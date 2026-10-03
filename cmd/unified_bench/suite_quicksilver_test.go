@@ -264,3 +264,27 @@ func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
 		t.Fatalf("engine metadata dropped: %+v", run)
 	}
 }
+
+func TestQuicksilverRejectsLevelDBBeforeOpen(t *testing.T) {
+	original := dbFactories
+	originalMode := *leveldbBlockCompressionMode
+	t.Cleanup(func() { dbFactories = original; *leveldbBlockCompressionMode = originalMode })
+	calls := 0
+	dbFactories = make(map[string]DBFactory, len(original))
+	for name := range original {
+		dbFactories[name] = func(string) (kvstore.DB, error) { calls++; return nil, errors.New("unexpected engine open") }
+	}
+	for _, mode := range []string{"default", "both"} {
+		*leveldbBlockCompressionMode = mode
+		for _, batch := range []int{1, 64} {
+			c := quicksilverSmokeConfig()
+			c.ReadBatch = batch
+			for _, names := range []string{"leveldb", "leveldb_block_comp_on", "leveldb_block_comp_off", "treedb,leveldb", "all"} {
+				_, err := runQuicksilverSuite(BenchConfig{DBsArg: names}, c, "")
+				if err == nil || !strings.Contains(err.Error(), "checkpoint closes/reopens") || calls != 0 {
+					t.Fatalf("selection=%s compression=%s readBatch=%d opened=%d: %v", names, mode, batch, calls, err)
+				}
+			}
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -196,6 +197,16 @@ func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
 			t.Fatalf("invalid args %v succeeded: %s", bad, out)
 		}
 	}
+	for _, batch := range []string{"1", "64"} {
+		for _, selection := range [][]string{{"-dbs=leveldb"}, {"-dbs=leveldb_block_comp_on"}, {"-dbs=leveldb_block_comp_off"}, {"-dbs=treedb,leveldb", "-leveldb-block-compression=both"}, {"-dbs=all"}} {
+			args := append([]string{"-suite=quicksilver", "-keys=17", "-quicksilver-reads=41", "-quicksilver-duration=1ms", "-quicksilver-read-batch=" + batch}, selection...)
+			out, err := exec.Command(binaryPath, args...).CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "checkpoint closes/reopens") || strings.Contains(string(out), "failed DB retained") {
+				t.Fatalf("LevelDB must fail before opening: args=%v err=%v: %s", args, err, out[:min(len(out), 1500)])
+			}
+		}
+	}
+
 	dir := t.TempDir()
 	cmd := exec.Command(binaryPath, "-suite=quicksilver", "-dbs=treedb", "-profile=durable", "-keys=17", "-read-workers=3", "-quicksilver-case=structured256", "-quicksilver-reads=41", "-quicksilver-duration=10ms", "-profile-dir="+dir)
 	var stderr bytes.Buffer

@@ -839,8 +839,12 @@ and performs 50,000 deterministic untimed warmup reads. Each fixed phase execute
 **2,000,000 aggregate operations**, including reader-count remainders: hits,
 misses, and 10 misses/1 hit. Default 4 readers each reuse a snapshot for 64 owned
 `Get` reads. `-quicksilver-read-batch=1` uses ordinary owned `DB.Get`; larger
-values require `ReadSnapshotter` and fail clearly when unavailable. `Batcher`
-and `Checkpoint` are also required. Unsupported engines and unknown registry
+values require `ReadSnapshotter` and fail clearly when unavailable. The current
+LevelDB adapter is unsupported, including `leveldb_block_comp_on`,
+`leveldb_block_comp_off`, and ordinary Get mode: its checkpoint closes/reopens the live DB handle while
+Quicksilver readers are active. Selections containing LevelDB (including `all`)
+fail before any engine opens or loads data; select supported engines explicitly
+or exclude LevelDB. `Batcher` and `Checkpoint` are also required. Unsupported engines and unknown registry
 names fail instead of disappearing from the selected set. LMDB remains optional:
 `GOWORK=off go build -tags lmdb -o bin/unified-bench ./cmd/unified_bench`. Its
 normal adapter provides owned snapshot reads and a force-sync checkpoint; the
