@@ -3374,7 +3374,10 @@ identity, caller-owned map isolation, malformed/coexisting mode refusal, and
 canonical membership. `TestFixedPeerVectorInitializationRootIdentityV1` checks
 paired-root binding, unchanged reopen, mutation/removal/retrofit refusal, and
 unmarked nonempty root refusal. `TestFixedPeerVectorInitializationSixNodeLayoutV1`
-checks admission of the intended six-node/two-RF3-group layout without deployment.
+checks refusal of unsupported two-group initialization while retaining ordinary
+six-node config validation. `TestFixedPeerVectorInitializationRefusesReplicaReplacementV1`
+checks the shared BEGIN and authority guards, including direct preparation,
+removal, completion, and reconciliation before replacement publication.
 `TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1` starts a tiny
 fresh authenticated RF3 cluster, commits a real catalog and indexed collection
 create plus a fresh document insert, observes the document and actual applied

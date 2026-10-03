@@ -74,8 +74,9 @@ func validateFixedPeerVectorInitializationV1(config *FixedPeerTCPConfigV1, addre
 	if intent.Collection.Database != raftplacement.DefaultDatabase || intent.Collection.Catalog != raftplacement.DefaultCatalog {
 		return errors.New("vector initialization requires default database and catalog")
 	}
+	// Prepare and serving activation currently support exactly one RF3 group.
 	invalid := errors.New("invalid bounded RF3 vector initialization intent")
-	if config.Vector != nil || config.Credentials == nil || (len(config.Groups) != 1 && len(config.Groups) != 2) || len(config.Nodes) != 3*len(config.Groups) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > 512 {
+	if config.Vector != nil || config.Credentials == nil || len(config.Groups) != 1 || len(config.Nodes) != 3*len(config.Groups) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > 512 {
 		return invalid
 	}
 	// No spare/dormant destination or differing catalog/data voter roster.

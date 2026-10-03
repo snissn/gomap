@@ -548,9 +548,9 @@ func TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1(t *testing.T)
 	check(true)
 }
 
-// The executable checkpoint uses three peers, but a six-container source/ANN
-// fixed layout can bind its complete membership and addresses from first boot.
-func TestFixedPeerVectorInitializationSixNodeLayoutV1(t *testing.T) {
+// Build the previously admitted two-group shape without opening a runtime.
+func sixNodeInitializationTestConfigV1(t *testing.T) FixedPeerTCPConfigV1 {
+	t.Helper()
 	first, second := initializationTestConfigsV1(t), initializationTestConfigsV1(t)
 	config := first[0]
 	config.Catalog = cloneFixedPeerGroupV1(config.Catalog)
@@ -607,12 +607,93 @@ func TestFixedPeerVectorInitializationSixNodeLayoutV1(t *testing.T) {
 			config.ListenAddress = config.Nodes[i].Address
 		}
 	}
-	normalized, _, err := validateFixedPeerConfigV1(config)
-	if err != nil {
-		t.Fatalf("six-node initialization rejected: %v", err)
+	return config
+}
+
+func TestFixedPeerVectorInitializationSixNodeLayoutV1(t *testing.T) {
+	config := sixNodeInitializationTestConfigV1(t)
+	if _, _, err := validateFixedPeerConfigV1(config); err == nil {
+		t.Fatal("two-group initialization admitted before prepare and serving support it")
 	}
-	record, err := raftplacement.NewCatalogMetaRecordV1(1, fixedPeerVectorInitializationCatalogV1(normalized))
-	if err != nil || len(record.Catalog.Groups) != 2 {
-		t.Fatalf("six-node canonical catalog: %+v %v", record, err)
+	config.VectorInitialization = nil
+	config.Catalog.Features = raftcluster.DefaultFeatureSet()
+	config.Catalog.Features.Required = append(config.Catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.Version{Major: 1}})
+	for i := range config.Catalog.Peers {
+		config.Catalog.Peers[i].Capabilities = config.Catalog.Features
+	}
+	if _, _, err := validateFixedPeerConfigV1(config); err != nil {
+		t.Fatalf("ordinary six-node configuration rejected: %v", err)
+	}
+}
+
+func TestFixedPeerVectorInitializationRefusesReplicaReplacementV1(t *testing.T) {
+	config := sixNodeInitializationTestConfigV1(t)
+	intent := config.VectorInitialization
+	catalog := cloneFixedPeerGroupV1(config.Catalog)
+	config.VectorInitialization = nil
+	config.Catalog.Features = raftcluster.DefaultFeatureSet()
+	config.Catalog.Features.Required = append(config.Catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.Version{Major: 1}})
+	for i := range config.Catalog.Peers {
+		config.Catalog.Peers[i].Capabilities = config.Catalog.Features
+	}
+	ordinary, digest, err := validateFixedPeerConfigV1(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := ordinary.Groups[0]
+	foreign := ordinary.Groups[1].Peers[0]
+	command := replacementReceiverTestBeginV1(t)
+	command.ConfigDigest = digest
+	command.GroupID = group.ID
+	command.OldNodeID = group.Peers[0].ID
+	command.NewPeer = raftcluster.Peer{ID: foreign.ID, Address: foreign.Address}
+	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &FixedPeerTCPRuntimeV1{
+		config: ordinary,
+		client: &FixedPeerTCPClientV1{digest: digest, addresses: map[raftcluster.NodeID]string{foreign.ID: foreign.Address}},
+		data:   make(map[raftcluster.GroupID]*fixedPeerDataV1),
+	}
+	if _, err := r.validateReplacementBeginV1(command); err != nil {
+		t.Fatalf("ordinary preauthorized replacement fixture rejected: %v", err)
+	}
+	// Retain the formerly admitted init shape to exercise runtime refusal
+	// independently of the new two-group config validation gate.
+	r.config.VectorInitialization = intent
+	r.config.Catalog = catalog
+	if _, err := r.validateReplacementBeginV1(command); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
+		t.Fatalf("initialization replacement admitted: %v", err)
+	}
+	ctx := context.Background()
+	for _, operation := range []string{"begin", "prepare", "enroll", "promotion-intent", "promote", "removal-proof", "removal-intent", "remove", "complete", "reconcile"} {
+		t.Run(operation, func(t *testing.T) {
+			var reply fixedPeerReplyV1
+			if err := r.handleReplacementV1(ctx, "/v1/replacement-"+operation, raw, &reply); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
+				t.Fatalf("initialization %s: %v", operation, err)
+			}
+			if reply.ReplacementState != nil || reply.Membership != nil || len(r.data) != 0 || len(r.transports) != 0 {
+				t.Fatalf("initialization %s published replacement state: %+v", operation, reply)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"prepare", func() error { return r.prepareReplacementV1(ctx, command) }},
+		{"remove", func() error { return r.removeReplacementV1(ctx, command, &fixedPeerReplyV1{}) }},
+		{"complete", func() error { return r.completeReplacementV1(ctx, command, &fixedPeerReplyV1{}) }},
+		{"reconcile", func() error { return r.reconcileReplacementV1(ctx, command) }},
+	} {
+		t.Run("direct-"+tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
+				t.Fatalf("direct initialization %s: %v", tc.name, err)
+			}
+			if len(r.data) != 0 || len(r.transports) != 0 {
+				t.Fatalf("direct initialization %s changed local runtime", tc.name)
+			}
+		})
 	}
 }
