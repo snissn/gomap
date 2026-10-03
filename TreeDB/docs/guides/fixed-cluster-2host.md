@@ -98,3 +98,14 @@ only `manifest.json` and `documents.f32`, verifies their hashes before SSH, and
 mounts them read-only. The initializer independently freezes and validates them
 before mutation. Do not change or substitute a corpus after a refusal. Keep
 this functional packet separate from sustained #4250 collection.
+
+The launcher accepts `--operation-timeout-seconds` from 1 through 600 and records
+the chosen budget in the plan; the default remains 120 seconds. This is a total
+budget for each initialize or qualify operation, including all dataset chunks
+and preparation, rather than a deadline per chunk. The remote driver command
+has an additional 60 seconds for process exit and receipt collection. For a
+fresh 10,000-row/128D packet (79 chunks plus preparation), explicitly plan with
+`--operation-timeout-seconds 600` before executing with the same value. A longer
+budget does not establish capacity or throughput; retain any UNKNOWN outcome
+and unissued suffix without retrying an ambiguous mutation or reusing its
+partial stores.

@@ -184,10 +184,13 @@ def main():
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--dataset", help="frozen exported representative dataset; empty retains three-row fixture")
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--operation-timeout-seconds", type=int, default=120, help="total initialize/qualify budget, 1..600 seconds")
     parser.add_argument("--ssh-user", default="mikers")
     parser.add_argument("--output", help="new receipt directory, required with --execute")
     parser.add_argument("--execute", action="store_true", help="explicitly create only this run's containers and stores")
     args = parser.parse_args()
+    if not 1 <= args.operation_timeout_seconds <= 600:
+        parser.error("operation-timeout-seconds must be in 1..600")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", args.run_id) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", args.ssh_user):
         parser.error("run-id and ssh-user require bounded ASCII names")
     if args.ssh_user != "mikers":
@@ -202,7 +205,7 @@ def main():
                    "image": manifest["image"], "binary_sha256": manifest["binary_sha256"],
                    "nodes": [{k: n[k] for k in ("host", "image", "node", "root", "name")} for n in nodes],
                    "driver_node": driver["node"], "planned_source_rows": dataset["SourceRows"] if dataset else 3, "planned_total_documents": dataset["SourceRows"]+1 if dataset else 4,
-                   "dataset": dataset}
+                   "dataset": dataset, "operation_timeout_seconds": args.operation_timeout_seconds}
     if not args.execute:
         print(json.dumps(public_plan, indent=2))
         return
@@ -233,10 +236,10 @@ def main():
     def remote(node, label, argv, timeout=180):
         return command(label, ["ssh", "-o", "BatchMode=yes", args.ssh_user + "@" + node["host"], shlex.join(argv)], timeout)
 
-    def docker(node, label, argv):
+    def docker(node, label, argv, timeout=180):
         if argv and argv[0] == "run":
             argv = ["run", "--pull=never"] + argv[1:]
-        return remote(node, label, ["docker"] + argv)
+        return remote(node, label, ["docker"] + argv, timeout)
 
     def mounts(node):
         root = node["root"]
@@ -307,7 +310,8 @@ def main():
 
         for mode in ("initialize", "qualify"):
             docker(driver, mode, ["run", "--rm", "--entrypoint", manifest["binary"], "--name", "treedb-4250-" + args.run_id + "-driver-" + mode] +
-                   mounts(driver) + [driver["image"]] + cli(mode) + ["-request-id", args.run_id, "-operation-timeout", "120s"])
+                   mounts(driver) + [driver["image"]] + cli(mode) + ["-request-id", args.run_id, "-operation-timeout", str(args.operation_timeout_seconds) + "s"],
+                   timeout=args.operation_timeout_seconds + 60)
             if mode == "initialize":
                 for node in nodes:
                     label = docker(node, "ownership-" + node["node"],

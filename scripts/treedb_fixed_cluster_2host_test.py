@@ -27,15 +27,16 @@ def rejects(call, exception):
     raise AssertionError("invalid fixture/state was accepted")
 
 
-def check_orchestration(root, manifest, size, dataset_path=None):
+def check_orchestration(root, manifest, size, dataset_path=None, operation_timeout_seconds=120):
     """Exercise real orchestration argv with mocked SSH/Docker responses."""
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     expected_dataset = None if dataset_path is None else (dataset_path / "documents.f32").read_bytes()
-    for fault in (None, "missing-image", "binary-mismatch", "digest", "ownership", "close", "driver", "timeout", "replacement"):
+    faults = (None, "missing-image", "binary-mismatch", "digest", "ownership", "close", "driver", "timeout", "replacement") if operation_timeout_seconds == 120 else (None,)
+    for fault in faults:
         if dataset_path is not None:
             (dataset_path / "documents.f32").write_bytes(expected_dataset)
-        output = root / ("receipts-" + ("dataset-" if dataset_path else "") + str(fault))
+        output = root / ("receipts-" + ("dataset-" if dataset_path else "") + str(operation_timeout_seconds) + "-" + str(fault))
         calls = []
         container_ids = {}
         inspect_count = 0
@@ -79,7 +80,8 @@ def check_orchestration(root, manifest, size, dataset_path=None):
                     text = container_id + "\n"
                 else:
                     assert mode in ("initialize", "qualify")
-                    assert command[command.index("-operation-timeout") + 1] == "120s"
+                    assert command[command.index("-operation-timeout") + 1] == str(operation_timeout_seconds) + "s"
+                    assert kwargs["timeout"] == operation_timeout_seconds + 60
                     if dataset_path is not None:
                         assert command[command.index("-dataset") + 1] == "/dataset"
                         assert any(value.endswith("/dataset:/dataset:ro") for value in command)
@@ -88,7 +90,7 @@ def check_orchestration(root, manifest, size, dataset_path=None):
                     if fault == "driver" and mode == "initialize":
                         code, text = 1, json.dumps({"Stage": "seed", "Error": "partial durable progress"})
                     if fault == "timeout" and mode == "initialize":
-                        raise harness.subprocess.TimeoutExpired(argv, 180, output=b"partial")
+                        raise harness.subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial")
             elif command[0] == "inspect":
                 assert command[-1] in container_ids.values()
                 if "--format" in command:
@@ -105,13 +107,18 @@ def check_orchestration(root, manifest, size, dataset_path=None):
         argv = ["harness", "--manifest", str(manifest_path), "--run-id", "offline", "--execute", "--output", str(output)]
         if dataset_path is not None:
             argv += ["--dataset", str(dataset_path)]
+        if operation_timeout_seconds != 120:
+            argv += ["--operation-timeout-seconds", str(operation_timeout_seconds)]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(harness.subprocess, "run", fake), contextlib.redirect_stdout(io.StringIO()):
             if fault is None:
                 harness.main()
             else:
                 rejects(harness.main, RuntimeError)
         if fault is None:
-            assert json.loads((output / "result.json").read_text())["status"] == "PASS"
+            result = json.loads((output / "result.json").read_text())
+            assert result["status"] == "PASS"
+            assert result["scope"]["operation_timeout_seconds"] == operation_timeout_seconds
+            assert json.loads((output / "plan.json").read_text())["operation_timeout_seconds"] == operation_timeout_seconds
             runs = [shlex.split(call[-1]) for call in calls if call[0] == "ssh" and shlex.split(call[-1])[:2] == ["docker", "run"]]
             assert len(runs) == 2 * size + 2
             assert sum("serve" in run for run in runs) == size
@@ -148,7 +155,16 @@ def check_dataset_admission():
         rejects(lambda: harness.admit_dataset(root), ValueError)
 
 
+def check_operation_timeout_admission():
+    for value in ("0", "601", "-1", "not-an-integer"):
+        argv = ["harness", "--manifest", "not-opened.json", "--run-id", "offline", "--execute",
+                "--operation-timeout-seconds", value]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(harness, "read_json", side_effect=AssertionError("invalid budget read input")), mock.patch.object(harness.subprocess, "run", side_effect=AssertionError("invalid budget reached network")), contextlib.redirect_stderr(io.StringIO()):
+            rejects(harness.main, SystemExit)
+
+
 def main():
+    check_operation_timeout_admission()
     check_dataset_admission()
     for size in (3, 4):
         with tempfile.TemporaryDirectory() as directory:
@@ -186,6 +202,12 @@ def main():
                     harness.main()
             public_plan = json.loads(output.getvalue())
             assert public_plan["planned_source_rows"] == 3 and public_plan["planned_total_documents"] == 4
+            assert public_plan["operation_timeout_seconds"] == 120
+            for budget in (1, 600):
+                budget_output = io.StringIO()
+                with mock.patch.object(sys, "argv", ["harness", "--manifest", str(manifest_path), "--run-id", "offline", "--operation-timeout-seconds", str(budget)]), mock.patch.object(harness.subprocess, "run", side_effect=AssertionError("budget plan made network call")), contextlib.redirect_stdout(budget_output):
+                    harness.main()
+                assert json.loads(budget_output.getvalue())["operation_timeout_seconds"] == budget
             assert "source_rows" not in public_plan and "max_total_documents" not in public_plan
             assert public_plan["workflow"] == [f"inspect{size}", f"serve{size}", "initialize", f"stop{size}", f"start{size}", "qualify"]
             defaults = copy.deepcopy(configs)
@@ -255,6 +277,9 @@ def main():
                 config["VectorInitialization"]["IndexDefinition"].update(dimensions=128, m=16, ef_construction=128, ef_search=128)
             write_configs(dataset_configs)
             check_orchestration(root, manifest, size, dataset_path)
+            # The drift mock mutates external input; restore the independent budget fixture.
+            (dataset_path / "documents.f32").write_bytes(vectors)
+            check_orchestration(root, manifest, size, dataset_path, operation_timeout_seconds=600)
             # Drift between full admission and private staging refuses before any network work.
             (dataset_path / "documents.f32").write_bytes(vectors)
             original_admit = harness.admit_dataset
