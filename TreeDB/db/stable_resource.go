@@ -33,8 +33,10 @@ type StableTemplateResourceProvider interface {
 type StableResourceCaptureLease struct {
 	db *DB
 
-	mu       sync.Mutex
-	released bool
+	mu             sync.Mutex
+	released       bool
+	borrowedGuard  *CommandWALStagingGuardV1
+	borrowedIntent *CommandWALIntent
 }
 
 // Release ends an admitted stable-resource capture. It is safe to call more
@@ -49,7 +51,9 @@ func (lease *StableResourceCaptureLease) Release() {
 		return
 	}
 	lease.released = true
-	lease.db.teardownMu.RUnlock()
+	if lease.borrowedGuard == nil {
+		lease.db.teardownMu.RUnlock()
+	}
 }
 
 // RetainStableResourceCaptureRecovery transfers exact producer rollback
@@ -62,8 +66,16 @@ func (lease *StableResourceCaptureLease) RetainStableResourceCaptureRecovery(cle
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	if lease.released {
-		return ErrClosed
+	if err := lease.validateDBLocked(lease.db); err != nil {
+		return err
+	}
+	if lease.borrowedGuard != nil {
+		// Keep actual ownership live through rollback-authority transfer.
+		lease.borrowedGuard.ownership.mu.Lock()
+		defer lease.borrowedGuard.ownership.mu.Unlock()
+		if err := lease.borrowedGuard.validateCaptureBorrowLocked(lease.db, lease.borrowedIntent); err != nil {
+			return err
+		}
 	}
 	lease.db.publicationPoisoned.Store(true)
 	_, registered := lease.db.tryRegisterCaptureTeardownHook(func() error {
@@ -473,4 +485,57 @@ func NewStableOuterLeafResourceToken(spec rootpublication.StableResourceSpec) (*
 	default:
 		return nil, fmt.Errorf("%w: outer-leaf pack producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
+}
+
+// ValidateDBV1 checks actual capture ownership without acquiring teardown.
+// A borrower is invalid after its own Release or the staging guard's release.
+func (lease *StableResourceCaptureLease) ValidateDBV1(db *DB) error {
+	if lease == nil {
+		return ErrClosed
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if err := lease.validateDBLocked(db); err != nil {
+		return err
+	}
+	if lease.borrowedGuard != nil {
+		lease.borrowedGuard.ownership.mu.Lock()
+		defer lease.borrowedGuard.ownership.mu.Unlock()
+		return lease.borrowedGuard.validateCaptureBorrowLocked(db, lease.borrowedIntent)
+	}
+	return nil
+}
+func (lease *StableResourceCaptureLease) validateDBLocked(db *DB) error {
+	if lease == nil || lease.db == nil || db == nil || lease.db != db || lease.released {
+		return ErrClosed
+	}
+	return nil
+}
+
+// ValidateCommandWALStagingCaptureV1 requires the exact actual staged intent,
+// rather than accepting an ordinary independently admitted capture lease.
+func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureV1(db *DB, intent *CommandWALIntent) error {
+	if lease == nil {
+		return ErrClosed
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if err := lease.validateDBLocked(db); err != nil {
+		return err
+	}
+	if lease.borrowedGuard == nil || intent == nil || lease.borrowedIntent != intent {
+		return ErrCommandWALRejected
+	}
+	lease.borrowedGuard.ownership.mu.Lock()
+	defer lease.borrowedGuard.ownership.mu.Unlock()
+	return lease.borrowedGuard.validateCaptureBorrowLocked(db, intent)
+}
+
+// ValidateCommandWALStagingCaptureDBV1 rejects an ordinary capture lease at
+// owner setup. Exact intent equality is checked again when applying the frame.
+func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureDBV1(db *DB) error {
+	if lease == nil {
+		return ErrClosed
+	}
+	return lease.ValidateCommandWALStagingCaptureV1(db, lease.borrowedIntent)
 }

@@ -21,13 +21,13 @@ import (
 // Split delivery is a production authenticated surface. Configuration digests
 // and loopback addresses are not substitutes for a certificate-bound node.
 func (r *FixedPeerTCPRuntimeV1) splitVectorGroupsV1(ctx context.Context) (raftcluster.GroupID, raftcluster.GroupID, error) {
-	if r == nil || r.vector == nil || r.config.Vector == nil || r.config.Credentials == nil ||
+	if r == nil || r.vector == nil || r.servingVectorConfigV1() == nil || r.config.Credentials == nil ||
 		r.client == nil || r.client.security == nil || r.client.peerTransport == nil ||
-		r.authority == nil || r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) ||
-		r.config.Vector.Identity.SourceFormat != 0 || r.draining.Load() {
+		r.authority == nil || r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) ||
+		r.servingVectorConfigV1().Identity.SourceFormat != 0 || r.draining.Load() {
 		return "", "", ErrFixedPeerVectorUnavailableV1
 	}
-	vector := r.config.Vector
+	vector := r.servingVectorConfigV1()
 	resolved, err := raftplacement.Validate(vector.Catalog)
 	if err != nil {
 		return "", "", err
@@ -61,7 +61,7 @@ func (r *FixedPeerTCPRuntimeV1) validateSplitVectorInsertV1(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	vector := r.config.Vector
+	vector := r.servingVectorConfigV1()
 	if source != raftcluster.GroupID(v.SourceGroup) || target != raftcluster.GroupID(v.TargetGroup) ||
 		v.Collection != vector.Collection.Collection || v.Index != vector.Manifest.IndexName ||
 		v.Generation != vector.Identity.Generation || v.CatalogEpoch != vector.Identity.Index.CatalogEpoch ||
@@ -184,7 +184,7 @@ func (r *FixedPeerTCPRuntimeV1) submitSplitVectorCommandV1(ctx context.Context, 
 		return zero, ErrFixedPeerVectorUnavailableV1
 	}
 	metadata := raftentry.RequestMetadataV1{RequestID: binary.BigEndian.Uint64(key[:8]), AckPolicy: iwire.AckRaftCommitted,
-		ClusterRouteKnown: true, ClusterRouteDatabase: r.config.Vector.Collection.Database, ClusterRouteCatalog: r.config.Vector.Collection.Catalog,
+		ClusterRouteKnown: true, ClusterRouteDatabase: r.servingVectorConfigV1().Collection.Database, ClusterRouteCatalog: r.servingVectorConfigV1().Collection.Catalog,
 		ClusterRouteCollection: v.Collection, ClusterRouteShape: "split_source_projection_insert", ClusterRouteGroupID: string(group),
 		CatalogMetaEpoch: v.CatalogEpoch, CatalogMetaDigest: v.CatalogDigest}
 	result, err := submitter.SubmitCommandEntryWithPreCommitV1(ctx, entry, metadata, func(commitCtx context.Context) error {
@@ -374,7 +374,7 @@ func (r *FixedPeerTCPRuntimeV1) proveSplitVectorTargetV1(ctx context.Context, v 
 	if err != nil {
 		return err
 	}
-	pin, err := r.vector.collection.AcquireVectorPartitionLiveSearchPinV1(r.config.Vector.Manifest)
+	pin, err := r.vector.collection.AcquireVectorPartitionLiveSearchPinV1(r.servingVectorConfigV1().Manifest)
 	if err != nil {
 		return err
 	}
@@ -409,7 +409,7 @@ func (r *FixedPeerTCPRuntimeV1) applySplitVectorSourceInsertV1(ctx context.Conte
 	if err != nil {
 		return zero, err
 	}
-	if request.SourceGroup != source || request.OwnerGroup != target || request.Identity != r.config.Vector.Identity {
+	if request.SourceGroup != source || request.OwnerGroup != target || request.Identity != r.servingVectorConfigV1().Identity {
 		return zero, ErrFixedPeerVectorProofStaleV1
 	}
 	if err := public.ValidateInsertRequestV1(ctx, request.Request); err != nil {
@@ -422,7 +422,7 @@ func (r *FixedPeerTCPRuntimeV1) applySplitVectorSourceInsertV1(ctx context.Conte
 	defer work.release()
 	ctx = work.ctx
 	docDigest := sha256.Sum256(request.Request.Document)
-	v := commitlog.SplitVectorInsertV1{Version: 1, Operation: "source", Collection: r.config.Vector.Collection.Collection,
+	v := commitlog.SplitVectorInsertV1{Version: 1, Operation: "source", Collection: r.servingVectorConfigV1().Collection.Collection,
 		Index: request.Request.Generation.Index, Generation: request.Request.Generation.Generation,
 		SourceGroup: string(source), TargetGroup: string(target), CatalogEpoch: request.CatalogProof.Epoch, CatalogDigest: request.CatalogProof.Digest,
 		ReadySetDigest: request.ReadySetDigest, ModelDigest: request.RouterModelDigest, PartitionID: request.PartitionID,

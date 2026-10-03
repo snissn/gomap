@@ -437,6 +437,18 @@
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Authenticated fixed-peer split source/project/clear commands use collection WAL kind 106, format 15. Golden fixtures pin the same bounded source payload in different envelopes, without byte equivalence. Generic public and peer ingress reject this privileged command with WireError(ErrUnsupportedFeature); it preserves the mutable live generation instead of using the immutable M7 invalidation barrier."
+    },
+    {
+      "nativewire_command": "CommandVectorPrepareV1",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/vector_prepare_v1_entry.hex",
+      "nativewire_fixture_sha256": "3f51b68866d60d8063060f2f0c7b4f8465a8c338eafe12f096171d98ab5799fc",
+      "command_wal_kind": "CollectionVectorPrepareV1",
+      "command_wal_payload_format": "CollectionVectorPrepareV1 (format 16)",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_vector_prepare_v1.hex",
+      "local_fixture_sha256": "cc45c2e9c7ad3493fb75995ac12dbf272fe18317604ecd749e8b776ebf7f1a80",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_kind_only_v1",
+      "notes": "Replicated vector_prepare_v1 command 70 lowers through committed Raft apply to collection WAL kind 107, format 16. Native and local golden fixtures use the same bounded prepare source identity; the applying FSM adds its term/index and actual native command digest to the local payload. The enclosing formats and FSM-assigned fields differ, so no byte equivalence is claimed. Fixed-peer initialization submits separate rebuild and prepare commands; standalone native dispatch has no local handler."
     }
   ]
 }

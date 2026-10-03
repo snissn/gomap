@@ -41,6 +41,10 @@ type vectorPartitionLifecycleCheckpointGenerationEncodingV1 struct {
 }
 
 func cloneVectorPartitionManifestForCheckpointV1(m VectorPartitionManifestV1) VectorPartitionManifestV1 {
+	if m.PrepareOrigin != nil {
+		origin := *m.PrepareOrigin
+		m.PrepareOrigin = &origin
+	}
 	cloned, err := cloneVectorPartitionManifestForCheckpointWithContextV1(context.Background(), m)
 	if err != nil {
 		panic(err)
@@ -70,6 +74,10 @@ func cloneVectorPartitionSliceWithContextV1[T any](ctx context.Context, source [
 }
 
 func cloneVectorPartitionManifestForCheckpointWithContextV1(ctx context.Context, m VectorPartitionManifestV1) (VectorPartitionManifestV1, error) {
+	if m.PrepareOrigin != nil {
+		origin := *m.PrepareOrigin
+		m.PrepareOrigin = &origin
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

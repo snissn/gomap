@@ -9,9 +9,9 @@ import (
 
 func TestVectorPartitionRelevantMutationCommandsMatchAcceptedRaftEntriesV1(t *testing.T) {
 	for _, row := range raftentry.AllCommandRowsV1() {
-		// Internal split phases preserve the mutable live generation through their
-		// authenticated runtime; the generic M7 barrier must not invalidate it.
-		want := row.Decision == raftentry.DecisionAccepted && row.CommandID != iwire.CommandSplitVectorInsertV1
+		// Internal split and preparation phases own their live-generation
+		// lifecycle; the generic M7 barrier must not invalidate it.
+		want := row.Decision == raftentry.DecisionAccepted && row.CommandID != iwire.CommandSplitVectorInsertV1 && row.CommandID != iwire.CommandVectorPrepareV1
 		if got := vectorPartitionRelevantMutationCommandV1(row.CommandID); got != want {
 			t.Fatalf("command %s relevant=%v want %v for decision %s", row.CommandName, got, want, row.Decision)
 		}

@@ -1773,6 +1773,15 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				Section{ID: SectionSplitVectorInsertV1, Bytes: []byte(`{"Version":1,"Operation":"source","Collection":"docs","Index":"embedding","Generation":1,"SourceGroup":"source","TargetGroup":"ann","CatalogEpoch":1,"CatalogDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ReadySetDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ModelDigest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","PartitionID":0,"Attempt":"b3BlcmF0aW9u","ID":"ZG9jdW1lbnQ=","Vector":[0,1],"Document":"eyJlbWJlZGRpbmciOlswLDFdLCJjYW5vbmljYWwiOiJzb3VyY2Utb25seSJ9","DocumentDigest":"6a6126591616a8ed1571fe96190c2768b0705165ef6006e9387057edc038f47b","SourceTerm":0,"SourceIndex":0,"TargetTerm":0,"TargetIndex":0,"LiveRevision":0}`)},
 			),
 		},
+		{
+			name:      "vector_prepare_v1",
+			commandID: CommandVectorPrepareV1,
+			fixture:   "vector_prepare_v1_entry.hex",
+			sections: deterministicFixtureSections(CommandVectorPrepareV1, "fixture/prepare",
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("docs")},
+				Section{ID: SectionVectorPrepareV1, Bytes: []byte(`{"Version":1,"Operation":"prepare","Collection":"docs","Index":"embedding","Group":"data-a","IndexDefinitionDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Generation":7,"MaxSourceRows":512,"SourceGeneration":1,"SourceChecksum":2,"SourceSchemaHash":3,"SourceRowCount":4,"Term":0,"IndexPosition":0,"CommandDigest":""}`)},
+			),
+		},
 	}
 }
 

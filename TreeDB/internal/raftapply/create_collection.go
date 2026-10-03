@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	createCollectionMetaMaxWireVersion           = 5
+	createCollectionMetaMaxWireVersion           = 6
 	createCollectionMetaMaxIndexDefinitions      = 1 << 16
 	createCollectionMetaMinIndexDefinitionLen    = 6
 	createCollectionMetaMinVectorDefinitionLen   = 7
@@ -310,12 +310,24 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 			vectorIndexes = append(vectorIndexes, idx)
 		}
 	}
+	var columnStore *collections.ColumnStoreConfig
+	if version >= 6 {
+		schema, err := readCreateMetaString(raw, &off, "column_store")
+		if err != nil {
+			return collections.CollectionMeta{}, err
+		}
+		columnStore, err = collections.DecodeColumnStoreWireConfigV1(name, []byte(schema), true)
+		if err != nil {
+			return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: column_store: %v", err)
+		}
+	}
 	if off != len(raw) {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: collection_meta has %d trailing bytes", len(raw)-off)
 	}
 	return collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
+			ColumnStore:                             columnStore,
 			AllowArrayValuesInIndex:                 allowArray,
 			DocumentFormat:                          documentFormatDecoded,
 			DataRootStoragePolicy:                   dataRootStoragePolicy,

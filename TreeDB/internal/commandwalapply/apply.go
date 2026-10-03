@@ -33,6 +33,7 @@ const (
 	LoweredFrameClassCollectionDeleteBatchByID
 	LoweredFrameClassCollectionUpdateBatchByID
 	LoweredFrameClassCollectionSplitVectorInsertV1
+	LoweredFrameClassCollectionVectorPrepareV1
 )
 
 // ApplyMetadata is the explicit metadata slot future R3a apply code will carry
@@ -187,11 +188,16 @@ func Append(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Optio
 	if err := checkContiguousAppendReady(db, appliedCommandLSN(db)); err != nil {
 		return Handle{}, Result{}, err
 	}
-	unlockRaw, err := db.LockCommandWALPublishWithBarriers()
+	actualGuard, err := db.LockCommandWALStagingGuardWithBarriersV1()
 	if err != nil {
 		return Handle{}, Result{}, err
 	}
-	return appendIntentWithStagingGuard(db, intent, opts, NewStagingGuard(db, unlockRaw))
+	staging, err := NewStagingGuard(db, actualGuard)
+	if err != nil {
+		actualGuard.Release()
+		return Handle{}, Result{}, err
+	}
+	return appendIntentWithStagingGuard(db, intent, opts, staging)
 }
 
 // AppendWithStagingGuard consumes a prepared owner's actual staging lease.
@@ -236,7 +242,7 @@ func appendIntentWithStagingGuard(db *backenddb.DB, intent *backenddb.CommandWAL
 		staging.Release()
 		return Handle{}, Result{}, err
 	}
-	lsn, err := db.AppendStagedCommandWALIntent(intent, opts.Sync)
+	lsn, err := staging.capture.Append(intent, opts.Sync)
 	if err != nil {
 		staging.Release()
 		return Handle{}, Result{}, err
@@ -321,6 +327,15 @@ func validateLoweredFrame(frame LoweredFrame) error {
 		return validateCollectionDeleteBatchByIDFrame(frame)
 	case LoweredFrameClassCollectionUpdateBatchByID:
 		return validateCollectionUpdateBatchByIDFrame(frame)
+	case LoweredFrameClassCollectionVectorPrepareV1:
+		if frame.Kind != commitlog.CommandKindCollectionVectorPrepareV1 || frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionVectorPrepareV1 {
+			return fmt.Errorf("%w: vector prepare frame identity", backenddb.ErrCommandWALUnsupported)
+		}
+		v, err := commitlog.DecodeVectorPreparePayloadV1(frame.Payload)
+		if err != nil || v.Term == 0 || v.IndexPosition == 0 || v.CommandDigest == "" {
+			return fmt.Errorf("%w: vector prepare frame metadata: %v", backenddb.ErrCommandWALRejected, err)
+		}
+		return nil
 	case LoweredFrameClassCollectionSplitVectorInsertV1:
 		if frame.Kind != commitlog.CommandKindCollectionSplitVectorInsertV1 ||
 			frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionSplitVectorInsertV1 {
@@ -408,9 +423,8 @@ func validateCollectionUpdateBatchByIDFrame(frame LoweredFrame) error {
 
 var applyAppendMu sync.Mutex
 
-// StagingGuard owns an actual raw-publish and teardown lease. The prepared
-// callback may transfer it once to Append; copies of Options share the same
-// claim and release state.
+// StagingGuard owns the actual DB-minted staging lease. The prepared callback
+// may transfer it once to Append; Options copies share claim and release state.
 type StagingGuard struct {
 	db      *backenddb.DB
 	mu      sync.Mutex
@@ -419,12 +433,16 @@ type StagingGuard struct {
 	intent  *backenddb.CommandWALIntent
 	once    sync.Once
 	unlock  func()
+	capture *backenddb.CommandWALStagingGuardV1
 }
 
-// NewStagingGuard adopts the supplied same-DB staging lease. The caller must
-// already hold LockCommandWALStaging and arrange Release if no Append occurs.
-func NewStagingGuard(db *backenddb.DB, unlock func()) *StagingGuard {
-	return &StagingGuard{db: db, unlock: unlock, active: unlock != nil}
+// NewStagingGuard adopts only a live, same-DB backend-minted staging guard.
+// The caller retains responsibility for Release if no Append occurs.
+func NewStagingGuard(db *backenddb.DB, actual *backenddb.CommandWALStagingGuardV1) (*StagingGuard, error) {
+	if err := actual.ClaimAppendOwnershipV1(db); err != nil {
+		return nil, err
+	}
+	return &StagingGuard{db: db, unlock: actual.Release, active: true, capture: actual}, nil
 }
 
 func (g *StagingGuard) claim(db *backenddb.DB) error {
@@ -435,6 +453,9 @@ func (g *StagingGuard) claim(db *backenddb.DB) error {
 	defer g.mu.Unlock()
 	if db == nil || g.db != db || !g.active || g.claimed {
 		return fmt.Errorf("%w: command wal apply staging guard is inactive, consumed, or belongs to a different DB", backenddb.ErrCommandWALRejected)
+	}
+	if err := g.capture.ValidateDBV1(db); err != nil {
+		return err
 	}
 	g.claimed = true
 	return nil
@@ -483,4 +504,13 @@ func appliedCommandLSN(db *backenddb.DB) uint64 {
 		return state.AppliedCommandLSN
 	}
 	return 0
+}
+
+// BorrowStableResourceCaptureLeaseV1 borrows the actual Append guard. The
+// callback must finish capture before Finalize/Abort expires that ownership.
+func (h Handle) BorrowStableResourceCaptureLeaseV1() (*backenddb.StableResourceCaptureLease, error) {
+	if h.db == nil || h.intent == nil || h.lsn == 0 || h.staging == nil || h.staging.capture == nil {
+		return nil, backenddb.ErrCommandWALRejected
+	}
+	return h.staging.capture.BorrowStableResourceCaptureLeaseV1(h.db, h.intent)
 }

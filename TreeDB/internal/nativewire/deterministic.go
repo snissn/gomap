@@ -40,7 +40,7 @@ const (
 	deterministicTemplateV1MaxDepth       = 64
 	minDeterministicIndexDefinitionLen    = 6
 	minDeterministicVectorDefinitionLen   = 7
-	maxDeterministicCollectionMetaVersion = 5
+	maxDeterministicCollectionMetaVersion = 6
 	maxDeterministicCollectionIndexes     = 1 << 16
 	maxDeterministicUint32                = uint64(^uint32(0))
 )
@@ -1170,7 +1170,12 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if version < 1 || version > maxDeterministicCollectionMetaVersion {
 		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
+	nameOff := off
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
+		return err
+	}
+	collectionName, err := readDeterministicStringField(raw, &nameOff, "collection name")
+	if err != nil {
 		return err
 	}
 	documentFormat, err := readDeterministicUvarintField(raw, &off, "document_format")
@@ -1272,6 +1277,15 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 				return err
 			}
 			off = next
+		}
+	}
+	if version >= 6 {
+		schema, err := readDeterministicStringField(raw, &off, "column_store")
+		if err != nil {
+			return err
+		}
+		if _, err := collections.DecodeColumnStoreWireConfigV1(collectionName, []byte(schema), true); err != nil {
+			return protocolError(ErrInvalidCommand, "column_store: %v", err)
 		}
 	}
 	if off != len(raw) {

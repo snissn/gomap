@@ -674,7 +674,7 @@ func nativewireHarnessCommittedCreateCollectionEntry(t *testing.T, term, index u
 	sections := []iwire.Section{
 		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
-		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{
+		{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(collections.CollectionMeta{
 			Name: collection,
 			Options: collections.CollectionOptions{
 				DocumentFormat: collections.DocumentFormatJSON,

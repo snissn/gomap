@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -80,8 +81,21 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 	if f == nil {
 		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	if vectorPrepareCommandHeaderV1(req.EntryBytes) {
+		var result raftcluster.CommandEntryPreflightResultV1
+		err := f.withVectorPrepareStorageV1(ctx, false, func(storage *collections.VectorPrepareStorageOwnerV1) error {
+			var err error
+			result, err = f.preflightCommandEntryLockedV1(req, storage)
+			return err
+		})
+		return result, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	return f.preflightCommandEntryLockedV1(req, nil)
+}
+
+func (f *FSM) preflightCommandEntryLockedV1(req raftcluster.CommandEntryPreflightRequestV1, storage *collections.VectorPrepareStorageOwnerV1) (raftcluster.CommandEntryPreflightResultV1, error) {
 	if f.closed {
 		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}
@@ -109,7 +123,7 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 		RequestMetadata:          cloneRequestMetadataV1(req.RequestMetadata),
 		ExpectedTarget:           cloneExpectedTargetV1(req.ExpectedTarget),
 	}
-	opts := raftapply.Options{DecodeLimits: f.decodeLimits, ResultStore: f.results}
+	opts := raftapply.Options{DecodeLimits: f.decodeLimits, ResultStore: f.results, VectorPrepareStorageOwner: storage}
 	var result raftapply.PreflightResultV1
 	var err error
 	if len(req.DecodedEntry.Bytes) != 0 {

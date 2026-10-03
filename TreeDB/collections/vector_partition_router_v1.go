@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -219,7 +220,11 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV
 	return c.buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx, building, partitions, opts, variant)
 }
 
-func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
+func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1, owners ...*CommandWALAdmittedCollection) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
+	var owner *CommandWALAdmittedCollection
+	if len(owners) != 0 {
+		owner = owners[0]
+	}
 	if err := building.requireInlineRuntimeV1(); err != nil {
 		return status, err
 	}
@@ -264,7 +269,11 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 	if building.Collection != c.name {
 		return fail(errors.New("collections: vector partition router collection mismatch"))
 	}
-	if err := c.validateVectorPartitionSourceIdentityV1(building); err != nil {
+	validateSource := c.validateVectorPartitionSourceIdentityV1
+	if owner != nil {
+		validateSource = owner.validateVectorPrepareSourceManifestV1
+	}
+	if err := validateSource(building); err != nil {
 		return fail(err)
 	}
 	def, err := c.vectorPartitionRouterDefinitionV1(building.IndexName)
@@ -392,13 +401,28 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 	if opts.AssetPartID == 0 {
 		opts.AssetPartID = uint64(building.PartitionCount) + 1
 	}
-	lease, err := c.db.AcquireStableResourceCaptureLease()
+	var lease *backenddb.StableResourceCaptureLease
+	var releaseCapture func()
+	if owner != nil {
+		lease, releaseCapture, err = owner.vectorPrepareCaptureLeaseV1()
+	} else {
+		lease, err = c.db.AcquireStableResourceCaptureLease()
+		if lease != nil {
+			releaseCapture = lease.Release
+		}
+	}
 	if err != nil {
 		return fail(err)
 	}
-	defer lease.Release()
+	defer releaseCapture()
 	appendStarted := time.Now()
-	refs, routerResources, err := AppendColumnPhysicalAssetsWithStableResources(
+	appendAssets := AppendColumnPhysicalAssetsWithStableResources
+	if owner != nil {
+		appendAssets = func(root string, cfg ColumnStoreConfig, _ uint32, items []StableColumnPhysicalAssetAppend, registry *rootpublication.IdentityPinRegistry, recovery StableResourceCaptureRecoveryRetainer) ([]ColumnAssetRef, *rootpublication.StableResourceSet, error) {
+			return appendFreshColumnPhysicalAssetsWithStableResources(root, cfg, items, registry, recovery)
+		}
+	}
+	refs, routerResources, err := appendAssets(
 		c.db.ColumnAssetRootDir(), *cfg, opts.AssetFileID,
 		[]StableColumnPhysicalAssetAppend{{
 			Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack,
@@ -482,7 +506,7 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 		return fail(err)
 	}
 	publishStarted := time.Now()
-	err = c.publishVectorPartitionManifestModeV1(ready, resources, true, expectedGraphVariant)
+	err = c.publishVectorPartitionManifestModeV1(ready, resources, owner == nil, expectedGraphVariant, owner)
 	status.PublishNanos = elapsedNanosVPR(publishStarted)
 	if err != nil {
 		return fail(err)

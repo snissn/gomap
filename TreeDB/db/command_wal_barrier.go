@@ -265,3 +265,142 @@ func (db *DB) unlockCommandWALRawPublishWithAdmission() {
 func (db *DB) LockCommandWALStaging() func() {
 	return db.lockCommandWALRawPublishWithTeardown()
 }
+
+// CommandWALStagingGuardV1 owns the actual teardown/raw leases acquired by a
+// command executor. Capture borrowers share this guard; they acquire no new
+// teardown read lease and cannot release its original ownership.
+type CommandWALStagingGuardV1 struct {
+	ownership *commandWALStagingOwnershipV1
+}
+
+// Copies of the exported opaque handle share actual DB-minted ownership.
+type commandWALStagingOwnershipV1 struct {
+	unlock      func()
+	db          *DB
+	mu          sync.Mutex
+	active      bool
+	transferred bool
+	intent      *CommandWALIntent
+}
+
+func (db *DB) LockCommandWALStagingGuardV1() (*CommandWALStagingGuardV1, error) {
+	if db == nil || !db.commandWAL {
+		return nil, ErrCommandWALUnsupported
+	}
+	db.teardownMu.RLock()
+	if db.closing.Load() {
+		db.teardownMu.RUnlock()
+		return nil, ErrClosed
+	}
+	db.commandWALRawPublishMu.Lock()
+	if db.closing.Load() {
+		db.unlockCommandWALRawPublishWithTeardown()
+		return nil, ErrClosed
+	}
+	return &CommandWALStagingGuardV1{ownership: &commandWALStagingOwnershipV1{db: db, active: true, unlock: db.unlockCommandWALRawPublishWithTeardown}}, nil
+}
+
+// LockCommandWALStagingGuardWithBarriersV1 mints the same typed staging
+// ownership after the existing public barriers have drained. Its actual lease
+// additionally owns raw admission, so Release must use that acquisition's unlock.
+func (db *DB) LockCommandWALStagingGuardWithBarriersV1() (*CommandWALStagingGuardV1, error) {
+	if db == nil || !db.commandWAL {
+		return nil, ErrCommandWALUnsupported
+	}
+	unlock, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return nil, err
+	}
+	return &CommandWALStagingGuardV1{ownership: &commandWALStagingOwnershipV1{db: db, active: true, unlock: unlock}}, nil
+}
+
+// ValidateDBV1 verifies the actual live DB-minted guard before ownership transfer.
+// Rejection does not release the original owner's lease.
+func (guard *CommandWALStagingGuardV1) ValidateDBV1(db *DB) error {
+	if guard == nil || guard.ownership == nil {
+		return ErrCommandWALRejected
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if !held.active || db == nil || held.db != db {
+		return ErrCommandWALRejected
+	}
+	return nil
+}
+
+// ClaimAppendOwnershipV1 transfers this exact DB-minted guard to one apply
+// handle owner. Copies cannot create another independent release authority.
+func (guard *CommandWALStagingGuardV1) ClaimAppendOwnershipV1(db *DB) error {
+	if guard == nil || guard.ownership == nil {
+		return ErrCommandWALRejected
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if !held.active || db == nil || held.db != db || held.intent != nil || held.transferred {
+		return ErrCommandWALRejected
+	}
+	held.transferred = true
+	return nil
+}
+
+// Append assigns this guard to the actual staged intent before any borrowing.
+func (guard *CommandWALStagingGuardV1) Append(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if guard == nil || guard.ownership == nil {
+		return 0, ErrClosed
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if !held.active || held.db == nil || held.intent != nil || intent == nil || intent.AssignedLSN() != 0 {
+		return 0, ErrCommandWALRejected
+	}
+	lsn, err := held.db.AppendStagedCommandWALIntent(intent, sync)
+	if err == nil && lsn != 0 {
+		held.intent = intent
+	}
+	return lsn, err
+}
+
+// Release expires all capture borrowers at Finalize/Abort, then relinquishes
+// raw before teardown. Borrowers are callback-scoped and must finish first.
+func (guard *CommandWALStagingGuardV1) Release() {
+	if guard == nil || guard.ownership == nil {
+		return
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if !held.active {
+		return
+	}
+	held.active = false
+	held.unlock()
+}
+
+func (guard *CommandWALStagingGuardV1) validateCaptureBorrowLocked(db *DB, intent *CommandWALIntent) error {
+	if guard == nil || guard.ownership == nil {
+		return ErrCommandWALRejected
+	}
+	held := guard.ownership
+	if !held.active || db == nil || held.db != db || intent == nil || held.intent != intent || !intent.StagedForPublish() || intent.AssignedLSN() == 0 {
+		return ErrCommandWALRejected
+	}
+	return nil
+}
+
+// BorrowStableResourceCaptureLeaseV1 validates the live guard's exact DB and
+// intent. It stays usable if Close starts after Append, until guard release.
+func (guard *CommandWALStagingGuardV1) BorrowStableResourceCaptureLeaseV1(db *DB, intent *CommandWALIntent) (*StableResourceCaptureLease, error) {
+	if guard == nil || guard.ownership == nil {
+		return nil, ErrClosed
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if err := guard.validateCaptureBorrowLocked(db, intent); err != nil {
+		return nil, err
+	}
+	return &StableResourceCaptureLease{db: db, borrowedGuard: guard, borrowedIntent: intent}, nil
+}

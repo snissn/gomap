@@ -434,6 +434,7 @@ type VectorIndex struct {
 	frozenPrefixIndexedDotBatches    uint64
 	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
+	partitionPreparation             *VectorPartitionPrepareCompletionV1
 	partitionLive                    *vectorIndexPartitionLiveStateV1
 	partitionLiveMutationUndo        *vectorIndexPartitionLiveDomainUndoV2
 	scalarDefinitions                []IndexDefinition

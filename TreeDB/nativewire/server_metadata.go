@@ -50,7 +50,11 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	}
 	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
 	logDebug("handleCreateCollection: CreateCollection success")
-	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*created)}}), nil
+	encoded, err := encodeCollectionMeta(*created)
+	if err != nil {
+		return nil, err
+	}
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encoded}}), nil
 }
 
 func (s *Server) handleListCollections() ([]iwire.Section, error) {
@@ -61,7 +65,11 @@ func (s *Server) handleListCollections() ([]iwire.Section, error) {
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMetaVector(metas)}}, nil
+	encoded, err := encodeCollectionMetaVector(metas)
+	if err != nil {
+		return nil, err
+	}
+	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encoded}}, nil
 }
 
 func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -117,7 +125,11 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
-	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}), nil
+	encoded, err := encodeCollectionMeta(*meta)
+	if err != nil {
+		return nil, err
+	}
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encoded}}), nil
 }
 
 func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -173,7 +185,11 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
-	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}), nil
+	encoded, err := encodeCollectionMeta(*meta)
+	if err != nil {
+		return nil, err
+	}
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encoded}}), nil
 }
 
 func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {

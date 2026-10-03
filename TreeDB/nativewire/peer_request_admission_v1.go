@@ -44,7 +44,7 @@ func (w *peerWorkLeaseV1) release() {
 
 func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
-	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
+	case "status", "replacement-read", "replacement-cutoff", "replacement-tail-check", "catalog-read", "vector-catalog-read", "vector-prepare-status", "catalog-route", "catalog-validate", "group-read-proof":
 		return "control-read"
 	case "vector-split-source-proof", "vector-split-receipt":
 		return "control-proof"

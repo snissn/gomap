@@ -13,9 +13,14 @@ import (
 // It refers to the original collection and actual operation-owned locks. The
 // callback must finalize or abort its appended frame before returning.
 type CommandWALAdmittedCollection struct {
-	collection *Collection
-	admission  *collectionCommandWALAdmission
-	staging    *commandwalapply.StagingGuard
+	collection           *Collection
+	admission            *collectionCommandWALAdmission
+	partitionStorageHeld bool
+	preparation          *VectorPartitionPrepareCompletionV1
+	partitionSourcePin   *backenddb.Snapshot
+	partitionCapture     *backenddb.StableResourceCaptureLease
+	replayOperation      *backenddb.CommandWALIntent
+	staging              *commandwalapply.StagingGuard
 }
 
 // WithPreparedCommandWALMutation owns schema, vector coverage/admission and
@@ -26,6 +31,9 @@ func (c *Collection) WithPreparedCommandWALMutation(apply func(*CommandWALAdmitt
 }
 
 func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), coveragePersistence bool, apply func(*CommandWALAdmittedCollection) error) error {
+	return c.withPreparedCommandWALMutationAndReplayIntent(acquire, coveragePersistence, nil, apply)
+}
+func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func() func(), coveragePersistence bool, replay *backenddb.CommandWALIntent, apply func(*CommandWALAdmittedCollection) error) error {
 	if c == nil {
 		return errCollectionNil
 	}
@@ -56,22 +64,42 @@ func (c *Collection) withPreparedCommandWALMutation(acquire func() func(), cover
 	if coveragePersistence {
 		flushBuffered = c.flushBufferedWritesWithCoverageLocked
 	}
-	if err := flushBuffered(); err != nil {
+	_, fromReplay := replay.ReplayAssignedLSN()
+	if fromReplay {
+		if err := c.db.ValidateCommandWALReplayOperationV1(replay); err != nil {
+			return err
+		}
+		if err := c.flushBufferedWritesWithRawPublishStateAndCoverage(false, coveragePersistence, true, false); err != nil {
+			return err
+		}
+	} else if err := flushBuffered(); err != nil {
 		return err
 	}
-	unlockRaw, err := c.lockCommandWALStagingWithAdmission(admission, nil, flushBuffered)
-	if err != nil {
-		return err
+	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
+	if !fromReplay && c.db.CommandWALEnabled() {
+		actualGuard, err := c.lockCommandWALStagingGuardWithAdmission(admission, flushBuffered)
+		if err != nil {
+			return err
+		}
+		staging, err := commandwalapply.NewStagingGuard(c.db, actualGuard)
+		if err != nil {
+			actualGuard.Release()
+			return err
+		}
+		defer staging.Release()
+		owner.staging = staging
 	}
-	staging := commandwalapply.NewStagingGuard(c.db, unlockRaw)
-	defer staging.Release()
-	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, staging: staging}
 	return apply(owner)
 }
 
 func (owner *CommandWALAdmittedCollection) validate() error {
 	if owner == nil || owner.collection == nil || owner.admission == nil || owner.admission.release == nil || owner.admission.mutationLocked == nil || !*owner.admission.mutationLocked {
 		return errors.New("collections: prepared command WAL owner is no longer active")
+	}
+	if owner.replayOperation != nil {
+		if err := owner.collection.db.ValidateCommandWALReplayOperationV1(owner.replayOperation); err != nil {
+			return err
+		}
 	}
 	return owner.collection.ensureWriteDomainOpen()
 }

@@ -105,7 +105,7 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 	defer cancel()
 	report := FixedPeerReadinessV1{Live: !r.closed.Load(), NodeID: r.config.NodeID, Draining: r.draining.Load()}
 	if r.config.VectorInitialization != nil {
-		report.VectorPhase = FixedPeerVectorPhaseInitializingV1
+		report.VectorPhase = r.vectorInitializationPhaseV1()
 	}
 	if !report.Live || report.Draining {
 		report.Error = "node is draining or closed"
@@ -207,9 +207,9 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		}
 		report.Groups = append(report.Groups, item)
 	}
-	if r.config.Vector != nil && r.config.Vector.Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
-		owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
-		router := r.config.NodeID == r.config.Vector.RouterNodeID
+	if r.servingVectorConfigV1() != nil && r.servingVectorConfigV1().Identity.Immutable != (raftplacement.VectorPartitionLifecycleImmutableAuthorityV1{}) {
+		owners := fixedPeerVectorOwnerGroupsV1(r.servingVectorConfigV1().Placement)
+		router := r.config.NodeID == r.servingVectorConfigV1().RouterNodeID
 		localOwner, ownerLeader := false, false
 		for _, owner := range owners {
 			if r.data[owner] == nil {
@@ -235,7 +235,7 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		report.Draining = true
 		failures = append(failures, raftcluster.ErrAdmissionUnavailable)
 	}
-	if r.config.VectorInitialization != nil {
+	if r.config.VectorInitialization != nil && r.vectorInitializationPhaseV1() != "active" {
 		failures = append(failures, ErrFixedPeerVectorUnavailableV1)
 	}
 	err = errors.Join(failures...)
@@ -262,7 +262,7 @@ func (r *FixedPeerTCPRuntimeV1) immutableVectorWarmReadinessV1(ctx context.Conte
 		return err
 	}
 	if listener {
-		if topology == nil || (r.config.NodeID == r.config.Vector.RouterNodeID && backend == nil) || (ownerLeader && source == nil) {
+		if topology == nil || (r.config.NodeID == r.servingVectorConfigV1().RouterNodeID && backend == nil) || (ownerLeader && source == nil) {
 			return ErrFixedPeerVectorUnavailableV1
 		}
 		status := topology.Status()

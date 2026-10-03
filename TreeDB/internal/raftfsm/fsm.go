@@ -2,6 +2,8 @@ package raftfsm
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -64,11 +67,13 @@ type Options struct {
 type FSM struct {
 	mu                      sync.RWMutex
 	snapshotOperationActive atomic.Bool
-	snapshotCaptureLimits   SnapshotCaptureLimitsV1
-	snapshotMu              sync.Mutex
-	snapshotNamespace       *lockfile.Lock
-	snapshotOwner           raftcluster.RaftSnapshotV1
-	snapshotWorkRelease     func()
+	// Test hook runs after the short capture RLock has been released.
+	vectorPrepareCapturedForTest func()
+	snapshotCaptureLimits        SnapshotCaptureLimitsV1
+	snapshotMu                   sync.Mutex
+	snapshotNamespace            *lockfile.Lock
+	snapshotOwner                raftcluster.RaftSnapshotV1
+	snapshotWorkRelease          func()
 
 	db          *backenddb.DB
 	metadataDir string
@@ -237,6 +242,36 @@ func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
 	return record.EntryID, true
 }
 
+// LookupCoveredApplyResultV1 is a read-only admission proof. It never advances
+// progress or fills a missing result; callers must compare the returned actual
+// command digest with their persisted command origin.
+func (f *FSM) LookupCoveredApplyResultV1(id raftentry.ApplyEntryID) (raftapply.ApplyResultRecordV1, bool, error) {
+	var out raftapply.ApplyResultRecordV1
+	if f == nil {
+		return out, false, fmt.Errorf("FSM is not open")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.closed || f.db == nil || f.results == nil {
+		return out, false, fmt.Errorf("FSM is not open")
+	}
+	if err := validateCommittedID(id); err != nil {
+		return out, false, err
+	}
+	record, ok, err := f.results.LookupApplyResult(id)
+	if err != nil || !ok {
+		return out, ok, err
+	}
+	localLSN, err := localAppliedCommandLSN(f.db)
+	if err != nil {
+		return out, false, err
+	}
+	if record.EntryID != id || record.AppliedCommandLSN == 0 || record.AppliedCommandLSN > localLSN || record.Result.CommandDigest != record.CommandDigest || record.Result.Status != raftentry.ApplyStatusApplied {
+		return out, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "durable result is not covered for entry %d/%d", id.Term, id.Index)
+	}
+	return record, true, nil
+}
+
 func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.ApplyResultV1, error) {
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
@@ -367,8 +402,24 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
+	if vectorPrepareCommandHeaderV1(entry.Bytes) {
+		var result raftentry.ApplyResultV1
+		err := f.withVectorPrepareStorageV1(context.Background(), true, func(storage *collections.VectorPrepareStorageOwnerV1) error {
+			var err error
+			result, err = f.applyCommittedEntryLockedV1(entry, storage)
+			return err
+		})
+		if err != nil && result.Status == "" {
+			return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, err)
+		}
+		return result, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.applyCommittedEntryLockedV1(entry, nil)
+}
+
+func (f *FSM) applyCommittedEntryLockedV1(entry CommittedEntryV1, storage *collections.VectorPrepareStorageOwnerV1) (raftentry.ApplyResultV1, error) {
 	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
 	}
@@ -397,9 +448,10 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 		return reject(digest, code, err)
 	}
 	return raftapply.ApplyCommittedEntryV1(f.db, entry.Bytes, meta, raftapply.Options{
-		DecodeLimits:  f.decodeLimits,
-		ProgressStore: f.progress,
-		ResultStore:   f.results,
+		VectorPrepareStorageOwner: storage,
+		DecodeLimits:              f.decodeLimits,
+		ProgressStore:             f.progress,
+		ResultStore:               f.results,
 	})
 }
 
@@ -661,5 +713,75 @@ func statusForCode(code raftentry.DeterministicErrorCodeV1) raftentry.ApplyStatu
 		return raftentry.ApplyStatusRejectedConflict
 	default:
 		return raftentry.ApplyStatusDeterministicGuardFailure
+	}
+}
+
+// This bounded prefix selects lock scheduling only. The authoritative decoder
+// still validates canonical varints, all bytes, digest, catalog and coverage.
+// CommandID is uint64, matching the decoder's cast without truncation.
+func vectorPrepareCommandHeaderV1(raw []byte) bool {
+	magic := nativewire.DeterministicEntryMagic
+	if len(raw) < len(magic) || string(raw[:len(magic)]) != magic {
+		return false
+	}
+	version, n := binary.Uvarint(raw[len(magic):])
+	if n <= 0 || version != nativewire.DeterministicEntryVersion {
+		return false
+	}
+	command, n := binary.Uvarint(raw[len(magic)+n:])
+	return n > 0 && nativewire.CommandID(command) == nativewire.CommandVectorPrepareV1
+}
+
+var errVectorPrepareDBChangedV1 = errors.New("raftfsm: vector prepare captured DB changed")
+
+// Capture precedes the root barrier, which precedes the FSM mutex. A restore
+// may replace the DB while the capture waits; retire it and retry before any
+// command-WAL Append. Committed apply deliberately uses Background, never an
+// HTTP cancellation to skip a committed entry.
+func (f *FSM) withVectorPrepareStorageV1(ctx context.Context, write bool, fn func(*collections.VectorPrepareStorageOwnerV1) error) error {
+	for {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		f.mu.RLock()
+		if f.closed || f.db == nil {
+			f.mu.RUnlock()
+			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+		}
+		db := f.db
+		capture, err := collections.AcquireVectorPrepareStableCaptureV1(db)
+		hook := f.vectorPrepareCapturedForTest
+		f.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		if hook != nil {
+			hook()
+		}
+		err = capture.WithStorageBarrierV1(ctx, func(storage *collections.VectorPrepareStorageOwnerV1) error {
+			if write {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+			} else {
+				f.mu.RLock()
+				defer f.mu.RUnlock()
+			}
+			if f.closed || f.db == nil {
+				return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+			}
+			if f.db != db {
+				return errVectorPrepareDBChangedV1
+			}
+			if err := storage.ValidateDBV1(f.db); err != nil {
+				return err
+			}
+			return fn(storage)
+		})
+		capture.Close()
+		if !errors.Is(err, errVectorPrepareDBChangedV1) {
+			return err
+		}
 	}
 }

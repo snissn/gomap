@@ -466,16 +466,44 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *back
 // First standalone partition binding uses the stronger write admission lock so
 // no document mutation can observe the carrier before its durable root exists.
 func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay, nil)
+}
+func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	c := idx.collection
-	unlockCoverage := c.lockVectorIndexCoveragePersistence()
-	defer unlockCoverage()
+	if owner == nil {
+		unlockCoverage := c.lockVectorIndexCoveragePersistence()
+		defer unlockCoverage()
+	} else {
+		if err := owner.validate(); err != nil {
+			return status, err
+		}
+		if owner.collection != c {
+			return status, errors.New("collections: foreign partition persistence owner")
+		}
+	}
+	if owner != nil && idx.needsNativeFullSnapshotAutoPersist() {
+		generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+		if err != nil {
+			return status, err
+		}
+		idx.recordSourceDocumentState(generation, state)
+		return idx.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
+	}
 	if idx.needsNativeFullSnapshotAutoPersist() {
 		return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay)
 	}
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
+	if owner == nil {
+		unlockMutation := c.lockMutation()
+		defer unlockMutation.Unlock()
+	}
+	flush := c.flushBufferedWritesWithCoverageLocked
+	if owner != nil {
+		flush = func() error {
+			return c.flushBufferedWritesWithRawPublishStateAndCoverage(c.commandWALRawPublishLocked || replay.StagedForPublish(), true, true, false)
+		}
+	}
+	if err := flush(); err != nil {
 		return status, err
 	}
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
@@ -1083,20 +1111,21 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
-	Name                            string                             `json:"name"`
-	Field                           string                             `json:"field"`
-	Metric                          VectorMetric                       `json:"metric"`
-	Encoding                        VectorIndexEncoding                `json:"encoding"`
-	Dimensions                      int                                `json:"dimensions"`
-	M                               int                                `json:"m"`
-	EfConstruction                  int                                `json:"ef_construction"`
-	EfSearch                        int                                `json:"ef_search"`
-	RebuildDeletedRatio             float64                            `json:"rebuild_deleted_ratio"`
-	Entry                           int                                `json:"entry"`
-	MaxLevel                        int                                `json:"max_level"`
-	SourceDocumentGenerationVersion int                                `json:"source_document_generation_version"`
-	SourceDocumentGeneration        uint64                             `json:"source_document_generation"`
-	PartitionLive                   *vectorIndexPartitionLivePersistV1 `json:"partition_live,omitempty"`
+	Name                            string                              `json:"name"`
+	Field                           string                              `json:"field"`
+	Metric                          VectorMetric                        `json:"metric"`
+	Encoding                        VectorIndexEncoding                 `json:"encoding"`
+	Dimensions                      int                                 `json:"dimensions"`
+	M                               int                                 `json:"m"`
+	EfConstruction                  int                                 `json:"ef_construction"`
+	EfSearch                        int                                 `json:"ef_search"`
+	RebuildDeletedRatio             float64                             `json:"rebuild_deleted_ratio"`
+	Entry                           int                                 `json:"entry"`
+	MaxLevel                        int                                 `json:"max_level"`
+	SourceDocumentGenerationVersion int                                 `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64                              `json:"source_document_generation"`
+	PartitionLive                   *vectorIndexPartitionLivePersistV1  `json:"partition_live,omitempty"`
+	Preparation                     *VectorPartitionPrepareCompletionV1 `json:"preparation,omitempty"`
 }
 
 type vectorIndexPersistNode struct {
@@ -1145,6 +1174,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 			SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 			PartitionLive:                   liveMeta,
+			Preparation:                     idx.partitionPreparation,
 		},
 		Nodes: make([]vectorIndexPersistNode, len(idx.nodes)),
 		DocMap: vectorIndexPersistDocMap{
@@ -1472,6 +1502,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 		SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 		PartitionLive:                   idx.partitionLiveMetaPersistLockedV2(),
+		Preparation:                     idx.partitionPreparation,
 	}
 }
 
@@ -2002,6 +2033,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			return reason
 		}
 		idx.partitionLive = partitionLive
+		idx.partitionPreparation = snapshot.Meta.Preparation
 		idx.publishSearchViewLocked(true)
 		return ""
 	}
@@ -2133,6 +2165,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		return reason
 	}
 	idx.partitionLive = partitionLive
+	idx.partitionPreparation = snapshot.Meta.Preparation
 	idx.publishSearchViewLocked(true)
 	return ""
 }

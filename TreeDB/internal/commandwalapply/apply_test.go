@@ -787,9 +787,34 @@ func TestInheritedStagingGuardClaimAndCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = other.Close() }()
-			unlock := db.LockCommandWALStaging()
+			actual, err := db.LockCommandWALStagingGuardV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer actual.Release()
+			if _, err := NewStagingGuard(other, actual); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("foreign adoption=%v", err)
+			}
+			if err := actual.ValidateDBV1(db); err != nil {
+				t.Fatalf("foreign adoption released actual guard: %v", err)
+			}
+			if _, err := NewStagingGuard(db, &backenddb.CommandWALStagingGuardV1{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("forged adoption=%v", err)
+			}
+			guard, err := NewStagingGuard(db, actual)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copied := *actual
+			if _, err := NewStagingGuard(db, &copied); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("reused adoption=%v", err)
+			}
+			if err := actual.ValidateDBV1(db); err != nil {
+				t.Fatalf("reused adoption released actual guard: %v", err)
+			}
 			releases := 0
-			guard := NewStagingGuard(db, func() { releases++; unlock() })
+			unlock := guard.unlock
+			guard.unlock = func() { releases++; unlock() }
 			defer guard.Release()
 			frame, err := TestNoopFrame()
 			if err != nil {
@@ -871,7 +896,15 @@ func TestInheritedStagingAppendAvoidsGlobalAppendLockInversion(t *testing.T) {
 			_ = db.Close()
 		}
 	}()
-	guard := NewStagingGuard(db, db.LockCommandWALStaging())
+	actual, err := db.LockCommandWALStagingGuardV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actual.Release()
+	guard, err := NewStagingGuard(db, actual)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer guard.Release()
 	frame, err := TestNoopFrame()
 	if err != nil {

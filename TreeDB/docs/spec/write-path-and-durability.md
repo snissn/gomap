@@ -635,3 +635,23 @@ Implementations and refactors must preserve:
 
 TreeDB is pre-alpha. WAL/value-log/index on-disk behavior may change between
 versions without backward-compatibility guarantees.
+
+### Assigned command-WAL asset capture borrowing
+
+The bounded vector prepare executor acquires its stable generation pin before
+raw admission. Its actual Append staging guard owns one teardown reader and
+the raw publication mutex through Finalize/Abort. Prepared callbacks retain and
+transfer that DB-minted guard in Append Options without reacquiring raw or the
+global append mutex. Ordinary Append mints its typed guard after the existing
+public barriers drain, retaining the actual raw-admission release as well.
+DB-validated capture borrowers
+identify that live DB/intent guard; they never acquire or release another
+teardown reader. Producers finish before Finalize/Abort and cannot use a
+released or expired borrower. Capture admitted by Append can finish after Close
+queues its teardown writer; closing checks on later publication remain intact.
+
+Startup replay owns the actual active replay LSN/token and an exact DB-minted
+intent, rather than an assigned raw staging guard. It uses ordinary unheld-raw
+publication and releases independent asset capture admission before native
+root publication. Replay identity expires when the existing callback restores
+its active frame state. No durable progress or recovery coverage is invented.

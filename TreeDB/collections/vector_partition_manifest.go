@@ -159,6 +159,13 @@ type VectorPartitionDomainPackV1 struct {
 
 // VectorPartitionManifestV1 is canonical only when its variable-length lists
 // are sorted. ReadySetDigest is SHA-256 of its required assets and placements.
+// VectorPartitionPrepareOriginV1 authenticates command-owned BUILD/READY
+// replay. It is provenance, never evidence of durable FSM progress.
+type VectorPartitionPrepareOriginV1 struct {
+	Term, Index   uint64
+	CommandDigest string
+}
+
 type VectorPartitionManifestV1 struct {
 	Format, State                                                      string
 	Collection, IndexName, IndexDefinitionDigest, IntegrityDigest      string
@@ -177,7 +184,8 @@ type VectorPartitionManifestV1 struct {
 	ReadySetDigest                                                     string
 	// PagedRootV2 is the explicit schema-7 alternative to the inline schema-6
 	// source/layout fields. Nil is omitted to preserve every legacy JSON byte.
-	PagedRootV2 *VectorPartitionPagedRootV2 `json:",omitempty"`
+	PagedRootV2   *VectorPartitionPagedRootV2     `json:",omitempty"`
+	PrepareOrigin *VectorPartitionPrepareOriginV1 `json:",omitempty"`
 }
 
 var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
@@ -205,6 +213,7 @@ var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
 	"RouterAsset",
 	"ReadySetDigest",
 	"PagedRootV2",
+	"PrepareOrigin",
 }
 
 var vectorPartitionDomainPacksIntegrityFieldV1 = []byte(`,"DomainPacks":`)
@@ -219,7 +228,7 @@ func validateVectorPartitionManifestIntegrityShapeV1() error {
 	for i, want := range vectorPartitionManifestIntegrityFieldNamesV1 {
 		field := typ.Field(i)
 		wantTag := ""
-		if want == "PagedRootV2" {
+		if want == "PagedRootV2" || want == "PrepareOrigin" {
 			wantTag = ",omitempty"
 		}
 		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != wantTag {
@@ -284,6 +293,12 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	}
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
+	}
+	if m.PrepareOrigin != nil {
+		origin := m.PrepareOrigin
+		if origin.Term == 0 || origin.Index == 0 || !isSHA256VPM(origin.CommandDigest) || m.SourceRowCount > 512 || m.PartitionCount != 1 || m.PagedRootV2 != nil || m.Format == VectorPartitionManifestFormatV2 {
+			return fmt.Errorf("%w: bounded prepare origin", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
 		return m.validatePagedRootWithContextV2(ctx, l, true)
@@ -598,6 +613,14 @@ func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1,
 	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		if err := str(s); err != nil {
+			return 0, err
+		}
+	}
+	if m.PrepareOrigin != nil {
+		if err := add(16); err != nil {
+			return 0, err
+		}
+		if err := str(m.PrepareOrigin.CommandDigest); err != nil {
 			return 0, err
 		}
 	}
@@ -995,6 +1018,11 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 	if err := writeField("ReadySetDigest", m.ReadySetDigest, false); err != nil {
 		return "", err
 	}
+	if m.PrepareOrigin != nil {
+		if err := writeField("PrepareOrigin", m.PrepareOrigin, false); err != nil {
+			return "", err
+		}
+	}
 	if _, err := h.Write([]byte{'}'}); err != nil {
 		return "", err
 	}
@@ -1178,7 +1206,11 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 6)
+	if m.PrepareOrigin != nil {
+		putU32VPM(b, 8)
+	} else {
+		putU32VPM(b, 6)
+	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
@@ -1204,6 +1236,12 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	if err := putAssetsWithContextVPM(ctx, b, m.Assets); err != nil {
 		return nil, err
 	}
+	if m.PrepareOrigin != nil {
+		putU64VPM(b, m.PrepareOrigin.Term)
+		putU64VPM(b, m.PrepareOrigin.Index)
+		putStringVPM(b, m.PrepareOrigin.CommandDigest)
+	}
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1280,7 +1318,8 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 		return decodeVectorPartitionPagedRootV2(ctx, raw, l)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 6 {
+	magic, version := r.u32(), r.u32()
+	if magic != vectorPartitionManifestMagicV1 || (version != 6 && version != 8) {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
@@ -1303,6 +1342,9 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 	m.OverlapMemberships = r.memberships()
 	m.Representatives = r.representatives()
 	m.Assets = r.assets()
+	if version == 8 {
+		m.PrepareOrigin = &VectorPartitionPrepareOriginV1{Term: r.u64(), Index: r.u64(), CommandDigest: r.str()}
+	}
 	if r.err != nil || r.off != len(raw) {
 		if err := ctx.Err(); err != nil {
 			return VectorPartitionManifestV1{}, err
@@ -3619,7 +3661,11 @@ func (c *Collection) StageVectorPartitionManifestV1(m VectorPartitionManifestV1,
 	return c.publishVectorPartitionManifestModeV1(m, resources, false, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
-func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
+func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool, expectedGraphVariant VectorPartitionLocalGraphVariantV1, owners ...*CommandWALAdmittedCollection) error {
+	var owner *CommandWALAdmittedCollection
+	if len(owners) != 0 {
+		owner = owners[0]
+	}
 	if c == nil || c.db == nil {
 		if resources != nil {
 			resources.Release()
@@ -3647,7 +3693,19 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
-	return c.withVectorPartitionStorageMutationV1(vectorPartitionMutationOperationPublishV1, func() error {
+	applyMutation := func(fn func() error) error {
+		return c.withVectorPartitionStorageMutationV1(vectorPartitionMutationOperationPublishV1, fn)
+	}
+	if owner != nil {
+		if err := owner.validate(); err != nil {
+			return err
+		}
+		if !owner.partitionStorageHeld || owner.collection != c {
+			return errors.New("collections: prepare storage barrier is not owned")
+		}
+		applyMutation = func(fn func() error) error { return fn() }
+	}
+	return applyMutation(func() error {
 		if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
 			return err
 		}
@@ -3678,7 +3736,11 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 		if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
 			return errors.New("collections: vector partition index definition digest mismatch")
 		}
-		if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
+		validateSource := c.validateVectorPartitionSourceIdentityV1
+		if owner != nil {
+			validateSource = owner.validateVectorPrepareSourceManifestV1
+		}
+		if err := validateSource(m); err != nil {
 			return err
 		}
 		if err := c.validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(m, expectedGraphVariant); err != nil {

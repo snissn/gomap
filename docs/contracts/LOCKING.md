@@ -53,7 +53,9 @@ These own schema, vector admission/coverage and mutation before append through
 apply and `Finalize` or `Abort`. After draining, they retain the actual raw staging
 and teardown guards through the callback. `CommandWALAppendOptions` passes that
 same-DB owner capability in Append Options; Append consumes it once and transfers
-it to the existing handle. It must not reacquire raw or the global append mutex
+it to the existing handle. This capability retains the DB-minted typed staging
+guard, so assigned asset capture borrows that exact DB/intent lifetime. It must
+not reacquire raw or the global append mutex
 under inherited raw. Finalize or Abort releases staging exactly once; callback
 cleanup releases an unused guard and leaves any abandoned assigned frame
 recovery-owned. The admitted handle is callback-local, and its appended frame
@@ -62,9 +64,27 @@ an assigned intent directly to a collection operation does not establish this
 ownership contract. Ordinary local Append, including catalog and no-op callers,
 runs the existing raw-publish barriers before assignment to drain a foreign
 pending or published-reserved owner; prepared Append inherits its checked guard.
+The ordinary typed guard retains its actual raw-admission/raw/teardown release;
+the prepared typed guard retains its actual raw/teardown release. Foreign drains
+expire and release the previous typed guard before admission handoff; retries
+mint a fresh guard. Startup replay retains its replay token without a live guard.
 
 See [write-path and durability](../../TreeDB/docs/spec/write-path-and-durability.md)
 for command-WAL visibility and recovery boundaries. Deterministic stale-owner,
 same-schema, prepared-owner and queue-controlled publication tests cover these
 rules in `TreeDB/collections`; actual append/finalize callers are covered in
 `TreeDB/internal/raftapply`.
+
+## Bounded vector prepare in the Raft FSM
+
+Vector prepare takes a factory-minted stable DB capture, the root-scoped vector
+storage barrier, then the execution FSM mutex, in that order. A short FSM read
+lock protects capture of the current DB pointer; it is released before waiting
+on the root barrier. The executor rechecks DB/root/open identity and retires a
+stale capture before WAL Append. Source readers and snapshots retain the same
+root-barrier-before-FSM order. Collection preparation borrows an opaque owner
+for this exact DB/root and callback lifetime; it cannot mint ownership from a
+caller snapshot or boolean. The owner spans actual WAL Finalize/Abort and
+expires on callback exit. Ordinary Raft inserts do not acquire this barrier.
+See `TreeDB/docs/spec/fixed-cluster-vector-prepare-v1.md` for the provisional
+bounded prepare contract and validation limits.
