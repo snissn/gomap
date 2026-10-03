@@ -551,7 +551,7 @@ func admitBootstrap(config nativewire.FixedPeerTCPConfigV1, bootstrap nativewire
 }
 func runArgs(parent context.Context, args []string, output io.Writer) (runErr error) {
 	flags := flag.NewFlagSet("treedb-query-under-write", flag.ContinueOnError)
-	mode := flags.String("mode", "query-under-write", "query-under-write, quiescent-recall, or read-window")
+	mode := flags.String("mode", "query-under-write", "query-under-write, quiescent-recall, read-window, or paced-window")
 	dataset := flags.String("dataset", "", "unchanged representative exported dataset directory")
 	phase := flags.String("phase", "", "recall phase: pre or post-only")
 	provenance := flags.String("provenance", "", "root-accepted quiescence/runtime/input provenance JSON")
@@ -568,14 +568,27 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	readMaxAttempts := flags.Int("read-max-attempts", 65536, "read-window measured attempt cap, 1..65536; hitting cap refuses verdict")
 	readOutputBytes := flags.Int("read-output-bytes", 128<<20, "read-window aggregate planned/result byte cap, 1MiB..256MiB")
 	readResourceGateDir := flags.String("read-resource-gate-dir", "", "optional fresh trusted run-local directory for ready/done resource sampling acknowledgments")
+	pacedInserts := flags.Int("paced-inserts", 6, "paced-window distinct ordinary insert slots, 1..10")
+	pacedInterval := flags.Duration("paced-interval", 5*time.Second, "paced-window minimum interval between serial insert invocation starts")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	readFlags, freshFlag := false, false
+	readFlags, freshFlag, pacedFlags := false, false, false
 	flags.Visit(func(f *flag.Flag) {
+		pacedFlags = pacedFlags || strings.HasPrefix(f.Name, "paced-")
 		readFlags = readFlags || strings.HasPrefix(f.Name, "read-")
 		freshFlag = freshFlag || f.Name == "fresh-inserts"
 	})
+	if *mode == "paced-window" {
+		if freshFlag || flags.NArg() != 0 {
+			return errors.New("paced-window refuses legacy mutation flags and positional arguments")
+		}
+		return runPacedWindow(parent, pacedOptions{Window: windowOptions{Admission: recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout},
+			Concurrency: *readConcurrency, Warmup: *readWarmup, Duration: *readWindow, MaxAttempts: *readMaxAttempts, OutputBytes: *readOutputBytes, ResourceGateDir: *readResourceGateDir}, Inserts: *pacedInserts, Interval: *pacedInterval}, output)
+	}
+	if pacedFlags {
+		return errors.New("paced flags require -mode paced-window")
+	}
 	if *mode == "read-window" {
 		if freshFlag || flags.NArg() != 0 {
 			return errors.New("read-window refuses mutation flags and positional arguments")
