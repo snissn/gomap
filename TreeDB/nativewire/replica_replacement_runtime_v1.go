@@ -86,6 +86,10 @@ func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, transpor
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateReplacementBeginV1(command raftplacement.ReplicaReplacementBeginV1) (FixedPeerTCPGroupV1, error) {
+	// Initialization binds an immutable roster, including before serving activation.
+	if r.config.VectorInitialization != nil {
+		return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
+	}
 	if r.config.Vector != nil {
 		if err := r.validateImmutableOwnerPreparationV1(command); err != nil {
 			return FixedPeerTCPGroupV1{}, err
@@ -131,6 +135,10 @@ func (r *FixedPeerTCPRuntimeV1) replacementAuthorityV1(ctx context.Context, comm
 	return err
 }
 func (r *FixedPeerTCPRuntimeV1) replacementStateAuthorityV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1) (raftplacement.ReplicaReplacementStateV1, error) {
+	// Direct preparation and reconciliation also require an unchanged init roster.
+	if r.config.VectorInitialization != nil {
+		return raftplacement.ReplicaReplacementStateV1{}, raftcluster.ErrUnsupportedFeature
+	}
 	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
 	if err != nil {
 		return raftplacement.ReplicaReplacementStateV1{}, err
