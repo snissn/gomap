@@ -79,9 +79,11 @@ type FixedPeerTCPConfigV1 struct {
 	Groups                            []FixedPeerTCPGroupV1
 	RequestTimeout, RaftTimeout       time.Duration
 	Vector                            *FixedPeerTCPVectorConfigV1
+	VectorInitialization              *FixedPeerTCPVectorInitializationV1 `json:",omitempty"`
 }
 
 type FixedPeerTCPStatusV1 struct {
+	VectorPhase                          string                   `json:",omitempty"`
 	Resources                            *PeerNodeResourceStatsV1 `json:",omitempty"`
 	ClusterID, CatalogRole               string
 	NodeID                               raftcluster.NodeID
@@ -193,6 +195,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	}
 	c.RaftListen = maps.Clone(c.RaftListen)
 	c.Vector = cloneFixedPeerVectorConfigV1(c.Vector)
+	c.VectorInitialization = cloneFixedPeerVectorInitializationV1(c.VectorInitialization)
 	c.Catalog = cloneFixedPeerGroupV1(c.Catalog)
 	c.Groups = slices.Clone(c.Groups)
 	for i := range c.Groups {
@@ -270,7 +273,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		if e != nil {
 			return c, "", e
 		}
-		if raftcluster.FeatureSetRequiresV1(resolved.Features, raftcluster.FeatureVectorPartitionLifecycle) && (i != 0 || c.Vector == nil) {
+		if raftcluster.FeatureSetRequiresV1(resolved.Features, raftcluster.FeatureVectorPartitionLifecycle) && (i != 0 || c.Vector == nil && c.VectorInitialization == nil) {
 			return invalid("vector lifecycle is only supported by the configured catalog runtime")
 		}
 		g.Peers, g.Features = resolved.Peers, resolved.Features
@@ -297,7 +300,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	if hostedDataGroups > fixedPeerMaxHostedDataGroupsV1 {
 		return invalid("too many locally hosted data groups")
 	}
-	if raftcluster.FeatureSetRequiresV1(c.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) != (c.Vector != nil) {
+	if raftcluster.FeatureSetRequiresV1(c.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) != (c.Vector != nil || c.VectorInitialization != nil) {
 		return invalid("vector runtime and catalog lifecycle feature must be enabled together")
 	}
 	if len(localGroups) != len(c.RaftListen) {
@@ -310,6 +313,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		}
 	}
 	if err := validateFixedPeerVectorConfigV1(c, localGroups); err != nil {
+		return invalid(err.Error())
+	}
+	if err := validateFixedPeerVectorInitializationV1(&c, addressOK); err != nil {
 		return invalid(err.Error())
 	}
 	if c.Vector != nil {
@@ -752,6 +758,9 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 
 func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV1, error) {
 	s := FixedPeerTCPStatusV1{NodeID: r.config.NodeID, ClusterID: r.config.ClusterID, ConfigDigest: r.client.digest, CatalogRole: "consumer", RecoveryState: "new", Address: r.client.addresses[r.config.NodeID]}
+	if r.config.VectorInitialization != nil {
+		s.VectorPhase = FixedPeerVectorPhaseInitializingV1
+	}
 	if r.client.peerTransport != nil {
 		resources := r.client.peerTransport.ResourceStatsV1()
 		s.Resources = &resources
@@ -1136,6 +1145,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err != nil {
 			return
 		}
+		if r.config.VectorInitialization != nil && command.Record.Epoch != r.config.VectorInitialization.CatalogEpoch {
+			err = raftplacement.ErrCatalogMetaStaleEpoch
+			return
+		}
 		if err = r.validateCatalog(command.Record.Catalog); err != nil {
 			return
 		}
@@ -1218,7 +1231,21 @@ func validateFixedPeerCatalogV1(config FixedPeerTCPConfigV1, c raftplacement.Cat
 }
 
 func validateFixedPeerCatalogWithAuthorityV1(config FixedPeerTCPConfigV1, c raftplacement.CatalogV1, authority *raftplacement.CatalogMetaAuthorityV1) error {
-	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) != (config.Vector != nil) {
+	if config.VectorInitialization != nil {
+		expected, err := raftplacement.NewCatalogMetaRecordV1(config.VectorInitialization.CatalogEpoch, fixedPeerVectorInitializationCatalogV1(config))
+		if err != nil {
+			return err
+		}
+		candidate, err := raftplacement.NewCatalogMetaRecordV1(config.VectorInitialization.CatalogEpoch, c)
+		if err != nil {
+			return err
+		}
+		if candidate.Digest != expected.Digest {
+			return fmt.Errorf("%w: initialization catalog differs from fixed intent", raftcluster.ErrInvalidConfig)
+		}
+	}
+
+	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) != (config.Vector != nil || config.VectorInitialization != nil) {
 		return raftcluster.ErrUnsupportedFeature
 	}
 	for _, g := range c.Groups {

@@ -3435,3 +3435,27 @@ changed physical identities and missing/rebound parent namespaces. It refuses
 unsupported LSN/RID manifest frontiers. The actual-cut enumerator derives each
 sealed generation's closure from its checksummed V1 manifest, while preserving
 newest-complete-root, command-frame replay, ACK and RO/RW key-state checks.
+
+
+### Fixed-peer vector initialization prerequisite (#4250)
+
+`TestFixedPeerVectorInitializationJSONIdentityV1` is the retained semantic red
+contract: on ef22 it compiles and fails because JSON discards the intent.
+`TestFixedPeerVectorInitializationCloneDigestAndValidationV1` checks canonical
+identity, caller-owned map isolation, malformed/coexisting mode refusal, and
+canonical membership. `TestFixedPeerVectorInitializationRootIdentityV1` checks
+paired-root binding, unchanged reopen, mutation/removal/retrofit refusal, and
+unmarked nonempty root refusal. `TestFixedPeerVectorInitializationSixNodeLayoutV1`
+checks refusal of unsupported two-group initialization while retaining ordinary
+six-node config validation. `TestFixedPeerVectorInitializationRefusesReplicaReplacementV1`
+checks the shared BEGIN and authority guards, including direct preparation,
+removal, completion, and reconciliation before replacement publication.
+`TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1` starts a tiny
+fresh authenticated RF3 cluster, commits a real catalog and indexed collection
+create plus a fresh document insert, observes the document and actual applied
+progress on all three replicas, and reopens matching roots. It also checks
+initializing status, non-readiness, bound reserved listeners that refuse traffic, and refused
+vector operations before and after reopen. This is not cluster qualification
+or proof of serving activation. Existing nil-intent runtime/security/readiness
+regressions and `BenchmarkSparseCatalogConfigV1/Nodes4Groups2` cover the ordinary
+configuration path; startup overhead should be compared at the exact base/head.

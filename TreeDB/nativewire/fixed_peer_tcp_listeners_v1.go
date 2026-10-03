@@ -21,6 +21,13 @@ func fixedPeerTCPListenAddressesV1(config FixedPeerTCPConfigV1) []string {
 				addresses = append(addresses, peers[config.NodeID])
 			}
 		}
+	} else if config.Vector == nil && config.VectorInitialization != nil {
+		addresses = append(addresses, config.VectorInitialization.PublicAddresses[config.NodeID])
+		for group, peers := range config.VectorInitialization.ShardAddresses {
+			if _, hosted := config.RaftListen[group]; hosted && peers[config.NodeID] != "" {
+				addresses = append(addresses, peers[config.NodeID])
+			}
+		}
 	}
 	slices.Sort(addresses)
 	return slices.Compact(addresses)
@@ -60,7 +67,7 @@ func bindFixedPeerTCPListenersV1(config FixedPeerTCPConfigV1, supplied map[strin
 	return owned, nil
 }
 
-// Cold shard roles must refuse traffic promptly while retaining the socket.
+// Cold vector roles must refuse traffic promptly while retaining the socket.
 // Otherwise their TCP backlog hides backend activation errors until timeout.
 func reserveFixedPeerDormantListenersV1(config FixedPeerTCPConfigV1, owned map[string]net.Listener) {
 	if config.Vector != nil {
@@ -68,6 +75,19 @@ func reserveFixedPeerDormantListenersV1(config FixedPeerTCPConfigV1, owned map[s
 			address := peers[config.NodeID]
 			if listener := owned[address]; listener != nil {
 				owned[address] = reserveFixedPeerTCPListenerV1(listener)
+			}
+		}
+	} else if config.VectorInitialization != nil {
+		address := config.VectorInitialization.PublicAddresses[config.NodeID]
+		if listener := owned[address]; listener != nil {
+			owned[address] = reserveFixedPeerTCPListenerV1(listener)
+		}
+		for group, peers := range config.VectorInitialization.ShardAddresses {
+			if _, hosted := config.RaftListen[group]; !hosted {
+				continue
+			}
+			if listener := owned[peers[config.NodeID]]; listener != nil {
+				owned[peers[config.NodeID]] = reserveFixedPeerTCPListenerV1(listener)
 			}
 		}
 	}

@@ -118,6 +118,11 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 			return invalid("local listener map exceeds identity or byte budget")
 		}
 	}
+	if c.VectorInitialization != nil {
+		if len(c.VectorInitialization.IndexDefinition.QuantizedIndexes) != 0 || !preflightFixedPeerVectorInventoryV1(reflect.ValueOf(c.VectorInitialization), &budget) {
+			return invalid("initialization inventory exceeds supported definition or byte budget")
+		}
+	}
 	if c.Vector != nil {
 		if !preflightFixedPeerVectorInventoryV1(reflect.ValueOf(c.Vector), &budget) {
 			return invalid("vector inventory exceeds byte budget")
