@@ -54,6 +54,23 @@ func TestTypedUpsertGroupSharesDurablePrefixAndRootPublication(t *testing.T) {
 	}
 	defer typedUpsertGroupAfterInstallTestHook.CompareAndSwap(&installHook, nil)
 
+	// Unrelated mutation contention must not force fresh insert requests out
+	// of the shared route. Both callers must queue without retaining leases.
+	mutation := first.lockMutation()
+	mutationHeld := true
+	firstReleased, ackReleased := false, false
+	defer func() {
+		if mutationHeld {
+			mutation.Unlock()
+		}
+		if !firstReleased {
+			close(releaseFirst)
+		}
+		if !ackReleased {
+			close(releaseAck)
+		}
+	}()
+
 	type result struct {
 		updated int
 		handled bool
@@ -77,6 +94,8 @@ func TestTypedUpsertGroupSharesDurablePrefixAndRootPublication(t *testing.T) {
 	go write(first, "group-a", "u1")
 	select {
 	case <-firstQueued:
+	case got := <-done:
+		t.Fatalf("fresh typed insert declined or completed before queueing under unrelated mutation contention: %+v", got)
 	case <-time.After(10 * time.Second):
 		t.Fatal("first typed request did not enter group formation")
 	}
@@ -91,12 +110,33 @@ func TestTypedUpsertGroupSharesDurablePrefixAndRootPublication(t *testing.T) {
 		if joined {
 			break
 		}
+		select {
+		case got := <-done:
+			t.Fatalf("fresh typed participant declined or completed before joining under unrelated mutation contention: %+v", got)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("second typed request did not join the group")
 		}
 		time.Sleep(time.Millisecond)
 	}
+	schemaCoord := first.collectionSchemaCoordinator()
+	if !schemaCoord.schemaMu.TryLock() {
+		t.Fatal("queued typed requests retained schema admission")
+	}
+	schemaCoord.schemaMu.Unlock()
+	if !schemaCoord.adHocVectorAdmissionMu.TryLock() {
+		t.Fatal("queued typed requests retained ad-hoc vector admission")
+	}
+	schemaCoord.adHocVectorAdmissionMu.Unlock()
+	if !schemaCoord.nativeVectorAdmissionMu.TryLock() {
+		t.Fatal("queued typed requests retained native vector admission")
+	}
+	schemaCoord.nativeVectorAdmissionMu.Unlock()
+	mutation.Unlock()
+	mutationHeld = false
 	close(releaseFirst)
+	firstReleased = true
 
 	select {
 	case <-afterInstall:
@@ -115,6 +155,7 @@ func TestTypedUpsertGroupSharesDurablePrefixAndRootPublication(t *testing.T) {
 		}
 	}
 	close(releaseAck)
+	ackReleased = true
 	sharedPublications := 0
 	for range 2 {
 		select {

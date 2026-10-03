@@ -49,8 +49,9 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	if hook := typedSourceBeforeAdmissionTestHook.Load(); hook != nil {
 		(*hook)(c)
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return 0, err
 	}
@@ -82,6 +83,6 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	if len(deleteIDs) == 0 && len(insertIDs) == 0 {
 		return 0, nil
 	}
-	deleted, err := c.replaceSourceDocumentsAtomicModeSchemaLocked(nil, deleteIDs, insertIDs, retained, nil, nil, projection, upsert, insertStats)
+	deleted, err := c.replaceSourceDocumentsAtomicModeSchemaLocked(nil, deleteIDs, insertIDs, retained, nil, nil, projection, upsert, insertStats, admission)
 	return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }

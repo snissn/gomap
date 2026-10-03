@@ -3932,15 +3932,21 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if db == nil {
 		return ErrClosed
 	}
-	// Storage maintenance takes maintenanceMu before teardownMu. Preserve that
-	// order so leaf-generation GC cannot deadlock this cleanup path.
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
-	if err != nil || !pending {
-		return err
+	for {
+		db.maintenanceMu.Lock()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		if err == nil && pending {
+			err = db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
+		}
+		db.maintenanceMu.Unlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
 	}
-	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 }
 
 // PrepareCommandWALCoveredPrefixCleanup closes the recovery-covered physical
@@ -3951,9 +3957,18 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	if db == nil {
 		return false, ErrClosed
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	return db.prepareCommandWALCoveredPrefixCleanupLocked()
+	for {
+		db.maintenanceMu.Lock()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		db.maintenanceMu.Unlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return pending, err
+		}
+		if err := drain.Drain(); err != nil {
+			return false, err
+		}
+	}
 }
 
 func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
@@ -4011,9 +4026,18 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
-	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+	for {
+		db.teardownMu.RLock()
+		err := db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+		db.teardownMu.RUnlock()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
+	}
 }
 
 // checkpointTeardownPinned runs while the caller holds teardownMu.RLock.

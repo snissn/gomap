@@ -26,43 +26,61 @@ func (h *Harness) applySplitVectorInsertV1(entry raftentry.CommandEntryV1, meta 
 	case "project":
 		v.TargetTerm, v.TargetIndex = meta.EntryID.Term, meta.EntryID.Index
 	}
-	payload, err := commitlog.EncodeSplitVectorInsertPayloadV1(v)
+	var applyResult raftentry.ApplyResultV1
+	err = collection.WithPreparedCommandWALSplitMutationV1(context.Background(), v, func(owner *collections.CommandWALAdmittedCollection) error {
+		var applyErr error
+		applyResult, applyErr = func() (raftentry.ApplyResultV1, error) {
+			payload, err := commitlog.EncodeSplitVectorInsertPayloadV1(v)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: split WAL payload: %v", err)
+			}
+			frame := commandwalapply.LoweredFrame{Class: commandwalapply.LoweredFrameClassCollectionSplitVectorInsertV1, Kind: commitlog.CommandKindCollectionSplitVectorInsertV1, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionSplitVectorInsertV1, Payload: payload}
+			appendOptions, err := owner.CommandWALAppendOptions(meta.SyncLocalCommandWAL)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, appendOptions)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			finalized := false
+			defer func() {
+				if !finalized {
+					h.walApply.Abort(h.db, handle)
+				}
+			}()
+			if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
+				return commandWALPostAppendRecoveryRequired(entry, err)
+			}
+			intent := handle.CommandWALIntent()
+			if intent == nil || handle.LSN() == 0 {
+				return commandWALPostAppendRecoveryRequired(entry, errors.New("split WAL intent unavailable"))
+			}
+			switch v.Operation {
+			case "source":
+				err = owner.InsertVectorPartitionSplitSourceWithCommandWALIntentV1(context.Background(), v, intent)
+			case "project":
+				_, err = owner.ProjectVectorPartitionSplitInsertWithCommandWALIntentV1(context.Background(), v, v.TargetTerm, v.TargetIndex, intent)
+			case "clear":
+				err = owner.CompleteVectorPartitionSplitInsertWithCommandWALIntentV1(context.Background(), v, intent)
+			}
+			if err != nil {
+				return h.collectionMutationApplyError(entry, handle, err)
+			}
+			if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
+				return commandWALFinalizeRecoveryRequired(entry, err)
+			}
+			finalized = true
+			return raftentry.ApplyResultV1{}, nil
+		}()
+		return applyErr
+	})
 	if err != nil {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: split WAL payload: %v", err)
-	}
-	frame := commandwalapply.LoweredFrame{Class: commandwalapply.LoweredFrameClassCollectionSplitVectorInsertV1, Kind: commitlog.CommandKindCollectionSplitVectorInsertV1, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionSplitVectorInsertV1, Payload: payload}
-	handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
-	if err != nil {
-		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
-	}
-	finalized := false
-	defer func() {
-		if !finalized {
-			h.walApply.Abort(h.db, handle)
+		if _, coded := ErrorCodeOf(err); !coded {
+			err = codeCollectionApplyError(err)
 		}
-	}()
-	if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
-		return commandWALPostAppendRecoveryRequired(entry, err)
+		return applyResult, err
 	}
-	intent := handle.CommandWALIntent()
-	if intent == nil || handle.LSN() == 0 {
-		return commandWALPostAppendRecoveryRequired(entry, errors.New("split WAL intent unavailable"))
-	}
-	switch v.Operation {
-	case "source":
-		err = collection.InsertVectorPartitionSplitSourceWithCommandWALIntentV1(context.Background(), v, intent)
-	case "project":
-		_, err = collection.ProjectVectorPartitionSplitInsertWithCommandWALIntentV1(context.Background(), v, v.TargetTerm, v.TargetIndex, intent)
-	case "clear":
-		err = collection.CompleteVectorPartitionSplitInsertWithCommandWALIntentV1(context.Background(), v, intent)
-	}
-	if err != nil {
-		return h.collectionMutationApplyError(entry, handle, err)
-	}
-	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
-		return commandWALFinalizeRecoveryRequired(entry, err)
-	}
-	finalized = true
 	logical, err := h.logicalDigestV1(LogicalDigestOptionsV1{ScopeRule: meta.ScopeRule, DatabaseScope: meta.DatabaseScope, CatalogScope: meta.CatalogScope})
 	if err != nil {
 		code, _ := ErrorCodeOf(err)

@@ -513,7 +513,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 		// may only cut over when it is newer and its base source is the exact
 		// current collection source. Existing pins own immutable delta views,
 		// so replacing the registered pointer does not invalidate them.
-		if manifest.Generation <= live.generation || !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage {
+		if manifest.Generation <= live.generation || (!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || idx.sourceDocumentGeneration != coverage {
 			return ErrVectorIndexPartitionLiveMismatchV1
 		}
 		if live.ownerEpoch == ^uint64(0) {
@@ -522,7 +522,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 		ownerEpoch = live.ownerEpoch + 1
 		domainEpochHighWater = live.domainEpochHighWater
 	}
-	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage) {
+	if idx.collection != nil && ((!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || idx.sourceDocumentGeneration != coverage) {
 		return fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, coverage, idx.sourceDocumentGeneration)
 	}
 	if !idx.vectorPartitionLiveBindingBytesFitV1(packDomains, clonedReps) {
@@ -1194,7 +1194,7 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 	}
 	// Once collection reconciliation advances the current source state, only a
 	// matching durable overlay coverage is authority for the old immutable base.
-	if idx.collection != nil && (!idx.sourceDocumentRootsValid || live.coverage != idx.sourceDocumentGeneration) {
+	if idx.collection != nil && ((!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || live.coverage != idx.sourceDocumentGeneration) {
 		idx.mu.RUnlock()
 		return nil, fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, live.coverage, idx.sourceDocumentGeneration)
 	}
@@ -1325,7 +1325,7 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 		return "invalid replay clone"
 	}
 	before.mu.RLock()
-	if before.mutationSeq != beforeSeq || before.partitionLive == nil || before.partitionLive.invalid {
+	if before.mutationSeq != beforeSeq || before.partitionLive == nil || before.partitionLive.invalid || len(before.unnotifiedDocumentIDs) != 0 {
 		before.mu.RUnlock()
 		return "carrier changed"
 	}
@@ -1594,7 +1594,7 @@ func (idx *VectorIndex) vectorPartitionLiveBindingCurrentV1(manifest VectorParti
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	live := idx.partitionLive
-	return idx.sourceDocumentRootsValid && live != nil && !live.invalid && live.bindingDurable &&
+	return idx.sourceDocumentRootsValid && len(idx.unnotifiedDocumentIDs) == 0 && live != nil && !live.invalid && live.bindingDurable &&
 		live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == vectorPartitionLiveSourceV1(manifest) &&
 		live.generation == manifest.Generation && live.coverage == idx.sourceDocumentGeneration &&
 		vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest)
@@ -1640,7 +1640,7 @@ func (c *Collection) validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(ind
 	idx.mu.RLock()
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable || live.generation != generation ||
-		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
+		(!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
 		idx.sourceDocumentState.CommitSeq != commitSeq || idx.sourceDocumentState.SystemRootPageID != systemRoot {
 		idx.mu.RUnlock()
 		return ErrVectorIndexPartitionLiveMismatchV1
@@ -1666,7 +1666,7 @@ func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartiti
 	if live == nil || live.invalid || !live.bindingDurable || live.indexDefinitionDigest != manifest.IndexDefinitionDigest ||
 		live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation ||
 		!vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) ||
-		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration {
+		(!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration {
 		return vectorPartitionLiveSearchPinKeyV1{}, false
 	}
 	return vectorPartitionLiveSearchPinKeyV1{
@@ -1863,7 +1863,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			idx.recordSourceDocumentState(currentGeneration, currentState)
 		} else {
 			idx.mu.RLock()
-			coverageCurrent := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == currentGeneration
+			coverageCurrent := idx.sourceDocumentRootsValid && len(idx.unnotifiedDocumentIDs) == 0 && idx.sourceDocumentGeneration == currentGeneration
 			idx.mu.RUnlock()
 			if !coverageCurrent {
 				return nil, false, ErrVectorIndexPartitionLiveMismatchV1
@@ -1960,7 +1960,7 @@ func (c *Collection) validateAndRecordVectorPartitionLiveAuthorityStateV1(manife
 	if live == nil || live.invalid || !live.bindingDurable ||
 		live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) ||
 		live.generation != manifest.Generation || live.coverage != currentGeneration ||
-		!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != currentGeneration {
+		(!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || idx.sourceDocumentGeneration != currentGeneration {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}
 	// Coverage was validated before this process-local authority cache update;
@@ -1982,7 +1982,7 @@ func (c *Collection) validateVectorPartitionLiveAuthorityStateV1(index string, g
 	defer idx.mu.RUnlock()
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable || live.generation != generation ||
-		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
+		(!idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0) || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
 		idx.sourceDocumentState != state {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}

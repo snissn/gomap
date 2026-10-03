@@ -151,8 +151,9 @@ func (c *Collection) importVectorPartitionSourceChunkV2(ownership sourcepartitio
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return zero, err
 	}
@@ -194,7 +195,7 @@ func (c *Collection) importVectorPartitionSourceChunkV2(ownership sourcepartitio
 		orderedIDs[i] = bytes.Clone(id)
 	}
 	metadata := sourceImportCommandMetadataV2{Version: 2, OrderedIDs: orderedIDs, Binding: sourceImportBindingV2{Snapshot: input.Snapshot, IndexName: input.IndexName, VectorColumn: input.VectorColumn, GroupID: input.GroupID, Start: owner.Start, End: owner.End}, ChunkIndex: input.ChunkIndex, DocumentRevisions: slices.Clone(input.DocumentRevisions), LegacyOrigins: input.LegacyOrigins}
-	return c.importSourceChunkSchemaLockedV2(metadata, ids, retained, projection, nil, nil, stats)
+	return c.importSourceChunkSchemaLockedWithAdmissionV2(metadata, ids, retained, projection, nil, nil, stats, admission)
 }
 
 func sourceImportChunkFromProjectionV2(meta CollectionMeta, command sourceImportCommandMetadataV2, ids [][]byte, projection *trustedFloat32Projection) (vectorpartition.SourceChunkV2, error) {
@@ -313,6 +314,15 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 	if len(diagnostics) != 0 {
 		stats = diagnostics[0]
 	}
+	return c.importSourceChunkSchemaLockedWithAdmissionV2(command, ids, retained, projection, replay, hooks, stats, nil)
+}
+
+func (c *Collection) importSourceChunkSchemaLockedWithAdmissionV2(command sourceImportCommandMetadataV2, ids, retained [][]byte, projection *trustedFloat32Projection, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, stats *VectorPartitionSourceImportStatsV2, admission *collectionCommandWALAdmission) (VectorPartitionSourceImportProgressV2, error) {
+	if admission == nil {
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
+		defer admission.unlock()
+	}
 
 	var zero VectorPartitionSourceImportProgressV2
 	if cfg := c.Meta().Options.ColumnStore; cfg != nil && cfg.ActiveManifest != nil && cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
@@ -351,7 +361,14 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 	receipt := sourceImportReceiptV2(payload)
 	progressKey, receiptKey := sourceImportKeysV2(c.Meta().Name, command.Binding, command.ChunkIndex)
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&unlockMutation, &mutationLocked)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return zero, err
 	}
@@ -443,7 +460,7 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 		}
 		plan, err := c.buildSourceReplacementPlanWithSourceImportV2(nil, ids, retained, nil, replay, hooks, projection, false, true)
 		if err != nil {
-			if isRetriableCollectionMutationError(err) {
+			if (replay == nil || replay.AssignedLSN() == 0) && isRetriableCollectionMutationError(err) {
 				lastErr = err
 				waitBeforeCollectionMutationRetry(attempt)
 				continue
@@ -460,9 +477,10 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			plan.close()
 			return zero, err
 		}
-		publishErr := c.publishSourceReplacementPlan(plan, hooks, nil)
+		publishErr := c.publishSourceReplacementPlan(plan, hooks, nil, admission)
+		assigned := plan.commandWAL != nil && plan.commandWAL.AssignedLSN() != 0
 		plan.close()
-		if isRetriableCollectionMutationError(publishErr) {
+		if !assigned && isRetriableCollectionMutationError(publishErr) {
 			lastErr = publishErr
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
@@ -608,9 +626,10 @@ func replayCollectionSourceImportV2(db *backenddb.DB, env commitlog.CommandEnvel
 	}
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockCoverage := collection.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	_, err = collection.importSourceChunkSchemaLockedV2(command, ids, retained, projection, intent, nil)
+	admissionState := collection.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
+	_, err = collection.importSourceChunkSchemaLockedWithAdmissionV2(command, ids, retained, projection, intent, nil, nil, admission)
 	return err
 }
 

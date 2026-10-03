@@ -17,7 +17,6 @@ var typedUpsertGroupAfterInstallTestHook atomic.Pointer[func()]
 
 type typedUpsertGroup struct {
 	domain    *collectionWriteDomain
-	mutation  collectionMutationUnlock
 	requests  []*typedUpsertGroupRequest
 	ids       map[string]struct{}
 	documents int
@@ -59,12 +58,13 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 		return 0, false, stats, nil
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
+	defer func() { unlockSchema() }()
 	if hook := typedSourceBeforeAdmissionTestHook.Load(); hook != nil {
 		(*hook)(c)
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return 0, true, stats, err
 	}
@@ -118,47 +118,32 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 	if coord == nil {
 		return 0, false, stats, nil
 	}
+	// GetInto supports concurrent reads, so pre-queue eligibility need not
+	// borrow mutation ownership or decline merely because a writer is active.
+	// Execution repeats the insert-only check under its actual mutation owner.
+	absent, err := typedUpsertGroupIDsAbsent(c, ownedIDs)
+	if err != nil {
+		return 0, true, stats, err
+	}
+	if !absent {
+		return 0, false, stats, nil
+	}
+	admission.unlock()
+	unlockSchema()
+	unlockSchema = func() {}
 	coord.mu.Lock()
 	group := coord.typedUpsertGroup
 	if group == nil {
-		mutation, locked := c.tryLockMutation()
-		if !locked {
-			coord.mu.Unlock()
-			return 0, false, stats, nil
-		}
-		absent, err := typedUpsertGroupIDsAbsent(c, ownedIDs)
-		if err != nil {
-			mutation.Unlock()
-			coord.mu.Unlock()
-			return 0, true, stats, err
-		}
-		if !absent {
-			mutation.Unlock()
-			coord.mu.Unlock()
-			return 0, false, stats, nil
-		}
-		group = &typedUpsertGroup{domain: c.writeDomain, mutation: mutation, ids: make(map[string]struct{}, len(ids)), maxDocs: maxDocs, maxBytes: maxBytes}
+		group = &typedUpsertGroup{domain: c.writeDomain, ids: make(map[string]struct{}, len(ids)), maxDocs: maxDocs, maxBytes: maxBytes}
 		if !group.add(request) {
-			mutation.Unlock()
 			coord.mu.Unlock()
 			return 0, false, stats, nil
 		}
 		request.leader = true
 		coord.typedUpsertGroup = group
-	} else {
-		if group.domain != c.writeDomain || !group.canAdd(request) {
-			coord.mu.Unlock()
-			return 0, false, stats, nil
-		}
-		absent, err := typedUpsertGroupIDsAbsent(c, ownedIDs)
-		if err != nil {
-			coord.mu.Unlock()
-			return 0, true, stats, err
-		}
-		if !absent || !group.add(request) {
-			coord.mu.Unlock()
-			return 0, false, stats, nil
-		}
+	} else if group.domain != c.writeDomain || !group.add(request) {
+		coord.mu.Unlock()
+		return 0, false, stats, nil
 	}
 	coord.mu.Unlock()
 
@@ -181,7 +166,6 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 			cond.Broadcast()
 		}
 		coord.mu.Unlock()
-		group.mutation.Unlock()
 		for i, queued := range requests {
 			queued.done <- results[i]
 		}
@@ -224,6 +208,43 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 		return nil
 	}
 	c := requests[0].collection
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	admissionState := c.lockCollectionCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return typedUpsertGroupErrorResults(requests, err)
+	}
+	if err := c.requireTypedBatchVectorAdmission(); err != nil {
+		return typedUpsertGroupErrorResults(requests, err)
+	}
+	if !c.commandWALActive(nil) || c.db.ResolvedProfile() != backenddb.ProfileCommandWALDurable || collectionMetaHasSecondaryUniqueIndex(c.Meta()) {
+		return make([]typedUpsertGroupResult, len(requests))
+	}
+	if err := c.requireColumnStoreCommandWAL(c.Meta(), nil); err != nil {
+		return typedUpsertGroupErrorResults(requests, err)
+	}
+	meta := c.Meta()
+	maxDocs, maxBytes := typedUpsertGroupLimits(meta)
+	if group.documents > maxDocs || group.bytes > maxBytes {
+		return make([]typedUpsertGroupResult, len(requests))
+	}
+	for _, request := range requests {
+		if err := validateTypedProjectionMeta(meta, request.projection); err != nil {
+			return typedUpsertGroupErrorResults(requests, err)
+		}
+	}
+
+	mutation := c.lockMutation()
+	held := true
+	defer func() {
+		if held {
+			mutation.Unlock()
+		}
+	}()
+	previousAdmissionMutation, previousAdmissionHeld := admission.bindMutation(&mutation, &held)
+	defer admission.restoreMutation(previousAdmissionMutation, previousAdmissionHeld)
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return typedUpsertGroupErrorResults(requests, err)
 	}
@@ -246,7 +267,7 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 		}
 		if plan.deleteCount != 0 || plan.unchangedCount != 0 {
 			plan.close()
-			return typedUpsertGroupErrorResults(requests, errors.New("collections: typed insert-only eligibility changed after admission"))
+			return make([]typedUpsertGroupResult, len(requests))
 		}
 		publishIntent := requests[0].intent
 		if len(intents) > 1 {
@@ -264,7 +285,7 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 			return nil
 		}}
 		publishStarted := time.Now()
-		publishErr := c.publishSourceReplacementPlan(plan, hooks, &stats)
+		publishErr := c.publishSourceReplacementPlan(plan, hooks, &stats, admission)
 		stats.Publish += time.Since(publishStarted)
 		plan.close()
 		if publishIntent.AssignedLSN() == 0 && isRetriableCollectionMutationError(publishErr) {
@@ -276,10 +297,16 @@ func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []ty
 		if !published {
 			return typedUpsertGroupErrorResults(requests, publishErr)
 		}
-		notifyErr := c.reconcileVectorIndexes(ids)
-		if notifyErr != nil {
-			c.invalidateRegisteredVectorIndexDocumentCoverage()
-			notifyErr = commitAmbiguousError("typed upsert group vector maintenance", notifyErr)
+		var notifyErr error
+		byCollection := make(map[*Collection][][]byte)
+		for _, request := range requests {
+			byCollection[request.collection] = append(byCollection[request.collection], request.ids...)
+		}
+		for collection, changedIDs := range byCollection {
+			if err := collection.reconcileVectorIndexes(changedIDs); err != nil {
+				collection.invalidateRegisteredVectorIndexDocumentCoverage()
+				notifyErr = errors.Join(notifyErr, commitAmbiguousError("typed upsert group vector maintenance", err))
+			}
 		}
 		finalErr := c.invalidateVectorIndexCoverageOnAcceptedMutation(errors.Join(publishErr, notifyErr))
 		results := make([]typedUpsertGroupResult, len(requests))

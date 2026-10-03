@@ -555,9 +555,11 @@ func TestCollectionVectorIndexNativeSearchDoesNotWaitForCatalogDuringMutation(t 
 		t.Fatalf("prime reader: %v", err)
 	}
 
-	unlockCoverage := writer.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	if _, err := writer.insertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil); err != nil {
+	unlockSchema := writer.lockCollectionSchemaRead()
+	defer unlockSchema()
+	admission := writer.lockCollectionCommandWALAdmission()
+	defer admission.unlock()
+	if _, err := writer.insertBatchSchemaLocked([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil, &admission); err != nil {
 		t.Fatalf("commit document before native reconciliation: %v", err)
 	}
 	writer.writeDomain.mu.Lock()
@@ -1963,14 +1965,17 @@ func TestNativeVectorCoverageAcknowledgesEachMutation(t *testing.T) {
 		t.Fatalf("generation before overlap: %v", err)
 	}
 
-	unlockFirst := c.lockVectorIndexCoverageMutation()
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	firstAdmission := c.lockCollectionCommandWALAdmission()
+	unlockFirst := firstAdmission.unlock
 	firstLocked := true
 	defer func() {
 		if firstLocked {
 			unlockFirst()
 		}
 	}()
-	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	firstIDs, err := c.insertBatchSchemaLocked([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil, &firstAdmission)
 	if err != nil {
 		t.Fatalf("publish first mutation: %v", err)
 	}
@@ -1986,26 +1991,27 @@ func TestNativeVectorCoverageAcknowledgesEachMutation(t *testing.T) {
 	}
 
 	secondStarted := make(chan struct{})
-	secondAcquired := make(chan func(), 1)
+	secondAcquired := make(chan collectionCommandWALAdmission, 1)
 	go func() {
 		close(secondStarted)
-		secondAcquired <- c.lockVectorIndexCoverageMutation()
+		secondAcquired <- c.lockCollectionCommandWALAdmission()
 	}()
 	<-secondStarted
 	select {
-	case unlockSecond := <-secondAcquired:
-		unlockSecond()
+	case secondAdmission := <-secondAcquired:
+		secondAdmission.unlock()
 		t.Fatal("second mutation entered before the first was acknowledged")
 	case <-time.After(50 * time.Millisecond):
 	}
 	unlockFirst()
 	firstLocked = false
-	var unlockSecond func()
+	var secondAdmission collectionCommandWALAdmission
 	select {
-	case unlockSecond = <-secondAcquired:
+	case secondAdmission = <-secondAcquired:
 	case <-time.After(5 * time.Second):
 		t.Fatal("second mutation remained blocked after the first was acknowledged")
 	}
+	unlockSecond := secondAdmission.unlock
 	secondLocked := true
 	defer func() {
 		if secondLocked {
@@ -2021,7 +2027,7 @@ func TestNativeVectorCoverageAcknowledgesEachMutation(t *testing.T) {
 	}
 	requireVectorResultIDs(t, results, "overlap-first", "seed")
 
-	secondIDs, err := c.insertBatch([][]byte{[]byte("overlap-second")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}, false, nil)
+	secondIDs, err := c.insertBatchSchemaLocked([][]byte{[]byte("overlap-second")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}, false, nil, &secondAdmission)
 	if err != nil {
 		t.Fatalf("publish second mutation: %v", err)
 	}
@@ -2102,6 +2108,67 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 	}
 	if after := index.searchView.Load(); after != before {
 		t.Fatal("native delta persistence republished the unchanged graph")
+	}
+}
+
+func TestNativeVectorCoverageCurrentAdmissionDoesNotCertifyUnnotifiedMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("seed insert did not register native vector index")
+	}
+	before, err := col.currentVectorIndexDocumentGeneration()
+	if err != nil || !index.coversSourceDocumentGeneration(before) {
+		t.Fatalf("seed generation=%d err=%v lacks native coverage", before, err)
+	}
+
+	ids, err := col.insertBatch([][]byte{[]byte("unnotified")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("insert without graph maintenance: %v", err)
+	}
+	after, err := col.currentVectorIndexDocumentGeneration()
+	if err != nil || after == before {
+		t.Fatalf("unnotified generation before=%d after=%d err=%v", before, after, err)
+	}
+	index.mu.RLock()
+	retainedBaseline := index.sourceDocumentRootsValid && index.sourceDocumentGeneration == before
+	index.mu.RUnlock()
+	if !retainedBaseline || index.coversSourceDocumentGeneration(after) {
+		t.Fatalf("unnotified mutation lost its actual baseline or advanced coverage from %d to %d", before, after)
+	}
+	var buffer VectorIndexSearchBuffer
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || response.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("unnotified search response=%+v err=%v", response, err)
+	}
+	if err := col.notifyVectorIndexesUpsert(ids); err != nil {
+		t.Fatalf("reconcile unnotified mutation: %v", err)
+	}
+	if !index.coversSourceDocumentGeneration(after) {
+		t.Fatalf("completed reconciliation did not cover generation %d", after)
+	}
+	response, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatalf("search reconciled graph: %v", err)
+	}
+	if len(response.Results) != 2 || string(response.Results[0].ID) != "unnotified" || string(response.Results[1].ID) != "seed" {
+		t.Fatalf("reconciled search results=%+v want unnotified then seed", response.Results)
 	}
 }
 
@@ -2630,13 +2697,17 @@ func TestCollectionVectorIndexAcceptedRowMutationInvalidatesCoverage(t *testing.
 		t.Fatalf("save seed graph status=%+v err=%v", status, err)
 	}
 
-	unlockCoverage := col.lockVectorIndexCoverageMutation()
-	_, err = col.insertBatch([][]byte{[]byte("accepted")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
-	if err == nil {
-		err = acceptedVectorMutationErrorForTest{error: errors.New("injected post-acceptance failure")}
-	}
-	err = col.invalidateVectorIndexCoverageOnAcceptedMutation(err)
-	unlockCoverage()
+	func() {
+		unlockSchema := col.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admission := col.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
+		_, err = col.insertBatchSchemaLocked([][]byte{[]byte("accepted")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil, &admission)
+		if err == nil {
+			err = acceptedVectorMutationErrorForTest{error: errors.New("injected post-acceptance failure")}
+		}
+		err = col.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+	}()
 	if !backenddb.CommitPublicationAccepted(err) {
 		_ = d.Close()
 		t.Fatalf("mutation error=%v want accepted publication", err)
@@ -5949,4 +6020,128 @@ func vectorIndexSnapshotFilePath(tb testing.TB, manifestPath, fileName string) s
 		tb.Fatalf("decode manifest: %v", err)
 	}
 	return filepath.Join(filepath.Dir(manifestPath), manifest.EpochDir, fileName)
+}
+
+// Domain-only publishers must survive another collection's commit and preserve
+// the stored-document parser while repairing an intentionally unnotified row.
+func TestCollectionVectorIndexDomainPublicationBindsIdentityAndFormat(t *testing.T) {
+	for _, format := range []DocumentFormat{DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1} {
+		for _, publication := range []string{"flush_all", "async", "admission_held"} {
+			t.Run(fmt.Sprintf("%s/%s", format, publication), func(t *testing.T) {
+				d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = d.Close() }()
+				mgr := NewCollectionManager(d)
+				def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+				if _, err := mgr.CreateCollection(&CollectionMeta{
+					Name:          "docs",
+					Options:       CollectionOptions{DocumentFormat: format, BufferedIndexedWrites: true, BufferedIndexedWriteMaxDocuments: 1024, DisableBufferedIndexedAsyncFlush: true},
+					Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+					VectorIndexes: []VectorIndexDefinition{def},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				col, err := mgr.OpenCollection("docs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := mgr.CreateCollection(&CollectionMeta{Name: "sibling"}); err != nil {
+					t.Fatal(err)
+				}
+				sibling, err := mgr.OpenCollection("sibling")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+					t.Fatal(err)
+				}
+				document := func(x, y float64) []byte {
+					switch format {
+					case DocumentFormatBSON:
+						return mustBSONCollectionDocument(t, bson.D{{Key: "kind", Value: "vector"}, {Key: "embedding", Value: bson.A{x, y}}})
+					case DocumentFormatTemplateV1:
+						var encoder TemplateV1Encoder
+						doc, err := encoder.EncodeDocument([]string{"kind", "embedding"}, []any{"vector", []any{x, y}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return doc
+					default:
+						return []byte(fmt.Sprintf(`{"kind":"vector","embedding":[%g,%g]}`, x, y))
+					}
+				}
+				if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{document(1, 0)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := col.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				index := col.registeredVectorIndex(def.Name)
+				if index == nil {
+					t.Fatal("missing installed native runtime")
+				}
+				// Expire the domain's exact catalog cache with no work to publish.
+				if _, err := sibling.Insert([]byte("first"), []byte("{}")); err != nil {
+					t.Fatal(err)
+				}
+				if err := sibling.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				if err := mgr.FlushAll(); err != nil {
+					t.Fatalf("no-op domain drain after sibling commit: %v", err)
+				}
+				if _, err := col.insertBatch([][]byte{[]byte("raw")}, [][]byte{document(0, 1)}, false, nil); err != nil {
+					t.Fatal(err)
+				}
+				generation, err := col.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if index.coversSourceDocumentGeneration(generation) || mgr.StatsSnapshot().PendingDocuments == 0 {
+					t.Fatal("raw fixture must remain buffered and unavailable before exact repair")
+				}
+				var staleBuffer VectorIndexSearchBuffer
+				staleResponse, staleErr := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &staleBuffer)
+				if !errors.Is(staleErr, ErrVectorIndexSearchUnavailable) || staleResponse.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+					t.Fatalf("unnotified native search response=%+v err=%v", staleResponse, staleErr)
+				}
+				if _, err := sibling.Insert([]byte("second"), []byte("{}")); err != nil {
+					t.Fatal(err)
+				}
+				if err := sibling.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				switch publication {
+				case "flush_all":
+					err = mgr.FlushAll()
+				case "async":
+					err = flushCollectionWriteDomainAsync(d, col.writeDomain)
+				case "admission_held":
+					release := col.lockNativeVectorAdmissionWrite()
+					err = col.flushCollectionWriteDomainsWithVectorAdmissionLocked()
+					release()
+				}
+				if err != nil {
+					t.Fatalf("domain publication: %v", err)
+				}
+				generation, err = col.currentVectorIndexDocumentGeneration()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if col.registeredVectorIndex(def.Name) != index || !index.coversSourceDocumentGeneration(generation) || mgr.StatsSnapshot().PendingDocuments != 0 {
+					t.Fatal("exact domain publication replaced the runtime or failed coverage/drain")
+				}
+				var buffer VectorIndexSearchBuffer
+				response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+				if err != nil || len(response.Results) != 2 || string(response.Results[0].ID) != "raw" || string(response.Results[1].ID) != "seed" || response.Stats.SearchRouteNativeRuntime != 1 {
+					t.Fatalf("repaired native search response=%+v err=%v", response, err)
+				}
+				if err := d.Close(); err != nil {
+					t.Fatalf("close after domain publication: %v", err)
+				}
+			})
+		}
+	}
 }

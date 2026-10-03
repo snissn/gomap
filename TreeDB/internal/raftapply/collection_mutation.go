@@ -45,84 +45,104 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
-	collection, err := h.preflightCollectionMutationV1(&mutation)
+	collection, err := h.replayCollectionManager().OpenCollection(mutation.collection)
 	if err != nil {
-		return raftentry.ApplyResultV1{}, err
+		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
 	}
-	frame, err := mutation.loweredFrame()
-	if err != nil {
-		return raftentry.ApplyResultV1{}, err
-	}
-	var handle commandwalapply.Handle
-	handleAppended := false
-	handleFinalized := false
-	defer func() {
-		if handleAppended && !handleFinalized {
-			h.walApply.Abort(h.db, handle)
-		}
-	}()
-	handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
-	if err != nil {
-		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
-	}
-	handleAppended = true
-	if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
-		return commandWALPostAppendRecoveryRequired(entry, err)
-	}
-	intent := handle.CommandWALIntent()
-	if intent == nil || handle.LSN() == 0 {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
-	}
-	finalizeHandle := func() error {
-		if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
-			return codeCommandWALApplyError(err)
-		}
-		handleFinalized = true
-		return nil
-	}
-
-	var affected int64
-	var matched int64
-	switch mutation.command {
-	case nativewire.CommandInsertBatch:
-		if len(mutation.documents) == 0 {
-			if err := finalizeHandle(); err != nil {
-				return commandWALFinalizeRecoveryRequired(entry, err)
+	var affected, matched int64
+	var applyResult raftentry.ApplyResultV1
+	err = collection.WithPreparedCommandWALMutation(func(owner *collections.CommandWALAdmittedCollection) error {
+		var applyErr error
+		applyResult, applyErr = func() (raftentry.ApplyResultV1, error) {
+			if err := h.preflightOpenedCollectionMutationV1(&mutation, true, owner); err != nil {
+				return raftentry.ApplyResultV1{}, err
 			}
-			break
+			frame, err := mutation.loweredFrame()
+			if err != nil {
+				return raftentry.ApplyResultV1{}, err
+			}
+			var handle commandwalapply.Handle
+			handleAppended := false
+			handleFinalized := false
+			defer func() {
+				if handleAppended && !handleFinalized {
+					h.walApply.Abort(h.db, handle)
+				}
+			}()
+			appendOptions, err := owner.CommandWALAppendOptions(meta.SyncLocalCommandWAL)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, appendOptions)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			}
+			handleAppended = true
+			if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
+				return commandWALPostAppendRecoveryRequired(entry, err)
+			}
+			intent := handle.CommandWALIntent()
+			if intent == nil || handle.LSN() == 0 {
+				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
+			}
+			finalizeHandle := func() error {
+				if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
+					return codeCommandWALApplyError(err)
+				}
+				handleFinalized = true
+				return nil
+			}
+
+			switch mutation.command {
+			case nativewire.CommandInsertBatch:
+				if len(mutation.documents) == 0 {
+					if err := finalizeHandle(); err != nil {
+						return commandWALFinalizeRecoveryRequired(entry, err)
+					}
+					break
+				}
+				resultIDs, err := owner.InsertBatchWithCommandWALIntent(mutation.ids, mutation.documents, mutation.trustedValidBSON, intent)
+				if err != nil {
+					return h.collectionMutationApplyError(entry, handle, err)
+				}
+				affected = int64(len(resultIDs))
+			case nativewire.CommandReplaceBatch:
+				matchedCount, modified, err := owner.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
+				if err != nil {
+					return h.collectionMutationApplyError(entry, handle, err)
+				}
+				matched = int64(matchedCount)
+				affected = int64(modified)
+			case nativewire.CommandUpdateBSONSet:
+				results, err := owner.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
+				if err != nil {
+					return h.collectionMutationApplyError(entry, handle, err)
+				}
+				matched = int64(mutation.bsonSetMatched)
+				affected = int64(countModifiedUpdateBatchResultsV1(results))
+			case nativewire.CommandDeleteBatch:
+				deleted, err := owner.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
+				if err != nil {
+					return h.collectionMutationApplyError(entry, handle, err)
+				}
+				affected = int64(deleted)
+			default:
+				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
+			}
+			if !handleFinalized {
+				if err := finalizeHandle(); err != nil {
+					return commandWALFinalizeRecoveryRequired(entry, err)
+				}
+			}
+			return raftentry.ApplyResultV1{}, nil
+		}()
+		return applyErr
+	})
+	if err != nil {
+		if _, coded := ErrorCodeOf(err); !coded {
+			err = codeCollectionApplyError(err)
 		}
-		resultIDs, err := collection.InsertBatchWithCommandWALIntent(mutation.ids, mutation.documents, mutation.trustedValidBSON, intent)
-		if err != nil {
-			return h.collectionMutationApplyError(entry, handle, err)
-		}
-		affected = int64(len(resultIDs))
-	case nativewire.CommandReplaceBatch:
-		matchedCount, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
-		if err != nil {
-			return h.collectionMutationApplyError(entry, handle, err)
-		}
-		matched = int64(matchedCount)
-		affected = int64(modified)
-	case nativewire.CommandUpdateBSONSet:
-		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
-		if err != nil {
-			return h.collectionMutationApplyError(entry, handle, err)
-		}
-		matched = int64(mutation.bsonSetMatched)
-		affected = int64(countModifiedUpdateBatchResultsV1(results))
-	case nativewire.CommandDeleteBatch:
-		deleted, err := collection.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
-		if err != nil {
-			return h.collectionMutationApplyError(entry, handle, err)
-		}
-		affected = int64(deleted)
-	default:
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
-	}
-	if !handleFinalized {
-		if err := finalizeHandle(); err != nil {
-			return commandWALFinalizeRecoveryRequired(entry, err)
-		}
+		return applyResult, err
 	}
 
 	logical, err := h.logicalDigestV1(LogicalDigestOptionsV1{
@@ -290,34 +310,51 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 	if err != nil {
 		return nil, codeCollectionApplyError(err)
 	}
+	if err := h.preflightOpenedCollectionMutationV1(mutation, prepareFrameDocuments, collection); err != nil {
+		return nil, err
+	}
+	return collection, nil
+}
+
+type collectionMutationPreparationV1 interface {
+	Meta() collections.CollectionMeta
+	MetaView() collections.CollectionMeta
+	Get([]byte) ([]byte, error)
+	PreflightCommandWALMutation(collections.ColumnPublishOperation) error
+	PreflightInsertBatchConflicts([][]byte, [][]byte, bool) error
+	PreflightReplaceBatchConflicts([][]byte, [][]byte) error
+	PrepareBSONSetUpdateBatchCommandWAL([]collections.BSONSetUpdateBatchItem) ([]collections.UpdateBatchResult, []commitlog.CollectionDocument, error)
+}
+
+func (h *Harness) preflightOpenedCollectionMutationV1(mutation *collectionMutationV1, prepareFrameDocuments bool, collection collectionMutationPreparationV1) error {
 	if mutation.command == nativewire.CommandInsertBatch || mutation.command == nativewire.CommandReplaceBatch || mutation.command == nativewire.CommandUpdateBSONSet {
 		format, err := normalizeApplyDocumentFormat(collection.Meta().Options.DocumentFormat)
 		if err != nil {
-			return nil, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: collection %q has unsupported document format: %v", mutation.collection, err)
+			return codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: collection %q has unsupported document format: %v", mutation.collection, err)
 		}
 		if format != mutation.documentFormat {
-			return nil, codedError(raftentry.ErrorRejectedConflictV1, "raftapply: deterministic document format %q does not match collection %q format %q", mutation.documentFormat, mutation.collection, format)
+			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: deterministic document format %q does not match collection %q format %q", mutation.documentFormat, mutation.collection, format)
 		}
 		if mutation.command != nativewire.CommandUpdateBSONSet {
 			if err := validateMutationDocumentsV1(format, mutation.documents); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 	switch mutation.command {
 	case nativewire.CommandInsertBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationInsert); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 		if prepareFrameDocuments {
 			mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
 		}
 		if err := collection.PreflightInsertBatchConflicts(mutation.ids, mutation.documents, mutation.trustedValidBSON); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 	case nativewire.CommandReplaceBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 		var changed []commitlog.CollectionDocument
 		if prepareFrameDocuments {
@@ -326,14 +363,14 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 		for i, id := range mutation.ids {
 			current, err := collection.Get(id)
 			if err != nil {
-				return nil, codeCollectionApplyError(err)
+				return codeCollectionApplyError(err)
 			}
 			if current == nil {
 				continue
 			}
 			if mutation.documentFormat == collections.DocumentFormatBSON {
 				if err := validateBSONReplacementPreservesIDV1(current, mutation.documents[i]); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			if prepareFrameDocuments && !bytes.Equal(current, mutation.documents[i]) {
@@ -345,34 +382,34 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 		}
 		mutation.frameDocuments = changed
 		if err := collection.PreflightReplaceBatchConflicts(mutation.ids, mutation.documents); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 	case nativewire.CommandUpdateBSONSet:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 		results, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
 		if err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 		// No-index preflight can skip retaining command-WAL frame documents,
 		// but it must still run the BSON-set prepare validation above.
 		if !prepareFrameDocuments && collectionHasNoSecondaryIndexesV1(collection) {
-			return collection, nil
+			return nil
 		}
 		mutation.bsonSetMatched = countMatchedUpdateBatchResultsV1(results)
 		mutation.frameDocuments = docs
 	case nativewire.CommandDeleteBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationDelete); err != nil {
-			return nil, codeCollectionApplyError(err)
+			return codeCollectionApplyError(err)
 		}
 	default:
-		return nil, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
+		return codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
 	}
-	return collection, nil
+	return nil
 }
 
-func collectionHasNoSecondaryIndexesV1(collection *collections.Collection) bool {
+func collectionHasNoSecondaryIndexesV1(collection collectionMutationPreparationV1) bool {
 	meta := collection.MetaView()
 	return len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
 }

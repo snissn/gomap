@@ -198,7 +198,38 @@ func vectorIndexNodeOrdinalMap(nodes []vectorIndexNode) map[string]int {
 	return out
 }
 
+// nativeScalarRowScratch belongs to one sequential publication/index walk.
+// Its row borrows encoder bytes until the next parse; scalar column append
+// copies them before that reset. Retained batch rows keep the owning parser.
+type nativeScalarRowScratch struct {
+	encoder indexEncodeArena
+	row     map[string][]byte
+}
+
+func (s *nativeScalarRowScratch) reset(runtimeCount int) {
+	if s.row == nil {
+		s.row = make(map[string][]byte, runtimeCount)
+		s.encoder = indexEncodeArena{
+			buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(runtimeCount)),
+			states:    make([][][]byte, 0, runtimeCount),
+			valueRefs: make([][]byte, 0, runtimeCount),
+		}
+		return
+	}
+	clear(s.row)
+	clear(s.encoder.states)
+	clear(s.encoder.valueRefs)
+	s.encoder.buf = s.encoder.buf[:0]
+	s.encoder.scratch = s.encoder.scratch[:0]
+	s.encoder.states = s.encoder.states[:0]
+	s.encoder.valueRefs = s.encoder.valueRefs[:0]
+}
+
 func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterializer, document []byte) (map[string][]byte, error) {
+	return idx.nativeScalarRowWithScratch(materializer, document, nil)
+}
+
+func (idx *VectorIndex) nativeScalarRowWithScratch(materializer *StoredDocumentJSONMaterializer, document []byte, scratch *nativeScalarRowScratch) (map[string][]byte, error) {
 	if idx == nil {
 		return nil, nil
 	}
@@ -225,18 +256,33 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	if len(runtimes) != len(definitions) {
 		return nil, errors.New("collections: native scalar runtimes are unavailable")
 	}
-	state, err := orderedIndexStateForDocument(scalarDocument, runtimes, collectionOptions{documentFormat: documentFormat})
+	var state orderedDocumentIndexState
+	var err error
+	var row map[string][]byte
+	if scratch == nil {
+		state, err = orderedIndexStateForDocument(scalarDocument, runtimes, collectionOptions{documentFormat: documentFormat})
+	} else {
+		scratch.reset(len(definitions))
+		state, err = orderedIndexStateForDocumentWithArena(scalarDocument, runtimes, collectionOptions{documentFormat: documentFormat}, &scratch.encoder)
+		row = scratch.row
+	}
 	if err != nil {
 		return nil, err
 	}
-	row := make(map[string][]byte, len(definitions))
+	if scratch == nil {
+		row = make(map[string][]byte, len(definitions))
+	}
 	for i, def := range definitions {
 		values := state.valuesAt(i)
 		if len(values) > 1 {
 			return nil, fmt.Errorf("collections: native scalar index %q produced multiple values", def.Name)
 		}
 		if len(values) == 1 {
-			row[def.Name] = bytes.Clone(values[0])
+			if scratch == nil {
+				row[def.Name] = bytes.Clone(values[0])
+			} else {
+				row[def.Name] = values[0]
+			}
 		}
 	}
 	return row, nil
