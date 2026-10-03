@@ -551,6 +551,11 @@ func admitBootstrap(config nativewire.FixedPeerTCPConfigV1, bootstrap nativewire
 }
 func runArgs(parent context.Context, args []string, output io.Writer) (runErr error) {
 	flags := flag.NewFlagSet("treedb-query-under-write", flag.ContinueOnError)
+	mode := flags.String("mode", "query-under-write", "query-under-write or read-only quiescent-recall")
+	dataset := flags.String("dataset", "", "unchanged representative exported dataset directory")
+	phase := flags.String("phase", "", "recall phase: pre or post-only")
+	provenance := flags.String("provenance", "", "root-accepted quiescence/runtime/input provenance JSON")
+	probe := flags.String("probe-receipt", "", "complete successful planned/result probe JSONL for post-only")
 	configPath := flags.String("config", "", "authenticated RF4 initialization config for this driver host")
 	bootstrapPath := flags.String("bootstrap-receipt", "", "retained successful sequential qualify JSON")
 	freshInserts := flags.Int("fresh-inserts", freshCount, "bounded unique ordinary insert population1..65; default preserves32")
@@ -559,6 +564,21 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..1m; default 10s")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *mode == "quiescent-recall" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "fresh-inserts" {
+				conflict = true
+			}
+		})
+		if conflict || flags.NArg() != 0 {
+			return errors.New("recall refuses workload flags and positional arguments")
+		}
+		return runRecall(parent, recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout}, output)
+	}
+	if *mode != "query-under-write" || *dataset != "" || *phase != "" || *provenance != "" || *probe != "" {
+		return errors.New("invalid mode or recall-only flags supplied to workload")
 	}
 	if err := validateProbeTimeouts(*timeout, *rpcTimeout); err != nil {
 		return err
