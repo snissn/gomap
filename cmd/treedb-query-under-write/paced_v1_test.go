@@ -254,3 +254,29 @@ func TestPacedReceiptFenceMismatchRemainsUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestPacedWarmupRefusesRetryAndRedirectBeforeNextCall(t *testing.T) {
+	for _, counter := range []string{"retry", "redirect"} {
+		t.Run(counter, func(t *testing.T) {
+			in, r := windowTestReport(t)
+			r.WarmupPlanned = 64
+			var calls atomic.Int32
+			reader := &windowTestClient{fakeClient: fakeClient{search: func(context.Context, public.SearchRequestV1) (public.SearchResponseV1, error) {
+				calls.Add(1)
+				response := windowTestResponse(&r.Admission)
+				if counter == "retry" {
+					response.Counters.Retries = 1
+				} else {
+					response.Counters.Redirects = 1
+				}
+				return response, nil
+			}}}
+			budget := 1 << 20
+			control := &windowPhaseControl{Validate: (&pacedInvocations{}).validate}
+			err := windowPhaseControlled(context.Background(), []ownedVectorClient{reader}, &in, &r, true, &budget, control)
+			if err == nil || calls.Load() != 1 || r.WarmupCounts.Failed != 1 || r.WarmupCounts.Unissued != 63 || len(r.Attempts) != 1 || r.Attempts[0].RecallAt10 != nil {
+				t.Fatalf("warmup failed to stop: err=%v calls=%d counts=%+v", err, calls.Load(), r.WarmupCounts)
+			}
+		})
+	}
+}

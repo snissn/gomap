@@ -638,7 +638,8 @@ func runPacedWindow(parent context.Context, o pacedOptions, output io.Writer) (r
 			return err
 		}
 	}
-	if err := windowPhase(ctx, readers, &in, &r.windowReport, true, &budget); err != nil {
+	warmupControl := &windowPhaseControl{Validate: (&pacedInvocations{}).validate}
+	if err := windowPhaseControlled(ctx, readers, &in, &r.windowReport, true, &budget, warmupControl); err != nil {
 		return err
 	}
 	owned, err := windowConnect(ctx, 1, r.Admission.RPCTimeout, dial)

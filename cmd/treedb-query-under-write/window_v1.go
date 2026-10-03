@@ -223,7 +223,7 @@ func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, 
 	defer cancel()
 	stop := func() {
 		cancel()
-		if control != nil {
+		if control != nil && control.Stop != nil {
 			control.Stop()
 		}
 	}
@@ -238,7 +238,7 @@ func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, 
 	} else {
 		r.MeasuredOriginUTC = origin.UTC()
 	}
-	if control != nil {
+	if control != nil && control.Start != nil {
 		control.Start(ctx, origin, stopAt)
 	}
 	*c = counts{Planned: limit, Unissued: limit}
@@ -293,7 +293,7 @@ func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, 
 				}
 				mu.Unlock()
 				a, err := windowCall(ctx, stop, client, in, &r.Admission, ordinal, worker, phase, origin)
-				if err == nil && control != nil {
+				if err == nil && control != nil && control.Validate != nil {
 					if err = control.Validate(a); err != nil {
 						a.Outcome, a.ErrorCode = errorOutcome(err, false)
 						a.Error, a.RecallAt10 = recallError(err), nil
@@ -336,7 +336,7 @@ func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, 
 		}(worker, client)
 	}
 	workers.Wait()
-	if control != nil {
+	if control != nil && control.Join != nil {
 		if err := control.Join(); err != nil {
 			firstErr = errors.Join(firstErr, err)
 			if r.StopReason == "" {
