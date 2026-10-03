@@ -89,7 +89,7 @@ func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
 	openAll := func() {
 		t.Helper()
 		for i := range configs {
-			node, err := OpenFixedPeerTCPRuntimeV1(configs[i])
+			node, err := fixedPeerOpenTestRuntimeV1(t, configs[i])
 			if err != nil {
 				t.Fatal(err)
 			}
