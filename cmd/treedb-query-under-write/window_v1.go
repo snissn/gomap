@@ -205,8 +205,28 @@ func windowPercentiles(values []int64) windowLatency {
 // QPS but outside native-call latency. In-flight calls drain at normal cutoff;
 // a genuine failure cancels every worker and preserves the returned population.
 func windowPhase(parent context.Context, clients []ownedVectorClient, in *recallInput, r *windowReport, warmup bool, byteBudget *int) error {
+	return windowPhaseControlled(parent, clients, in, r, warmup, byteBudget, nil)
+}
+
+// Only the separately admitted paced mode supplies these phase-local hooks.
+// Start shares the exact monotonic origin; Join drains the independently owned
+// writer before duration is fixed. Stop must not take the read retention lock.
+type windowPhaseControl struct {
+	Start    func(context.Context, time.Time, time.Time)
+	Stop     context.CancelFunc
+	Validate func(windowAttempt) error
+	Join     func() error
+}
+
+func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, in *recallInput, r *windowReport, warmup bool, byteBudget *int, control *windowPhaseControl) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	stop := func() {
+		cancel()
+		if control != nil && control.Stop != nil {
+			control.Stop()
+		}
+	}
 	origin := time.Now()
 	stopAt := origin.Add(r.RequestedDuration)
 	phase := "measured"
@@ -217,6 +237,9 @@ func windowPhase(parent context.Context, clients []ownedVectorClient, in *recall
 		phase, limit, c, completed = "warmup", r.WarmupPlanned, &r.WarmupCounts, &r.WarmupCompletions
 	} else {
 		r.MeasuredOriginUTC = origin.UTC()
+	}
+	if control != nil && control.Start != nil {
+		control.Start(ctx, origin, stopAt)
 	}
 	*c = counts{Planned: limit, Unissued: limit}
 	var mu sync.Mutex
@@ -236,7 +259,7 @@ func windowPhase(parent context.Context, clients []ownedVectorClient, in *recall
 		if r.StopReason == "" {
 			r.StopReason = reason
 		}
-		cancel()
+		stop()
 	}
 	for worker, client := range clients {
 		workers.Add(1)
@@ -269,7 +292,14 @@ func windowPhase(parent context.Context, clients []ownedVectorClient, in *recall
 					next++
 				}
 				mu.Unlock()
-				a, err := windowCall(ctx, cancel, client, in, &r.Admission, ordinal, worker, phase, origin)
+				a, err := windowCall(ctx, stop, client, in, &r.Admission, ordinal, worker, phase, origin)
+				if err == nil && control != nil && control.Validate != nil {
+					if err = control.Validate(a); err != nil {
+						a.Outcome, a.ErrorCode = errorOutcome(err, false)
+						a.Error, a.RecallAt10 = recallError(err), nil
+						stop()
+					}
+				}
 				mu.Lock()
 				if a.Outcome != "unissued" {
 					windowAccount(c, a)
@@ -306,6 +336,14 @@ func windowPhase(parent context.Context, clients []ownedVectorClient, in *recall
 		}(worker, client)
 	}
 	workers.Wait()
+	if control != nil && control.Join != nil {
+		if err := control.Join(); err != nil {
+			firstErr = errors.Join(firstErr, err)
+			if r.StopReason == "" {
+				r.StopReason = "concurrent_writer_failure"
+			}
+		}
+	}
 	if !warmup {
 		r.ActualDurationNS = time.Since(origin).Nanoseconds()
 		if r.ActualDurationNS > 0 {

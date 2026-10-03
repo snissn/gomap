@@ -342,3 +342,133 @@ whole-lifetime resource peak. Wall-clock alignment and external collection remai
 root's responsibility. This trusted local filesystem protocol is not hardened
 against hostile path replacement or a blocking filesystem; existing outer
 process timeout remains required. No server/public API or endpoint is changed.
+
+
+## Paced ordinary writes with representative reads (provisional source checkpoint)
+
+`-mode paced-window` is a separate admitted observation. Existing default,
+quiescent-recall and read-window behavior stays available. This first paced mode
+requires the complete accepted trial11 post65 input chain: population10069,
+highest acknowledged prefix155 and live revision66. Root must exclude other
+writers before setup/pre-recall/warmup and after this mode's writer drains.
+During measurement this mode alone owns the serial ordinary writer. Existing
+provenance binds the original server source/ELF independently of this driver's
+source/ELF; building the driver does not relabel the accepted server runtime.
+
+    treedb-query-under-write -mode paced-window \
+      -config /inputs/node-c.json -bootstrap-receipt /receipts/qualify.json \
+      -dataset /inputs/dataset -provenance /receipts/recall-provenance.json \
+      -phase post-only -probe-receipt /receipts/probe.jsonl \
+      -run-id unique-paced01 -read-concurrency 1 \
+      -paced-inserts 6 -paced-interval 5s \
+      -read-resource-gate-dir /fresh-resource-gate \
+      -timeout 120s -rpc-timeout 10s > /receipts/unique-paced01.jsonl
+
+The unchanged sixteen topK10/probes1/configured-EfSearch queries run after64
+warmup calls, at explicit reader concurrency1 or4, for60s measured admission.
+The existing read attempt/output bounds apply; defaults remain65536 and128MiB.
+This mode requires warmup64 and window60s; shorter private phase tests do not
+qualify the actual checkpoint. Each reader owns its persistent native socket across warmup and measurement.
+Setup connections are deliberately renewed after serial pre-recall and before
+warmup so an unused worker socket cannot inherit a long idle pre-phase.
+One additional persistent native socket belongs solely to the writer. There is
+no client mutation/search retry, catch-up burst, exact fallback, or serving/API
+change. `-fresh-inserts` refuses here; `-paced-*` flags refuse in other modes.
+
+`-paced-inserts` admits1..10 candidates (default6); `-paced-interval` admits
+1s..60s (default5s). All candidate IDs must be absent from the complete frozen
+baseline and from earlier candidates. The existing angular candidate generator
+is reused, but its anchor-only guard is insufficient here: the full possible
+population must prove each declared post-ack visibility query's canonical winner.
+Six candidates use a different direction denominator from trial11's65 candidates;
+that observation does not itself establish visibility or recall invariance.
+Exact ties use the same FP32 score bits and ID order as the existing oracle.
+Any failed candidate/visibility/invariance admission refuses before networking.
+
+The exact full-baseline Top10 for every query must remain unchanged at every
+possible planned serial insert prefix. For insertion only, merging each
+canonically scored new candidate into the previously proven full-baseline exact
+Top10 is equivalent to rescoring all rows; ordered IDs and score bits must match.
+The report retains baseline population identity, all candidate requests/hashes,
+per-candidate sixteen scores and each prefix's Top10 digest. This is an explicit
+workload-specific invariant proof, not a search response watermark. General
+changing-population concurrent recall remains unqualified. This mode fails closed
+when the invariant cannot be proved, rather than issuing writes without that
+qualification or reporting invented baseline recall.
+
+A frozen baseline-plus-all-planned-vector map permits canonical validation of
+approximate native neighbors. Its membership is not visibility evidence. Every
+returned planned ID must additionally have an insert invocation interval start
+at or before the search API completion, on the same monotonic phase clock.
+InvocationStartNS is recorded at the local client-interface method entry,
+separately from the outer call interval; it proves local dispatch began and
+does not claim wire submission, commit completion or a server prefix.
+This rejects never-invoked/future candidates but does not invent an applied-index
+or claim that the search saw an exact acknowledged prefix. Native generation,
+HNSW/read proof, no exact scan, canonical score/order, zero retry/redirect counters
+and complete bounded response checks remain required.
+
+The writer declares offsets0,interval,2*interval,... and executes serially. Its
+next invocation is no earlier than both that offset and one full pace interval
+from the previous invocation start. A complete configured RPC budget must fit
+both the remaining measured admission and overall budget. A future offset that
+cannot fit is marked unissued immediately, without waiting beyond the cutoff.
+Shorter successful prefixes are retained honestly; at least one successful write
+and a successful native search completing during an outstanding insert API call
+are necessary for this mode's overlap observation. That is client interval
+evidence, not a server critical-section, latency guarantee, saturation or capacity.
+Any read-call/validation/cap or write/proof failure cancels both roles immediately,
+joins every worker, retains actual failures/UNKNOWN and leaves a complete unissued
+suffix. Duration is fixed only after both read and writer drain. Read QPS excludes
+setup, oracle, pre-recall, warmup, resource waits, retry, visibility and post-recall.
+Successful/non-success read and ordinary-write call latency populations stay
+separate; explicit retry and post-ack probe intervals are individually retained.
+
+After a successful measured phase and drain, the resource done handshake keeps
+all client sockets/process alive for root's closing five-role samples. One
+explicit identical logical retry of the last acknowledged fresh write then runs
+outside read QPS; an idle writer connection is deliberately renewed before that
+planned phase, never after a failed call. The new consensus commit must leave
+live revision/ID/owner/partition/generation unchanged. Final all-voter readiness
+uses that new prefix. Post-ack TopK1 visibility probes and paired sixteen-call
+quiescent recall use a deliberately renewed idle reader outside measurement.
+The post oracle adds only acknowledged distinct vectors, excludes retry as a row,
+records its exact population digest, and rechecks all-four final readiness.
+UNKNOWN never becomes an assumed committed/uncommitted population. Low recall
+is recorded, not an invented threshold; external root gates decide agreed quality
+and service thresholds independently of this harness observation verdict.
+
+`fixed_cluster_paced_window_v1` planned/result records preserve all existing
+window fields plus explicit write slots, receipts, skipped reasons, starting/final
+revision/prefix, prefix proof scores/digests, retry, bounded overlap counts and
+paired recall. Read retention charges actual encoded attempt bytes; a3MiB reserve
+covers the bounded write, visibility, paired recall and terminal evidence. Small
+otherwise valid byte caps can refuse if the full planned/result evidence cannot
+fit. The final pair is checked against its actual encoding; a cap or encoding
+failure refuses qualification. Retained JSON bytes are not a Go heap bound:
+response copies, maps/slices, transient encodings and final output buffers add
+harness memory. No full-result duplicate is written to the resource directory.
+
+The initial admission deliberately cannot chain a later paced population.
+After any invocation, root must preserve its raw ledger/UNKNOWN history and never
+rerun the original10069/prefix155 inputs on the changed store. This source scope
+supports an initial C1 observation; a second C4 run needs separately qualified or
+reviewed chained population admission. Limits and elapsed time do not erase this
+sequencing restriction. Runtime collection, native/resource review, source/ELF
+freeze and predecessor integration remain root-owned gates; source construction
+alone does not establish a qualifying actual paced window or close #4959/#4250.
+
+Root validation commands (not run during source construction):
+
+    GOWORK=off go test ./cmd/treedb-query-under-write
+    GOWORK=off go test -race ./cmd/treedb-query-under-write
+
+Focused additions: TestPacedFullBaselinePrefixInvariantAndCanonicalTie,
+TestPacedInvocationEvidenceAndFullRPCBudget,
+TestPacedSuccessfulSharedQueryOverlapAndExplicitRetry,
+TestPacedReadFailureImmediatelyCancelsWriterAndRetainsUnknown,
+TestPacedLateWriteSlotsStayUnissuedWithoutWaiting,
+TestPacedModeBoundsRefuseBeforeInputOrNetwork,
+TestPacedReceiptFenceMismatchRemainsUnknown. Existing TestWindow*, TestRecall*
+and mixed-workload tests remain required. Channel rendezvous establishes tested
+API overlap/cancellation; private short clocks are not distributed runtime proof.
