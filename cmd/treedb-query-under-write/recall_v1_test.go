@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -179,7 +180,7 @@ func TestRecallProbeLedgerDeduplicatesOnlyProvenRetry(t *testing.T) {
 	if err := recallValidateProvenance(&in, &r); err != nil {
 		t.Fatal(err)
 	}
-	if err := recallAdmitProbe(recallTestProbeRaw(events), &in, &r); err != nil {
+	if err := recallAdmitProbe(context.Background(), recallTestProbeRaw(events), &in, &r); err != nil {
 		t.Fatal(err)
 	}
 	if len(in.vectors) != 5 || r.HighestCommitIndex != 11 {
@@ -194,53 +195,71 @@ func TestRecallProbeRefusesUnknownIncompleteOrForgedLedger(t *testing.T) {
 		"unknown": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Operations[2].Outcome = "unknown" },
+		}) {
+			e[1].Report.Operations[2].Outcome = "unknown"
+		},
 		"failed-verdict": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Verdict = "FAILED" },
+		}) {
+			e[1].Report.Verdict = "FAILED"
+		},
 		"missing-op": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Operations = e[1].Report.Operations[:69] },
+		}) {
+			e[1].Report.Operations = e[1].Report.Operations[:69]
+		},
 		"retry-bytes": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Operations[67].InsertRequest.Document = []byte("{}") },
+		}) {
+			e[1].Report.Operations[67].InsertRequest.Document = []byte("{}")
+		},
 		"revision-gap": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Operations[2].InsertResponse.LiveRevision = 4 },
+		}) {
+			e[1].Report.Operations[2].InsertResponse.LiveRevision = 4
+		},
 		"forged-count": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Counts.Unknown = 1 },
+		}) {
+			e[1].Report.Counts.Unknown = 1
+		},
 		"old-commit": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Operations[67].InsertResponse.CommitIndex = 10 },
+		}) {
+			e[1].Report.Operations[67].InsertResponse.CommitIndex = 10
+		},
 		"lost-ready": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.Readiness[0].State.Ready = false },
+		}) {
+			e[1].Report.Readiness[0].State.Ready = false
+		},
 		"wrong-runtime": func(e *[2]struct {
 			Event  string
 			Report report
-		}) { e[1].Report.BinarySHA256 = strings.Repeat("d", 64) },
+		}) {
+			e[1].Report.BinarySHA256 = strings.Repeat("d", 64)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			in, r := recallTestInput()
 			events := recallTestProbe(t, &in, &r)
 			mutate(&events)
-			if err := recallAdmitProbe(recallTestProbeRaw(events), &in, &r); err == nil {
+			if err := recallAdmitProbe(context.Background(), recallTestProbeRaw(events), &in, &r); err == nil {
 				t.Fatal("accepted incomplete/forged mutation population")
 			}
 		})
 	}
 	in, r := recallTestInput()
 	events := recallTestProbe(t, &in, &r)
-	if err := recallAdmitProbe(append(recallTestProbeRaw(events), []byte("{}\n")...), &in, &r); err == nil {
+	if err := recallAdmitProbe(context.Background(), append(recallTestProbeRaw(events), []byte("{}\n")...), &in, &r); err == nil {
 		t.Fatal("accepted trailing event")
 	}
 }
@@ -260,7 +279,7 @@ func recallTestQueries(t *testing.T) (recallInput, recallReport) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	corpus, err := recallTop10(scorer, in.corpusIDs, in.vectors)
+	corpus, err := recallTop10(context.Background(), scorer, in.corpusIDs, in.vectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +292,7 @@ func recallTestQueries(t *testing.T) (recallInput, recallReport) {
 		in.exported = append(in.exported, ids)
 	}
 	in.vectors["live"] = append([]float32(nil), q...)
-	if err := recallPlan(&in, &r); err != nil {
+	if err := recallPlan(context.Background(), &in, &r); err != nil {
 		t.Fatal(err)
 	}
 	return in, r
@@ -294,7 +313,7 @@ func TestRecallCanonicalAugmentedTruthAndScoredApproximation(t *testing.T) {
 	// FP32 source normalization and stable ID ordering use the exported serving contract.
 	scorer, _ := collections.NewCanonicalVectorPartitionCosineScorerV1(oracleVector(128, 1, 0))
 	vectors := map[string][]float32{"b": oracleVector(128, 3, 4), "a": oracleVector(128, 3, 4)}
-	top, err := recallTop10(scorer, []string{"b", "a"}, vectors)
+	top, err := recallTop10(context.Background(), scorer, []string{"b", "a"}, vectors)
 	want, scoreErr := collections.CanonicalVectorPartitionCosineScoreV1(oracleVector(128, 1, 0), vectors["a"])
 	if err != nil || scoreErr != nil || top[0].ID != "a" || math.Float32bits(top[0].Score) != math.Float32bits(want) {
 		t.Fatal("canonical bits/tie contract differs")
@@ -322,7 +341,7 @@ func TestRecallArtifactBoundsAndErrorIdentity(t *testing.T) {
 	}
 	r := recallReport{Error: strings.Repeat("x", recallOutputCap)}
 	var out bytes.Buffer
-	if err := recallEmit(&out, "result", &r); err == nil || out.Len() != 0 {
+	if err := recallEmit(context.Background(), &out, "result", &r); err == nil || out.Len() != 0 {
 		t.Fatal("emitted oversized artifact")
 	}
 }
@@ -380,7 +399,7 @@ func TestRecallReadOnlySerialFailStopRetainsPartial(t *testing.T) {
 				t.Fatalf("partial counts=%+v err=%v", r.Counts, err)
 			}
 			var output bytes.Buffer
-			if err := recallEmit(&output, "result", &r); err != nil {
+			if err := recallEmit(context.Background(), &output, "result", &r); err != nil {
 				t.Fatal(err)
 			}
 			if output.Len() > recallOutputCap/2 || !bytes.Contains(output.Bytes(), []byte("result")) {
@@ -395,22 +414,22 @@ func TestRecallInputBoundsAndStrictJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := recallBudget{}
-	if _, err := b.read(path, 4); err == nil {
+	if _, err := b.read(context.Background(), path, 4); err == nil {
 		t.Fatal("accepted oversized file")
 	}
 	b.bytes = recallInputCap - 4
-	if _, err := b.read(path, 8); err == nil {
+	if _, err := b.read(context.Background(), path, 8); err == nil {
 		t.Fatal("accepted aggregate overflow")
 	}
 	for _, raw := range []string{"{\"Version\":1,\"Unknown\":true}", "{\"Version\":1} {}"} {
 		var p recallProvenance
-		if err := recallDecode([]byte(raw), &p); err == nil {
+		if err := recallDecode(context.Background(), []byte(raw), &p); err == nil {
 			t.Fatal("accepted unknown/trailing JSON")
 		}
 	}
 	raw := make([]byte, 128*4)
 	binary.LittleEndian.PutUint32(raw, math.Float32bits(float32(math.NaN())))
-	if _, err := recallFloats(raw, 1, 128, false); err == nil {
+	if _, err := recallFloats(context.Background(), raw, 1, 128, false); err == nil {
 		t.Fatal("accepted nonfinite vector")
 	}
 }
@@ -472,7 +491,7 @@ func TestRecallDatasetFreezesBytesAndRejectsHashShapeAndTruth(t *testing.T) {
 	var in recallInput
 	var r recallReport
 	var budget recallBudget
-	if err := recallReadDataset(&budget, path, &in, &r); err != nil {
+	if err := recallReadDataset(context.Background(), &budget, path, &in, &r); err != nil {
 		t.Fatal(err)
 	}
 	if len(in.vectors) != 10000 || len(in.queries) != 16 || len(in.exported) != 16 {
@@ -480,7 +499,7 @@ func TestRecallDatasetFreezesBytesAndRejectsHashShapeAndTruth(t *testing.T) {
 	}
 	in.config.VectorInitialization = &nativewire.FixedPeerTCPVectorInitializationV1{}
 	in.config.VectorInitialization.IndexDefinition.EfSearch = 64
-	if err := recallPlan(&in, &r); err != nil {
+	if err := recallPlan(context.Background(), &in, &r); err != nil {
 		t.Fatal(err)
 	}
 	// Later path edits cannot mutate privately frozen vectors or oracle input.
@@ -494,7 +513,7 @@ func TestRecallDatasetFreezesBytesAndRejectsHashShapeAndTruth(t *testing.T) {
 	var other recallInput
 	var otherReport recallReport
 	var otherBudget recallBudget
-	if err := recallReadDataset(&otherBudget, path, &other, &otherReport); err == nil {
+	if err := recallReadDataset(context.Background(), &otherBudget, path, &other, &otherReport); err == nil {
 		t.Fatal("accepted changed dataset bytes")
 	}
 	if err := os.WriteFile(filepath.Join(path, "documents.f32"), make([]byte, len(docs)), 0600); err != nil {
@@ -503,11 +522,143 @@ func TestRecallDatasetFreezesBytesAndRejectsHashShapeAndTruth(t *testing.T) {
 	m.Dimensions = 127
 	writeManifest()
 	otherBudget = recallBudget{}
-	if err := recallReadDataset(&otherBudget, path, &other, &otherReport); err == nil {
+	if err := recallReadDataset(context.Background(), &otherBudget, path, &other, &otherReport); err == nil {
 		t.Fatal("accepted mismatched shape")
 	}
 	in.exported[0][0] = "doc-000010"
-	if err := recallPlan(&in, &r); err == nil {
+	if err := recallPlan(context.Background(), &in, &r); err == nil {
 		t.Fatal("silently replaced original corpus truth")
+	}
+}
+
+// Err invokes a deterministic control before checking a real cancellation context.
+// Tests can cancel at an observed setup boundary without sleeps or production hooks.
+type recallSetupControlContext struct {
+	context.Context
+	check func()
+}
+
+func (c recallSetupControlContext) Err() error {
+	c.check()
+	return c.Context.Err()
+}
+
+type recallTestReadFunc func([]byte) (int, error)
+
+func (f recallTestReadFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestRecallSetupRefusesCanceledOrExpiredParentBeforeInput(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		name := "canceled"
+		if expired {
+			name = "expired"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			want := error(context.Canceled)
+			if expired {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				want = context.DeadlineExceeded
+			} else {
+				cancel()
+			}
+			defer cancel()
+			var out bytes.Buffer
+			// Missing paths would report an open error if entry did any setup work first.
+			err := runRecall(ctx, recallOptions{Config: "/must-not-open", Bootstrap: "/must-not-open", Dataset: "/must-not-open", Provenance: "/must-not-open",
+				Phase: "pre", RunID: "cancel-setup", Timeout: time.Minute, RPCTimeout: time.Second}, &out)
+			if !errors.Is(err, want) {
+				t.Fatalf("setup error %v; want %v", err, want)
+			}
+			var event struct {
+				Event  string
+				Report recallReport
+			}
+			d := json.NewDecoder(&out)
+			if err := d.Decode(&event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Event != "result" || event.Report.Verdict != "FAILED" || len(event.Report.Queries) != 0 ||
+				len(event.Report.ReadinessBefore) != 0 || len(event.Report.ReadinessAfter) != 0 || event.Report.BinarySHA256 != "" {
+				t.Fatalf("canceled setup retained work or accepted: %+v", event.Report)
+			}
+			var extra any
+			if err := d.Decode(&extra); err != io.EOF {
+				t.Fatalf("unexpected planned/extra event: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecallSetupReaderChecksBeforeAndAfterRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	reader := recallContextReader{ctx: ctx, reader: recallTestReadFunc(func(p []byte) (int, error) {
+		calls++
+		p[0] = 'x'
+		cancel()
+		return 1, nil
+	})}
+	raw, err := io.ReadAll(reader)
+	if !errors.Is(err, context.Canceled) || calls != 1 || string(raw) != "x" {
+		t.Fatalf("lost in-read cancellation: raw=%q calls=%d err=%v", raw, calls, err)
+	}
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("read continued after cancellation: calls=%d err=%v", calls, err)
+	}
+	var budget recallBudget
+	if _, err := budget.read(ctx, "/must-not-open", 8); !errors.Is(err, context.Canceled) || budget.bytes != 0 {
+		t.Fatalf("file admission ignored cancellation: %v", err)
+	}
+	var out bytes.Buffer
+	if err := recallEmit(ctx, &out, "planned", &recallReport{}); !errors.Is(err, context.Canceled) || out.Len() != 0 {
+		t.Fatalf("planned output ignored cancellation: bytes=%d err=%v", out.Len(), err)
+	}
+}
+
+func TestRecallOracleSetupCancellationAndDeadline(t *testing.T) {
+	in, r := recallTestQueries(t)
+	r.Queries = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controlled := recallSetupControlContext{Context: ctx, check: func() {
+		// Stop at the first completed oracle query, before constructing the other 15.
+		if len(r.Queries) == 1 {
+			cancel()
+		}
+	}}
+	if err := recallPlan(controlled, &in, &r); !errors.Is(err, context.Canceled) {
+		t.Fatalf("oracle ignored setup cancellation: %v", err)
+	}
+	recallFinish(&r)
+	if len(r.Queries) != 1 || r.Queries[0].Outcome != "unissued" || r.Counts.Attempted != 0 ||
+		r.Counts.Unissued != 1 || r.MeanRecallAt10 != nil {
+		t.Fatalf("oracle cancellation lost partial/unissued boundary: %+v", r.Counts)
+	}
+	// A real elapsed deadline must refuse without scoring any query.
+	expired, expireCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer expireCancel()
+	r.Queries = nil
+	if err := recallPlan(expired, &in, &r); !errors.Is(err, context.DeadlineExceeded) || len(r.Queries) != 0 {
+		t.Fatalf("oracle ignored setup deadline: queries=%d err=%v", len(r.Queries), err)
+	}
+	// Stop inside a scoring pass too, not merely at the next query boundary.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	checks := 0
+	inside := recallSetupControlContext{Context: ctx2, check: func() {
+		checks++
+		if checks == 3 {
+			cancel2()
+		}
+	}}
+	scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(in.queries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if top, err := recallTop10(inside, scorer, in.corpusIDs, in.vectors); !errors.Is(err, context.Canceled) || top != nil || checks != 3 {
+		t.Fatalf("scoring continued after cancellation: top=%v checks=%d err=%v", top, checks, err)
 	}
 }

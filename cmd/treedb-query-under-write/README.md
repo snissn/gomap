@@ -200,6 +200,18 @@ successful calls. Each event contains at most 512 KiB of JSON plus one newline
 (pair <= 1 MiB + 2 bytes); each retained
 response at32KiB and error summaries at2KiB plus a full-error SHA256.
 
+The overall recall timeout starts at mode entry, before input/executable reads,
+JSON admission, FP32 conversion, oracle construction, planned output, readiness
+and native searches. One context is shared across those stages; synchronous read
+checks and per-row/operation/query oracle checks stop subsequent work after
+cancellation. No goroutine is created to race an I/O call against a timer.
+An already blocking OS open/read/write/close, bounded buffered JSON decode,
+hash or sort must return before the next cancellation check; the flag is not a
+hard process wall-time/preemption guarantee. Root retains an outer process
+wall-time limit. Failure-result output and cleanup remain best-effort after
+cancellation so partial evidence can be retained, and can themselves block on
+the output/filesystem; root must preserve an outer-timeout failure packet.
+
 Root validation: existing driver normal/race checks plus tests named
 TestRecall*. Source-only construction does not establish runtime qualification.
 The full #4959 sustained windows and #4250 serving/capacity gates remain open.

@@ -116,19 +116,47 @@ func recallHex(s string, n int) bool {
 	raw, err := hex.DecodeString(s)
 	return err == nil && len(s) == n*2 && len(raw) == n && s == hex.EncodeToString(raw)
 }
-func recallDecode(raw []byte, value any) error {
-	d := json.NewDecoder(bytes.NewReader(raw))
+
+// Read checks are synchronous: no goroutine can remain blocked after cancellation.
+// An OS Read already in progress must return before its cancellation is observed.
+type recallContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r recallContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if canceled := r.ctx.Err(); canceled != nil {
+		return n, canceled
+	}
+	return n, err
+}
+func recallDecode(ctx context.Context, raw []byte, value any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d := json.NewDecoder(recallContextReader{ctx: ctx, reader: bytes.NewReader(raw)})
 	d.DisallowUnknownFields()
 	if err := d.Decode(value); err != nil {
 		return err
 	}
 	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
+	err := d.Decode(&extra)
+	if canceled := ctx.Err(); canceled != nil {
+		return canceled
+	}
+	if err != io.EOF {
 		return errors.New("trailing JSON input")
 	}
 	return nil
 }
-func (b *recallBudget) read(path string, capBytes int64) ([]byte, error) {
+func (b *recallBudget) read(ctx context.Context, path string, capBytes int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if capBytes > recallInputCap-b.bytes {
 		capBytes = recallInputCap - b.bytes
 	}
@@ -140,7 +168,7 @@ func (b *recallBudget) read(path string, capBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, capBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(recallContextReader{ctx: ctx, reader: f}, capBytes+1))
 	if err != nil {
 		return nil, err
 	}
@@ -150,23 +178,29 @@ func (b *recallBudget) read(path string, capBytes int64) ([]byte, error) {
 	b.bytes += int64(len(raw))
 	return raw, nil
 }
-func (b *recallBudget) json(path string, value any, capBytes int64) (string, error) {
-	raw, err := b.read(path, capBytes)
+func (b *recallBudget) json(ctx context.Context, path string, value any, capBytes int64) (string, error) {
+	raw, err := b.read(ctx, path, capBytes)
 	if err != nil {
 		return "", err
 	}
-	if err := recallDecode(raw, value); err != nil {
+	if err := recallDecode(ctx, raw, value); err != nil {
 		return "", err
 	}
 	return recallSHA(raw), nil
 }
-func recallFloats(raw []byte, rows, dims int, corpus bool) ([][]float32, error) {
+func recallFloats(ctx context.Context, raw []byte, rows, dims int, corpus bool) ([][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if rows < 1 || dims != 128 || len(raw) != rows*dims*4 {
 		return nil, errors.New("FP32 shape/length mismatch")
 	}
 	result := make([][]float32, rows)
 	owned := make([]float32, rows*dims)
 	for row := 0; row < rows; row++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		result[row] = owned[row*dims : (row+1)*dims]
 		var norm, plane float64
 		for col := range result[row] {
@@ -184,11 +218,14 @@ func recallFloats(raw []byte, rows, dims int, corpus bool) ([][]float32, error) 
 			return nil, errors.New("FP32 normalization/oracle-plane mismatch")
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
-func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallReport) error {
+func recallReadDataset(ctx context.Context, b *recallBudget, path string, in *recallInput, r *recallReport) error {
 	var err error
-	if r.ManifestSHA256, err = b.json(filepath.Join(path, "manifest.json"), &r.Manifest, 64<<10); err != nil {
+	if r.ManifestSHA256, err = b.json(ctx, filepath.Join(path, "manifest.json"), &r.Manifest, 64<<10); err != nil {
 		return err
 	}
 	m := r.Manifest
@@ -207,7 +244,7 @@ func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallR
 		if !ok || f.Bytes != size || !recallHex(f.SHA256, 32) {
 			return nil, errors.New("dataset file identity/length mismatch")
 		}
-		raw, err := b.read(filepath.Join(path, name), size)
+		raw, err := b.read(ctx, filepath.Join(path, name), size)
 		if err != nil {
 			return nil, err
 		}
@@ -220,12 +257,15 @@ func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallR
 	if err != nil {
 		return err
 	}
-	docs, err := recallFloats(raw, 10000, 128, true)
+	docs, err := recallFloats(ctx, raw, 10000, 128, true)
 	if err != nil {
 		return err
 	}
 	in.vectors = make(map[string][]float32, 10069)
 	for i, v := range docs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		id := fmt.Sprintf("doc-%06d", i)
 		in.corpusIDs = append(in.corpusIDs, id)
 		in.vectors[id] = v
@@ -234,7 +274,7 @@ func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallR
 	if err != nil {
 		return err
 	}
-	if in.queries, err = recallFloats(raw, 16, 128, false); err != nil {
+	if in.queries, err = recallFloats(ctx, raw, 16, 128, false); err != nil {
 		return err
 	}
 	f, ok := m.Files["exact_truth.jsonl"]
@@ -245,9 +285,12 @@ func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallR
 	if err != nil {
 		return err
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
+	d := json.NewDecoder(recallContextReader{ctx: ctx, reader: bytes.NewReader(raw)})
 	d.DisallowUnknownFields()
 	for i := 0; i < 16; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var row struct {
 			QueryID     string   `json:"query_id"`
 			DocumentIDs []string `json:"document_ids"`
@@ -268,7 +311,11 @@ func recallReadDataset(b *recallBudget, path string, in *recallInput, r *recallR
 		in.exported = append(in.exported, row.DocumentIDs)
 	}
 	var extra any
-	if d.Decode(&extra) != io.EOF {
+	decodeErr := d.Decode(&extra)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if decodeErr != io.EOF {
 		return errors.New("extra truth query/trailing input")
 	}
 	return nil
@@ -377,20 +424,27 @@ func recallLogicalHash(op operation) (string, error) {
 	}
 	return "", errors.New("probe operation has invalid request kind")
 }
-func recallAdmitProbe(raw []byte, in *recallInput, r *recallReport) error {
+func recallAdmitProbe(ctx context.Context, raw []byte, in *recallInput, r *recallReport) error {
 	var events [2]struct {
 		Event  string
 		Report report
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
+	d := json.NewDecoder(recallContextReader{ctx: ctx, reader: bytes.NewReader(raw)})
 	d.DisallowUnknownFields()
 	for i := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := d.Decode(&events[i]); err != nil {
 			return err
 		}
 	}
 	var extra any
-	if d.Decode(&extra) != io.EOF || events[0].Event != "planned" || events[1].Event != "result" {
+	decodeErr := d.Decode(&extra)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if decodeErr != io.EOF || events[0].Event != "planned" || events[1].Event != "result" {
 		return errors.New("probe needs exactly planned/result events")
 	}
 	planned, result := events[0].Report, events[1].Report
@@ -417,6 +471,9 @@ func recallAdmitProbe(raw []byte, in *recallInput, r *recallReport) error {
 	}
 	lastCommit, revision := b.Retry.CommitIndex, uint64(1)
 	for i, expected := range plan {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		before, op := planned.Operations[i], result.Operations[i]
 		if !reflect.DeepEqual(before, expected) {
 			return errors.New("probe planned request differs from supported frozen plan")
@@ -459,7 +516,11 @@ func recallAdmitProbe(raw []byte, in *recallInput, r *recallReport) error {
 				Embedding []float32 `json:"embedding"`
 				Kind      string    `json:"kind"`
 			}
-			if err := recallDecode(op.InsertRequest.Document, &doc); err != nil || doc.Kind != "query-under-write" || !reflect.DeepEqual(doc.Embedding, op.InsertRequest.Vector) {
+			decodeErr := recallDecode(ctx, op.InsertRequest.Document, &doc)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if decodeErr != nil || doc.Kind != "query-under-write" || !reflect.DeepEqual(doc.Embedding, op.InsertRequest.Vector) {
 				return errors.New("probe document/vector mismatch")
 			}
 			in.vectors[id] = append([]float32(nil), op.InsertRequest.Vector...)
@@ -496,7 +557,7 @@ func recallAdmitProbe(raw []byte, in *recallInput, r *recallReport) error {
 		return err
 	}
 	r.HighestCommitIndex = lastCommit
-	return nil
+	return ctx.Err()
 }
 func recallLess(a, b public.NeighborV1) bool {
 	if a.Score != b.Score {
@@ -504,9 +565,12 @@ func recallLess(a, b public.NeighborV1) bool {
 	}
 	return a.ID < b.ID
 }
-func recallTop10(s *collections.CanonicalVectorPartitionCosineScorerV1, ids []string, vectors map[string][]float32) ([]public.NeighborV1, error) {
+func recallTop10(ctx context.Context, s *collections.CanonicalVectorPartitionCosineScorerV1, ids []string, vectors map[string][]float32) ([]public.NeighborV1, error) {
 	best := make([]public.NeighborV1, 0, 11)
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		score, err := s.ScoreV1(vectors[id])
 		if err != nil {
 			return nil, err
@@ -517,20 +581,38 @@ func recallTop10(s *collections.CanonicalVectorPartitionCosineScorerV1, ids []st
 			best = best[:10]
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return best, nil
 }
-func recallPlan(in *recallInput, r *recallReport) error {
+func recallPlan(ctx context.Context, in *recallInput, r *recallReport) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(in.queries) != 16 || len(in.exported) != 16 || len(in.corpusIDs) < 10 || in.config.VectorInitialization.IndexDefinition.EfSearch < 10 {
 		return errors.New("recall needs sixteen top10 queries and configured EfSearch>=10")
 	}
 	ids := make([]string, 0, len(in.vectors))
 	for id := range in.vectors {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ids = append(ids, id)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	sort.Strings(ids)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	population := sha256.New()
 	var word [4]byte
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		binary.LittleEndian.PutUint32(word[:], uint32(len(id)))
 		_, _ = population.Write(word[:])
 		_, _ = population.Write([]byte(id))
@@ -542,11 +624,14 @@ func recallPlan(in *recallInput, r *recallReport) error {
 	r.PopulationSHA256 = hex.EncodeToString(population.Sum(nil))
 	r.PopulationRows = len(ids)
 	for i, q := range in.queries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(q)
 		if err != nil {
 			return err
 		}
-		corpus, err := recallTop10(scorer, in.corpusIDs, in.vectors)
+		corpus, err := recallTop10(ctx, scorer, in.corpusIDs, in.vectors)
 		if err != nil {
 			return err
 		}
@@ -555,7 +640,7 @@ func recallPlan(in *recallInput, r *recallReport) error {
 				return errors.New("canonical corpus oracle differs from unchanged exported truth")
 			}
 		}
-		truth, err := recallTop10(scorer, ids, in.vectors)
+		truth, err := recallTop10(ctx, scorer, ids, in.vectors)
 		if err != nil {
 			return err
 		}
@@ -564,7 +649,7 @@ func recallPlan(in *recallInput, r *recallReport) error {
 			Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 32}}
 		r.Queries = append(r.Queries, recallQuery{QueryID: fmt.Sprintf("query-%06d", i), RequestSHA256: hashJSON(request), Outcome: "unissued", Request: request, CorpusTruth: corpus, Truth: truth})
 	}
-	return nil
+	return ctx.Err()
 }
 func recallValidateResponse(q *recallQuery, response public.SearchResponseV1, vectors map[string][]float32) (float64, error) {
 	c := response.Counters
@@ -665,7 +750,10 @@ func recallRunQueries(ctx context.Context, client vectorClient, in *recallInput,
 	}
 	return nil
 }
-func recallEmit(output io.Writer, event string, r *recallReport) error {
+func recallEmit(ctx context.Context, output io.Writer, event string, r *recallReport) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(struct {
 		Event  string
 		Report *recallReport
@@ -677,22 +765,34 @@ func recallEmit(output io.Writer, event string, r *recallReport) error {
 		return errors.New("recall event exceeds retained byte bound")
 	}
 	raw = append(raw, '\n')
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	_, err = output.Write(raw)
-	return err
+	return errors.Join(err, ctx.Err())
 }
 func runRecall(parent context.Context, o recallOptions, output io.Writer) (runErr error) {
+	ctx, cancel := context.WithTimeout(parent, o.Timeout)
+	defer cancel()
 	r := recallReport{Version: 1, Kind: "fixed_cluster_quiescent_recall_v1", Verdict: "FAILED", Phase: o.Phase, RunID: o.RunID,
 		Scope:         "operationally quiescent RF4 one-group native recall; no query watermark, paired comparison, concurrent recall or sustained capacity claim",
 		ScoreContract: collections.VectorPartitionCanonicalScoreContractV1, Timeout: o.Timeout, RPCTimeout: o.RPCTimeout}
 	defer func() {
+		if runErr == nil {
+			runErr = ctx.Err()
+		}
 		if runErr != nil {
 			r.Verdict = "FAILED"
 			r.Error = recallError(runErr)
 		}
 		recallFinish(&r)
-		runErr = errors.Join(runErr, recallEmit(output, "result", &r))
+		// Preserve failure evidence after cancellation; root bounds blocking output externally.
+		runErr = errors.Join(runErr, recallEmit(context.WithoutCancel(ctx), output, "result", &r))
 	}()
 	if err := validateProbeTimeouts(o.Timeout, o.RPCTimeout); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if o.Config == "" || o.Bootstrap == "" || o.Dataset == "" || o.Provenance == "" || !asciiID(o.RunID) ||
@@ -702,22 +802,31 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 	var in recallInput
 	var budget recallBudget
 	var err error
-	if r.ConfigSHA256, err = budget.json(o.Config, &in.config, 8<<20); err != nil {
+	if r.ConfigSHA256, err = budget.json(ctx, o.Config, &in.config, 8<<20); err != nil {
 		return err
 	}
-	if r.BootstrapSHA256, err = budget.json(o.Bootstrap, &in.bootstrap, 4<<20); err != nil {
+	if r.BootstrapSHA256, err = budget.json(ctx, o.Bootstrap, &in.bootstrap, 4<<20); err != nil {
 		return err
 	}
 	if r.ConfigIdentity, err = nativewire.InspectFixedPeerTCPConfigV1(in.config); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if r.Generation, err = admitBootstrap(in.config, in.bootstrap); err != nil {
 		return err
 	}
-	if err = recallReadDataset(&budget, o.Dataset, &in, &r); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if r.ProvenanceSHA256, err = budget.json(o.Provenance, &r.Provenance, 64<<10); err != nil {
+	if err = recallReadDataset(ctx, &budget, o.Dataset, &in, &r); err != nil {
+		return err
+	}
+	if r.ProvenanceSHA256, err = budget.json(ctx, o.Provenance, &r.Provenance, 64<<10); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err = recallValidateProvenance(&in, &r); err != nil {
@@ -728,7 +837,7 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 	}
 	r.HighestCommitIndex = in.bootstrap.Retry.CommitIndex
 	if o.Phase == "post-only" {
-		raw, err := budget.read(o.Probe, 16<<20)
+		raw, err := budget.read(ctx, o.Probe, 16<<20)
 		if err != nil {
 			return err
 		}
@@ -736,11 +845,14 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 		if r.ProbeSHA256 != r.Provenance.ProbeSHA256 {
 			return errors.New("probe file/provenance hash mismatch")
 		}
-		if err := recallAdmitProbe(raw, &in, &r); err != nil {
+		if err := recallAdmitProbe(ctx, raw, &in, &r); err != nil {
 			return err
 		}
 	}
-	if err := recallPlan(&in, &r); err != nil {
+	if err := recallPlan(ctx, &in, &r); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	executable, err := os.Executable()
@@ -752,18 +864,22 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 		return err
 	}
 	h := sha256.New()
-	_, err = io.Copy(h, f)
+	_, err = io.Copy(h, recallContextReader{ctx: ctx, reader: f})
 	closeErr := f.Close()
 	if err != nil || closeErr != nil {
 		return errors.Join(err, closeErr)
 	}
 	r.BinarySHA256 = hex.EncodeToString(h.Sum(nil))
 	recallFinish(&r)
-	if err := recallEmit(output, "planned", &r); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(parent, o.Timeout)
-	defer cancel()
+	if err := recallEmit(ctx, output, "planned", &r); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	control, err := nativewire.NewFixedPeerTCPClientV1(in.config)
 	if err != nil {
 		return err
@@ -796,6 +912,9 @@ func runRecall(parent context.Context, o recallOptions, output io.Writer) (runEr
 		return err
 	}
 	if err := observe(&r.ReadinessAfter); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	r.Verdict = "ACCEPT_QUIESCENT_RECALL_OBSERVATION"
