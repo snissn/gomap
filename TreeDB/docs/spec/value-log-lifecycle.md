@@ -49,6 +49,51 @@ Record CRC verification precedes a mapped cache hit; cache identity includes the
 verification mode and frame shape. Physical identity pins, segment reachability,
 eviction and close retain their existing lifetime rules.
 
+### 1.3 Durable raw-frame read cost
+
+Ordinary raw value batches protected by the cached redo/journal or the public
+command WAL bound their grouping count by the normalized
+`ValueLog.BlockTargetCompressedBytes` target (4096 bytes by default), treating
+that target as raw payload bytes when compression is off or the selector chooses
+raw. Both the queued request planner and ordinary batch append use the largest
+actual encoded value in their batch to cap K. Mixed-size grouped raw payloads
+therefore stay within the target; a single value larger than the target remains
+one record. Existing smaller record-count limits still apply. Framing bytes are
+additional to the payload target.
+
+The public command-WAL layer disables the cached redo/journal because it owns
+command append/sync durability; that is distinct from WAL-off benchmark ingest and remains
+eligible for this byte bound.
+
+This reduces whole-record CRC read amplification without skipping verification
+or caching a prior verification result. WAL-off benchmark ingest retains its existing
+throughput grouping, and the dedicated outer-leaf lane retains its own K policy.
+Dictionary/block compression and their writer-level keep/reject decisions retain
+their existing grouping policies. In particular, an initial auto/balanced
+forced-pointer block batch may bootstrap a larger compressed group, reject the
+compression, and persist that whole group raw. A local random 4 KiB-value batch
+produced a 128 KiB raw payload through this route; it is outside the raw chooser
+bound. Full-profile evidence would need to justify separately splitting rejected
+writer/prepared compressed frames before changing that compression policy. Existing pointers and frame encodings remain
+valid, and ACK, sync, retention, GC and rewrite authority are unchanged.
+
+Measure isolated raw-frame read cost with:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' \
+  -bench '^BenchmarkValueLogRawFrameRead$' -benchmem -benchtime=1s -count=3
+```
+
+The benchmark appends through the ordinary production raw planner, closes the
+writer, and warms a sealed mapped read before timing owned `ReadAppend` results.
+It reports allocation costs, CRC checks per read and physical record CRC bytes
+per returned byte, including frame/header metadata. CRC-byte accounting derives
+from each pointer's persisted record header; it is not an inferred grouping K.
+Use matched heads on the same host. This package microbenchmark does not prove
+public load/update/checkpoint/footprint guardrails or durable Quicksilver hit
+throughput; qualify those with the public native harness. Go test benchmark text
+and optional profiles are standalone evidence, not benchprof artifact inputs.
+
 ## 2. Segment States
 
 Conceptually, a value-log segment can be:
