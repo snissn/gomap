@@ -155,6 +155,9 @@ func (r *FixedPeerTCPRuntimeV1) derivePreparedVectorInitializationV1(ctx context
 	if err != nil {
 		return nil, err
 	}
+	if status == nil || status.Completion == nil {
+		return nil, errors.New("nativewire: local voter has no validated prepared generation")
+	}
 	store, err := collections.OpenExistingVectorPartitionStoreV1(db.Dir())
 	if err != nil {
 		return nil, err
@@ -203,6 +206,9 @@ func (r *FixedPeerTCPRuntimeV1) validatePreparedVectorAllVotersV1(ctx context.Co
 	local, err := r.vectorPrepareStatusV1(ctx)
 	if err != nil {
 		return err
+	}
+	if local == nil || local.Completion == nil {
+		return errors.New("nativewire: local voter has no validated prepared generation")
 	}
 	for _, peer := range r.config.Groups[0].Peers {
 		var state *fixedPeerVectorPrepareStatusV1
