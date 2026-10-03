@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,6 +46,143 @@ func TestFixedPeerFixtureRetainsBootstrapListenersV1(t *testing.T) {
 				_ = stolen.Close()
 			}
 		}
+	}
+}
+
+func TestFixedPeerInitializationListenerOwnershipV1(t *testing.T) {
+	t.Run("enumerate_bind_transfer", func(t *testing.T) {
+		config, _, err := validateFixedPeerConfigV1(initializationTestConfigsV1(t)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Expected roles come from the validated intent, not the enumerator.
+		roles := []string{config.ListenAddress, config.VectorInitialization.PublicAddresses[config.NodeID]}
+		for _, address := range config.RaftListen {
+			roles = append(roles, address)
+		}
+		for group, peers := range config.VectorInitialization.ShardAddresses {
+			if _, hosted := config.RaftListen[group]; hosted {
+				roles = append(roles, peers[config.NodeID])
+			}
+		}
+		slices.Sort(roles)
+		if got := fixedPeerTCPListenAddressesV1(config); !slices.Equal(got, roles) {
+			t.Fatalf("initialization roles omitted: got=%v want=%v", got, roles)
+		}
+		expected := make(map[string]net.Listener)
+		fixedPeerTestListenersV1.Lock()
+		for _, address := range roles {
+			expected[address] = fixedPeerTestListenersV1.listeners[address]
+		}
+		fixedPeerTestListenersV1.Unlock()
+		for _, address := range roles {
+			if expected[address] == nil {
+				t.Fatalf("fixture did not retain initialization role %s", address)
+			}
+			if stolen, err := net.Listen("tcp", address); err == nil {
+				stolen.Close()
+				t.Fatalf("initialization role could be stolen: %s", address)
+			}
+		}
+		supplied := fixedPeerTakeTestListenersV1(config)
+		defer func() {
+			for _, listener := range supplied {
+				listener.Close()
+			}
+		}()
+		owned, err := bindFixedPeerTCPListenersV1(config, supplied)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			for _, listener := range owned {
+				listener.Close()
+			}
+		}()
+		reserveFixedPeerDormantListenersV1(config, owned)
+		for _, address := range []string{config.VectorInitialization.PublicAddresses[config.NodeID], config.VectorInitialization.ShardAddresses[config.Groups[0].ID][config.NodeID]} {
+			if _, ok := owned[address].(*fixedPeerTCPReservationV1); !ok {
+				t.Fatalf("initialization role has no dormant refusal owner: %s", address)
+			}
+			fixedPeerAssertDormantRefusalV1(t, address)
+		}
+		runtime := &FixedPeerTCPRuntimeV1{listeners: owned}
+		for _, address := range roles {
+			listener, err := runtime.takeListenerV1(address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if listener != expected[address] {
+				listener.Close()
+				t.Fatalf("initialization transfer replaced role socket %s", address)
+			}
+			listener.Close()
+		}
+		if len(owned) != 0 {
+			t.Fatalf("transferred roles remain owned: %v", owned)
+		}
+		// Non-hosted shard roles stay excluded; duplicates remain canonical.
+		filtered := config
+		filtered.VectorInitialization = cloneFixedPeerVectorInitializationV1(config.VectorInitialization)
+		filtered.VectorInitialization.ShardAddresses["unhosted"] = map[raftcluster.NodeID]string{config.NodeID: config.VectorInitialization.PublicAddresses[config.Nodes[1].ID]}
+		filtered.VectorInitialization.PublicAddresses[config.NodeID] = config.ListenAddress
+		want := slices.DeleteFunc(slices.Clone(roles), func(address string) bool {
+			return address == config.VectorInitialization.PublicAddresses[config.NodeID]
+		})
+		if got := fixedPeerTCPListenAddressesV1(filtered); !slices.Equal(got, want) {
+			t.Fatalf("initialization hosted/dedup roles: got=%v want=%v", got, want)
+		}
+	})
+	t.Run("intent_collision_cleanup", func(t *testing.T) {
+		config, _, err := validateFixedPeerConfigV1(initializationTestConfigsV1(t)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		address := config.VectorInitialization.PublicAddresses[config.NodeID]
+		supplied := fixedPeerTakeTestListenersV1(config)
+		blocked := supplied[address]
+		if blocked == nil {
+			t.Fatal("intent public role was not transferred from allocator")
+		}
+		delete(supplied, address)
+		defer blocked.Close()
+		defer func() {
+			for _, listener := range supplied {
+				listener.Close()
+			}
+		}()
+		owned, err := bindFixedPeerTCPListenersV1(config, supplied)
+		if err == nil {
+			for _, listener := range owned {
+				listener.Close()
+			}
+			t.Fatal("occupied initialization role admitted")
+		}
+		for address := range supplied {
+			probe, err := net.Listen("tcp", address)
+			if err != nil {
+				t.Fatalf("failed initialization bind leaked owned role %s: %v", address, err)
+			}
+			probe.Close()
+		}
+	})
+}
+
+func fixedPeerAssertDormantRefusalV1(t testing.TB, address string) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatalf("reserved role is not listening %s: %v", address, err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := conn.Read(make([]byte, 1))
+	// Winsock WSAECONNRESET differs from syscall's portable ECONNRESET value.
+	reset := errors.Is(err, syscall.ECONNRESET) || runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10054))
+	if n != 0 || !errors.Is(err, io.EOF) && !reset {
+		t.Fatalf("dormant role did not promptly refuse %s: bytes=%d err=%v", address, n, err)
 	}
 }
 
