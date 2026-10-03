@@ -1964,6 +1964,10 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 }
 
 func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error) {
+	return startSuiteRuntimeProfiles(cfg, columnStoreSuiteBenchTestName)
+}
+
+func startSuiteRuntimeProfiles(cfg BenchConfig, testName string) (func() error, error) {
 	type runtimeProfileCleanup struct {
 		finish func() error
 		abort  func() error
@@ -1986,7 +1990,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		return out
 	}
 
-	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
+	if shouldAllocsProfile(cfg, testName) {
 		restoreMemRate := installAllocsProfileRateForEnabled(true, cfg.AllocsProfileRate)
 		restore := func() error {
 			restoreMemRate()
@@ -2010,7 +2014,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		f, err := os.Create(blockProfile)
 		if err != nil {
 			_ = abort()
-			return nil, fmt.Errorf("column_store: blockprofile: %w", err)
+			return nil, fmt.Errorf("%s: blockprofile: %w", testName, err)
 		}
 		runtime.SetBlockProfileRate(rate)
 		cleanups = append(cleanups, runtimeProfileCleanup{
@@ -2040,7 +2044,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		f, err := os.Create(mutexProfile)
 		if err != nil {
 			_ = abort()
-			return nil, fmt.Errorf("column_store: mutexprofile: %w", err)
+			return nil, fmt.Errorf("%s: mutexprofile: %w", testName, err)
 		}
 		prevFrac := runtime.SetMutexProfileFraction(frac)
 		cleanups = append(cleanups, runtimeProfileCleanup{
@@ -2067,13 +2071,13 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		f, err := os.Create(traceProfile)
 		if err != nil {
 			_ = abort()
-			return nil, fmt.Errorf("column_store: trace: %w", err)
+			return nil, fmt.Errorf("%s: trace: %w", testName, err)
 		}
 		if err := trace.Start(f); err != nil {
 			_ = f.Close()
 			_ = os.Remove(traceProfile)
 			_ = abort()
-			return nil, fmt.Errorf("column_store: trace start: %w", err)
+			return nil, fmt.Errorf("%s: trace start: %w", testName, err)
 		}
 		cleanups = append(cleanups, runtimeProfileCleanup{
 			finish: func() error {

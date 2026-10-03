@@ -376,3 +376,19 @@ WriteSync-only update acknowledgement samples, a separate fixed-present owned
 Get concurrent reader, and explicitly scoped process IO counters. See
 [its measured boundaries](../../docs/benchmarks/treedb_quicksilver_workflow/README.md);
 these package packets are not benchprof profile-dir artifacts.
+
+The native `unified-bench -suite quicksilver` exports ordinary results and
+per-engine `quicksilver_hits/misses/mixed/concurrent` CPU/allocation captures.
+Initial/final checkpoint labels are loaded from `checkpoint_durations_seconds`
+so underscore-containing engine names parse correctly. `TreeDB` and
+`TreeDB (bench_unsafe)` remain separate canonical result, stats, checkpoint and
+throughput-table labels when both adapters are selected. `quicksilver_results.json`
+contains the detailed workload oracle, timing, latency and process-allocation
+observations; it is supplementary to the canonical benchprof inputs. Shared
+block/mutex/trace artifacts cover the whole multi-engine suite, including setup
+and verification. Throughput and profile-overhead observations must remain
+separate. See the [suite contract and commands](../unified_bench/README.md#quicksilver-shaped-kv-workload).
+
+Quicksilver canonical results also produce a point-read throughput table in
+`insights.md/html` and `quicksilver_ops` rows in `insights.json`. These read
+phases remain separate from the scan-specific throughput comparisons.

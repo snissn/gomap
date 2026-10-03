@@ -1099,7 +1099,7 @@ func NewTreeDBBenchUnsafe(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return wrapTreeDBAdapter(db, "TreeDB"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (bench_unsafe)"), nil
 }
 
 func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {

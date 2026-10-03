@@ -506,18 +506,28 @@ func main() {
 	} else {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
-	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
-	fmt.Fprintf(os.Stderr, "             read_workers=%d\n", resolveReadWorkers(*readWorkers))
-	fmt.Fprintf(os.Stderr, "             key_shape=%s\n", strings.TrimSpace(*keyShapeArg))
-	if *rangeQueries > 0 {
-		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
+	if strings.EqualFold(strings.TrimSpace(*suiteArg), "quicksilver") {
+		c, err := resolveQuicksilverConfig(BenchConfig{Keys: *numKeys, ReadWorkers: *readWorkers, ValueSize: *valSize, BatchSize: *batchSize}, isSet)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "Quicksilver: case=%s keys=%d valsize=%d key_bytes=32 shared_prefix=24 load_batch=1000\n", c.Case, c.Keys, c.valueSize())
+		fmt.Fprintf(os.Stderr, "             readers=%d aggregate_reads=%d snapshot_reads=%d updates=%d duration=%s GOMAXPROCS=%d\n", c.Workers, c.Reads, c.ReadBatch, c.Updates, c.Duration, runtime.GOMAXPROCS(0))
+		fmt.Fprintf(os.Stderr, "DBs:         %s\nPhases:      %s\n", *dbsArg, strings.Join(quicksilverPhaseNames, ","))
+	} else {
+		fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
+		fmt.Fprintf(os.Stderr, "             read_workers=%d\n", resolveReadWorkers(*readWorkers))
+		fmt.Fprintf(os.Stderr, "             key_shape=%s\n", strings.TrimSpace(*keyShapeArg))
+		if *rangeQueries > 0 {
+			fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
+		}
+		if contains(selectedTests, "batch_delete_range") {
+			fmt.Fprintf(os.Stderr, "             batch_delete_range_width=%d batch_delete_ranges_per_batch=%d validate=%t refill=%t\n",
+				effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
+		}
+		fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
+		fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
 	}
-	if contains(selectedTests, "batch_delete_range") {
-		fmt.Fprintf(os.Stderr, "             batch_delete_range_width=%d batch_delete_ranges_per_batch=%d validate=%t refill=%t\n",
-			effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
-	}
-	fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
-	fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
 	selectedDBs := resolveDBs(*dbsArg, *dbsExcludeArg)
 	runsTreeDB := false
 	for _, name := range selectedDBs {
@@ -529,10 +539,12 @@ func main() {
 	hasAllTests := contains(selectedTests, "all")
 	runsBatchWrite := hasAllTests || contains(selectedTests, "batch_write")
 	runsBatchWriteSteady := hasAllTests || contains(selectedTests, "batch_write_steady")
-	if runsTreeDB && runsBatchWrite && !runsBatchWriteSteady {
+	if !strings.EqualFold(*suiteArg, "quicksilver") && runsTreeDB && runsBatchWrite && !runsBatchWriteSteady {
 		fmt.Fprintf(os.Stderr, "Note:        TreeDB batch_write reports front-end ingest only; use batch_write_steady for settled backend throughput.\n")
 	}
-	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
+	if !strings.EqualFold(*suiteArg, "quicksilver") {
+		fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
+	}
 	fmt.Fprintf(os.Stderr, "\n")
 
 	logResolvedTreeDBOptions()
@@ -638,6 +650,16 @@ func main() {
 			out, err := runGethHotKVSuite(baseCfg)
 			if err != nil {
 				log.Fatalf("geth_hot_kv suite: %v", err)
+			}
+			fmt.Print(out)
+		case "quicksilver":
+			cfg, err := resolveQuicksilverConfig(baseCfg, isSet)
+			if err != nil {
+				log.Fatal(err)
+			}
+			out, err := runQuicksilverSuite(baseCfg, cfg, strings.TrimSpace(*profileDir))
+			if err != nil {
+				log.Fatal(err)
 			}
 			fmt.Print(out)
 		case "readme":

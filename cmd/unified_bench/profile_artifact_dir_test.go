@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -177,5 +182,139 @@ func TestContentionProfilePath(t *testing.T) {
 	want := filepath.Join(dir, "block_random_read_batch_treedb__vlog_off_.pprof")
 	if got != want {
 		t.Fatalf("contentionProfilePath = %q, want %q", got, want)
+	}
+}
+
+func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "unified-bench")
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+	for _, bad := range [][]string{{"-keys=0"}, {"-quicksilver-case=bad"}, {"-dbs=not_registered"}, {"-quicksilver-read-batch=0"}, {"-quicksilver-duration=0"}, {"-checkpoint-settle-before-tests=all"}, {"-range-span=50"}, {"-format=markdown"}} {
+		args := append([]string{"-suite=quicksilver", "-dbs=treedb"}, bad...)
+		if out, err := exec.Command(binaryPath, args...).CombinedOutput(); err == nil {
+			t.Fatalf("invalid args %v succeeded: %s", bad, out)
+		}
+	}
+	for _, batch := range []string{"1", "64"} {
+		for _, selection := range [][]string{{"-dbs=leveldb"}, {"-dbs=leveldb_block_comp_on"}, {"-dbs=leveldb_block_comp_off"}, {"-dbs=treedb,leveldb", "-leveldb-block-compression=both"}, {"-dbs=all"}} {
+			args := append([]string{"-suite=quicksilver", "-keys=17", "-quicksilver-reads=41", "-quicksilver-duration=1ms", "-quicksilver-read-batch=" + batch}, selection...)
+			out, err := exec.Command(binaryPath, args...).CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "checkpoint closes/reopens") || strings.Contains(string(out), "failed DB retained") {
+				t.Fatalf("LevelDB must fail before opening: args=%v err=%v: %s", args, err, out[:min(len(out), 1500)])
+			}
+		}
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command(binaryPath, "-suite=quicksilver", "-dbs=treedb,treedb_bench_unsafe", "-profile=durable", "-keys=17", "-read-workers=3", "-quicksilver-case=structured256", "-quicksilver-reads=41", "-quicksilver-duration=10ms", "-profile-dir="+dir)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("CLI: %v: %s", err, stderr.String())
+	}
+	var stdoutReports []quicksilverResult
+	if err := json.Unmarshal(stdout, &stdoutReports); err != nil {
+		t.Fatalf("stdout must be JSON: %v: %s", err, stdout[:min(len(stdout), 512)])
+	}
+	if len(stdoutReports) != 2 {
+		t.Fatalf("stdout reports: %s", stdout)
+	}
+	for _, name := range []string{"quicksilver_results.json", "benchprof_results.json", "benchprof_results.md", "insights.json", "insights.md", "insights.html", "block.pprof", "mutex.pprof", "trace.out", "cpu_quicksilver_hits_treedb.pprof", "allocs_quicksilver_hits_treedb.pprof", "checkpoint_cpu_checkpoint_quicksilver_initial_treedb.pprof", "checkpoint_cpu_checkpoint_quicksilver_final_treedb.pprof"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || info.Size() == 0 {
+			t.Fatalf("missing artifact %s: %v", name, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "quicksilver_results.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reports []quicksilverResult
+	if err = json.Unmarshal(raw, &reports); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRaw, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canonical benchprofExport
+	if err := json.Unmarshal(canonicalRaw, &canonical); err != nil || len(canonical.Runs) != 1 {
+		t.Fatalf("canonical export: %v: %s", err, canonicalRaw)
+	}
+	run := canonical.Runs[0]
+	markdown, err := os.ReadFile(filepath.Join(dir, "benchprof_results.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := map[string]bool{}
+	for _, line := range strings.Split(string(markdown), "\n") {
+		lines[strings.Join(strings.Fields(line), " ")] = true
+	}
+	if !lines["Test TreeDB TreeDB (bench_unsafe)"] {
+		t.Fatalf("variant columns lost: %s", markdown)
+	}
+	if len(reports) != 2 || len(run.TreeDBStats) != 2 {
+		t.Fatalf("variant reports/stats lost: %s", canonicalRaw)
+	}
+	for i, r := range reports {
+		wantName, wantProfile := "TreeDB", "command_wal_durable"
+		if i == 1 {
+			wantName, wantProfile = "TreeDB (bench_unsafe)", "bench_unsafe"
+		}
+		if r.DBName != wantName || stdoutReports[i].DBName != wantName || r.FinalStats["treedb.profile.resolved"] != wantProfile || r.VerifiedKeys != 17 || r.VerifiedMisses != 17 || r.Config.Reads != 41 {
+			t.Fatalf("incorrect variant settings/counts: %+v", r)
+		}
+		for _, p := range r.Phases {
+			if len(run.Results[p.Name]) != 2 || run.Results[p.Name][wantName] != p.OpsPerSec {
+				t.Fatalf("variant result lost: %+v", run.Results[p.Name])
+			}
+			for _, prefix := range []string{"cpu_", "allocs_"} {
+				name := prefix + p.Name + "_" + r.Engine + ".pprof"
+				info, err := os.Stat(filepath.Join(dir, name))
+				if err != nil || info.Size() == 0 {
+					t.Fatalf("missing artifact %s: %v", name, err)
+				}
+			}
+		}
+		for _, p := range r.Phases[:3] {
+			if p.Ops != 41 {
+				t.Fatalf("aggregate count %d", p.Ops)
+			}
+		}
+		for phase, ms := range map[string]float64{"quicksilver_initial": r.InitialCheckpointMS, "quicksilver_final": r.FinalCheckpointMS} {
+			seconds := run.CheckpointDurationsSeconds[phase]
+			if len(seconds) != 2 || math.Abs(seconds[wantName]-ms/1000) > 1e-9 {
+				t.Fatalf("variant checkpoint lost: %s: %+v", phase, seconds)
+			}
+		}
+	}
+	for _, name := range quicksilverPhaseNames {
+		row := name + " " + formatFloat(run.Results[name]["TreeDB"]) + " " + formatFloat(run.Results[name]["TreeDB (bench_unsafe)"])
+		if !lines[row] {
+			t.Fatalf("actual variant values missing: %s", row)
+		}
+	}
+	insightsRaw, err := os.ReadFile(filepath.Join(dir, "insights.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var insights struct {
+		Rows []struct {
+			Phase     string  `json:"phase"`
+			Engine    string  `json:"engine"`
+			OpsPerSec float64 `json:"ops_per_sec"`
+		} `json:"quicksilver_ops"`
+	}
+	if err := json.Unmarshal(insightsRaw, &insights); err != nil || len(insights.Rows) != 8 {
+		t.Fatalf("consumer lost variants: %v: %s", err, insightsRaw)
+	}
+	for _, row := range insights.Rows {
+		if run.Results[row.Phase][row.Engine] != row.OpsPerSec {
+			t.Fatalf("consumer changed result: %+v", row)
+		}
 	}
 }

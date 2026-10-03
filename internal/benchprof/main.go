@@ -32,10 +32,11 @@ type config struct {
 }
 
 type report struct {
-	GeneratedAt string `json:"generated_at"`
-	ProfilesDir string `json:"profiles_dir"`
-	Binary      string `json:"binary"`
-	OpsSource   string `json:"ops_source,omitempty"`
+	QuicksilverOps []quicksilverOpsRow `json:"quicksilver_ops,omitempty"`
+	GeneratedAt    string              `json:"generated_at"`
+	ProfilesDir    string              `json:"profiles_dir"`
+	Binary         string              `json:"binary"`
+	OpsSource      string              `json:"ops_source,omitempty"`
 
 	OpsRows             []opsRow                      `json:"ops_rows,omitempty"`
 	CPUProfiles         []pprofSummary                `json:"cpu_profiles,omitempty"`
@@ -53,6 +54,12 @@ type report struct {
 	Warnings []string `json:"warnings,omitempty"`
 
 	InvestigationTargets []investigationTarget `json:"investigation_targets,omitempty"`
+}
+
+type quicksilverOpsRow struct {
+	Phase     string  `json:"phase"`
+	Engine    string  `json:"engine"`
+	OpsPerSec float64 `json:"ops_per_sec"`
 }
 
 type opsRow struct {
@@ -133,10 +140,11 @@ type benchprofResultsFile struct {
 }
 
 type benchprofResultsRun struct {
-	Keys                int                           `json:"keys"`
-	Results             map[string]map[string]float64 `json:"results"`
-	TreeDBStats         map[string]map[string]string  `json:"treedb_stats,omitempty"`
-	CollectionWorkloads []benchprofCollectionWorkload `json:"collection_workloads,omitempty"`
+	CheckpointDurationsSeconds map[string]map[string]float64 `json:"checkpoint_durations_seconds,omitempty"`
+	Keys                       int                           `json:"keys"`
+	Results                    map[string]map[string]float64 `json:"results"`
+	TreeDBStats                map[string]map[string]string  `json:"treedb_stats,omitempty"`
+	CollectionWorkloads        []benchprofCollectionWorkload `json:"collection_workloads,omitempty"`
 }
 
 type benchprofCollectionWorkload struct {
@@ -224,8 +232,8 @@ func runFromConfig(cfg config) error {
 		return fmt.Errorf("write json: %w", err)
 	}
 
-	fmt.Printf("wrote markdown: %s\n", cfg.outMarkdown)
-	fmt.Printf("wrote json:     %s\n", cfg.outJSON)
+	fmt.Fprintf(os.Stderr, "wrote markdown: %s\n", cfg.outMarkdown)
+	fmt.Fprintf(os.Stderr, "wrote json:     %s\n", cfg.outJSON)
 
 	htmlDoc, err := markdownToHTMLDoc(md)
 	if err != nil {
@@ -234,7 +242,7 @@ func runFromConfig(cfg config) error {
 	if err := os.WriteFile(cfg.outHTML, htmlDoc, 0o644); err != nil {
 		return fmt.Errorf("write html: %w", err)
 	}
-	fmt.Printf("wrote html:     %s\n", cfg.outHTML)
+	fmt.Fprintf(os.Stderr, "wrote html:     %s\n", cfg.outHTML)
 	return nil
 }
 
@@ -327,7 +335,12 @@ func buildReport(cfg config) (report, error) {
 		rep.OpsRows = rows
 		rep.OpsSource = source
 	}
-	if len(rep.OpsRows) == 0 {
+	if rows, err := loadQuicksilverOps(cfg.profilesDir); err != nil {
+		rep.Warnings = append(rep.Warnings, err.Error())
+	} else {
+		rep.QuicksilverOps = rows
+	}
+	if len(rep.OpsRows) == 0 && len(rep.QuicksilverOps) == 0 {
 		rep.Warnings = append(rep.Warnings, "no scan ops found; unified-bench -profile-dir now writes benchprof_results.json automatically")
 	}
 	if stats, err := loadTreeDBStatsMetadata(cfg.profilesDir); err != nil {
@@ -612,6 +625,40 @@ func splitProfileTail(tail string, knownTests map[string]struct{}) (testName, db
 	return tail, ""
 }
 
+// Point reads use their own table so scan-specific comparisons retain their meaning.
+func loadQuicksilverOps(profilesDir string) ([]quicksilverOpsRow, error) {
+	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %q: %w", path, err)
+	}
+	var parsed benchprofResultsFile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", path, err)
+	}
+	var rows []quicksilverOpsRow
+	for _, run := range parsed.Runs {
+		for phase, engines := range run.Results {
+			if !strings.HasPrefix(phase, "quicksilver_") {
+				continue
+			}
+			for engine, ops := range engines {
+				rows = append(rows, quicksilverOpsRow{Phase: phase, Engine: engine, OpsPerSec: ops})
+			}
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Phase != rows[j].Phase {
+			return rows[i].Phase < rows[j].Phase
+		}
+		return rows[i].Engine < rows[j].Engine
+	})
+	return rows, nil
+}
+
 func loadKnownTests(profilesDir string) map[string]struct{} {
 	tests := make(map[string]struct{})
 	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
@@ -629,6 +676,11 @@ func loadKnownTests(profilesDir string) map[string]struct{} {
 		return tests
 	}
 	for _, run := range parsed.Runs {
+		for name := range run.CheckpointDurationsSeconds {
+			if strings.TrimSpace(name) != "" {
+				tests[name] = struct{}{}
+			}
+		}
 		for testName := range run.Results {
 			if strings.TrimSpace(testName) == "" {
 				continue
@@ -1698,6 +1750,15 @@ func renderMarkdown(rep report) string {
 				formatOps(row.Prefix),
 				ratio,
 			))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(rep.QuicksilverOps) > 0 {
+		sb.WriteString("## Quicksilver Point Reads\n\n")
+		sb.WriteString("| Phase | Engine | Ops/Sec |\n|---|---|---:|\n")
+		for _, row := range rep.QuicksilverOps {
+			sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n", row.Phase, row.Engine, formatOps(row.OpsPerSec)))
 		}
 		sb.WriteString("\n")
 	}
