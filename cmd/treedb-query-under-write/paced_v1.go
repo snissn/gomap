@@ -620,7 +620,9 @@ func runPacedWindow(parent context.Context, o pacedOptions, output io.Writer) (r
 	readers, err := windowConnect(ctx, o.Window.Concurrency, r.Admission.RPCTimeout, dial)
 	defer func() {
 		for _, c := range readers {
-			runErr = errors.Join(runErr, c.Close())
+			if c != nil {
+				runErr = errors.Join(runErr, c.Close())
+			}
 		}
 	}()
 	if err != nil {
@@ -644,7 +646,11 @@ func runPacedWindow(parent context.Context, o pacedOptions, output io.Writer) (r
 		return err
 	}
 	writer := owned[0]
-	defer func() { runErr = errors.Join(runErr, writer.Close()) }()
+	defer func() {
+		if writer != nil {
+			runErr = errors.Join(runErr, writer.Close())
+		}
+	}()
 	if gate != nil {
 		if err := gate.wait(ctx, "ready", &r.windowReport); err != nil {
 			return err
