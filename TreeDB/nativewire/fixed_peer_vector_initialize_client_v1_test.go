@@ -70,6 +70,13 @@ func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
 			t.Fatalf("accepted %q", id)
 		}
 	}
+	for _, count := range []int{1, 2, 4, 5, 6} {
+		changed := config
+		changed.Nodes = make([]FixedPeerTCPNodeV1, count)
+		if err := validateFixedPeerFixtureV1(changed, "run_1"); (err == nil) != (count == 4) {
+			t.Fatalf("fixture node count %d: %v", count, err)
+		}
+	}
 	for _, bound := range []uint64{3, 4, 512} {
 		config.VectorInitialization.MaxSourceRows = bound
 		if err := validateFixedPeerFixtureV1(config, "run_1"); err != nil {
@@ -145,12 +152,16 @@ func TestFixedPeerVectorFixtureCanonicalIntentBeforeNetworkV1(t *testing.T) {
 }
 
 func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
-	runFixedPeerVectorFixtureRealRaftV1(t, "three-row")
+	runFixedPeerVectorFixtureRealRaftV1(t, "three-row", 3)
+}
+
+func TestFixedPeerVectorFixtureRF4RealRaftV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, "three-row", 4)
 }
 
 func TestFixedPeerVectorFixturePreparedRowsRealRaftV1(t *testing.T) {
 	for _, mode := range []string{"initialize-four-row", "standalone-four-row"} {
-		t.Run(mode, func(t *testing.T) { runFixedPeerVectorFixtureRealRaftV1(t, mode) })
+		t.Run(mode, func(t *testing.T) { runFixedPeerVectorFixtureRealRaftV1(t, mode, 3) })
 	}
 }
 
@@ -225,11 +236,17 @@ func fixtureExtraRowV1(t *testing.T, ctx context.Context, client *FixedPeerTCPCl
 	}
 }
 
-func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string) {
+func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int) {
+	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
-	configs := initializationTestConfigsV1(t)
+	var configs []FixedPeerTCPConfigV1
+	if replicas == 4 {
+		configs = fourNodeInitializationTestConfigsV1(t)
+	} else {
+		configs = initializationTestConfigsV1(t)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
@@ -376,7 +393,7 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string) {
 		})
 	}
 	qualified, err := client.QualifyVectorFixtureV1(ctx, "operator-fixture")
-	if err != nil || len(qualified.Readiness) != 3 || qualified.Prepare.Command.SourceRowCount != 3 ||
+	if err != nil || len(qualified.Readiness) != len(configs) || qualified.Prepare.Command.SourceRowCount != 3 ||
 		qualified.Prepare.Command != initialized.Prepare.Command || qualified.Prepare.AssetSetDigest != initialized.Prepare.AssetSetDigest {
 		t.Fatalf("qualify=%+v err=%v", qualified, err)
 	}

@@ -2108,6 +2108,10 @@ func collectionMetaHasNativeVectorIndexes(meta CollectionMeta) bool {
 }
 
 func (c *Collection) lockVectorIndexCoverageMutation() func() {
+	return c.lockVectorIndexCoverageMutationWithColdCarrier(false)
+}
+
+func (c *Collection) lockVectorIndexCoverageMutationWithColdCarrier(forceColdCarrier bool) func() {
 	if c == nil || c.writeDomain == nil {
 		return func() {}
 	}
@@ -2122,6 +2126,16 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		hasMaintainedVectorIndexes = coord != nil && (coord.hasNativeVectorIndexes.Load() || coord.hasPartitionLiveCarrier())
 		domain.mu.RLock()
 		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
+		if forceColdCarrier {
+			// A cold ColumnGraph can have a durable live carrier before serving
+			// registers it. Loading requires exclusive admission, never an upgrade.
+			for _, def := range domain.meta.VectorIndexes {
+				if def.Strategy == VectorIndexStrategyColumnGraph {
+					hasMaintainedVectorIndexes = true
+					break
+				}
+			}
+		}
 		domain.mu.RUnlock()
 		domain.nativeVectorIndexesMu.RLock()
 		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0

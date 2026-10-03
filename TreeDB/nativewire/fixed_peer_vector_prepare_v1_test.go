@@ -32,18 +32,29 @@ import (
 )
 
 func TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3)
 }
+
+// This recovery witness acknowledges a live overlay before the physical Raft
+// snapshot, then retains the ordinary tail/retry/close/reopen assertions below.
+func TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3, true)
+}
+
+func TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1(t *testing.T) {
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 4)
+}
+
 func TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, true, false, false)
+	runFixedPeerVectorPrepareRealRaftV1(t, true, false, false, 3)
 }
 
 func TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, true, false)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, true, false, 3)
 }
 
 func TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1(t *testing.T) {
-	runFixedPeerVectorPrepareRealRaftV1(t, false, false, true)
+	runFixedPeerVectorPrepareRealRaftV1(t, false, false, true, 3)
 }
 
 // Reuse genuinely committed preparation and its covered FSM result. The view
@@ -120,8 +131,13 @@ func checkPreparedVectorCatalogRecoveryV1(t *testing.T, ctx context.Context, nod
 	}
 }
 
-func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, pollRegression bool) {
-	configs := initializationTestConfigsV1(t)
+func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, pollRegression bool, replicas int, preSnapshotOverlay ...bool) {
+	var configs []FixedPeerTCPConfigV1
+	if replicas == 4 {
+		configs = fourNodeInitializationTestConfigsV1(t)
+	} else {
+		configs = initializationTestConfigsV1(t)
+	}
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	open := func(round string) {
 		t.Helper()
@@ -637,13 +653,28 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	if _, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "different-prepare"); err == nil {
 		t.Fatal("conflicting preparation request was adopted")
 	}
-	for _, node := range nodes {
+	localCompletions := make([]collections.VectorPartitionPrepareCompletionV1, len(nodes))
+	for i, node := range nodes {
 		local, err := node.vectorPrepareStatusV1(ctx)
 		if err != nil || local.Completion == nil || local.Completion.Command != completion.Command || local.Completion.AssetSetDigest != completion.AssetSetDigest {
 			t.Fatalf("voter completion=%+v err=%v", local, err)
 		}
+		localCompletions[i] = *local.Completion
 		if node.vector != nil || node.config.Vector != nil || node.vectorInitializationPhaseV1() != FixedPeerVectorPhaseInitializingV1 {
 			t.Fatal("prepare activated live pointers before restart")
+		}
+	}
+	checkDurableCompletions := func(stage string) {
+		t.Helper()
+		for i, node := range nodes {
+			c, _, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID, MinAppliedIndex: completion.Command.IndexPosition}, "docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, present, err := c.VectorPartitionPrepareCompletionV1(completion.Command.Index)
+			if err != nil || !present || actual != localCompletions[i] {
+				t.Fatalf("%s voter %s durable completion=%+v want=%+v present=%v err=%v", stage, node.config.NodeID, actual, localCompletions[i], present, err)
+			}
 		}
 	}
 	if loseResult {
@@ -684,7 +715,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 		t.Helper()
 		publicClient, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("strict search %s dial/HELLO: %v", id, err)
 		}
 		defer publicClient.Close()
 		result, err := publicClient.VectorSearchStrictV1(ctx, searchRequest(query))
@@ -727,6 +758,31 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 			t.Fatalf("restart changed immutable intent/config: %v", err)
 		}
 	}
+	if len(preSnapshotOverlay) != 0 && preSnapshotOverlay[0] {
+		request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: configs[0].VectorInitialization.IndexDefinition.Name, Generation: configs[0].VectorInitialization.Generation}, IdempotencyKey: []byte("pre-snapshot-overlay"), ID: []byte("pre-snapshot-overlay"), Vector: []float32{-1, -1}, Document: []byte(`{"embedding":[-1,-1],"kind":"pre-snapshot"}`), Deadline: time.Now().Add(30 * time.Second)}
+		client, err := DialContext(ctx, "tcp", configs[0].VectorInitialization.PublicAddresses[configs[0].NodeID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, insertErr := client.VectorInsertV1(ctx, request)
+		closeErr := client.Close()
+		if err := errors.Join(insertErr, closeErr); err != nil {
+			t.Fatal(err)
+		}
+		if err := public.ValidateInsertResponseV1(request, response); err != nil || response.CommitIndex <= completion.Command.IndexPosition {
+			t.Fatalf("pre-snapshot insert lacks actual visibility: %+v err=%v", response, err)
+		}
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				state, err := node.Status(ctx)
+				if err != nil || len(state.Groups) != 1 || state.Groups[0].Applied.Index < response.CommitIndex {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	checkDurableCompletions("before provider snapshot")
 	// Force an actual provider snapshot at the prepared/ACTIVE prefix. Fresh
 	// insert below is a genuine Raft tail entry after this snapshot.
 	for _, node := range nodes {
@@ -847,7 +903,19 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	// A known leader and a successful routed search do not prove that every
 	// local follower FSM has caught up. Keep the real retry prefix required.
 	waitInsertPrefix(replay.CommitIndex)
+	checkDurableCompletions("snapshot-plus-tail reopen")
+	for _, node := range nodes {
+		if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
+			t.Fatalf("voter %s did not recover prepared serving state", node.config.NodeID)
+		}
+		if err := errors.Join(node.requirePreparedVectorCurrentDBV1(), node.requirePreparedVectorCatalogV1()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	search("fresh-y", []float32{0, 1})
+	if len(preSnapshotOverlay) != 0 && preSnapshotOverlay[0] {
+		search("pre-snapshot-overlay", []float32{-1, -1})
+	}
 	for i, node := range nodes {
 		c, _, err := node.data[group.ID].fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: node.config.NodeID, GroupID: group.ID, MinAppliedIndex: replay.CommitIndex}, "docs")
 		if err != nil {

@@ -31,8 +31,8 @@ type FixedPeerVectorQualificationV1 struct {
 
 func validateFixedPeerFixtureV1(config FixedPeerTCPConfigV1, requestID string) error {
 	v := config.VectorInitialization
-	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || len(config.Nodes) != 3 {
-		return fmt.Errorf("fixture requires authenticated single-group RF3 initialization")
+	if config.Credentials == nil || v == nil || len(config.Groups) != 1 || (len(config.Nodes) != 3 && len(config.Nodes) != 4) {
+		return fmt.Errorf("fixture requires authenticated single-group RF3/RF4 initialization")
 	}
 	def := v.IndexDefinition
 	if v.Generation != 1 || v.CatalogEpoch != 1 ||
