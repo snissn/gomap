@@ -598,6 +598,30 @@ func (n *Node) GetLeafValueView(index uint16) (val []byte, valPtr page.ValuePtr,
 	return val, page.ValuePtr{}, flags, nil
 }
 
+// GetLeafValueViewWithRevision returns value metadata after a successful SearchLeaf
+// on the same immutable node. SearchLeaf validates the matched key; columnar
+// leaves then need no key reconstruction. Value views retain GetLeafValueView's
+// lifetime. Other encodings retain the full entry decoder's validation.
+func (n *Node) GetLeafValueViewWithRevision(index uint16) (val []byte, valPtr page.ValuePtr, flags byte, revision page.EntryRevision, err error) {
+	if n.Type() != page.PageTypeLeaf {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, ErrInvalidType
+	}
+	if n.leafColumnar() && (n.leafPrefixCompressed() && n.leafPrefixV2() || !n.leafPrefixCompressed() && n.leafColumnarV2()) {
+		val, valPtr, flags, err = n.GetLeafValueView(index)
+		if err != nil {
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, err
+		}
+		if n.leafPrefixCompressed() {
+			revision, err = n.leafColumnarPrefixV2RevisionAt(index)
+		} else {
+			revision, err = n.leafColumnarV2RevisionAt(index)
+		}
+		return val, valPtr, flags, revision, err
+	}
+	_, val, valPtr, flags, revision, err = n.GetLeafEntryViewWithRevision(index)
+	return val, valPtr, flags, revision, err
+}
+
 // UpdateLeafValuePtr updates the ValuePtr bytes for the entry at index if the
 // entry is a pointer and currently matches oldPtr. It updates the page checksum
 // on success.
@@ -1860,9 +1884,13 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 		return blockStart, cmp == 0, nil
 	}
 
-	if len(target) == 8 && len(restartKey) == 8 {
-		targetU := getUint64BEAt(target, 0)
-		prevU := getUint64BEAt(data, restartStart)
+	// Equal-length keys with a validated common prefix can compare their final
+	// eight bytes numerically. Each encoded successor must preserve that prefix
+	// and length; otherwise restart the generic scan from the original key.
+	commonLen := len(restartKey) - 8
+	if commonLen >= 0 && len(target) == len(restartKey) && bytes.Equal(restartKey[:commonLen], target[:commonLen]) {
+		targetU := getUint64BEAt(target, commonLen)
+		prevU := getUint64BEAt(data, restartStart+commonLen)
 		fastOK := true
 		curStart := restartEnd
 		nextKeyDirOff := restartKeyDirOff + 4
@@ -1881,7 +1909,7 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 			prefixOff += 2
 
 			suffix := data[curStart:curEnd]
-			nextU, ok := composePrefixVirtualKeyU64(prevU, prefixLen, suffix)
+			nextU, ok := composePrefixVirtualKeyU64(prevU, prefixLen-commonLen, suffix)
 			if !ok {
 				fastOK = false
 				break

@@ -1686,7 +1686,21 @@ bytes ValueBlob
 bytes KeySuffixBlob
 ```
 
-Keys reconstruct using previous key prefix within restart blocks.
+Keys reconstruct using previous key prefix within restart blocks. Point search
+may compare the final eight bytes numerically when the target and restart key
+have equal lengths of at least eight bytes and identical bytes before that
+suffix. Every decoded successor must preserve that common prefix and key length:
+its prefix length reaches the suffix boundary, is no longer than the previous
+key, and its encoded suffix exactly completes the key. A length or prefix change
+restarts the generic lexicographic scan; malformed directory/prefix bounds still
+fail as corruption. Prefix bytes are arbitrary, including binary and long keys.
+This is an in-memory search optimization; the stored encoding is unchanged.
+
+After successful search on the same immutable node, value-only point access can
+read `ValOff`, `Flags`, and optional `RevisionLE` without reconstructing the key.
+Value and pointer lengths and revision bounds retain their existing validation.
+Key-bearing views still reconstruct into node-owned scratch with their existing
+lifetimes.
 
 ### 5.6 Target raw-KV entry revisions
 
