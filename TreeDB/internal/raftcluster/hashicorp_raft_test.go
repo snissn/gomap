@@ -907,22 +907,27 @@ func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testi
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock() // Release before shutdown, including every failed assertion.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSetup()
 	for {
-		status, err := p.RuntimeStatusV1(ctx)
+		status, err := p.RuntimeStatusV1(setupCtx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if status.State == "Leader" {
+			if _, err := HashicorpRaftTestLeaderReady(setupCtx, p); err != nil {
+				t.Fatalf("leader readiness: %v", err)
+			}
 			break
 		}
 		select {
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+		case <-setupCtx.Done():
+			t.Fatal(setupCtx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	callCtx, cancelCall := context.WithCancel(ctx)
 	defer cancelCall()
 	done := make(chan error, 1)
@@ -933,6 +938,8 @@ func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testi
 	}()
 	select {
 	case <-entered:
+	case err := <-done:
+		t.Fatalf("CommitCommandEntryV1 returned before committed apply: %v", err)
 	case <-ctx.Done():
 		t.Fatal("command did not reach actual committed apply")
 	}
