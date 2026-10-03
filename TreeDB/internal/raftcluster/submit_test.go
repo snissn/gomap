@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
@@ -412,6 +413,104 @@ func TestSingleGroupSubmitterStaleVectorInsertRequiresKnownReplayV1(t *testing.T
 			}
 			if preflightCalls != tc.preflight || commitCalls != tc.commit || callbackCalls != tc.commit {
 				t.Fatalf("preflight/commit/callback=%d/%d/%d want %d/%d/%d", preflightCalls, commitCalls, callbackCalls, tc.preflight, tc.commit, tc.commit)
+			}
+		})
+	}
+}
+
+func TestSingleGroupSubmitterStalePrepareRequiresKnownReplayV1(t *testing.T) {
+	// This submit-boundary stand-in recognizes exact stored bytes. The native
+	// real-Raft Prepare fixture separately proves actual durable FSM identity.
+	makeEntry := func(v commitlog.VectorPrepareV1, key string) []byte {
+		t.Helper()
+		payload, err := commitlog.EncodeVectorPreparePayloadV1(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sections := []iwire.Section{
+			{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandVectorPrepareV1, Version: 1})},
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte(key)},
+			{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+			{ID: iwire.SectionCollectionRef, Bytes: append([]byte{1}, "users"...)},
+			{ID: iwire.SectionVectorPrepareV1, Bytes: payload},
+		}
+		validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := iwire.AppendDeterministicEntry(nil, validated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	source := commitlog.VectorPrepareV1{Version: 1, Operation: "rebuild", Collection: "users", Index: "embedding", Group: "group-a", IndexDefinitionDigest: strings.Repeat("a", 64), Generation: 1, MaxSourceRows: 3}
+	prepare := source
+	prepare.Operation = "prepare"
+	prepare.SourceGeneration, prepare.SourceChecksum, prepare.SourceSchemaHash, prepare.SourceRowCount = 1, 20, 30, 3
+	sourceEntry := makeEntry(source, "prepare-test/source")
+	prepareEntry := makeEntry(prepare, "prepare-test/prepare")
+	changed := prepare
+	changed.SourceChecksum++
+	ordinary := testClusterCommandEntry(t, 7)
+	knownEntries := map[string][]byte{
+		"prepare-test/source":   sourceEntry,
+		"prepare-test/prepare":  prepareEntry,
+		"raftcluster/insert/u1": ordinary,
+	}
+	conflict := errors.New("stored prepare idempotency digest conflict")
+	for _, tc := range []struct {
+		name              string
+		entry             []byte
+		preflight, commit int
+		wantErr           error
+		reject            bool
+	}{
+		{name: "exact_source_replay", entry: sourceEntry, preflight: 1, commit: 1},
+		{name: "exact_prepare_replay", entry: prepareEntry, preflight: 1, commit: 1},
+		{name: "unknown_key", entry: makeEntry(prepare, "unknown/prepare"), preflight: 1, wantErr: ErrCatalogVersionMismatch, reject: true},
+		{name: "changed_source", entry: makeEntry(changed, "prepare-test/prepare"), preflight: 1, wantErr: conflict, reject: true},
+		{name: "changed_operation", entry: makeEntry(prepare, "prepare-test/source"), preflight: 1, wantErr: conflict, reject: true},
+		{name: "malformed_envelope", entry: append(bytes.Clone(prepareEntry), 0), reject: true},
+		{name: "no_idempotency_token", entry: makeEntry(prepare, raftentry.NoIdempotencyTokenV1), reject: true},
+		{name: "ordinary_stale_known_entry", entry: ordinary, wantErr: ErrCatalogVersionMismatch, reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preflightCalls, commitCalls := 0, 0
+			applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusAlreadyApplied}}
+			submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+				AdmissionProvider:      StaticAdmissionProvider{Status: LeaderAdmission()},
+				CatalogVersionProvider: staticCatalogVersion(8),
+				Preflight: CommandEntryPreflightFunc(func(_ context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+					preflightCalls++
+					if req.CurrentCatalogVersion != 8 || !req.HasCurrentCatalogVersion || req.DecodedEntry.Target.CommandID != iwire.CommandVectorPrepareV1 {
+						t.Fatalf("unexpected stale prepare preflight: %+v", req)
+					}
+					original, known := knownEntries[string(req.DecodedEntry.IdempotencyKey)]
+					if known && !bytes.Equal(req.EntryBytes, original) {
+						return CommandEntryPreflightResultV1{}, conflict
+					}
+					return CommandEntryPreflightResultV1{KnownIdempotencyReplay: known}, nil
+				}),
+				CommitSource: CommitSourceFunc(func(_ context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+					commitCalls++
+					if !bytes.Equal(req.EntryBytes, tc.entry) {
+						t.Fatal("submitter changed exact replay bytes")
+					}
+					return productionCommittedResult(req, 3, 1), nil
+				}),
+				Applier: applier,
+			})
+			result, err := submitter.SubmitCommandEntryV1(context.Background(), tc.entry, routeMetadata("group-a", iwire.AckRaftCommitted))
+			if tc.reject {
+				if err == nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+					t.Fatalf("refusal error=%v want %v", err, tc.wantErr)
+				}
+			} else if err != nil || !result.CommittedApplied || !result.CommittedRecoverable || result.ApplyResult.Status != raftentry.ApplyStatusAlreadyApplied {
+				t.Fatalf("known replay result=%+v err=%v", result, err)
+			}
+			if preflightCalls != tc.preflight || commitCalls != tc.commit || len(applier.snapshot()) != tc.commit {
+				t.Fatalf("preflight/commit/apply=%d/%d/%d want %d/%d/%d", preflightCalls, commitCalls, len(applier.snapshot()), tc.preflight, tc.commit, tc.commit)
 			}
 		})
 	}

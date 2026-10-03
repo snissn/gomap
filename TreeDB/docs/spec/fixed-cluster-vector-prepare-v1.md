@@ -29,6 +29,16 @@ and the refused persisted cluster can reopen.
 `FixedPeerTCPClientV1.PrepareVectorInitializationV1` first commits a collection
 owned source rebuild. Every voter must report the same authenticated source.
 It then commits PartitionPrepare with that frozen source/group/generation.
+The same request ID can resume after source commitment or partial preparation.
+The authenticated owner restores the original expected catalog version only
+from that key's locally covered durable apply result, then requires the entire
+canonical command digest to match. Source and prepare use distinct keys and
+retain their original frozen payloads. A stale Prepare guard may reach shared
+submit preflight, but commit still requires a known exact idempotency replay.
+Unknown keys and changed source or payload receive no stale-guard grant.
+All-voter source and completion agreement and real committed apply remain
+required; a successful all-completed retry returns the durable completion.
+
 The FSM assigns its actual term/index and deterministic command digest;
 clients cannot supply those positions. The collection retains its actual
 schema, native admission, coverage persistence, mutation and partition storage

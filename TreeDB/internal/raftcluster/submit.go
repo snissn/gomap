@@ -500,7 +500,12 @@ func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry [
 		preCommit != nil && ((metadata.ClusterRouteShape == "vector_partition_exact_id" && decoded.Target.CommandID == iwire.CommandInsertBatch) ||
 		(metadata.ClusterRouteShape == "split_source_projection_insert" && decoded.Target.CommandID == iwire.CommandSplitVectorInsertV1)) &&
 		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0
-	if guardErr != nil && !allowStaleCreateRetry && !allowStaleVectorRetry {
+	// A stale prepare guard reaches preflight only to prove the full original
+	// durable key/digest identity. Unknown or changed entries cannot commit.
+	allowStalePrepareRetry := guardErr != nil && errors.Is(guardErr, ErrCatalogVersionMismatch) &&
+		decoded.Target.CommandID == iwire.CommandVectorPrepareV1 &&
+		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0
+	if guardErr != nil && !allowStaleCreateRetry && !allowStaleVectorRetry && !allowStalePrepareRetry {
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}
@@ -523,7 +528,7 @@ func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry [
 		}
 		return SubmitResultV1{}, err
 	}
-	if (allowStaleCreateRetry || allowStaleVectorRetry) && !preflightResult.KnownIdempotencyReplay {
+	if (allowStaleCreateRetry || allowStaleVectorRetry || allowStalePrepareRetry) && !preflightResult.KnownIdempotencyReplay {
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}

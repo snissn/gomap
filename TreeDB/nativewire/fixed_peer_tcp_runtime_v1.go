@@ -1226,6 +1226,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			err = raftcluster.ErrRouteTargetUnknown
 			return
 		}
+		body.Entry, err = r.vectorPrepareResumeEntryV1(ctx, body.Entry, body.Metadata)
+		if err != nil {
+			return
+		}
 		reply.Submit, err = submitter.SubmitCommandEntryV1(ctx, body.Entry, body.Metadata)
 	default:
 		err = raftcluster.ErrRouteTargetUnsupported
