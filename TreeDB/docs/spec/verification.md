@@ -3526,5 +3526,28 @@ harness, then candidate RF3 versus RF4 for incremental B/op and allocs/op.
 Neither benchmark measures election, preparation or four-daemon RSS. Retain
 actual container footprint separately. These are proposed checks until executed
 on the final integrated source; no 100K, sustained mutation, throughput or
-physical-host failure acceptance follows. Source rows512 and completed inserts64
-remain unchanged, and RF4 quorum3 cannot survive either host loss in 2+2.
+physical-host failure acceptance follows. That original packet qualified only
+three prepared rows and a bounded ordinary insert population; #4956 extends
+preparation admission and the optional public probe as documented below. RF4
+quorum3 cannot survive either host loss in 2+2.
+
+
+## Dataset checkpoint (#4956)
+
+The existing initializer/qualifier optionally consumes a frozen dataset; empty
+`-dataset` preserves the three-row fixture. The shared preparation envelope is
+16,384 rows / 32 MiB actual FP32+IDs / 1,024-byte individual IDs, enforced before
+owned source materialization. The initial packet counts 10,000 unchanged128D
+rows plus three separated oracle anchors. See
+[the preparation contract](fixed-cluster-vector-prepare-v1.md#dataset-preparation-admission-4956)
+for exact input eligibility, stream/chunk identities, UNKNOWN/fail-stop behavior,
+restart proofs and allocation evidence gates. The real Raft dataset tests cover
+unchanged RF4 reopen, lost committed second-chunk reply and eligible same-count
+corpus replacement refusal before public search/write. Manifest origin boundary
+coverage admits16,384, refuses16,385 and preserves the other origin constraints.
+These are proposed checks until root executes the exact final candidate; the
+failed staged packet did not establish a corpus-identity causal red.
+The optional65-new-ID public
+probe reconciles historical64 ordinary-write qualification claims; it changes
+no split identity capacity and establishes no sustained throughput or broad
+mutation/recall guarantee. #4250/#4810 remain open.

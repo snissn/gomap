@@ -71,6 +71,7 @@ type options struct {
 	BootstrapRevision, BootstrapCommitIndex uint64
 	OwnerGroup                              string
 	Timeout, RPCTimeout                     time.Duration
+	Dimensions, FreshInserts, EfSearch      int
 }
 
 func hashJSON(value any) string {
@@ -81,6 +82,17 @@ func hashJSON(value any) string {
 func asciiID(id string) bool {
 	return len(id) > 0 && len(id) <= 64 && strings.Trim(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == ""
 }
+func effectiveFreshCount(o options) int {
+	if o.FreshInserts == 0 {
+		return freshCount
+	}
+	return o.FreshInserts
+}
+func oracleVector(dimensions int, x, y float32) []float32 {
+	v := make([]float32, dimensions)
+	v[0], v[1] = x, y
+	return v
+}
 func makePlan(o options) ([]operation, error) {
 	if !asciiID(o.RunID) || o.BootstrapID == "" || o.Generation.Index == "" || o.Generation.Generation == 0 || o.BootstrapRevision != 1 || o.BootstrapCommitIndex == 0 || o.OwnerGroup == "" {
 		return nil, errors.New("requires a fresh, successfully qualified generation, live revision 1, and bounded ASCII run ID")
@@ -88,20 +100,35 @@ func makePlan(o options) ([]operation, error) {
 	if o.Timeout < time.Second || o.Timeout > 2*time.Minute || o.RPCTimeout < time.Millisecond || o.RPCTimeout > 10*time.Second || o.RPCTimeout > o.Timeout {
 		return nil, errors.New("timeout requires 1s..2m; RPC timeout requires 1ms..10s within overall timeout")
 	}
+	dimensions := o.Dimensions
+	if dimensions == 0 {
+		dimensions = 2
+	}
+	freshN := effectiveFreshCount(o)
+	efSearch := o.EfSearch
+	if efSearch == 0 {
+		efSearch = 8
+	}
+	if efSearch < 1 || efSearch > 4096 {
+		return nil, errors.New("probe efSearch outside1..4096")
+	}
+	if dimensions < 2 || dimensions > 4096 || freshN < 1 || freshN > 65 {
+		return nil, errors.New("probe requires dimensions2..4096 and fresh inserts1..65")
+	}
 	var plan []operation
 	search := func(phase string, vector []float32, id string) {
 		request := public.SearchRequestV1{Version: 1, Generation: o.Generation, Query: vector, Metric: public.MetricCosineV1,
-			TopK: 1, Probes: 1, EfSearch: 8, Consistency: public.ConsistencyGenerationSnapshotV1,
+			TopK: 1, Probes: 1, EfSearch: efSearch, Consistency: public.ConsistencyGenerationSnapshotV1,
 			Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}}
 		plan = append(plan, operation{Ordinal: len(plan), Phase: phase, Kind: "search", ExpectedID: id, SearchRequest: &request, RequestSHA256: hashJSON(request), Outcome: "unissued"})
 	}
-	search("preflight-writer", []float32{1, 0}, "seed-x")
-	search("preflight-reader", []float32{1, 0}, "seed-x")
-	vectors := make([][]float32, freshCount)
-	ids := make([]string, freshCount)
-	for i := 0; i < freshCount; i++ {
-		angle := math.Pi/2 + float64(i+1)*math.Pi/(2*float64(freshCount+1))
-		vectors[i] = []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}
+	search("preflight-writer", oracleVector(dimensions, 1, 0), "seed-x")
+	search("preflight-reader", oracleVector(dimensions, 1, 0), "seed-x")
+	vectors := make([][]float32, freshN)
+	ids := make([]string, freshN)
+	for i := 0; i < freshN; i++ {
+		angle := math.Pi/2 + float64(i+1)*math.Pi/(2*float64(freshN+1))
+		vectors[i] = oracleVector(dimensions, float32(math.Cos(angle)), float32(math.Sin(angle)))
 		ids[i] = fmt.Sprintf("%s-doc-%02d", o.RunID, i)
 		if ids[i] == o.BootstrapID || ids[i] == "seed-x" || ids[i] == "seed-minus-x" || ids[i] == "seed-minus-y" {
 			return nil, errors.New("run ID collides with bootstrap corpus")
@@ -114,12 +141,12 @@ func makePlan(o options) ([]operation, error) {
 		plan = append(plan, operation{Ordinal: len(plan), Phase: "concurrent", Kind: "insert", ExpectedID: ids[i], InsertRequest: &request, RequestSHA256: hashJSON(request), Outcome: "unissued"})
 	}
 	for i := 0; i < concurrentSearchCount; i++ {
-		search("concurrent", []float32{1, 0}, "seed-x")
+		search("concurrent", oracleVector(dimensions, 1, 0), "seed-x")
 	}
-	retry := *plan[2+freshCount-1].InsertRequest
+	retry := *plan[2+freshN-1].InsertRequest
 	plan = append(plan, operation{Ordinal: len(plan), Phase: "explicit-retry", Kind: "insert", ExpectedID: string(retry.ID), InsertRequest: &retry, RequestSHA256: hashJSON(retry), Outcome: "unissued"})
 	// Certify unique cosine winners separately from exact-ID mutation visibility.
-	corpus := [][]float32{{1, 0}, {-1, 0}, {0, -1}, {0, 1}}
+	corpus := [][]float32{oracleVector(dimensions, 1, 0), oracleVector(dimensions, -1, 0), oracleVector(dimensions, 0, -1), oracleVector(dimensions, 0, 1)}
 	corpus = append(corpus, vectors...)
 	for i, vector := range vectors {
 		self := cosine(vector, vector)
@@ -133,7 +160,7 @@ func makePlan(o options) ([]operation, error) {
 		}
 		search("post-self", vector, ids[i])
 	}
-	search("final-anchor", []float32{1, 0}, "seed-x")
+	search("final-anchor", oracleVector(dimensions, 1, 0), "seed-x")
 	return plan, nil
 }
 func cosine(a, b []float32) float64 {
@@ -258,6 +285,7 @@ func finish(r *report) {
 	}
 }
 func runWorkload(parent context.Context, writer, reader vectorClient, o options, r *report) error {
+	freshN := effectiveFreshCount(o)
 	plan, err := makePlan(o)
 	if err != nil {
 		return err
@@ -307,19 +335,19 @@ func runWorkload(parent context.Context, writer, reader vectorClient, o options,
 		}
 		results <- nil
 	}
-	go worker(writer, 2, 2+freshCount)
-	go worker(reader, 2+freshCount, 2+freshCount+concurrentSearchCount)
+	go worker(writer, 2, 2+freshN)
+	go worker(reader, 2+freshN, 2+freshN+concurrentSearchCount)
 	ready.Wait()
 	close(start)
 	a, b := <-results, <-results
 	if err := errors.Join(a, b); err != nil {
 		return fail(err)
 	}
-	retryIndex := 2 + freshCount + concurrentSearchCount
+	retryIndex := 2 + freshN + concurrentSearchCount
 	if err := execute(ctx, writer, &r.Operations[retryIndex], origin, o.RPCTimeout); err != nil {
 		return fail(err)
 	}
-	original, retry := r.Operations[2+freshCount-1].InsertResponse, r.Operations[retryIndex].InsertResponse
+	original, retry := r.Operations[2+freshN-1].InsertResponse, r.Operations[retryIndex].InsertResponse
 	if retry.CommitIndex <= original.CommitIndex || retry.LiveRevision != original.LiveRevision || retry.VisibleID != original.VisibleID ||
 		retry.OwnerGroup != original.OwnerGroup || retry.PartitionID != original.PartitionID || len(retry.VisibilityToken) != 0 {
 		r.Operations[retryIndex].Outcome = "unknown"
@@ -424,8 +452,18 @@ func readinessWith(ctx context.Context, read func(context.Context, nativewire.Fi
 func admitBootstrap(config nativewire.FixedPeerTCPConfigV1, bootstrap nativewire.FixedPeerVectorQualificationV1) (public.GenerationIDV1, error) {
 	v := config.VectorInitialization
 	if config.Credentials == nil || config.Vector != nil || v == nil || len(config.Nodes) != 4 || len(config.Groups) != 1 ||
-		v.MaxSourceRows > 512 || v.IndexDefinition.Dimensions != 2 || v.IndexDefinition.Field != "embedding" {
-		return public.GenerationIDV1{}, errors.New("runner supports only authenticated four-voter one-group 2D initialized fixture")
+		v.MaxSourceRows > 16384 || v.IndexDefinition.Dimensions < 2 || v.IndexDefinition.Dimensions > 4096 || v.IndexDefinition.Field != "embedding" {
+		return public.GenerationIDV1{}, errors.New("runner supports only authenticated four-voter one-group bounded initialized corpus")
+	}
+	if bootstrap.Dataset == nil {
+		if v.IndexDefinition.Dimensions != 2 {
+			return public.GenerationIDV1{}, errors.New("non-2D bootstrap requires eligible frozen dataset receipt")
+		}
+	} else {
+		d := bootstrap.Dataset
+		if d.Rows < 1 || d.Dimensions != v.IndexDefinition.Dimensions || d.OraclePlaneMaxFraction != 0.9 || d.SourceRows != uint64(d.Rows)+3 || d.SourceRows != bootstrap.Prepare.Command.SourceRowCount || d.SourceRows > v.MaxSourceRows || d.InputBytes > 32<<20 || len(d.ManifestSHA256) != 64 || len(d.VectorsSHA256) != 64 {
+			return public.GenerationIDV1{}, errors.New("dataset bootstrap identity/count/oracle eligibility mismatch")
+		}
 	}
 	generation := public.GenerationIDV1{Index: v.IndexDefinition.Name, Generation: v.Generation}
 	if bootstrap.Insert.OwnerGroup != string(config.Groups[0].ID) || bootstrap.Insert.OwnerGroup != string(v.SourceGroupID) {
@@ -458,11 +496,15 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	flags := flag.NewFlagSet("treedb-query-under-write", flag.ContinueOnError)
 	configPath := flags.String("config", "", "authenticated RF4 initialization config for this driver host")
 	bootstrapPath := flags.String("bootstrap-receipt", "", "retained successful sequential qualify JSON")
+	freshInserts := flags.Int("fresh-inserts", freshCount, "bounded unique ordinary insert population1..65; default preserves32")
 	runID := flags.String("run-id", "", "unique 1..64 ASCII identity; never reuse after any mutation attempt")
 	timeout := flags.Duration("timeout", 120*time.Second, "whole checkpoint deadline, 1s..2m")
 	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..10s")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *freshInserts < 1 || *freshInserts > 65 {
+		return errors.New("-fresh-inserts requires1..65")
 	}
 	if flags.NArg() != 0 || *configPath == "" || *bootstrapPath == "" {
 		return errors.New("requires -config, -bootstrap-receipt and no positional arguments")
@@ -497,7 +539,7 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 		return err
 	}
 	v := config.VectorInitialization
-	o := options{RunID: *runID, Generation: r.Generation, BootstrapID: bootstrap.Insert.VisibleID, BootstrapRevision: bootstrap.Insert.LiveRevision, BootstrapCommitIndex: bootstrap.Retry.CommitIndex, OwnerGroup: bootstrap.Insert.OwnerGroup, Timeout: *timeout, RPCTimeout: *rpcTimeout}
+	o := options{RunID: *runID, Generation: r.Generation, BootstrapID: bootstrap.Insert.VisibleID, BootstrapRevision: bootstrap.Insert.LiveRevision, BootstrapCommitIndex: bootstrap.Retry.CommitIndex, OwnerGroup: bootstrap.Insert.OwnerGroup, Timeout: *timeout, RPCTimeout: *rpcTimeout, Dimensions: v.IndexDefinition.Dimensions, FreshInserts: *freshInserts, EfSearch: v.IndexDefinition.EfSearch}
 	if r.Operations, err = makePlan(o); err != nil {
 		return err
 	}

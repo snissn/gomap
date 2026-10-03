@@ -3,11 +3,15 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,13 +81,13 @@ func TestFixedPeerVectorFixtureBoundsBeforeNetworkV1(t *testing.T) {
 			t.Fatalf("fixture node count %d: %v", count, err)
 		}
 	}
-	for _, bound := range []uint64{3, 4, 512} {
+	for _, bound := range []uint64{3, 4, 512, 10003, 16384} {
 		config.VectorInitialization.MaxSourceRows = bound
 		if err := validateFixedPeerFixtureV1(config, "run_1"); err != nil {
 			t.Fatalf("bound=%d: %v", bound, err)
 		}
 	}
-	for _, bound := range []uint64{2, 513} {
+	for _, bound := range []uint64{2, 16385} {
 		config.VectorInitialization.MaxSourceRows = bound
 		if validateFixedPeerFixtureV1(config, "run_1") == nil {
 			t.Fatalf("accepted preparation bound %d", bound)
@@ -153,6 +157,17 @@ func TestFixedPeerVectorFixtureCanonicalIntentBeforeNetworkV1(t *testing.T) {
 
 func TestFixedPeerVectorFixtureRealRaftV1(t *testing.T) {
 	runFixedPeerVectorFixtureRealRaftV1(t, "three-row", 3)
+}
+
+func TestFixedPeerVectorDatasetChunkAmbiguityStopsRealRaftV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, "dataset-ambiguous", 3)
+}
+
+func TestFixedPeerVectorDatasetSameCountReplacementRefusedRealRaftV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, "dataset-replaced", 4)
+}
+func TestFixedPeerVectorDatasetRF4RealRaftReopenV1(t *testing.T) {
+	runFixedPeerVectorFixtureRealRaftV1(t, "dataset", 4)
 }
 
 func TestFixedPeerVectorFixtureRF4RealRaftV1(t *testing.T) {
@@ -247,6 +262,21 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 	} else {
 		configs = initializationTestConfigsV1(t)
 	}
+	datasetPath := ""
+	expectedRows := uint64(3)
+	if strings.HasPrefix(mode, "dataset") {
+		datasetPath = writeFixedPeerDatasetTestV1(t, 600, 128)
+		expectedRows = 603
+		for i := range configs {
+			configs[i].RequestTimeout = time.Minute
+			v := configs[i].VectorInitialization
+			v.MaxSourceRows = 640
+			v.IndexDefinition.Dimensions = 128
+			v.IndexDefinition.M = 16
+			v.IndexDefinition.EfConstruction = 128
+			v.IndexDefinition.EfSearch = 128
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
@@ -281,7 +311,7 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 	defer initializeCancel()
 	initializing := client
 	injected := false
-	if mode != "three-row" {
+	if mode == "initialize-four-row" || mode == "standalone-four-row" {
 		initializing = fixtureStatusClientV1(t, client, func(reply *fixedPeerReplyV1) {
 			if injected {
 				return
@@ -295,7 +325,78 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 			}
 		})
 	}
-	initialized, err := initializing.InitializeVectorFixtureV1(initializeCtx, "operator-fixture")
+	datasetManifestSHA := ""
+	if strings.HasPrefix(mode, "dataset") {
+		d, e := readFixedPeerVectorDatasetV1(datasetPath, configs[0])
+		if e != nil {
+			t.Fatal(e)
+		}
+		datasetManifestSHA = d.identity.ManifestSHA256
+	}
+	targetCalls := 0
+	if mode == "dataset-ambiguous" {
+		copyClient := *client
+		copyHTTP := *client.http
+		base, ok := client.http.Transport.(*http.Transport)
+		if !ok {
+			t.Fatal("actual authenticated transport required")
+		}
+		copyHTTP.Transport = splitInsertRoundTripperV1{Transport: base, roundTrip: func(request *http.Request) (*http.Response, error) {
+			drop := false
+			if request.URL.Path == "/v1/submit" {
+				raw, e := io.ReadAll(request.Body)
+				if e != nil {
+					return nil, e
+				}
+				request.Body = io.NopCloser(bytes.NewReader(raw))
+				var body fixedPeerRequestV1
+				if e = json.Unmarshal(raw, &body); e != nil {
+					return nil, e
+				}
+				drop = bytes.Contains(body.Entry, []byte(fixedPeerVectorDatasetRequestIDV1("operator-fixture", datasetManifestSHA)+"/dataset/000001"))
+			}
+			response, e := base.RoundTrip(request)
+			if e != nil || !drop {
+				return response, e
+			}
+			targetCalls++
+			raw, e := io.ReadAll(response.Body)
+			response.Body.Close()
+			if e != nil {
+				return nil, e
+			}
+			var reply fixedPeerReplyV1
+			if e = json.Unmarshal(raw, &reply); e != nil {
+				return nil, e
+			}
+			if !reply.Submit.CommittedApplied || !reply.Submit.Evidence.ProvesProductionConsensus() {
+				t.Fatalf("cut did not follow real commit: %+v", reply)
+			}
+			return nil, fmt.Errorf("injected lost committed dataset chunk reply")
+		}}
+		copyClient.http = &copyHTTP
+		initializing = &copyClient
+	}
+	var initialized FixedPeerVectorBootstrapV1
+	if strings.HasPrefix(mode, "dataset") {
+		initialized, err = initializing.InitializeVectorDatasetV1(initializeCtx, "operator-fixture", datasetPath)
+	} else {
+		initialized, err = initializing.InitializeVectorFixtureV1(initializeCtx, "operator-fixture")
+	}
+	if mode == "dataset-ambiguous" {
+		if err == nil || targetCalls != 1 || initialized.Stage != "dataset-seed" || initialized.Prepare.Command.Term != 0 || len(initialized.Chunks) != 5 {
+			t.Fatalf("ambiguous chunk did not stop: %+v calls=%d err=%v", initialized, targetCalls, err)
+		}
+		if initialized.Chunks[0].Outcome != "committed-applied" || initialized.Chunks[1].Outcome != "unknown" || initialized.Chunks[1].Error == "" {
+			t.Fatalf("partial accounting lost: %+v", initialized.Chunks)
+		}
+		for _, chunk := range initialized.Chunks[2:] {
+			if chunk.Outcome != "unissued" {
+				t.Fatalf("continued after ambiguous commit: %+v", chunk)
+			}
+		}
+		return
+	}
 	if mode == "initialize-four-row" {
 		if !injected || err == nil || !strings.Contains(err.Error(), "exactly3") ||
 			initialized.Stage != "prepare" || initialized.Prepare.Command.SourceRowCount != 4 {
@@ -313,13 +414,51 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 		if err != nil || completion.Command.SourceRowCount != 4 {
 			t.Fatalf("genuine four-row preparation: %+v err=%v", completion, err)
 		}
-	} else if err != nil || initialized.Stage != "prepared-restart-required" || initialized.Prepare.Command.SourceRowCount != 3 {
+	} else if err != nil || initialized.Stage != "prepared-restart-required" || initialized.Prepare.Command.SourceRowCount != expectedRows {
 		t.Fatalf("initialize=%+v err=%v", initialized, err)
 	}
 	client.Close()
 	closeAll()
 	if t.Failed() {
 		return
+	}
+	if mode == "dataset-replaced" {
+		// A distinct fully eligible same-count corpus must not inherit the original
+		// durable preparation identity. Keep its hashes honest so pure input
+		// admission succeeds and the authoritative preparation check is exercised.
+		vectorsPath := filepath.Join(datasetPath, "documents.f32")
+		vectors, e := os.ReadFile(vectorsPath)
+		if e != nil {
+			t.Fatal(e)
+		}
+		vectors[11] ^= 0x80 // Row0 coordinate2: +1 -> -1, same norm and oracle plane.
+		if e = os.WriteFile(vectorsPath, vectors, 0600); e != nil {
+			t.Fatal(e)
+		}
+		manifestPath := filepath.Join(datasetPath, "manifest.json")
+		raw, e := os.ReadFile(manifestPath)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var manifest fixedPeerVectorDatasetManifestV1
+		if e = json.Unmarshal(raw, &manifest); e != nil {
+			t.Fatal(e)
+		}
+		sum := sha256.Sum256(vectors)
+		entry := manifest.Files["documents.f32"]
+		entry.SHA256 = hex.EncodeToString(sum[:])
+		manifest.Files["documents.f32"] = entry
+		raw, e = json.Marshal(manifest)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(manifestPath, raw, 0600); e != nil {
+			t.Fatal(e)
+		}
+		replacement, e := readFixedPeerVectorDatasetV1(datasetPath, configs[0])
+		if e != nil || replacement.identity.SourceRows != expectedRows || replacement.identity.ManifestSHA256 == initialized.Dataset.ManifestSHA256 {
+			t.Fatalf("replacement must remain eligible and distinct: %+v %v", replacement, e)
+		}
 	}
 	openAll()
 	client, err = NewFixedPeerTCPClientV1(configs[0])
@@ -343,6 +482,28 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 			row, err := col.Get([]byte("operator-fixture-fresh-y"))
 			if err != nil || row != nil {
 				t.Fatalf("qualification wrote a fresh row: %q err=%v", row, err)
+			}
+		}
+		return
+	}
+	if mode == "dataset-replaced" {
+		qualified, e := client.QualifyVectorDatasetV1(ctx, "operator-fixture", datasetPath)
+		if e == nil || !strings.Contains(e.Error(), "matching request") || qualified.Before.Counters.SelectedPartitions != 0 || qualified.Insert.CommitIndex != 0 || qualified.Retry.CommitIndex != 0 {
+			t.Fatalf("substituted corpus reached public qualification: %+v %v", qualified, e)
+		}
+		return
+	}
+	if mode == "dataset" {
+		qualified, e := client.QualifyVectorDatasetV1(ctx, "operator-fixture", datasetPath)
+		if e != nil || qualified.Dataset == nil || qualified.Prepare.Command.SourceRowCount != expectedRows || len(qualified.Readiness) != 4 || qualified.Prepare.Command != initialized.Prepare.Command {
+			t.Fatalf("dataset reopen qualification: %+v %v", qualified, e)
+		}
+		if len(initialized.Chunks) != 5 {
+			t.Fatalf("bounded dataset chunks=%d", len(initialized.Chunks))
+		}
+		for _, chunk := range initialized.Chunks {
+			if chunk.Outcome != "committed-applied" || !chunk.Result.Evidence.ProvesProductionConsensus() {
+				t.Fatalf("chunk lost proof: %+v", chunk)
 			}
 		}
 		return

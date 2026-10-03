@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
@@ -77,7 +78,7 @@ func validateFixedPeerVectorInitializationV1(config *FixedPeerTCPConfigV1, addre
 	// Prepare and serving activation support one group with exactly three or
 	// four colocated catalog/data voters; no spare or second group is admitted.
 	invalid := errors.New("invalid bounded RF3/RF4 vector initialization intent")
-	if config.Vector != nil || config.Credentials == nil || len(config.Groups) != 1 || (len(config.Nodes) != 3 && len(config.Nodes) != 4) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > 512 {
+	if config.Vector != nil || config.Credentials == nil || len(config.Groups) != 1 || (len(config.Nodes) != 3 && len(config.Nodes) != 4) || len(config.Catalog.Peers) != len(config.Nodes) || len(config.RaftListen) != 2 || intent.CatalogEpoch != 1 || intent.Generation == 0 || intent.MaxSourceRows == 0 || intent.MaxSourceRows > commitlog.VectorPrepareMaxSourceRowsV1 {
 		return invalid
 	}
 	// No spare/dormant destination or differing catalog/data voter roster.

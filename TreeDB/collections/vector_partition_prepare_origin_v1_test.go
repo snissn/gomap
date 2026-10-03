@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"strings"
 	"testing"
@@ -113,5 +114,55 @@ func TestVectorPartitionPrepareStageReplayRequiresExactOriginV1(t *testing.T) {
 	changed.Canonicalize()
 	if !errors.Is(changed.Validate(DefaultVectorPartitionManifestLimits()), ErrVectorPartitionManifestInvalid) {
 		t.Fatal("zero position did not fail closed")
+	}
+}
+
+func TestVectorPartitionPrepareOriginSharedRowAdmissionV1(t *testing.T) {
+	for _, rows := range []uint64{512, 603, 10003, commitlog.VectorPrepareMaxSourceRowsV1, commitlog.VectorPrepareMaxSourceRowsV1 + 1} {
+		t.Run(fmt.Sprintf("rows%d", rows), func(t *testing.T) {
+			m := prepareOriginManifestForTestV1()
+			m.SourceRowCount = rows
+			m.Memberships = make([]VectorPartitionMembershipV1, int(rows))
+			for i := range m.Memberships {
+				m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+			}
+			m.Canonicalize()
+			raw, err := EncodeVectorPartitionManifestV1(m)
+			if rows > commitlog.VectorPrepareMaxSourceRowsV1 {
+				if !errors.Is(err, ErrVectorPartitionManifestInvalid) || !strings.Contains(err.Error(), "bounded prepare origin") {
+					t.Fatalf("oversized origin admitted: %v", err)
+				}
+				// This remains a preparation-origin bound, not a generic manifest row cap.
+				m.PrepareOrigin = nil
+				m.Canonicalize()
+				if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+					t.Fatalf("generic manifest inherited prepare cap: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("shared row admission refused: %v", err)
+			}
+			decoded, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+			if err != nil || decoded.SourceRowCount != rows || decoded.PrepareOrigin == nil {
+				t.Fatalf("origin roundtrip: rows=%d %v", decoded.SourceRowCount, err)
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*VectorPartitionManifestV1){
+		"term":            func(m *VectorPartitionManifestV1) { m.PrepareOrigin.Term = 0 },
+		"index":           func(m *VectorPartitionManifestV1) { m.PrepareOrigin.Index = 0 },
+		"digest":          func(m *VectorPartitionManifestV1) { m.PrepareOrigin.CommandDigest = "bad" },
+		"multi-partition": func(m *VectorPartitionManifestV1) { m.PartitionCount = 2 },
+		"paged":           func(m *VectorPartitionManifestV1) { m.PagedRootV2 = &VectorPartitionPagedRootV2{} },
+		"v2":              func(m *VectorPartitionManifestV1) { m.Format = VectorPartitionManifestFormatV2 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := prepareOriginManifestForTestV1()
+			mutate(&m)
+			if err := m.Validate(DefaultVectorPartitionManifestLimits()); !errors.Is(err, ErrVectorPartitionManifestInvalid) || !strings.Contains(err.Error(), "bounded prepare origin") {
+				t.Fatalf("origin constraint widened: %v", err)
+			}
+		})
 	}
 }

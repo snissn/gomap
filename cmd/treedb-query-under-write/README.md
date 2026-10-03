@@ -1,8 +1,8 @@
 # Bounded native query-under-write checkpoint
 
-This standalone client supports one authenticated RF4 initialized data group, four resident servers (two per host), and the existing 2D cosine bootstrap corpus. It uses public VectorSearchStrictV1 and VectorInsertV1. It does not create stores, initialize or prepare a cluster, alter a graph, change membership, or supply substitute proofs.
+This standalone client supports one authenticated RF4 initialized data group, four resident servers (two per host), and either the existing 2D cosine bootstrap corpus or a qualified dataset corpus. It uses public VectorSearchStrictV1 and VectorInsertV1. It does not create stores, initialize or prepare a cluster, alter a graph, change membership, or supply substitute proofs.
 
-Run it only after the existing fixed-peer initialize / clean restart / qualify sequence succeeds, with the retained qualify JSON and that driver's original initialization config. The config's public endpoint is loopback; run the driver on its configured host. Reader and writer have independently dialed connections. The previous qualified corpus must be exactly the three seeds plus the qualified fresh-y row, with live revision 1. Use fresh owned cluster roots for each campaign and never reuse a run ID after a mutation attempt. The old qualification receipt is an input binding, not a fresh route capability; current all-voter readiness is checked before workload. Bootstrap owner must equal both the configured sole data group and initialization source group before any networking.
+Run it only after the existing fixed-peer initialize / clean restart / qualify sequence succeeds, with the retained qualify JSON and that driver's original initialization config. The config's public endpoint is loopback; run the driver on its configured host. Reader and writer have independently dialed connections. For the 2D fixture, the previous qualified corpus must be exactly the three seeds plus the qualified fresh-y row, with live revision 1. A dataset corpus instead requires the matching retained dataset identity/count/eligibility proof described below, also with live revision 1. Use fresh owned cluster roots for each campaign and never reuse a run ID after a mutation attempt. The old qualification receipt is an input binding, not a fresh route capability; current all-voter readiness is checked before workload. Bootstrap owner must equal both the configured sole data group and initialization source group before any networking.
 
 Example after root-approved build and resource allocation:
 
@@ -17,7 +17,7 @@ Root must bind the driver source/executable, daemon source/executables/images, s
 
 ## Fixed population and output
 
-There are 132 planned API attempts: two preflight strict anchor searches, 32 unique inserts concurrent with 64 strict anchor searches, one explicitly scheduled identical retry of the last insert, 32 post-write self searches and one final anchor search. That is 99 searches and 33 mutation attempts, only 32 new IDs. Including the existing bootstrap fresh-y ID, the campaign has 33 fresh IDs and 36 documents, below its fresh-write64 bound. Preparation's source512 bound remains distinct from this fresh-write campaign limit.
+The default 2D fixture run has 132 planned API attempts: two preflight strict anchor searches, 32 unique inserts concurrent with 64 strict anchor searches, one explicitly scheduled identical retry of the last insert, 32 post-write self searches and one final anchor search. That is 99 searches and 33 mutation attempts, only 32 new IDs. Including the existing bootstrap fresh-y ID, this fixture campaign has 33 fresh IDs and 36 documents, within the earlier64-ID qualification population. Preparation input admission remains distinct from the fresh-write campaign population.
 
 Before network activity the command emits a "planned" JSON event containing generation, frozen requests/vector/document bytes, stable request hashes, input/executable SHA256s, timeouts and every initially unissued operation. Logical request hashes omit the later operation deadline. A "result" event retains the final report with each attempted operation's actual deadline, monotonic start/end nanoseconds, complete response, outcome and typed error code/message. Unissued operations remain in the same plan. JSON byte fields use the standard Go base64 encoding. Setup/dial/Hello/readiness are outside workload latency timestamps; readiness observations are retained separately with requested node, round, response and error classification. There are no percentile or QPS summaries.
 
@@ -41,3 +41,17 @@ Focused validation for root:
     GOWORK=off go test -race ./cmd/treedb-query-under-write -count=1
 
 The deterministic client fakes exercise operation populations, exact retry identity, invalid fresh sequence stopping before another insert, ambiguity/full accounting, cancellation, overlap boundaries and refusal of native/exact-fallback oracle mismatches. They are not actual distributed runtime evidence. A subsequent bounded two-host packet must use the integrated predecessor stack and all actual public API/daemon receipts. Construction on the provisional #4944/#4945 snapshot does not make this branch mergeable.
+
+
+## Dataset checkpoint
+
+A successful dataset qualification receipt may bind a non-2D corpus from #4956.
+Use its same configuration and retained dataset identity/count/eligibility proof.
+`-fresh-inserts 65` plans 65 distinct ordinary public inserts, one explicit retry,
+and 132 strict native searches (198 total attempts), in the configured dimensions
+and EfSearch. Default flags still plan the original132 operations. The dataset
+must have passed the first-two-coordinate norm fraction<=0.9 eligibility before
+loading; anchors/new probes use that plane, with zeros in remaining coordinates.
+Raw planned/result responses, ambiguity accounting, final all-voter prefix checks,
+client-overlap semantics and no automatic retry remain unchanged. This is a
+functional population probe, not sustained performance or general mutation proof.

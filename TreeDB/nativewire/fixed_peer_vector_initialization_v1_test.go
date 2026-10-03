@@ -337,7 +337,7 @@ func TestFixedPeerVectorInitializationCloneDigestAndValidationV1(t *testing.T) {
 		"zero-generation":        func(c *FixedPeerTCPConfigV1) { c.VectorInitialization.Generation = 0 },
 		"wrong-epoch":            func(c *FixedPeerTCPConfigV1) { c.VectorInitialization.CatalogEpoch = 2 },
 		"zero-source-bound":      func(c *FixedPeerTCPConfigV1) { c.VectorInitialization.MaxSourceRows = 0 },
-		"oversized-source-bound": func(c *FixedPeerTCPConfigV1) { c.VectorInitialization.MaxSourceRows = 513 },
+		"oversized-source-bound": func(c *FixedPeerTCPConfigV1) { c.VectorInitialization.MaxSourceRows = 16385 },
 		"quantized-definition": func(c *FixedPeerTCPConfigV1) {
 			c.VectorInitialization.IndexDefinition.QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{{Name: "unsupported"}}
 		},

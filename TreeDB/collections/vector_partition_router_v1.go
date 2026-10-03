@@ -528,7 +528,12 @@ func (c *Collection) vectorPartitionRouterDefinitionV1(index string) (VectorInde
 // current typed FP32 source. Callers use the document ID to derive memberships;
 // BuildAndPublishVectorPartitionRouterV1 reopens and bit-verifies the source so
 // a stale or caller-modified snapshot still fails closed.
-func (c *Collection) ReadVectorPartitionRouterSourceRowsV1(index string) (_ VectorPartitionSourceIdentityV1, _ []VectorPartitionRouterSourceRowV1, resultErr error) {
+func (c *Collection) ReadVectorPartitionRouterSourceRowsV1(index string) (VectorPartitionSourceIdentityV1, []VectorPartitionRouterSourceRowV1, error) {
+	return c.readVectorPartitionRouterSourceRowsBoundedV1(index, uint64(internalrouter.DefaultRouterConfigV1().MaxVectors), ^uint64(0), int(^uint(0)>>1))
+}
+
+// Validate actual IDs and vector input bytes before allocating owned source rows.
+func (c *Collection) readVectorPartitionRouterSourceRowsBoundedV1(index string, maxRows, maxBytes uint64, maxIDBytes int) (_ VectorPartitionSourceIdentityV1, _ []VectorPartitionRouterSourceRowV1, resultErr error) {
 	var identity VectorPartitionSourceIdentityV1
 	def, err := c.vectorPartitionRouterDefinitionV1(index)
 	if err != nil {
@@ -547,7 +552,7 @@ func (c *Collection) ReadVectorPartitionRouterSourceRowsV1(index string) (_ Vect
 	if reader.documentIDSource == nil {
 		return identity, nil, errors.New("collections: authoritative vector partition router document-ID source is unavailable")
 	}
-	if reader.graph.RowCount < 1 || reader.graph.RowCount > internalrouter.DefaultRouterConfigV1().MaxVectors {
+	if reader.graph.RowCount < 1 || uint64(reader.graph.RowCount) > maxRows {
 		return identity, nil, fmt.Errorf("collections: authoritative vector partition router rows=%d outside supported bound", reader.graph.RowCount)
 	}
 	identity = VectorPartitionSourceIdentityV1{
@@ -556,7 +561,28 @@ func (c *Collection) ReadVectorPartitionRouterSourceRowsV1(index string) (_ Vect
 		SchemaHash: reader.graph.BaseSchemaHash,
 		RowCount:   uint64(reader.graph.RowCount),
 	}
+	vectorBytes := uint64(reader.graph.RowCount) * uint64(def.Dimensions) * 4
+	inputBytes := vectorBytes
+	if inputBytes > maxBytes {
+		return identity, nil, errors.New("collections: vector prepare source bytes exceed input admission")
+	}
+	for ordinal := 0; ordinal < reader.graph.RowCount; ordinal++ {
+		id, ok := reader.documentIDForOrdinal(ordinal)
+		if !ok || len(id) == 0 || len(id) > maxIDBytes {
+			return identity, nil, errors.New("collections: vector prepare document ID exceeds input admission")
+		}
+		if uint64(len(id)) > maxBytes-inputBytes {
+			return identity, nil, errors.New("collections: vector prepare source bytes exceed input admission")
+		}
+		inputBytes += uint64(len(id))
+	}
+	if def.Dimensions < 1 || reader.graph.RowCount > math.MaxInt/def.Dimensions || inputBytes-vectorBytes > uint64(math.MaxInt) {
+		return identity, nil, errors.New("collections: source allocation size overflows")
+	}
 	rows := make([]VectorPartitionRouterSourceRowV1, reader.graph.RowCount)
+	vectors := make([]float32, reader.graph.RowCount*def.Dimensions)
+	ids := make([]byte, int(inputBytes-vectorBytes))
+	idOffset := 0
 	for ordinal := range rows {
 		values, _, _, ok := reader.typedVectorSource.vectorForOrdinal(ordinal)
 		if !ok || len(values) != def.Dimensions {
@@ -566,11 +592,22 @@ func (c *Collection) ReadVectorPartitionRouterSourceRowsV1(index string) (_ Vect
 		if !ok || len(id) == 0 {
 			return VectorPartitionSourceIdentityV1{}, nil, fmt.Errorf("collections: authoritative vector partition router document ID %d is unavailable", ordinal)
 		}
+		start, end := ordinal*def.Dimensions, (ordinal+1)*def.Dimensions
+		copy(vectors[start:end], values)
+		idEnd := idOffset + len(id)
+		if idEnd < idOffset || idEnd > len(ids) {
+			return identity, nil, errors.New("collections: frozen source ID bytes changed")
+		}
+		copy(ids[idOffset:idEnd], id)
 		rows[ordinal] = VectorPartitionRouterSourceRowV1{
 			VectorOrdinal: uint64(ordinal),
-			DocumentID:    append([]byte(nil), id...),
-			Values:        append([]float32(nil), values...),
+			DocumentID:    ids[idOffset:idEnd:idEnd],
+			Values:        vectors[start:end:end],
 		}
+		idOffset = idEnd
+	}
+	if idOffset != len(ids) {
+		return identity, nil, errors.New("collections: frozen source ID bytes changed")
 	}
 	return identity, rows, nil
 }

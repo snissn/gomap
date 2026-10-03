@@ -403,6 +403,39 @@ func TestExplicitRetrySplitProofStaysUnknownBeforePostSearch(t *testing.T) {
 	}
 }
 
+func TestDatasetProbePlanMoreThan64OrdinaryIDs(t *testing.T) {
+	o := testOptions()
+	o.Dimensions = 128
+	o.FreshInserts = 65
+	o.EfSearch = 128
+	plan, err := makePlan(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 198 {
+		t.Fatalf("population=%d", len(plan))
+	}
+	ids := map[string]bool{}
+	for _, op := range plan {
+		if op.InsertRequest != nil && op.Phase != "explicit-retry" {
+			ids[op.ExpectedID] = true
+			if len(op.InsertRequest.Vector) != 128 {
+				t.Fatal("dimension drift")
+			}
+		}
+		if op.SearchRequest != nil && (len(op.SearchRequest.Query) != 128 || op.SearchRequest.EfSearch != 128) {
+			t.Fatal("search config drift")
+		}
+	}
+	if len(ids) != 65 || !reflect.DeepEqual(plan[66].InsertRequest, plan[131].InsertRequest) {
+		t.Fatal("ordinary population/retry identity drift")
+	}
+	o.FreshInserts = 66
+	if _, err := makePlan(o); err == nil {
+		t.Fatal("admitted excessive probe")
+	}
+}
+
 func TestReadinessRetainsErrorsAndUsesRemainingRounds(t *testing.T) {
 	config := nativewire.FixedPeerTCPConfigV1{Nodes: []nativewire.FixedPeerTCPNodeV1{{ID: "node"}}, Groups: []nativewire.FixedPeerTCPGroupV1{{ID: "group"}}}
 	for _, mode := range []string{"transient", "exhausted", "canceled"} {

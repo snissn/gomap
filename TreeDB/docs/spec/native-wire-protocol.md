@@ -1655,3 +1655,12 @@ ingress and at the local owner. The owner validates current catalog proof before
 production Raft submission. Pre-send admission refusals remain definite;
 post-send lost mutation responses retain commit ambiguity. Catalog status from
 a consumer carries no local applied-progress or readiness claim.
+
+
+The #4956 dataset initializer changes no wire command/schema: it sends bounded
+ordinary CommandInsertBatch chunks through the existing authenticated Route and
+Raft Submit path before first-generation Prepare. Source admission is16,384 rows,
+32MiB actual FP32+ID input and1024-byte individual IDs, enforced by the prepare
+owner; these are not new ordinary-insert limits. Dataset/chunk identities and
+partial/UNKNOWN outcomes are operator receipt fields. See
+[the preparation contract](fixed-cluster-vector-prepare-v1.md#dataset-preparation-admission-4956).
