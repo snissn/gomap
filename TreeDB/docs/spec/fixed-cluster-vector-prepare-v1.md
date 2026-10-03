@@ -10,8 +10,9 @@ movement, subsequent generations and automatic activation without restart are
 outside this checkpoint. RF4 is bounded operational conformance, not a larger
 capacity or fault-tolerance claim: its quorum is three and a 2+2 two-host
 placement cannot survive either host loss. Preparation admission is separate from live overlay limits. The optional ordinary
-insert probe plans65 distinct IDs; its unpaced corpus completion is not yet
-qualified. Split mutation ledgers retain their own64 bounds.
+insert probe plans65 distinct IDs. Fresh trial10 completed its bounded
+198-operation corpus probe; this is ordinary growth qualification, not sustained
+capacity. Split mutation ledgers retain their own64 bounds.
 
 Create and InsertBatch use routed native Raft commands. Physical creation uses
 additive collection-metadata version 6 carrying the production column schema;
@@ -273,6 +274,12 @@ cost,65 serial writes alone exceed250s. Larger budgets do not establish fairness
 or hide the retained unpaced failure. Reader-intent admission protects a waiting
 reader's gap before a later ordinary writer queues; authoritative consensus,
 current-DB, generation/revision pins and live-document visibility stay intact.
-Root normal/race checks and a frozen fresh unpaced runtime packet remain gates.
-Historical64 ordinary-write qualification is not a hard ordinary ledger cap;
-actual >64 completion remains unresolved here until #4958 supplies evidence.
+Root normal/race checks passed. Fresh trial10 then completed all 198 planned
+operations: 65 distinct ordinary inserts, one identical retry and 132 native
+searches. Actual client-call overlap was verified, and all four voters applied
+through commit 154. The reviewed sealed archive is
+`91333f496872113c8b1942c173a43218810eaf0322921677e6cd53086814aa17`;
+all four servers stopped cleanly without OOM and stores remain preserved.
+Historical64 ordinary-write qualification is not a hard ordinary ledger cap.
+This bounded >64 completion does not establish sustained throughput, recall,
+general mutation coverage or host-loss tolerance; #4959/#4250 remain open.

@@ -3583,5 +3583,17 @@ logical request bytes, stable hashes or tiny default population, and reject
 invalid bounds before input/network work. The larger limits do not themselves
 prove admission fairness. Retained trial08's unpaced198-operation plan failed
 with8 successes/1 failed search/1 UNKNOWN mutation/188 unissued, leaving actual
->64 ordinary growth, phase cost and representative public resource qualification
-pending a reviewed frozen fresh packet. #4250 sustained acceptance stays open.
+>64 ordinary growth pending a reviewed frozen fresh packet at that point.
+Fresh trial10 subsequently passed all 198 attempts on the unchanged
+10,000-row/128D corpus: 65 distinct ordinary inserts, one identical retry and
+132 native searches, with verified client-call overlap and all four voters
+applied through commit 154. No failed, UNKNOWN or unissued operations occurred;
+all four servers stopped exit 0 without OOM and their stores remain preserved.
+The independently reviewed sealed archive is
+`91333f496872113c8b1942c173a43218810eaf0322921677e6cd53086814aa17`.
+Its daemon retains source `47aa6ab` / ELF `1a9c7061` and its phase-renewal driver retains
+source `f231933` / ELF `940752c0`; later ancestry-only integration does not relabel them.
+This qualifies bounded ordinary growth and native client-call overlap, not
+sustained throughput, representative recall, broad mutation support, whole-host
+failure tolerance or unobserved whole-lifetime resource peaks. Write-phase cost
+attribution and broader resource qualification remain open with #4959/#4250.
