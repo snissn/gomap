@@ -50,7 +50,7 @@ callback. An already assigned intent retains its append owner's guards.
 External append/apply callers, including Raft executors, use
 `WithPreparedCommandWALMutation` or `WithPreparedCommandWALSplitMutationV1`.
 These own schema, vector admission/coverage and mutation before append through
-apply and `Finalize` or `Abort`. Declared `column_graph` mutations take the
+apply and `Finalize` or `Abort`. Prepared `column_graph` mutations take the
 existing exclusive native admission even before a serving handle registers a
 carrier. Under schema read and native admission, prepared mutation restores a
 cold durable carrier using the existing load mutex before taking mutation or raw
