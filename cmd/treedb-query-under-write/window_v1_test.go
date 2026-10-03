@@ -250,6 +250,88 @@ func TestWindowResponseOwnershipAndCanonicalValidation(t *testing.T) {
 	}
 }
 
+func TestWindowConcurrentSuccessfulSharedQueryValidation(t *testing.T) {
+	in, r := windowTestReport(t)
+	q := &r.Admission.Queries[0]
+	scorer := q.scorer
+	if scorer == nil {
+		t.Fatal("fixture did not prepare the shared scorer")
+	}
+	frozen := hashJSON(q)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entered := make(chan int, 2)
+	release := make(chan struct{})
+	type result struct {
+		attempt windowAttempt
+		err     error
+	}
+	results := make(chan result, 2)
+	var stops atomic.Int32
+	origin := time.Now()
+	for worker, ordinal := range []int{0, 16} {
+		// Both ordinals select the same frozen query/scorer. Distinct valid
+		// responses exercise canonical validation with recalls 1 and 0.9.
+		response := windowTestResponse(&r.Admission)
+		if worker == 1 {
+			response.Neighbors = append([]public.NeighborV1(nil), q.CorpusTruth...)
+		}
+		client := &windowTestClient{fakeClient: fakeClient{search: func(call context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+			if request.Deadline.IsZero() {
+				return public.SearchResponseV1{}, errors.New("missing call deadline")
+			}
+			request.Deadline = time.Time{}
+			if hashJSON(request) != q.RequestSHA256 {
+				return public.SearchResponseV1{}, errors.New("changed frozen request")
+			}
+			entered <- worker
+			select {
+			case <-release:
+				return response, nil
+			case <-call.Done():
+				return public.SearchResponseV1{}, call.Err()
+			}
+		}}}
+		go func() {
+			a, err := windowCall(ctx, func() { stops.Add(1) }, client, &in, &r.Admission, ordinal, worker, "measured", origin)
+			results <- result{attempt: a, err: err}
+		}()
+	}
+	seen := [2]bool{}
+	for range seen {
+		select {
+		case worker := <-entered:
+			if seen[worker] {
+				t.Fatal("worker entered twice")
+			}
+			seen[worker] = true
+		case <-ctx.Done():
+			t.Fatal("both independent clients did not reach the shared-query barrier")
+		}
+	}
+	close(release)
+	for range seen {
+		select {
+		case got := <-results:
+			a := got.attempt
+			wantRecall := 1.0
+			if a.Worker == 1 {
+				wantRecall = 0.9
+			}
+			if got.err != nil || a.Outcome != "succeeded" || a.RecallAt10 == nil || *a.RecallAt10 != wantRecall ||
+				a.Ordinal != a.Worker*16 || a.QueryID != q.QueryID || a.RequestSHA256 != q.RequestSHA256 ||
+				a.Response == nil || a.Response.Generation != r.Admission.Generation || len(a.Response.Neighbors) != 10 {
+				t.Fatalf("concurrent successful validation lost evidence: attempt=%+v err=%v", a, got.err)
+			}
+		case <-ctx.Done():
+			t.Fatal("concurrent validations did not return")
+		}
+	}
+	if stops.Load() != 0 || q.scorer != scorer || hashJSON(q) != frozen {
+		t.Fatal("successful calls canceled work or mutated the shared oracle")
+	}
+}
+
 func TestWindowNearestRankPercentilesAndFullCoverage(t *testing.T) {
 	p := windowPercentiles([]int64{100, 1, 3, 2})
 	if p.Samples != 4 || p.P50NS != 2 || p.P95NS != 100 || p.P99NS != 100 {

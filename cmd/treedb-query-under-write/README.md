@@ -233,15 +233,15 @@ and sixteen-call quiescent-recall mode remain available.
       -run-id readwindow01 -read-concurrency 4 \
       -timeout 120s -rpc-timeout 10s > /receipts/read-window.jsonl
 
-`-read-concurrency` is mandatory and accepts only1 or4. Each worker owns one
+`-read-concurrency` is mandatory and accepts only 1 or 4. Each worker owns one
 independently dialed persistent strict native client across warmup and measurement.
-Default warmup is64 requests total, assigned by ordinal=worker+n*concurrency;
-with four workers each receives16. Warmup must finish successfully before the
-measured clock starts. `-read-warmup` accepts0..1024. Every phase cycles query
-ordinal%16 through the frozen top10/probes1/configured-EfSearch requests. No
+Default warmup is 64 requests total, assigned by ordinal=worker+n*concurrency;
+with four workers each receives 16. Warmup must finish successfully before the
+measured clock starts. `-read-warmup` accepts 0..1024. Every phase cycles query
+ordinal%16 through the frozen TopK=10/probes=1/configured-EfSearch requests. No
 socket is shared across workers, no search is retried, and no fallback occurs.
 
-Default admission window is60s; `-read-window` accepts1s..60s for bounded
+Default admission window is 60s; `-read-window` accepts 1s..60s for bounded
 checks. The closed loop admits another call after each worker returns, validates,
 and retains its previous response. At normal cutoff, admission stops and calls
 already issued drain under their remaining per-call and overall timeout. The
@@ -275,10 +275,10 @@ and non-success calls separately, and mean recall over measured successes when
 untruncated. Empty latency populations have Samples=0. Warmup and oracle are
 excluded from these summaries; low recall is observed, not an invented gate.
 
-Default measured cap is65536 attempts (`-read-max-attempts` accepts1..65536).
-Default encoded pair budget is128MiB (`-read-output-bytes` accepts1..256MiB,
-including both event newlines); each response is bounded at32KiB and errors
-reuse the2KiB/full-hash summary. Retention charges actual encoded attempt bytes
+Default measured cap is 65536 attempts (`-read-max-attempts` accepts 1..65536).
+Default encoded pair budget is 128 MiB (`-read-output-bytes` accepts 1 MiB..256 MiB,
+including both event newlines); each response is bounded at 32 KiB and errors
+reuse the 2 KiB/full-hash summary. Retention charges actual encoded attempt bytes
 and reserves space for readiness/errors and at most four response-free terminal
 records. On aggregate byte exhaustion the terminal record retains response
 byte length/SHA but omits its response, marks Truncated and stops the workers.
