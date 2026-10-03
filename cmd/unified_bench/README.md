@@ -890,6 +890,18 @@ selections accept at most 126 read workers, its default reader-slot limit, for
 both snapshot and ordinary Get modes. Wider selections fail before any engine
 opens or loads data; the suite allows up to 1024 workers for other engines.
 
+RocksDB is optional: install the native RocksDB headers/shared library, then
+`GOWORK=off CGO_ENABLED=1 go build -tags 'lmdb rocksdb' -o bin/unified-bench ./cmd/unified_bench`
+and select `-dbs treedb,lmdb,rocksdb`. The `rocksdb` adapter uses the native C API,
+64 MiB write buffer, 64 MiB LRU block cache, 10 bits/key whole-key Bloom filters,
+Snappy compression, checksum verification and synchronous WAL writes (including
+ordinary `Set`/batch `Commit`). Its checkpoint waits for a native flush while
+preserving the live DB handle and read snapshots. Close snapshots before their
+DB owner. `Name`/stats report the build-time header version; use a matching shared
+library and record its package version in benchmark provenance. Go allocation
+metrics exclude RocksDB's native allocations; reported cache/memtable properties
+are current engine observations, not peak RSS or a total native-memory budget.
+
 Concurrent mixed readers run for `-quicksilver-duration` (default 4s). A paced
 writer updates `-quicksilver-updates` distinct keys (default min(40,000,keys)),
 in 1000-value batches, checkpointing at four quarter intervals (up to four when
