@@ -305,6 +305,11 @@ func (b *Batch) write(sync bool) error {
 		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
 		return b.db.checkpoint(false)
 	}
+	if sync && !b.physicalOnly && !b.db.commandWAL {
+		if err := b.db.drainNoWALSyncPublishBarriers(); err != nil {
+			return err
+		}
+	}
 	var unlockRawPublish func()
 	if !b.physicalOnly && b.db.commandWAL {
 		var err error
@@ -846,6 +851,11 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 	}
 	if b.db.readOnly {
 		return ErrReadOnly
+	}
+	if sync && !b.physicalOnly && !b.db.commandWAL {
+		if err := b.db.drainNoWALSyncPublishBarriers(); err != nil {
+			return err
+		}
 	}
 	var unlockRawPublish func()
 	if !b.physicalOnly && b.db.commandWAL {

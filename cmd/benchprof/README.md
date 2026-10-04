@@ -65,8 +65,11 @@ make benchprof
 
 Example:
 
-This example uses unified-bench's legacy `fast` benchmark-runner preset for a
-no-WAL profiling ceiling; it is not a TreeDB server profile recommendation.
+This example uses unified-bench's `fast` preset, which resolves TreeDB to the
+production `no_wal_fast` profile with checksum verification enabled. Ordinary
+write acknowledgements are volatile; explicit sync, checkpoint, and clean close
+remain durable boundaries. Use `-profile bench_unsafe` for the explicit profiling
+ceiling.
 
 ```bash
 mkdir -p /tmp/scan-profiles

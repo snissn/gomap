@@ -3917,9 +3917,9 @@ func (db *DB) commitManualRootAttempt(newRootID uint64, basis StateToken, condit
 
 // Checkpoint forces a durable boundary for previously-published backend state.
 //
-// Unlike CommitAtState or ForceCommit, this does not publish a new root or
-// advance CommitSeq. It is intended for callers that already made writes
-// visible with relaxed durability and now need those writes durable on disk.
+// Registered higher-level executors may first publish pending acknowledged
+// writes through an unlocked barrier drain. The checkpoint itself does not
+// advance CommitSeq; it seals the resulting previously-published backend state.
 func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
 }
@@ -4027,6 +4027,11 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 		return ErrClosed
 	}
 	for {
+		if !db.commandWAL {
+			if err := db.drainNoWALSyncPublishBarriers(); err != nil {
+				return err
+			}
+		}
 		db.teardownMu.RLock()
 		err := db.checkpointTeardownPinned(maintenanceAlreadyHeld)
 		db.teardownMu.RUnlock()
@@ -4062,8 +4067,10 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	defer func() { unlockCommandWALAdmission() }()
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer func() { unlockCommandWALPublish() }()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		return err
+	if db.commandWAL {
+		if err := db.runCommandWALRawPublishBarriers(); err != nil {
+			return err
+		}
 	}
 
 	db.writeMu.Lock()

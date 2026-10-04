@@ -23,7 +23,7 @@ import (
 //
 //   - "Command WAL durable": command WAL plus durable ordinary ACKs.
 //   - "Command WAL relaxed": command WAL plus relaxed ordinary ACKs.
-//   - "No WAL fast":         no WAL plus relaxed ordinary ACKs.
+//   - "No WAL fast":         authoritative storage with volatile ordinary ACKs.
 //   - "Bench unsafe":        benchmark/test-only ceiling with no durability promise.
 //
 // Additional legacy/no-WAL constants remain temporarily available for
@@ -66,8 +66,10 @@ const (
 	// The four canonical profile strings are the only accepted parser tokens.
 	ProfileCommandWALDurable = db.ProfileCommandWALDurable
 	ProfileCommandWALRelaxed = db.ProfileCommandWALRelaxed
-	ProfileNoWALFast         = db.ProfileNoWALFast
-	ProfileBenchUnsafe       = db.ProfileBenchUnsafe
+	// ProfileNoWALFast supports authoritative data. Ordinary ACKs are volatile
+	// until a seal; explicit Sync, Checkpoint, and clean Close remain durable.
+	ProfileNoWALFast   = db.ProfileNoWALFast
+	ProfileBenchUnsafe = db.ProfileBenchUnsafe
 
 	// Deprecated Go aliases. They retain distinct source tokens so resolution can
 	// expose a deprecation signal, but each maps to exactly one canonical profile.

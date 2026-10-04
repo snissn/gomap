@@ -430,6 +430,12 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		}
 	}()
 
+	if sync && tx.db.disableJournal && (tx.batch == nil || len(tx.batch.entries) == 0) {
+		if err := tx.db.Checkpoint(); err != nil {
+			return err
+		}
+	}
+
 	if err := tx.db.beginExclusiveWrite(); err != nil {
 		return err
 	}

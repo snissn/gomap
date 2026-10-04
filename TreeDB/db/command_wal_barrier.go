@@ -16,18 +16,24 @@ type commandWALRawBarrier struct {
 }
 
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
-// writers must run before appending a new raw KV command frame. Higher-level
+// writers must run before appending a new raw KV command frame. Checkpoint also
+// runs these callbacks in WAL-free mode, allowing registered higher-level
+// executors to hand off pending acknowledged writes before capturing its root.
+// WAL-free ordinary root publications do not run these callbacks. Higher-level
 // command executors use this to drain already-appended staged command frames so
 // raw KV publishes cannot create AppliedCommandLSN gaps. A caller takes
 // exclusive pre-raw admission before it acquires the command-WAL publish mutex;
 // hooks still run with that mutex held so existing staged publishers retain
 // their atomic raw-publish contract. A higher-level drain that would wait for
 // foreground publication returns an internal PendingDrain handoff instead;
-// the boundary owner drops all its leases, drains, then reruns every hook. A hook must not append command-WAL frames,
-// acquire LockCommandWALStaging, or call a path that does either. The returned unregister
-// function waits for in-flight hooks and must not be called from the hook itself.
+// the command-WAL boundary owner drops all its leases, drains, then reruns every
+// hook. A WAL-free boundary snapshots the registry and drains each hook once,
+// covering prior acknowledgements without chasing later writes. A hook must not
+// append command-WAL frames, acquire LockCommandWALStaging, or call a path that
+// does either. The returned unregister function waits for in-flight hooks and
+// must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
-	if db == nil || hook == nil || !db.commandWAL {
+	if db == nil || hook == nil {
 		return func() {}
 	}
 	db.closeHooksMu.Lock()
@@ -69,13 +75,7 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	}
 }
 
-func (db *DB) runCommandWALRawPublishBarriers() error {
-	if db == nil || !db.commandWAL {
-		return nil
-	}
-	if err := db.commandWALPoisonedError(); err != nil {
-		return err
-	}
+func (db *DB) snapshotCommandWALRawPublishBarriers() []*commandWALRawBarrier {
 	db.commandWALRawBarrierMu.Lock()
 	barriers := make([]*commandWALRawBarrier, 0, len(db.commandWALRawBarriers))
 	for _, barrier := range db.commandWALRawBarriers {
@@ -85,20 +85,36 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 	}
 	db.commandWALRawBarrierMu.Unlock()
 
+	return barriers
+}
+
+// run pins only the observer. PendingDrain runs outside this lease, matching
+// the existing command-WAL handoff and unregister lifetime.
+func (barrier *commandWALRawBarrier) run() error {
+	barrier.mu.Lock()
+	if !barrier.active || barrier.hook == nil {
+		barrier.mu.Unlock()
+		return nil
+	}
+	hook := barrier.hook
+	barrier.wg.Add(1)
+	barrier.mu.Unlock()
+	defer barrier.wg.Done()
+	return hook()
+}
+
+func (db *DB) runCommandWALRawPublishBarriers() error {
+	if db == nil {
+		return nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	barriers := db.snapshotCommandWALRawPublishBarriers()
+
 	var errs []error
 	for _, barrier := range barriers {
-		barrier.mu.Lock()
-		if !barrier.active || barrier.hook == nil {
-			barrier.mu.Unlock()
-			continue
-		}
-		hook := barrier.hook
-		barrier.wg.Add(1)
-		barrier.mu.Unlock()
-		err := func() error {
-			defer barrier.wg.Done()
-			return hook()
-		}()
+		err := barrier.run()
 		if err != nil {
 			// Restart at the owning boundary before visiting later barriers.
 			// All barriers are rerun after the unlocked drain succeeds.
@@ -112,6 +128,46 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// drainNoWALSyncPublishBarriers covers acknowledged higher-level buffers before
+// a public raw KV sync publication. Internal physical/ordered-root publishers
+// bypass it so draining a collection cannot recursively drain itself.
+func (db *DB) drainNoWALSyncPublishBarriers() error {
+	// No-WAL hooks inspect collection-owned locks. Do not hold teardown:
+	// their owner may need a backend lease while Close is queued.
+	checkReady := func() error {
+		if db.closing.Load() {
+			return ErrClosed
+		}
+		if db.readOnly {
+			return ErrReadOnly
+		}
+		return db.publicationPoisonedError()
+	}
+	if err := checkReady(); err != nil {
+		return err
+	}
+	// A successful drain covers completed prior writes. Restarting the
+	// registry would extend that cut whenever later ordinary writes refill
+	// a collection, potentially preventing the boundary from ever sealing.
+	for _, barrier := range db.snapshotCommandWALRawPublishBarriers() {
+		if err := checkReady(); err != nil {
+			return err
+		}
+		err := barrier.run()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
+	}
+	return checkReady()
 }
 
 func (db *DB) lockCommandWALRawPublish() func() {

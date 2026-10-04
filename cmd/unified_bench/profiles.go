@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	profileArg = flag.String("profile", "", "Cross-DB benchmark preset to use (balanced, durable, fast, wal_on_fast). Not a TreeDB server profile. Overrides default flags unless explicitly set.")
+	profileArg = flag.String("profile", "", "Cross-DB benchmark preset to use (balanced, durable, fast, wal_on_fast, bench_unsafe). Not a TreeDB server profile. Overrides default flags unless explicitly set.")
 )
 
 type Profile struct {
@@ -24,7 +24,7 @@ var profiles map[string]Profile
 func init() {
 	applyFast := func(isSet map[string]bool) {
 		// TreeDB
-		applyTreeDBProfileIfUnset(treedb.ProfileBenchUnsafe, isSet)
+		applyTreeDBProfileIfUnset(treedb.ProfileNoWALFast, isSet)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 
 		// Badger
@@ -47,6 +47,11 @@ func init() {
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
 	}
 
+	applyBenchUnsafe := func(isSet map[string]bool) {
+		applyFast(isSet)
+		applyTreeDBProfileIfUnset(treedb.ProfileBenchUnsafe, isSet)
+	}
+
 	applyWALOnFast := func(isSet map[string]bool) {
 		// TreeDB: keep WAL enabled and relax ordinary ACK durability. Read
 		// integrity remains verified under the canonical production contract.
@@ -65,16 +70,20 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Cross-DB no-sync throughput preset. For TreeDB this selects the explicit bench_unsafe boundary with no WAL, relaxed read integrity, and Celestia-aligned auto/snappy/balanced value-log compression. UNSAFE for production data.",
+			Description: "Cross-DB no-sync throughput preset. TreeDB uses production no_wal_fast with verified reads: ordinary ACKs are volatile until sealing; explicit Sync, Checkpoint, and clean Close remain durable. Other engines retain their native no-sync flags.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
 			Description: "Cross-DB relaxed-WAL preset. For TreeDB this selects command_wal_relaxed with verified read integrity and Celestia-aligned auto/snappy/balanced value-log compression.",
 			Apply:       applyWALOnFast,
 		},
-		"unsafe": { // Alias for fast
-			Description: "Alias for 'fast'",
-			Apply:       applyFast,
+		"bench_unsafe": {
+			Description: "Explicit benchmark-only ceiling: TreeDB uses no WAL and skips read checksums; no production durability promise.",
+			Apply:       applyBenchUnsafe,
+		},
+		"unsafe": { // Legacy alias for the explicit ceiling
+			Description: "Alias for 'bench_unsafe'",
+			Apply:       applyBenchUnsafe,
 		},
 		"durable": {
 			Description: "Strict durability: WAL/sync enabled (defaults). Ideal for correctness verification.",

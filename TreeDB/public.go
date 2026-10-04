@@ -2557,11 +2557,9 @@ func (db *DB) Print() error {
 // In cached mode this flushes queued memtables with backend sync and resets the
 // WAL to a fresh segment. In backend mode it forces a sync boundary.
 //
-// Current collection-local pending writes may have their own flush-boundary
-// behavior; see docs/spec/contracts.md for the current collection contract and
-// the PR1 collection WAL target contract. After collection WAL lands,
-// Checkpoint returning nil must also cover pre-cut collection WAL transactions
-// or return/report explicit collection WAL debt.
+// Registered collection managers drain acknowledged collection-local writes
+// before a WAL-free root is captured. Command-WAL managers close their staged
+// command prefix before the checkpoint seals roots and cleanup metadata.
 func (db *DB) Checkpoint() (err error) {
 	start := time.Now()
 	defer func() {

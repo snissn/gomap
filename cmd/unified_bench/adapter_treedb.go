@@ -410,6 +410,8 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("profile_resolved=%s", r.opts.ResolvedProfile))
 	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
 	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
+	lines = append(lines, fmt.Sprintf("benchmark_unsafe=%t", r.opts.UnsafeBenchmarkProfile))
+	lines = append(lines, fmt.Sprintf("vlog_current_writable_mmap=%t", r.opts.ValueLog.CurrentWritableMmap))
 	if strings.TrimSpace(r.maintenanceMode) != "" {
 		lines = append(lines, fmt.Sprintf("maintenance_mode=%s", strings.TrimSpace(r.maintenanceMode)))
 	}
@@ -1016,7 +1018,7 @@ func resolveUnifiedBenchTreeDBProfile(disableWAL, forceBenchmarkUnsafe bool) (tr
 	}
 	if *treedbDisableReadChecksum {
 		if !disableWAL {
-			return "", false, fmt.Errorf("TreeDB: -treedb-disable-read-checksum is only available through the no-WAL bench_unsafe contract; use -profile fast or also set -treedb-disable-wal")
+			return "", false, fmt.Errorf("TreeDB: -treedb-disable-read-checksum is only available through the no-WAL bench_unsafe contract; use -profile bench_unsafe or also set -treedb-disable-wal")
 		}
 		return treedb.ProfileBenchUnsafe, true, nil
 	}

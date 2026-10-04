@@ -1508,6 +1508,9 @@ type collectionWriteDomain struct {
 	indexedAsyncMu   sync.Mutex
 	indexedAsyncCond *sync.Cond
 	indexedAsyncRun  bool
+	// Protected by indexedAsyncMu: uncoordinated no-WAL sync drains pause
+	// starts and ask the worker to yield after its prepared publication.
+	indexedSyncDrainWaiters int
 	// Protected by mu: queued work starts only as its admission owner exits.
 	indexedAsyncFlushDeferred bool
 	indexedAsyncErr           error
@@ -2811,11 +2814,22 @@ func (domain *collectionWriteDomain) beginIndexedAsyncFlush() bool {
 	if domain.indexedAsyncCond == nil {
 		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
 	}
-	if domain.indexedAsyncRun {
+	if domain.indexedAsyncRun || domain.indexedSyncDrainWaiters != 0 ||
+		(domain.schemaCoordinator != nil && domain.schemaCoordinator.indexedSyncDrainWaiters.Load() != 0) {
 		return false
 	}
 	domain.indexedAsyncRun = true
 	return true
+}
+
+func (domain *collectionWriteDomain) indexedSyncDrainPending() bool {
+	if coord := domain.schemaCoordinator; coord != nil {
+		return coord.indexedSyncDrainWaiters.Load() != 0
+	}
+	domain.indexedAsyncMu.Lock()
+	pending := domain.indexedSyncDrainWaiters != 0
+	domain.indexedAsyncMu.Unlock()
+	return pending
 }
 
 func (domain *collectionWriteDomain) finishIndexedAsyncFlush(err error) {
@@ -3298,7 +3312,8 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 
 // FlushAll publishes buffered writes for every collection write domain known to
 // this manager, then persists dirty native vector indexes registered through
-// collection handles. The backend DB also calls this as a close hook while
+// collection handles. WAL-free Checkpoint drains this state before sealing its
+// root. The backend DB also calls this as a close hook while
 // write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
@@ -3321,6 +3336,9 @@ func (m *CollectionManager) FlushAll() error {
 	}
 	m.collectionsMu.RUnlock()
 
+	if !m.db.CommandWALEnabled() {
+		defer m.holdIndexedAsyncFlushForSync(domains)()
+	}
 	var errs []error
 	for _, domain := range domains {
 		domain.waitIndexedAsyncFlush()
@@ -3334,6 +3352,55 @@ func (m *CollectionManager) FlushAll() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// holdIndexedAsyncFlushForSync bounds the asynchronous frontier before waiting
+// for workers. Pause each shared coordinator before any later sibling snapshot,
+// so even newly registered domains defer their workers. Uncoordinated domains
+// use their existing condition mutex. No domain/admission/teardown lease is held
+// while changing waiter counts or waiting for a prepared publication to finish.
+func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWriteDomain) func() {
+	coordinators := make(map[*collectionSchemaCoordinator]struct{}, len(domains))
+	var uncoordinated []*collectionWriteDomain
+	for _, domain := range domains {
+		if coord := domain.schemaCoordinator; coord != nil {
+			coordinators[coord] = struct{}{}
+		} else {
+			uncoordinated = append(uncoordinated, domain)
+		}
+	}
+	for coord := range coordinators {
+		coord.indexedSyncDrainWaiters.Add(1)
+	}
+	for _, domain := range uncoordinated {
+		domain.indexedAsyncMu.Lock()
+		domain.indexedSyncDrainWaiters++
+		domain.indexedAsyncMu.Unlock()
+	}
+	return func() {
+		var resume []*collectionWriteDomain
+		for coord := range coordinators {
+			if coord.indexedSyncDrainWaiters.Add(-1) == 0 {
+				// Only the last waiter resumes a finite fresh snapshot. New
+				// domains admitted during the drain may also have deferred work.
+				resume = append(resume, coord.snapshotDomains()...)
+			}
+		}
+		for _, domain := range uncoordinated {
+			domain.indexedAsyncMu.Lock()
+			domain.indexedSyncDrainWaiters--
+			last := domain.indexedSyncDrainWaiters == 0
+			domain.indexedAsyncMu.Unlock()
+			if last {
+				resume = append(resume, domain)
+			}
+		}
+		// Preserve queued work after failures or later refills. A new waiter
+		// racing this release makes the existing scheduler defer it again.
+		for _, domain := range resume {
+			collectionForWriteDomainPublication(m.db, domain).startDeferredIndexedAsyncFlush()
+		}
+	}
 }
 
 // SyncForStandaloneWriteConcern closes the durable storage boundary used by a
@@ -3402,6 +3469,14 @@ func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDo
 	}
 	collection := collectionForWriteDomainPublication(db, domain)
 	for {
+		if !db.CommandWALEnabled() && domain.indexedSyncDrainPending() {
+			domain.mu.Lock()
+			if len(domain.indexedFlushUnits) != 0 {
+				domain.indexedAsyncFlushDeferred = true
+			}
+			domain.mu.Unlock()
+			return nil
+		}
 		work, err := collection.prepareIndexedAsyncPublish()
 		if err != nil || work == nil {
 			return err
@@ -3435,6 +3510,10 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 		return true
 	}
 	if !domain.beginIndexedAsyncFlush() {
+		if !c.db.CommandWALEnabled() && domain.indexedSyncDrainPending() {
+			domain.indexedAsyncFlushDeferred = true
+			return true
+		}
 		return false
 	}
 	domain.indexedAsyncFlushScheduled.Add(1)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1811,77 +1812,80 @@ func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 }
 
 func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
-	db := &DB{commandWAL: true}
-	barrierEntered := make(chan struct{})
-	releaseBarrier := make(chan struct{})
-	unregisterStarted := make(chan struct{})
-	unregisterReturned := make(chan struct{})
-	runDone := make(chan error, 1)
+	for _, commandWAL := range []bool{false, true} {
+		t.Run(fmt.Sprintf("command_wal_%t", commandWAL), func(t *testing.T) {
+			db := &DB{commandWAL: commandWAL}
+			barrierEntered := make(chan struct{})
+			releaseBarrier := make(chan struct{})
+			unregisterStarted := make(chan struct{})
+			unregisterReturned := make(chan struct{})
+			runDone := make(chan error, 1)
 
-	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
-		close(barrierEntered)
-		<-releaseBarrier
-		return nil
-	})
-	go func() {
-		runDone <- db.runCommandWALRawPublishBarriers()
-	}()
-	select {
-	case <-barrierEntered:
-	case <-time.After(time.Second):
-		t.Fatalf("raw publish barrier did not start")
-	}
-	go func() {
-		close(unregisterStarted)
-		unregister()
-		close(unregisterReturned)
-	}()
-	select {
-	case <-unregisterStarted:
-	case <-time.After(time.Second):
-		t.Fatalf("unregister goroutine did not start")
-	}
-	select {
-	case <-unregisterReturned:
-		t.Fatalf("unregister returned before in-flight barrier completed")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(releaseBarrier)
-	select {
-	case <-unregisterReturned:
-	case <-time.After(time.Second):
-		t.Fatalf("unregister did not return after in-flight barrier completed")
-	}
-	select {
-	case err := <-runDone:
-		if err != nil {
-			t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("runCommandWALRawPublishBarriers did not finish")
-	}
-	if got := len(db.commandWALRawBarriers); got != 0 {
-		t.Fatalf("barrier count after unregister=%d, want 0", got)
+			unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+				close(barrierEntered)
+				<-releaseBarrier
+				return nil
+			})
+			go func() {
+				runDone <- db.runCommandWALRawPublishBarriers()
+			}()
+			select {
+			case <-barrierEntered:
+			case <-time.After(time.Second):
+				t.Fatalf("raw publish barrier did not start")
+			}
+			go func() {
+				close(unregisterStarted)
+				unregister()
+				close(unregisterReturned)
+			}()
+			select {
+			case <-unregisterStarted:
+			case <-time.After(time.Second):
+				t.Fatalf("unregister goroutine did not start")
+			}
+			select {
+			case <-unregisterReturned:
+				t.Fatalf("unregister returned before in-flight barrier completed")
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(releaseBarrier)
+			select {
+			case <-unregisterReturned:
+			case <-time.After(time.Second):
+				t.Fatalf("unregister did not return after in-flight barrier completed")
+			}
+			select {
+			case err := <-runDone:
+				if err != nil {
+					t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("runCommandWALRawPublishBarriers did not finish")
+			}
+			if got := len(db.commandWALRawBarriers); got != 0 {
+				t.Fatalf("barrier count after unregister=%d, want 0", got)
+			}
+		})
 	}
 }
 
-func TestCommandWALRawPublishBarrierNoopWhenDisabled(t *testing.T) {
+func TestNoWALRawPublishBarrierRegistration(t *testing.T) {
 	db := &DB{}
 	var called atomic.Bool
 	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
 		called.Store(true)
 		return nil
 	})
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatal(err)
+	}
+	if !called.Load() {
+		t.Fatal("WAL-free checkpoint barrier was not registered")
+	}
 	unregister()
 	if got := len(db.commandWALRawBarriers); got != 0 {
-		t.Fatalf("barrier count with command WAL disabled=%d, want 0", got)
-	}
-	db.commandWAL = true
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
-	}
-	if called.Load() {
-		t.Fatalf("disabled command WAL raw publish barrier was registered")
+		t.Fatalf("barriers after unregister=%d", got)
 	}
 }
 

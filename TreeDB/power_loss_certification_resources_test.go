@@ -20,7 +20,9 @@ const authoritativeResourcesVariantID = "public-authoritative-resources-stable-i
 
 // TestPowerLossCertificationAuthoritativeResourcesPublicReopen retains one
 // normal-public-open witness whose stable image contains production collection
-// template, secondary, text, column, vector, and auxiliary physical resources.
+// template, secondary, text, dictionary, and persistent value-log resources.
+// Durable command-WAL profiles additionally certify column, column_graph vector,
+// and auxiliary physical resources; relaxed profiles assert their write rejection.
 // The selected crash boundary is emitted by the real checkpoint path; the test
 // does not relabel the producer-authority unit matrix as power-loss evidence.
 func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) {
@@ -137,6 +139,10 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	// the model must earn those bytes and names through observed production
 	// persistence events rather than importing them as initially stable.
 	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
+	t.Logf("authoritative resource scope profile=%s physical_resources=%t supported=documents,secondary,text,template,dictionary,persistent-pointers,outer-leaves", profile, witness.physicalResources)
+	if !witness.physicalResources {
+		t.Log("authoritative resource unsupported foreground writes rejected without inserted rows: typed-storage,column_graph-vector; physical auxiliary assets are outside this profile's witness")
+	}
 	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
 	// Stop the trainer and drain its final accepted-profile callback. Published
 	// dictionaries remain live for the dictionary-encoded witness value, but no
@@ -164,21 +170,25 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		t.Fatalf("authoritative resource background error after pre-window drain: %v", err)
 	default:
 	}
-	// The marker is a durable command-WAL write, but is deliberately placed
-	// before arming. With autonomous checkpoint, vacuum, prune, value-log
-	// generation, and dictionary-training publishers disabled or quiesced above,
-	// the explicit Checkpoint below owns the marker's cached frontier and its
-	// main-root metadata publication.
+	// An ordinary Set leaves a dirty cached marker for the terminal Checkpoint.
+	// SetSync would already checkpoint and seal that marker under no_wal_fast,
+	// consuming its main-root publication before the replay cut is armed. With
+	// autonomous checkpoint, vacuum, prune, value-log generation, and dictionary
+	// training disabled or quiesced above, the explicit Checkpoint below owns the
+	// marker's cached frontier and its main-root metadata publication. A durable
+	// command-WAL profile may durably acknowledge Set through its WAL; this
+	// witness selects the subsequent main-root checkpoint publication in either
+	// profile, not the ordinary write's ACK.
 	boundaryKey := []byte("certification/authoritative-resource-boundary")
 	boundaryValue := []byte("stable")
 	observeMu.Lock()
 	phase = "boundary-set"
 	if armed {
 		observeMu.Unlock()
-		t.Fatal("authoritative-resource replay cut armed during boundary SetSync")
+		t.Fatal("authoritative-resource replay cut armed during boundary Set")
 	}
 	observeMu.Unlock()
-	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
+	if err := database.Set(boundaryKey, boundaryValue); err != nil {
 		restoreObserver()
 		t.Fatalf("write authoritative resource boundary: %v", err)
 	}
@@ -211,7 +221,7 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, authoritativeResourcesVariantID, powerLossOracleSeed)
 		}
 	}
-	if namespaceEvents == 0 || dictDBPersistenceEvents == 0 || authoritativeAssetPersistenceEvents == 0 {
+	if namespaceEvents == 0 || dictDBPersistenceEvents == 0 || (witness.physicalResources && authoritativeAssetPersistenceEvents == 0) {
 		t.Fatalf("resource creation persistence coverage namespace=%d dictdb=%d assets=%d", namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
 	}
 	t.Logf("authoritative resource cut occurrence=%d namespace_events=%d dictdb_persistence_events=%d asset_persistence_events=%d", selectedOccurrence, namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
