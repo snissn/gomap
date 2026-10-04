@@ -113,6 +113,9 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 		switch result.Op {
 		case UpdateNoop:
 			guard.Unlock()
+			if syncWrite && !db.commandWAL {
+				return db.Checkpoint()
+			}
 			return nil
 		case UpdateSet:
 			err = db.setPoint(key, result.Value, syncWrite)

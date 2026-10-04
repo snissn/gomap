@@ -718,6 +718,24 @@ Coverage:
 
 ## 6. Durability/Profile Defaults
 
+Authoritative no-WAL boundaries (#4980) are covered by
+`TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers` (separate managers,
+indexed/unindexed buffers, checkpoint/maintenance, point/batch/conditional/no-op
+sync and clean close reopened from the existing power-loss oracle),
+`TestNoWALCheckpointWaitsForIndexedAsyncPublisher`,
+`TestCollectionVectorIndexNativeRootCheckpointPersistsDirtyGraph`,
+`TestNoWALSyncBarrierDrainAndFailure` (observer/drain outside teardown and failed
+drain prevents the later mutation), and
+`TestNoWALFastPublicNoopSyncSealsEarlierWrites`.
+`TestNoWALReadOnlyConditionalSyncValidatesAfterDrain` preserves read conflicts.
+`TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix` documents the
+autonomous-seal limitation across independently buffered ordinary ACKs.
+`TestApplyProfile_FastAndExplicitUnsafeCeiling` verifies the benchmark production
+fast/explicit unsafe mapping and integrity/mmap resolution.
+See [the no-WAL audit](no-wal-fast-audit.md) for source boundaries and existing
+reopen/GC/closure-oracle qualification. These checks make no throughput claim.
+
+
 Invariant:
 - Durability modes and profile bundles map to expected policy knobs.
 

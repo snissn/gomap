@@ -519,8 +519,8 @@ Durability mode controls guarantees for sync calls:
     command frames remain relaxed while explicit sync APIs opt up to a durable
     V2 prefix.
 - `DurabilityWALOffRelaxed`:
-  - In benchmark/compatibility mode, WAL off means relaxed sync; the durability
-    boundary is typically checkpoint-based.
+  - Production `no_wal_fast` supports authoritative data with volatile ordinary
+    acknowledgement and durable explicit sync/checkpoint/clean-close boundaries.
 
 Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 
@@ -611,7 +611,7 @@ Barrier methods:
 |---|---|
 | `Collection.Flush` | Publishes all pending collection write-domain state for that collection admitted before the flush cut and waits for in-flight async indexed publishing for that collection. It does not imply fsync unless composed with a sync/checkpoint boundary that requires fsync. Under command WAL, it may also serve as a publish boundary for commands admitted before the cut only if it advances `AppliedLSN` atomically with the roots. |
 | `CollectionManager.FlushAll` | Applies the `Flush` contract to every collection write domain known to the manager at the flush cut. Future backend-owned command WAL services must use a global domain registry when the contract needs to cover all collection handles, not only one manager instance. |
-| `DB.Checkpoint` | Target command WAL cleanup boundary: successful return may report clean only when every pre-cut command frame required for recovery is covered by durable roots plus `AppliedLSN`, and when cleanup metadata for omitted WAL ranges is durable. If publication/`AppliedLSN`/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero command WAL debt. |
+| `DB.Checkpoint` | In WAL-free mode, drains acknowledged local writes and dirty native vector state from registered collection managers before sealing a backend root. Command WAL cleanup boundary: successful return may report clean only when every pre-cut command frame required for recovery is covered by durable roots plus `AppliedLSN`, and when cleanup metadata for omitted WAL ranges is durable. If publication/`AppliedLSN`/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero command WAL debt. |
 | Document service `OptimizeIndex` after deferred inserts | Drains collection work, crosses `DB.Checkpoint`, then performs any debt-qualified vacuum and publishes query-ready vector assets. Once the checkpoint succeeds, accepted documents survive process crash even if later optimization fails; only a successful Optimize response promises a clean query-ready vector generation. |
 | `DB.Close` | Establishes a close admission cut. Every collection write racing with the cut either fails before visible install with `ErrClosed` or is included in the close drain. If `Close` returns `nil`, every included successful collection mutation is visible after read-write reopen. Physical cleanup may remain a safe leak, but WAL/external refs needed for recovery must not be removed. |
 

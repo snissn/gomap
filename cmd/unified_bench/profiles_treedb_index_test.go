@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -684,8 +685,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
 	}
-	if !*treedbDisableReadChecksum {
-		t.Fatalf("expected fast profile to disable read checksum")
+	if *treedbDisableReadChecksum {
+		t.Fatalf("expected fast profile to preserve verified read integrity")
 	}
 
 	resetTreeDBIndexFlagsForTest()
@@ -724,6 +725,63 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if *treedbDisableReadChecksum {
 		t.Fatalf("expected wal_on_fast profile to preserve verified read integrity")
+	}
+}
+
+func TestApplyProfile_FastAndExplicitUnsafeCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		want   treedb.Profile
+		unsafe bool
+	}{
+		{name: "fast", want: treedb.ProfileNoWALFast},
+		{name: "bench_unsafe", want: treedb.ProfileBenchUnsafe, unsafe: true},
+		{name: "unsafe", want: treedb.ProfileBenchUnsafe, unsafe: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := saveTreeDBFlagState()
+			defer restoreTreeDBFlagState(saved)
+			resetTreeDBIndexFlagsForTest()
+			if err := applyProfile(tc.name, map[string]bool{}); err != nil {
+				t.Fatal(err)
+			}
+			opts, _, err := buildTreeDBOptions(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opts.ResolvedProfile != tc.want || opts.UnsafeBenchmarkProfile != tc.unsafe {
+				t.Fatalf("resolved=%q benchmark=%t want=%q benchmark=%t", opts.ResolvedProfile, opts.UnsafeBenchmarkProfile, tc.want, tc.unsafe)
+			}
+			if (opts.ValueLog.ReadIntegrity == treedb.IntegritySkipChecksums) != tc.unsafe {
+				t.Fatalf("integrity=%v benchmark=%t", opts.ValueLog.ReadIntegrity, tc.unsafe)
+			}
+			if !tc.unsafe && opts.ValueLog.CurrentWritableMmap {
+				t.Fatal("production fast enabled current writable mmap")
+			}
+			report := (treeDBOptionsReport{opts: opts}).formatText("")
+			for _, field := range []string{fmt.Sprintf("profile_resolved=%s", tc.want), fmt.Sprintf("benchmark_unsafe=%t", tc.unsafe), fmt.Sprintf("vlog_current_writable_mmap=%t", opts.ValueLog.CurrentWritableMmap)} {
+				if !strings.Contains(report, field) {
+					t.Fatalf("resolved report missing %q: %s", field, report)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyProfile_FastExplicitChecksumOverrideSelectsCeiling(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbDisableReadChecksum = true
+	if err := applyProfile("fast", map[string]bool{"treedb-disable-read-checksum": true}); err != nil {
+		t.Fatal(err)
+	}
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.ResolvedProfile != treedb.ProfileBenchUnsafe || !opts.UnsafeBenchmarkProfile {
+		t.Fatalf("explicit checksum skipping resolved=%q benchmark=%t", opts.ResolvedProfile, opts.UnsafeBenchmarkProfile)
 	}
 }
 

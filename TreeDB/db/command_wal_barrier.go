@@ -16,7 +16,10 @@ type commandWALRawBarrier struct {
 }
 
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
-// writers must run before appending a new raw KV command frame. Higher-level
+// writers must run before appending a new raw KV command frame. Checkpoint also
+// runs these callbacks in WAL-free mode, allowing registered higher-level
+// executors to hand off pending acknowledged writes before capturing its root.
+// WAL-free ordinary root publications do not run these callbacks. Higher-level
 // command executors use this to drain already-appended staged command frames so
 // raw KV publishes cannot create AppliedCommandLSN gaps. A caller takes
 // exclusive pre-raw admission before it acquires the command-WAL publish mutex;
@@ -27,7 +30,7 @@ type commandWALRawBarrier struct {
 // acquire LockCommandWALStaging, or call a path that does either. The returned unregister
 // function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
-	if db == nil || hook == nil || !db.commandWAL {
+	if db == nil || hook == nil {
 		return func() {}
 	}
 	db.closeHooksMu.Lock()
@@ -70,7 +73,7 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 }
 
 func (db *DB) runCommandWALRawPublishBarriers() error {
-	if db == nil || !db.commandWAL {
+	if db == nil {
 		return nil
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
@@ -112,6 +115,33 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// drainNoWALSyncPublishBarriers covers acknowledged higher-level buffers before
+// a public raw KV sync publication. Internal physical/ordered-root publishers
+// bypass it so draining a collection cannot recursively drain itself.
+func (db *DB) drainNoWALSyncPublishBarriers() error {
+	for {
+		// No-WAL hooks inspect collection-owned locks. Do not hold teardown:
+		// their owner may need a backend lease while Close is queued.
+		if db.closing.Load() {
+			return ErrClosed
+		}
+		if db.readOnly {
+			return ErrReadOnly
+		}
+		if err := db.publicationPoisonedError(); err != nil {
+			return err
+		}
+		err := db.runCommandWALRawPublishBarriers()
+		drain := commandWALPendingDrain(err)
+		if drain == nil {
+			return err
+		}
+		if err := drain.Drain(); err != nil {
+			return err
+		}
+	}
 }
 
 func (db *DB) lockCommandWALRawPublish() func() {

@@ -3298,7 +3298,8 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 
 // FlushAll publishes buffered writes for every collection write domain known to
 // this manager, then persists dirty native vector indexes registered through
-// collection handles. The backend DB also calls this as a close hook while
+// collection handles. WAL-free Checkpoint drains this state before sealing its
+// root. The backend DB also calls this as a close hook while
 // write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {

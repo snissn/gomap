@@ -123,6 +123,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     production benchmark matrix, target envelope, and fail-closed rollout gates.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
+- `TreeDB/docs/spec/no-wal-fast-audit.md`
+  - authoritative no-WAL ACK boundaries, registered collection drains, persistent
+    closure/recovery/GC audit, and allocation/benchmark qualification limits.
 - `TreeDB/docs/spec/command-wal-durable-write-contract.md`
   - current cached command-WAL `Write`/`WriteSync` ordering, logical versus
     physical sync counters, crash boundaries, and the M3 optimization guardrail.

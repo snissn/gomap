@@ -397,7 +397,18 @@ func (m *CollectionManager) publishCommandWALNoop(intent *backenddb.CommandWALIn
 }
 
 func (m *CollectionManager) flushPendingCommandWALBeforeRawPublish() error {
-	if m == nil || m.db == nil || !m.db.CommandWALEnabled() || m.commandWALCoordinator == nil {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	if !m.db.CommandWALEnabled() {
+		if m.hasPendingCheckpointWrites() {
+			// No-WAL checkpoint/sync invokes hooks without teardown. Collection
+			// publication does not run raw barriers, so FlushAll cannot recurse.
+			return &commandwalbarrier.PendingDrain{Drain: m.FlushAll}
+		}
+		return nil
+	}
+	if m.commandWALCoordinator == nil {
 		return nil
 	}
 	coord := m.commandWALCoordinator
@@ -422,6 +433,33 @@ func (m *CollectionManager) flushPendingCommandWALBeforeRawPublish() error {
 		unlock()
 		return nil
 	}}
+}
+
+// hasPendingCheckpointWrites observes local state outside backend teardown
+// leases. Publication can acquire backend leases while holding local locks.
+func (m *CollectionManager) hasPendingCheckpointWrites() bool {
+	m.domainMu.RLock()
+	for _, domain := range m.domains {
+		if domain == nil {
+			continue
+		}
+		domain.mu.RLock()
+		pending := domain.count != 0 || hasBufferedNoIndexTableWritesLocked(domain) || hasBufferedIndexedPendingWrites(domain)
+		domain.mu.RUnlock()
+		if pending || domain.indexedAsyncFlushRunning() {
+			m.domainMu.RUnlock()
+			return true
+		}
+	}
+	m.domainMu.RUnlock()
+	m.collectionsMu.RLock()
+	defer m.collectionsMu.RUnlock()
+	for collection := range m.collections {
+		if collection != nil && collection.hasDirtyNativeVectorIndex() {
+			return true
+		}
+	}
+	return false
 }
 
 func collectionCommandWALPendingDomainDrain(db *backenddb.DB, owner *collectionWriteDomain) error {

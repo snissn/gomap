@@ -26523,7 +26523,7 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 		switch result.Op {
 		case backenddb.UpdateNoop:
 			guard.Unlock()
-			return nil
+			return db.syncBarrierAfterWrite(syncWrite)
 		case backenddb.UpdateSet:
 			err = db.set(key, result.Value, syncWrite)
 			guard.Unlock()

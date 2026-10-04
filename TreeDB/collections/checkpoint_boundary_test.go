@@ -7,7 +7,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestCollectionCheckpointDoesNotFlushPendingNoIndexInsert(t *testing.T) {
+func TestCollectionCheckpointFlushesPendingNoIndexInsert(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -34,11 +34,11 @@ func TestCollectionCheckpointDoesNotFlushPendingNoIndexInsert(t *testing.T) {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	afterCheckpointRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
-	if afterCheckpointRoot != beforeRoot {
-		t.Fatalf("checkpoint changed primary root from %d to %d for pending collection-local insert", beforeRoot, afterCheckpointRoot)
+	if afterCheckpointRoot == beforeRoot {
+		t.Fatalf("checkpoint left primary root at %d for pending collection-local insert", beforeRoot)
 	}
-	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 1 {
-		t.Fatalf("pending count after checkpoint=%d want 1", got)
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 0 {
+		t.Fatalf("pending count after checkpoint=%d want 0", got)
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {

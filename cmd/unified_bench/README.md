@@ -119,9 +119,10 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
   - `durable` (strict durability)
-  - `fast` (benchmark-runner no-sync preset; TreeDB enters the explicit `bench_unsafe` boundary with the Celestia-aligned auto/snappy/balanced value-log compression defaults; unsafe)
+  - `fast` (TreeDB selects production `no_wal_fast`: verified reads and volatile ordinary ACKs; explicit `*Sync`, `Checkpoint`, and clean `Close` seal a durable root. Persistent value-log/outer-leaf assets remain protected. A crash may lose recent volatile writes, never a torn batch or a root with missing references. Independently buffered collection domains do not promise a global ordinary-ACK-order prefix; explicit database boundaries drain registered managers.)
+  - `bench_unsafe` (explicit benchmark-only ceiling; TreeDB skips read checksums and has no production durability promise; `unsafe` is its legacy alias)
   - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB maps this to `command_wal_relaxed` with verified read integrity and the same compression defaults)
-  - These names are unified-bench presets shared across database adapters, not the public TreeDB server profile vocabulary. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or `no_wal_fast`; benchmark-only `bench_unsafe` requires an explicit benchmark constructor boundary.
+  - These names are unified-bench presets shared across database adapters. Native no-sync flags have engine-specific guarantees and are not durability-equivalent. The public TreeDB server profile vocabulary is separate. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or `no_wal_fast`; benchmark-only `bench_unsafe` requires an explicit benchmark constructor boundary.
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
   - Hidden TreeDB variants can be selected explicitly, including
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
@@ -279,8 +280,8 @@ explicitly deferred.
 ## Standard Profile Workflow (`benchprof`)
 
 Use `-profile-dir` so all profiles and ops outputs are captured in one place.
-This example uses unified-bench's legacy `fast` benchmark-runner preset for a
-no-WAL profiling ceiling; it is not a TreeDB server profile recommendation:
+This example uses unified-bench's `fast` preset, selecting production
+`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling:
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)

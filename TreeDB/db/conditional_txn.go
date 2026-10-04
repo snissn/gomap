@@ -428,6 +428,11 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		}
 	}()
 	if tx.batch == nil || tx.batch.batch == nil || tx.batch.batch.Len() == 0 {
+		if sync && !tx.db.commandWAL {
+			if err := tx.db.Checkpoint(); err != nil {
+				return err
+			}
+		}
 		return tx.validateReadSetOnly()
 	}
 	tx.batch.conditionalTxnID = tx.id
