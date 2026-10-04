@@ -566,3 +566,29 @@ Template and dictionary lookup failures for encoded/compressed records are treat
 2. Unreferenced segments may be deleted; referenced segments must remain.
 3. Segment deletion is reachability-based, not age-based.
 4. Rewrite must preserve key/value visibility across reopen.
+
+## 10. Ordinary Compressed Frame Read Cost
+
+An owned point read verifies the complete stored frame CRC and, on a decoded
+group-cache miss, decodes the complete compressed payload before selecting one
+value. Ordinary cached user-value block batches under auto/balanced compression
+therefore bound newly ingested frames by 32 KiB of actual decoded value bytes,
+with the selector's K as an upper bound and oversized values as singletons.
+RID/offset metadata is not part of that decoded payload. Compression rejection
+keeps the same bounded grouping when writing the frame raw.
+
+The bound reduces cold point-read amplification without changing frame version,
+read verification, owned-output lifetime, cache budget, publication/durability
+boundaries, pointer reachability or GC rules. Smaller groups can cost compression
+ratio, frame overhead and ingestion/checkpoint throughput; assess those costs
+together with read throughput and tail latency on representative workloads.
+Eligible grouping counters report successful emitted frame sizes, including
+compression-rejected frames, rather than the selector's pre-cap estimate.
+
+Recognized retained JSON/template/semantic streams and template-enabled lanes,
+dedicated leaf-log lanes, explicit block/dictionary compression, size/throughput
+policies and selected raw-mode batches keep their existing grouping policies.
+The bound applies to eligible fresh cached ingestion, not every persisted frame:
+previously written files remain readable and maintenance rewrite independently
+groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
+an ingestion improvement alone is not a global post-maintenance size guarantee.

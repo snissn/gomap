@@ -2,6 +2,7 @@ package treedb_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -10,6 +11,114 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+func TestPublicCompressedFrames_OrdinaryGroupingReopen(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(profile, dir)
+			opts.DisableSideStores = true
+			opts.IndexOuterLeavesInValueLog = false
+			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundCheckpointIdleDuration = -1
+			opts.BackgroundIndexVacuumInterval = -1
+			opts.DisableBackgroundPrune = true
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.ForcePointers = true
+			opts.ValueLog.Compression = treedb.ValueLogCompressionAuto
+			opts.ValueLog.AutoPolicy = treedb.ValueLogAutoBalanced
+			opts.ValueLog.BlockCodec = treedb.ValueLogBlockSnappy
+			database, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			values := make([][]byte, 128)
+			batch := database.NewBatch()
+			defer batch.Close()
+			for i := range values {
+				size := []int{1024, 1024, 30 << 10, 40 << 10}[i%4]
+				values[i] = bytes.Repeat([]byte{byte(i)}, size)
+				binary.LittleEndian.PutUint64(values[i], uint64(i))
+				if err := batch.Set([]byte(fmt.Sprintf("group-%03d", i)), values[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			readCount := 0
+			for _, path := range paths {
+				var lane, sequence int
+				if _, err := fmt.Sscanf(filepath.Base(path), "value-l%d-%d.log", &lane, &sequence); err != nil {
+					t.Fatal(err)
+				}
+				fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(sequence))
+				if err != nil {
+					t.Fatal(err)
+				}
+				reader, err := valuelog.NewReader(path, fileID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				frameBytes, frameCount := make(map[uint64]int), make(map[uint64]int)
+				for {
+					_, value, ptr, err := reader.ReadNext()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						_ = reader.Close()
+						t.Fatal(err)
+					}
+					frameBytes[ptr.Offset] += len(value)
+					frameCount[ptr.Offset]++
+					readCount++
+				}
+				if err := reader.Close(); err != nil {
+					t.Fatal(err)
+				}
+				for offset, rawBytes := range frameBytes {
+					if rawBytes > 32<<10 && frameCount[offset] != 1 {
+						t.Fatalf("frame %s:%d holds %d bytes/%d values", path, offset, rawBytes, frameCount[offset])
+					}
+				}
+			}
+			if readCount != len(values) {
+				t.Fatalf("persisted count=%d, want %d", readCount, len(values))
+			}
+			database, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, want := range values {
+				key := []byte(fmt.Sprintf("group-%03d", i))
+				got, err := database.Get(key)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("reopened value %d: %v", i, err)
+				}
+				got[0] ^= 0xff
+				again, err := database.Get(key)
+				if err != nil || !bytes.Equal(again, want) {
+					t.Fatalf("owned reread %d: %v", i, err)
+				}
+			}
+		})
+	}
+}
 
 func TestPublicCommandWALRawFrames_DurableGrouping(t *testing.T) {
 	dir := t.TempDir()

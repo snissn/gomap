@@ -577,6 +577,17 @@ Coverage:
   - `TestPublicCommandWALRawFrames_DurableGrouping` uses the public command-WAL
     durable profile, syncs a forced-pointer 4 KiB raw batch, checks persisted
     records hold one value per frame, and verifies exact values after reopen.
+  - `TestPublicCompressedFrames_OrdinaryGroupingReopen` checks mixed-size
+    auto/balanced frames through ordinary public writes, checkpoint, close and
+    reopen in command-WAL durable and no-WAL fast profiles, including owned
+    rereads and oversized singletons.
+- `TreeDB/caching/vlog_block_read_amplification_test.go`:
+  - `TestValueLogBlockFrames_BoundedOrdinaryPayload` checks actual decoded-byte
+    bounds, pointer order and emitted-K counters through direct, worker-prepared
+    and queued ordinary block paths, including raw compression rejection.
+  - `TestValueLogBlockFrameBoundary` covers exact/empty/mixed/oversized payloads
+    and K ceilings; `TestValueLogBlockRawLimitEligibility` preserves excluded
+    leaf/template/retained and explicit compression-policy paths.
 
 ## 2. Recovery Coherence
 

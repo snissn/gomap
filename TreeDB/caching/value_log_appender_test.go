@@ -667,7 +667,7 @@ func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) 
 	attempted := 0
 	for batch := 0; batch < 2; batch++ {
 		prepared, _, err := db.prepareAppendFrames(
-			&db.lanes[0], 0, nil, records, 1, rawBytes, vlogWriteBlock, false,
+			&db.lanes[0], 0, nil, records, 1, 0, rawBytes, vlogWriteBlock, false,
 			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
 		)
 		if err != nil {
@@ -693,7 +693,7 @@ func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) 
 		compressible[i] = valuelog.Record{RID: uint64(i + 1), Value: bytes.Repeat([]byte{byte(i + 1)}, valueBytes)}
 	}
 	prepared, _, err := db.prepareAppendFrames(
-		&db.lanes[0], 0, nil, compressible, 1, rawBytes, vlogWriteBlock, true,
+		&db.lanes[0], 0, nil, compressible, 1, 0, rawBytes, vlogWriteBlock, true,
 		valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
 	)
 	if err != nil {
@@ -754,7 +754,7 @@ func TestPrepareAppendFramesCloseWaitsForSubmittedTasks(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		prepared, _, err := db.prepareAppendFrames(
-			l, 0, nil, records, 1, 256<<10, vlogWriteBlock, false,
+			l, 0, nil, records, 1, 0, 256<<10, vlogWriteBlock, false,
 			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
 		)
 		if prepared != nil {

@@ -1871,6 +1871,21 @@ Single oversized values, WAL-off benchmark ingest and dedicated split-leaf lanes
 their respective policies. Readers still verify the complete persisted record
 CRC before selecting a subvalue.
 
+Ordinary cached user-value batches selected for non-dictionary block compression
+under `Compression=auto` and `AutoPolicy=balanced` also cap each frame at 32 KiB
+of decoded value payload. The writer uses the actual encoded value lengths,
+preserves the selector's K ceiling, and allows an oversized value as a singleton.
+RID/offset tables and record headers are outside this payload bound. Prepared
+workers and direct appends use the same contiguous frame boundaries, including
+when compression is rejected and the frame is stored raw.
+
+Recognized retained JSON/template/semantic streams, template-enabled lanes,
+dedicated leaf-log lanes, explicit block/dictionary modes, size/throughput
+policies and selected raw batches retain their existing grouping policies.
+This is an ingestion policy: existing files and maintenance rewrite, which can
+group up to 4 MiB of raw payload, retain their formats and remain readable.
+See [compressed grouping tradeoffs](value-log-lifecycle.md#10-ordinary-compressed-frame-read-cost).
+
 ### 7.2 Compact split-leaf payload format
 
 When TreeDB writes outer leaf pages into the split `leaf_vlog` directory, it
