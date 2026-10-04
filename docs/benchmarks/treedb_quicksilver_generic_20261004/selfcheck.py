@@ -48,4 +48,56 @@ for mutation in ('wrong executable', 'undeclared compression'):
         pass
     else:
         raise ValueError('mutated retained command accepted: ' + mutation)
-print('PASS: 12 actual baseline packets; altered requests/configuration, wrong executable and undeclared compression rejected; assertions retained under -O')
+entries = namespace['harness_entries']
+check_harness = namespace['check_harness']
+original = entries(repo, namespace['BASE'])
+repaired = entries(repo, namespace['DOC_REPAIR'])
+check_harness(original, original, repaired, repaired)
+check_harness(original, repaired, repaired, repaired)
+try:
+    check_harness(original, repaired, original, repaired)
+except ValueError:
+    pass
+else:
+    raise ValueError('reverse README transition accepted')
+for path, entry in (
+    ('cmd/benchprof/README.md', '100644 blob ' + '0' * 40),
+    ('cmd/unified_bench/README.md', repaired['cmd/benchprof/README.md']),
+    ('cmd/unified_bench/README.md', repaired['cmd/unified_bench/README.md'].replace('100644', '100755')),
+    ('cmd/unified_bench/main.go', '100644 blob ' + '0' * 40),
+    ('cmd/benchprof/main_test.go', '100644 blob ' + '0' * 40),
+    ('cmd/unified_bench/unreviewed.md', '100644 blob ' + '0' * 40),
+    ('scripts/unified_bench_quicksilver_capture.py', '100644 blob ' + '0' * 40),
+    ('scripts/test_unified_bench_quicksilver_capture.py', '100644 blob ' + '0' * 40),
+    ('cmd/benchprof/README.md', None),
+):
+    mutated = repaired.copy()
+    if entry is None:
+        del mutated[path]
+    else:
+        mutated[path] = entry
+    for captured, landed in ((original, mutated), (mutated, repaired)):
+        try:
+            check_harness(original, captured, landed, repaired)
+        except ValueError:
+            pass
+        else:
+            raise ValueError('mutated harness accepted: ' + path)
+source = namespace['read'](root / 'o1-o1-composed-durable91-pair1/source-receipt.json')
+applicability = namespace['source_applicability'](repo, source['head'], namespace['DOC_REPAIR'], source)
+namespace['require'](applicability['captured_head'] == source['head'] and
+                     applicability['compiled_project_input_count'] == 2130, 'actual O1 documentation applicability')
+try:
+    namespace['source_applicability'](repo, source['head'], namespace['BASE'], source)
+except ValueError:
+    pass
+else:
+    raise ValueError('changed landed TreeDB accepted')
+name = next(iter(source['compiled_project_inputs']))
+try:
+    namespace['project_inputs'](repo, namespace['DOC_REPAIR'], {name: '0' * 64})
+except ValueError:
+    pass
+else:
+    raise ValueError('changed compiled input accepted')
+print('PASS: 12 actual baseline packets; original request/configuration/argv guards; exact README transitions and 2130 O1 compiled inputs; README/runtime/test/producer drift rejected; assertions retained under -O')

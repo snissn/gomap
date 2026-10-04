@@ -20,6 +20,11 @@ import subprocess
 
 BASE = '6137db44b66e0323daba05ae891db44a8055c0fd'
 BASE_PACKET = '52959db2d657b5a57d992a677e27c2d1f676654891a4cfaa4680480bf24631a9'
+DOC_REPAIR = '8229183f61d5d93e612e9adb79ace3514fddd50c'
+README_BLOBS = {
+    'cmd/benchprof/README.md': ('fc1ca832dc2f250002e4a6c6858bad977893f9d9', 'f6cd1c62a46c8a4b7a0d93befa86fb327d449ce1'),
+    'cmd/unified_bench/README.md': ('309cf9c59c67967abba9256684ec67de8dc45753', '3a40d2b73cc6fd5484b1ecc7f380223c4f797ea3'),
+}
 HERE = pathlib.Path(__file__).resolve().parent
 
 
@@ -70,6 +75,45 @@ def project_inputs(repo, head, files):
             require(process.stdout.read(1) == b'\n' and digest(raw) == expected, 'source bytes ' + name)
         process.stdin.close()
         require(process.wait() == 0, 'git source verification')
+
+
+def harness_entries(repo, head):
+    return {path.decode(): entry.decode() for entry, path in
+            (line.split(b'\t', 1) for line in git(repo, 'ls-tree', '-r', '-z', head,
+             '--', 'cmd/unified_bench', 'cmd/benchprof', 'scripts/unified_bench_quicksilver_capture.py',
+             'scripts/test_unified_bench_quicksilver_capture.py').split(b'\0') if line)}
+
+
+def check_harness(before, captured, landed, repaired):
+    """Only the two frozen documentation transitions may change harness trees."""
+    before, captured, landed = before.copy(), captured.copy(), landed.copy()
+    transitions = {}
+    for path, (old, new) in README_BLOBS.items():
+        old, new = '100644 blob ' + old, '100644 blob ' + new
+        require(before.pop(path, None) == old and repaired.get(path) == new, 'frozen README repair ' + path)
+        captured_entry, landed_entry = captured.pop(path, None), landed.pop(path, None)
+        require(captured_entry in (old, new) and landed_entry in (captured_entry, new), 'bounded README transition ' + path)
+        transitions[path] = {'captured': captured_entry, 'landed': landed_entry}
+    require(captured == before, 'unchanged harness entries')
+    require(landed == before, 'landed harness entries')
+    return transitions
+
+
+def source_applicability(repo, head, landed, source):
+    require(git(repo, 'rev-parse', head + ':TreeDB') == git(repo, 'rev-parse', landed + ':TreeDB'), 'final landed TreeDB equality')
+    transitions = check_harness(*(harness_entries(repo, sha) for sha in (BASE, head, landed, DOC_REPAIR)))
+    require(all(source['files'][k] == v for k, v in source['compiled_project_inputs'].items()), 'project input inventory')
+    project_inputs(repo, head, source['compiled_project_inputs'])
+    project_inputs(repo, landed, source['compiled_project_inputs'])
+    helper = 'scripts/treedb_point_lookup_profile.sh'
+    if helper in source['files']:
+        # Bind the original helper receipt; this standalone diagnostic did not
+        # produce the unified-bench captures and need not equal landed tooling.
+        project_inputs(repo, head, {helper: source['files'][helper]})
+    return {'captured_head': head, 'landed_head': landed, 'documentation_repair_sha': DOC_REPAIR,
+            'readme_entries': transitions, 'compiled_project_input_count': len(source['compiled_project_inputs']),
+            'point_lookup_helper_captured_sha256': source['files'].get(helper),
+            'point_lookup_helper_role': 'standalone diagnostic, not this capture producer'}
 
 
 def compact(result):
@@ -133,17 +177,7 @@ def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hash
     source = receipts['source']
     require(landed, '--landed-final required for final raw inputs')
     head = source['head']
-    require(git(repo, 'rev-parse', head + ':TreeDB') == git(repo, 'rev-parse', landed + ':TreeDB'), 'final landed TreeDB equality')
-    for subtree in ('cmd/unified_bench', 'cmd/benchprof'):
-        require(git(repo, 'rev-parse', head + ':' + subtree) == git(repo, 'rev-parse', BASE + ':' + subtree), 'unchanged harness ' + subtree)
-        require(git(repo, 'rev-parse', head + ':' + subtree) == git(repo, 'rev-parse', landed + ':' + subtree), 'landed harness ' + subtree)
-    require(git(repo, 'show', head + ':scripts/unified_bench_quicksilver_capture.py') ==
-            git(repo, 'show', BASE + ':scripts/unified_bench_quicksilver_capture.py'), 'unchanged capture contract')
-    require(git(repo, 'show', landed + ':scripts/unified_bench_quicksilver_capture.py') ==
-            git(repo, 'show', BASE + ':scripts/unified_bench_quicksilver_capture.py'), 'landed capture contract')
-    require(all(source['files'][k] == v for k, v in source['compiled_project_inputs'].items()), 'project input inventory')
-    project_inputs(repo, head, source['compiled_project_inputs'])
-    project_inputs(repo, landed, source['compiled_project_inputs'])
+    applicability = source_applicability(repo, head, landed, source)
     require(receipts['build']['head'] == head and all(b['rc'] == 0 for b in receipts['build']['builds'].values()), 'successful matching build')
     expected_env = next(r for r in baseline['run_records'] if r['group'] == 'primary')['run_metadata']['env']
     libraries = {k: v['sha256'] for k, v in manifest['libraries'].items()}
@@ -166,7 +200,8 @@ def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hash
         for name in ('stdout.json', 'stderr.log', 'ldd.stdout.txt', 'ldd.stderr.txt'):
             require((path.parent / name).is_file(), 'missing raw receipt ' + name)
         stderr = (path.parent / 'stderr.log').read_text()
-        record = {'cell': cell, 'raw_directory': str(path.parent), 'run_metadata': meta, 'status': 'FAILED_OR_CENSORED', 'result': None}
+        record = {'cell': cell, 'raw_directory': str(path.parent), 'run_metadata': meta,
+                  'source_applicability': applicability, 'status': 'FAILED_OR_CENSORED', 'result': None}
         if meta['rc'] == 0:
             require(meta.get('validated') is True and 'SKIP' not in stderr and 'Exit status: 0' in stderr, 'successful non-SKIP receipt')
             reports = read(path.parent / 'stdout.json')
