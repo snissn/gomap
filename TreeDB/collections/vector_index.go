@@ -2839,6 +2839,10 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), 1) {
 		return errors.New("collections: vector index node ordinal exceeds uint32")
 	}
+	oldCurrent := -1
+	if current, ok := idx.currentNode[string(documentID)]; ok {
+		oldCurrent = current
+	}
 	idx.prepareSearchViewForMutationLocked()
 	idx.tombstoneDocumentIDLocked(documentID)
 
@@ -2875,6 +2879,9 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			candidates = idx.searchLayerWithCanonicalCandidateSeedsScratchLocked(vector, vectorNorm, prepared, entryPoint, descentCandidates, idx.efConstruction, layer, &idx.insertScratch)
 		} else {
 			candidates = idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
+		}
+		if layer == 0 {
+			candidates = idx.admitRedundantConstructionNeighborhoodLocked(vector, vectorNorm, prepared, candidates, nodeID, oldCurrent, &idx.insertScratch, nil)
 		}
 		selectionLimit := idx.maxNeighborsForLayer(layer)
 		if layer == 0 && idx.layer0ConstructionPolicy != nil {
@@ -3192,14 +3199,26 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, docume
 			if err := scratch.finalContextErr(); err != nil {
 				return plan, err
 			}
-			plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
+			if layer == 0 {
+				candidates = idx.admitRedundantConstructionNeighborhoodLocked(vector, norm, &prepared, candidates, sourceNodeID, -1, scratch, nil)
+				if err := scratch.finalContextErr(); err != nil {
+					return plan, err
+				}
+			}
+			plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), sourceNodeID)
 		} else {
 			context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: sourceNodeID, layer: layer, dimensions: idx.dimensions}
 			candidates := idx.searchLayerWithScratchObservedLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch, context)
 			if err := scratch.finalContextErr(); err != nil {
 				return plan, err
 			}
-			plan.neighbors[layer] = idx.selectLayerNeighborsObservedLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1, context)
+			if layer == 0 {
+				candidates = idx.admitRedundantConstructionNeighborhoodLocked(vector, norm, &prepared, candidates, sourceNodeID, -1, scratch, context)
+				if err := scratch.finalContextErr(); err != nil {
+					return plan, err
+				}
+			}
+			plan.neighbors[layer] = idx.selectLayerNeighborsObservedLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), sourceNodeID, context)
 		}
 		if len(plan.neighbors[layer]) > 0 {
 			entry = plan.neighbors[layer][0]
@@ -3348,9 +3367,9 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupObservedLocked(links []ve
 	pruned := candidateCount > limit
 	if pruned {
 		if context == nil {
-			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(candidates, limit, dotScratch)
+			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(fromNodeID, candidates, limit, dotScratch)
 		} else {
-			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(candidates, limit, dotScratch, context)
+			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(fromNodeID, candidates, limit, dotScratch, context)
 		}
 	}
 	if dotScratch != nil {
@@ -4025,15 +4044,15 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 	}
 }
 
-func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
-	return idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, nil)
+func (idx *VectorIndex) pruneLayerNeighborsLocked(sourceNodeID int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
+	return idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(sourceNodeID, neighbors, limit, nil)
 }
 
-func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch) []vectorIndexNeighbor {
-	return idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors, limit, dotScratch, nil)
+func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchLocked(sourceNodeID int, neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch) []vectorIndexNeighbor {
+	return idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(sourceNodeID, neighbors, limit, dotScratch, nil)
 }
 
-func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexNeighbor {
+func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(sourceNodeID int, neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexNeighbor {
 	if limit <= 0 || len(neighbors) == 0 {
 		return nil
 	}
@@ -4056,7 +4075,7 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	scored, _, _, _, _ = idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(scored, limit, false, true, false, dotScratch, context)
+	scored, _, _, _, _ = idx.selectConstructionDiverseCandidatesLocked(scored, limit, false, true, false, dotScratch, context, sourceNodeID)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: uint32(candidate.nodeID), distance: candidate.distance})
@@ -5380,7 +5399,7 @@ func (idx *VectorIndex) selectLayerNeighborsObservedLocked(vector []float32, vec
 		// this allocation.
 		constructionCandidates = append([]vectorIndexCandidate(nil), scored...)
 	}
-	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(scored, limit, trace != nil, backfill, false, nil, context)
+	scored, diversitySelected, _, diversity, _ = idx.selectConstructionDiverseCandidatesLocked(scored, limit, trace != nil, backfill, false, nil, context, excludeNodeID)
 	if capturePostfill {
 		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
 	}
@@ -5404,6 +5423,127 @@ func (idx *VectorIndex) selectLayerNeighborsObservedLocked(vector []float32, vec
 		out[i] = scored[i].nodeID
 	}
 	return out
+}
+
+// constructionNodesHaveIdenticalVectorsLocked compares the stored representation,
+// not distance ties: unrelated vectors can have the same query distance. Int8
+// nodes have no float32 vector, so nil slices must never establish identity.
+func (idx *VectorIndex) constructionNodesHaveIdenticalVectorsLocked(left, right int) bool {
+	if left < 0 || right < 0 || left >= len(idx.nodes) || right >= len(idx.nodes) || idx.dimensions <= 0 {
+		return false
+	}
+	switch idx.metric {
+	case VectorMetricCosine, VectorMetricL2, VectorMetricInnerProduct:
+	default:
+		return false
+	}
+	a, b := &idx.nodes[left], &idx.nodes[right]
+	switch idx.encoding {
+	case VectorIndexEncodingFloat32:
+		if len(a.vector) != idx.dimensions || len(b.vector) != idx.dimensions || !slices.Equal(a.vector, b.vector) {
+			return false
+		}
+		if validateFloat32Vector(a.vector) != nil {
+			return false
+		}
+		return idx.metric != VectorMetricCosine || vectorNormSquared(a.vector) > 0
+	case VectorIndexEncodingInt8:
+		if len(a.quantized) != idx.dimensions || len(b.quantized) != idx.dimensions || a.quantScale <= 0 || a.quantScale != b.quantScale || math.IsInf(float64(a.quantScale), 0) || math.IsNaN(float64(a.quantScale)) || !slices.Equal(a.quantized, b.quantized) {
+			return false
+		}
+		if idx.metric == VectorMetricCosine {
+			for _, value := range a.quantized {
+				if value != 0 {
+					return true
+				}
+			}
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (idx *VectorIndex) constructionCandidatesHaveIdenticalVectorsLocked(candidates []vectorIndexCandidate) bool {
+	for i, candidate := range candidates {
+		for _, other := range candidates[:i] {
+			if candidate.distance == other.distance && idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, other.nodeID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func vectorIndexConstructionOrdinalOffset(nodeID, sourceNodeID int) int {
+	if nodeID < sourceNodeID {
+		return sourceNodeID - nodeID
+	}
+	return nodeID - sourceNodeID
+}
+
+// Admit only known local endpoints when SEARCH-LAYER contains an exact-vector
+// redundancy. Its capacity stays EfConstruction; a distinct geometry bridge is
+// never evicted to make room. Deleted endpoints remain useful traversal waypoints.
+func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, candidates []vectorIndexCandidate, sourceNodeID, oldCurrent int, scratch *vectorIndexSearchScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
+	if len(candidates) == 0 || !idx.constructionCandidatesHaveIdenticalVectorsLocked(candidates) {
+		return candidates
+	}
+	admit := func(nodeID int) {
+		if nodeID < 0 || nodeID >= len(idx.nodes) || nodeID == sourceNodeID {
+			return
+		}
+		for _, candidate := range candidates {
+			if candidate.nodeID == nodeID {
+				return
+			}
+		}
+		replace := -1
+		if len(candidates) >= idx.efConstruction {
+			for i, candidate := range candidates {
+				for j, other := range candidates {
+					if i != j && idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, other.nodeID) {
+						if replace < 0 || vectorIndexConstructionOrdinalOffset(candidate.nodeID, sourceNodeID) > vectorIndexConstructionOrdinalOffset(candidates[replace].nodeID, sourceNodeID) {
+							replace = i
+						}
+						break
+					}
+				}
+			}
+			if replace < 0 {
+				return
+			}
+		}
+		if context != nil {
+			context.recordRowFrom(sourceNodeID, nodeID, false)
+		}
+		distance, ok := idx.scoreSearchNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID, scratch)
+		if !ok || math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 0) {
+			return
+		}
+		candidate := vectorIndexCandidate{nodeID: nodeID, distance: distance}
+		if replace >= 0 {
+			candidates[replace] = candidate
+		} else {
+			candidates = append(candidates, candidate)
+		}
+	}
+	// Frozen-prefix planning can see only the immutable prefix, not the future
+	// ordinal immediately before this plan. Use its last existing node instead.
+	predecessor := minInt(sourceNodeID-1, len(idx.nodes)-1)
+	for i, known := range [2]int{oldCurrent, predecessor} {
+		if i == 1 && known == oldCurrent {
+			continue
+		}
+		admit(known)
+		if known >= 0 && known < len(idx.nodes) {
+			for _, neighbor := range idx.layerNeighborsLocked(known, 0) {
+				admit(int(neighbor.nodeID))
+			}
+		}
+	}
+	return candidates
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
@@ -5436,10 +5576,35 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
+	return idx.selectConstructionDiverseCandidatesLocked(candidates, limit, includeOrigins, backfillEnabled, captureQualityPostfill, dotScratch, context, -1)
+}
+
+func (idx *VectorIndex) selectConstructionDiverseCandidatesLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1, sourceNodeID int) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
 	if limit <= 0 || len(candidates) == 0 {
 		return nil, 0, 0, nil, nil
 	}
-	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	redundant := sourceNodeID >= 0 && idx.constructionCandidatesHaveIdenticalVectorsLocked(candidates)
+	compare := idx.compareVectorIndexCandidatesByDistanceLocked
+	if redundant {
+		// A single transitive tie order applies to this bounded redundant pool.
+		// Serving keeps its stable-ID comparator.
+		compare = func(left, right vectorIndexCandidate) int {
+			if left.distance == right.distance {
+				leftOffset := vectorIndexConstructionOrdinalOffset(left.nodeID, sourceNodeID)
+				rightOffset := vectorIndexConstructionOrdinalOffset(right.nodeID, sourceNodeID)
+				if leftOffset < rightOffset {
+					return -1
+				}
+				if leftOffset > rightOffset {
+					return 1
+				}
+			}
+			return idx.compareVectorIndexCandidatesByDistanceLocked(left, right)
+		}
+		slices.SortFunc(candidates, compare)
+	} else {
+		idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	}
 	orderedHash := uint64(0x4461)
 	if context != nil {
 		orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(context.phase+1))
@@ -5471,7 +5636,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 		}
 		return candidates, len(candidates), 0, diversity, nil
 	}
-	if idx.metric == VectorMetricInnerProduct {
+	if idx.metric == VectorMetricInnerProduct && !redundant {
 		recordDecision(candidates[:limit])
 		if !includeOrigins {
 			return candidates[:limit], limit, 0, nil, nil
@@ -5498,7 +5663,16 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 			rejected = append(rejected, candidate)
 			continue
 		}
-		if idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, dotScratch, context) {
+		identical := false
+		if redundant {
+			for _, existing := range selected {
+				if idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, existing.nodeID) {
+					identical = true
+					break
+				}
+			}
+		}
+		if !identical && (idx.metric == VectorMetricInnerProduct || idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, dotScratch, context)) {
 			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1|1)
 			selected = append(selected, candidate)
 		} else {
@@ -5531,7 +5705,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 	selectedPos := 0
 	rejectedPos := 0
 	for selectedPos < len(selected) && rejectedPos < backfill {
-		if idx.compareVectorIndexCandidatesByDistanceLocked(selected[selectedPos], rejected[rejectedPos]) <= 0 {
+		if compare(selected[selectedPos], rejected[rejectedPos]) <= 0 {
 			out = append(out, selected[selectedPos])
 			selectedPos++
 			continue
