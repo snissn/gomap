@@ -44,7 +44,7 @@ Successful independent client calls are timed by one driver's monotonic clock. A
 
 The exported client API exposes no command-dispatch event. Therefore the report explicitly labels this as independent client API-call overlap; exact socket-dispatch overlap is unproved. This does not prove simultaneous server graph-mutation critical sections: an insert may commit before its reply is observed, and safe read/publication serialization is allowed. A stronger requirement needs separate authorized tracing, not a hidden socket observer or production hook.
 
-Successful report verdict is ACCEPT_BOUNDED_FUNCTIONAL_CLIENT_OVERLAP. It is not stable tail latency, saturation, sustained capacity/QPS, comparative speedup, host-loss tolerance, or support for batches/upsert/replace/delete/optimize/cross-group transactions. No such operation is accepted by this command. RF4 quorum three cannot survive loss of either two-voter host.
+Successful report verdict is ACCEPT_BOUNDED_FUNCTIONAL_CLIENT_OVERLAP. It is not stable tail latency, saturation, sustained capacity/QPS, comparative speedup, host-loss tolerance, or support for batches/upsert/replace/delete/optimize/cross-group transactions. No such operation is accepted by the default query-under-write mode. RF4 quorum three cannot survive loss of either two-voter host.
 
 Focused validation for root:
 
@@ -474,3 +474,142 @@ TestPacedModeBoundsRefuseBeforeInputOrNetwork,
 TestPacedReceiptFenceMismatchRemainsUnknown. Existing TestWindow*, TestRecall*
 and mixed-workload tests remain required. Channel rendezvous establishes tested
 API overlap/cancellation; private short clocks are not distributed runtime proof.
+
+## Mixed colocated replace/delete window
+
+`-mode mixed-window` reuses the fixed RF4 read-window admission, connections,
+resource gates and retained attempts. Existing insert/read modes are unchanged.
+This mode admits exactly six serial slots in a 60-second window: replace A,
+supersede A, delete B, replace C, delete C, delete D. A/B/C/D are four existing
+corpus IDs outside every query's baseline and exported-corpus canonical top10.
+The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s), with
+full write and untimed visibility RPC budgets required before the cutoff.
+Warmup is 64 calls; read concurrency/caps use existing read-window limits.
+
+```sh
+treedb-query-under-write -mode mixed-window \
+  -config fixed-peer.json -bootstrap-receipt fresh-bootstrap.json \
+  -dataset frozen-dataset -provenance fresh-provenance.json -phase pre \
+  -run-id mixed-one -read-concurrency 4 -read-window 60s \
+  -read-warmup 64 -mixed-interval 5s -rpc-timeout 3s -timeout 5m \
+  -read-resource-gate-dir fresh-owned-gate > mixed.jsonl
+```
+
+Admission scores the **entire frozen population** at all seven planned prefixes
+before client networking, using canonical FP32 cosine and stable ID ordering.
+The 10,000-row/128D/16-query corpus is not the entire baseline: the authenticated
+bootstrap's fixture anchors and prior explicitly proven rows are counted too.
+`Admission.PopulationRows`/`PopulationSHA256`, `Anchors` and each `Prefixes` row
+retain that actual reconstructed identity. Never reuse a prior campaign's final
+population, revisions or commit positions. Root must freeze/export the actual
+fresh source and verify this admission population before starting this mode.
+Any planned canonical top10 ID or score-bit change refuses admission.
+
+Each prefix also retains all four changed IDs' canonical `ScoreBits` and
+`Present` values for each query in `Prefixes[].Changed`. A measured response must
+match **one** permitted prefix in its entirety, including changed-ID absence;
+unchanged IDs retain baseline canonical scores. The permitted interval is bounded
+by original mutation ACKs before call entry and issued mutations before call
+return. Online validation is tightened after both reader and writer join against
+actual retained `StartNS`/`EndNS`; `ReadPrefixes` records lower/upper/matched
+prefix per measured ordinal. This prevents mixing two postimages or accepting
+an arbitrary old state. Approximate HNSW results remain allowed: recall uses the
+existing invariant full-population top10 and existing external acceptance
+threshold, not an added recall=1 gate. Each ACK gets an untimed strict query with
+its visibility token, validated against exactly that acknowledged prefix before
+the next writer invocation.
+
+After drain, the driver explicitly retries original slot0 after supersession and
+original slot2 after deletion. It retains their original request identity and
+requires identical original term/index/counts/coverage/live revision/token, with
+returned applied index covering that outcome. `HighestNewCommitIndex` excludes
+these retries; `RequiredAppliedIndex` additionally covers their observed apply
+positions. A complete acknowledged ledger reconstructs the final expected
+population; quiescent canonical recall and all-voter catchup follow. Any failed,
+UNKNOWN, malformed, truncated, mismatched or missing sample consumes the run:
+no automatic retry, discarded sample, exact fallback or fast-read substitution.
+
+The final `AuditPlan` is a bounded six-original-request/ACK attachment to the
+**existing** fixed-peer diagnostics operation. The driver acquires `Audits` from
+all four live voters before any shutdown. Root may also extract that exact plan
+from the final result and independently collect the same existing operation:
+
+```sh
+treedb-fixed-peer -mode diagnostics -config voter.json \
+  -colocated-audit-plan extracted-plan.json > voter-audit.json
+```
+
+The plan is at most 524288 encoded bytes, version1, six unique original attempts,
+zero logical deadlines and at most six final unique IDs (this mode has four).
+`treedb-fixed-peer` loads/validates it before opening any stores or client
+networking. Ordinary diagnostics omit `ColocatedAudit`. No endpoint, offline
+DB opener, scheduler or shutdown hook is added.
+
+Every audit proves the actual current-FSM DB binding, ACTIVE/catalog/router
+scope, applied floor, exact original command digests/outcomes and physical WAL
+coverage. It verifies the retained ordinal/count/byte/SHA chain and performs
+six exact witness lookups, then uses the prepared source owner to prove final
+canonical content/absence and exact per-domain live membership for the known
+IDs. The receipt carries per-voter applied term/index, physical root state,
+next WAL LSN, retained count/bytes/chain, six witnesses and final-ID proofs.
+Current DB, root, applied state, summary and next LSN are rechecked; any torn
+state or pending publication refuses the audit. The owner wrapper can flush
+pending work; this is **not** an inherently read-only operation. Pending gauges
+are a conservative precheck; unchanged physical state/covered WAL and fenced
+proofs establish the accepted observation. A stale handle with matching bytes,
+forged digest/chain, incomplete witnesses or source/live disagreement cannot be
+successful evidence. Root-owned quiescence is required; these checks do not
+create a distributed stop-the-world barrier. Keep all voters live until all
+four receipts and all-voter catchup have been verified, then retain clean-stop
+receipts separately.
+
+`mixed-report-v1.schema.json` describes the JSONL envelope and audit-plan shape;
+semantic validators are authoritative beyond schema shape. Root collectors must
+bind binary/config/bootstrap/dataset/provenance hashes, planned/result pair,
+seven full-prefix truths and changed-ID scores, every issued/unissued original
+and retry, probe response hashes, query coverage/recall/error counters,
+client-call overlap and causal-prefix rows. `Writes[].LogicalSHA256` binds the
+zero-deadline request; `RequestSHA256` binds its actual deadline-bearing call.
+Search attempts retain their logical query hash plus actual deadline; token
+probes retain their actual request hash. No socket dispatch or server critical
+section overlap is claimed. Verify six original ACKs, two original retries,
+six token probes, full final-ledger identity and four matching audit summaries;
+per-voter physical LSNs/roots are local and need not equal.
+
+Root resource brackets reuse the ready/done nonce-bound gates. Report per-role
+process/cgroup/disk/network availability and sampling limits honestly. Search
+QPS includes online validation/retention and call drain, excluding setup, full
+oracle, warmup, resource waits, post-join causal recheck, retry, recall and audit.
+Writer latency is public client submit-to-visible ACK; six raw samples do not
+justify p99, sustained capacity, speedup or request-attributed process allocation.
+The driver verdict remains pending root shutdown verification. The audits prove
+only six original witnesses and four known IDs, **not** the entire 10K source
+population. Cross-group projection, general changing-topK attribution, unlimited
+retention, movement/splitting, host loss and capacity remain open. RF4 quorum
+three cannot survive either two-voter host's loss.
+
+Allocation ownership: corpus/query vectors and prefix truths are immutable after
+setup. Seven full-population maps/oracles are built outside measurement; retained
+prefix evidence contains only 16x10 truths and 16x4 changed-ID scalar scores.
+Measured calls copy response strings/neighbors/tokens before client reuse. The
+writer retains six responses and two explicit retries; the final plan borrows
+that immutable ledger until synchronous serialization, and receivers own decoded
+plan bytes. Four audit receipts own six scalar witnesses/final proofs each.
+The existing aggregate JSONL byte cap covers the complete pair. Audit chain
+verification and manager gauges are untimed observation costs, not a hot serving
+path. `BenchmarkMixedRetainedCallV1` measures attributable fake-client retention
+cost; process samples include clients/background/audits according to their
+brackets and are not B/op.
+
+Validation selectors: `TestMixed*`, `TestColocatedAudit*`,
+`TestFixedPeerColocatedAuditCurrentAuthorityV1`, plus unchanged `TestWindow*`,
+`TestPaced*` and `TestRecall*`. Existing
+`TestVectorPartitionColocatedOutcomeSummaryVerificationV1` covers forged chains,
+ordinal/count/bytes/version/uncovered records; existing
+`TestVectorPartitionColocatedMutationProofV1` covers source/live disagreement.
+The new mixed/audit API was absent at the provisional predecessor head: focused
+fake tests were authored before implementation, but there is no runnable
+pre-implementation API test. This capability-absence exception is not a compiler
+failure presented as product-red evidence. Linux Go1.26 normal/race, matched
+existing-mode allocation guards, exact-head CI/review and a landed independently
+verified two-host campaign remain required for acceptance.

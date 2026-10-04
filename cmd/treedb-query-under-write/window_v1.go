@@ -123,6 +123,10 @@ func windowConnect(ctx context.Context, n int, rpcTimeout time.Duration, dial fu
 }
 
 func windowCall(ctx context.Context, stop context.CancelFunc, client vectorClient, in *recallInput, admission *recallReport, ordinal, worker int, phase string, origin time.Time) (windowAttempt, error) {
+	return windowCallValidated(ctx, stop, client, in, admission, ordinal, worker, phase, origin, nil)
+}
+
+func windowCallValidated(ctx context.Context, stop context.CancelFunc, client vectorClient, in *recallInput, admission *recallReport, ordinal, worker int, phase string, origin time.Time, validate func(*recallQuery, public.SearchResponseV1, int64, int64) (float64, error)) (windowAttempt, error) {
 	q := &admission.Queries[ordinal%len(admission.Queries)]
 	a := windowAttempt{Ordinal: ordinal, Worker: worker, Phase: phase, QueryID: q.QueryID, RequestSHA256: q.RequestSHA256, Outcome: "unissued"}
 	if err := ctx.Err(); err != nil {
@@ -159,7 +163,13 @@ func windowCall(ctx context.Context, stop context.CancelFunc, client vectorClien
 		a.Response = &owned
 	}
 	if err == nil {
-		value, validateErr := recallValidateResponse(q, response, in.vectors)
+		var value float64
+		var validateErr error
+		if validate == nil {
+			value, validateErr = recallValidateResponse(q, response, in.vectors)
+		} else {
+			value, validateErr = validate(q, response, a.StartNS, a.EndNS)
+		}
 		err = validateErr
 		if err == nil {
 			a.RecallAt10 = &value
@@ -208,14 +218,15 @@ func windowPhase(parent context.Context, clients []ownedVectorClient, in *recall
 	return windowPhaseControlled(parent, clients, in, r, warmup, byteBudget, nil)
 }
 
-// Only the separately admitted paced mode supplies these phase-local hooks.
+// Only the separately admitted paced and mixed modes supply these phase-local hooks.
 // Start shares the exact monotonic origin; Join drains the independently owned
 // writer before duration is fixed. Stop must not take the read retention lock.
 type windowPhaseControl struct {
-	Start    func(context.Context, time.Time, time.Time)
-	Stop     context.CancelFunc
-	Validate func(windowAttempt) error
-	Join     func() error
+	Start            func(context.Context, time.Time, time.Time)
+	Stop             context.CancelFunc
+	Validate         func(windowAttempt) error
+	ResponseValidate func(*recallQuery, public.SearchResponseV1, int64, int64) (float64, error)
+	Join             func() error
 }
 
 func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, in *recallInput, r *windowReport, warmup bool, byteBudget *int, control *windowPhaseControl) error {
@@ -292,7 +303,11 @@ func windowPhaseControlled(parent context.Context, clients []ownedVectorClient, 
 					next++
 				}
 				mu.Unlock()
-				a, err := windowCall(ctx, stop, client, in, &r.Admission, ordinal, worker, phase, origin)
+				var validator func(*recallQuery, public.SearchResponseV1, int64, int64) (float64, error)
+				if control != nil {
+					validator = control.ResponseValidate
+				}
+				a, err := windowCallValidated(ctx, stop, client, in, &r.Admission, ordinal, worker, phase, origin, validator)
 				if err == nil && control != nil && control.Validate != nil {
 					if err = control.Validate(a); err != nil {
 						a.Outcome, a.ErrorCode = errorOutcome(err, false)

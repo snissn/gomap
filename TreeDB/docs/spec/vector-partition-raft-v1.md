@@ -1039,3 +1039,24 @@ snapshot qualification. New public methods/sections did not exist on the base,
 so the issue's compile-capability red exception applies; authored semantic
 regressions still require a runner-classified normal/race result. No unexecuted
 baseline is represented as an observed red.
+
+### Six-outcome mixed-window observation
+
+The mixed-window driver precomputes full-population canonical FP32 truth for all
+seven planned prefixes and rejects changing top10 ID/score bits. Measured reads
+use one causally permitted prefix's changed-ID presence/scores and unchanged
+baseline scores; recall retains the existing threshold. Serial ACK token probes,
+original superseded-replace/delete retries and final acknowledged-ledger recall
+are separate untimed checks. No failed/UNKNOWN sample is retried or discarded.
+
+An explicit optional existing diagnostics attachment proves six retained original
+outcomes and final known-ID content/absence plus exact live membership, while all
+voters remain live. `VerifyVectorPartitionColocatedMutationLogicalStateV1` and
+six nonzero-digest exact lookups establish original outcomes; the prepared owner
+establishes source/live proof. Actual current-FSM DB, ACTIVE scope, root/applied
+state, physical command-WAL coverage, next LSN and summary are fenced/rechecked.
+Pending publication, stale matching handles and torn proofs refuse. Admission
+may flush, so unchanged physical state is mandatory; this is not an offline or
+intrinsically read-only proof. This does not establish the entire source population
+or cross-group semantics. See the mixed-window README for receipt/resource limits
+and `TestMixed*` / `TestFixedPeerColocatedAuditCurrentAuthorityV1` for new controls.

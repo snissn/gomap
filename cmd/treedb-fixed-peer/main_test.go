@@ -41,3 +41,12 @@ func TestFixedPeerFixtureCLIRejectsBeforeConfigOrNetwork(t *testing.T) {
 		}
 	}
 }
+
+func TestColocatedAuditCLIAdmissionBeforeConfigV1(t *testing.T) {
+	for _, args := range [][]string{{"-mode", "serve", "-colocated-audit-plan", "missing"}, {"-mode", "diagnostics", "-colocated-audit-plan", "missing"}} {
+		var output bytes.Buffer
+		if err := runArgs(context.Background(), args, &output); err == nil || output.Len() != 0 {
+			t.Fatalf("audit admission %v output%s", err, output.String())
+		}
+	}
+}

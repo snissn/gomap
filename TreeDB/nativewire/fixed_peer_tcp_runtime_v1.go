@@ -932,6 +932,7 @@ func (s fixedPeerRemoteSubmitterV1) SubmitCommandEntryV1(ctx context.Context, en
 }
 
 type fixedPeerRequestV1 struct {
+	ColocatedAudit           *ColocatedAuditPlanV1 `json:",omitempty"`
 	Entry                    []byte
 	Metadata                 raftentry.RequestMetadataV1
 	Route                    ClusterRouteRequest
@@ -1071,6 +1072,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		err = fmt.Errorf("invalid trailing RPC payload")
 		return
 	}
+	if body.ColocatedAudit != nil && request.URL.Path != "/v1/diagnostics" {
+		err = errors.New("colocated audit attachment requires diagnostics")
+		return
+	}
 	if ownerTailCaller {
 		command, decodeErr := raftplacement.DecodeReplicaReplacementBeginV1(body.Entry)
 		if decodeErr != nil || command.OwnerPreparation == nil || command.NewPeer.ID != caller {
@@ -1100,6 +1105,13 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	case "/v1/diagnostics":
 		var report FixedPeerDiagnosticsV1
 		report, err = r.diagnosticsV1(ctx)
+		if err == nil && body.ColocatedAudit != nil {
+			var audit ColocatedAuditReceiptV1
+			audit, err = r.colocatedAuditV1(ctx, *body.ColocatedAudit)
+			if err == nil {
+				report.ColocatedAudit = &audit
+			}
+		}
 		reply.Diagnostics = &report
 	case "/v1/readiness":
 		var report FixedPeerReadinessV1
