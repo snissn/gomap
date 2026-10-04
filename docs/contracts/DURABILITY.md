@@ -25,14 +25,15 @@ auxiliary dependency. Backend-root publication may happen later.
 suffix. A successful explicit `*Sync`, including an empty batch sync, persists
 the dependency-complete command-WAL prefix captured by the call.
 
-`no_wal_fast` is supported for authoritative data with volatile ordinary ACKs.
+`no_wal_fast` ordinary acknowledgements are volatile. The profile supports
+authoritative data with durable explicit database boundaries.
 A crash may lose recent volatile writes; it must never expose a torn batch,
 mixed root, or missing persistent reference. Independently buffered collection
 domains do not promise a global ordinary-ACK-order prefix: an autonomous seal
 can retain a later published operation while an earlier local write is still
 volatile. Explicit database boundaries cover previously completed writes from
-registered collection managers. Its
-explicit `*Sync` operations wait for a sealed complete root covering the call;
+registered collection managers. Explicit `*Sync` operations wait for a sealed
+complete root covering the call;
 the persistent value log remains enabled and all referenced assets must be
 stable before the root is selectable.
 

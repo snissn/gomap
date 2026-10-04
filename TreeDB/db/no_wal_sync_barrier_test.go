@@ -139,3 +139,98 @@ func TestNoWALSyncPreflightRejectsUnavailableDBBeforeHooks(t *testing.T) {
 		})
 	}
 }
+
+// A later refill must not extend an explicit boundary's drain indefinitely.
+// The sentinel makes the old retry loop fail deterministically instead of hang.
+func TestNoWALSyncBarrierDoesNotChasePostDrainWrites(t *testing.T) {
+	for _, boundary := range []string{"checkpoint", "batch", "empty_batch", "conditional"} {
+		t.Run(boundary, func(t *testing.T) {
+			database, err := Open(Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			var observed, drained [2]int
+			for i := range observed {
+				unregister := database.RegisterCommandWALRawPublishBarrier(func() error {
+					observed[i]++
+					if observed[i] != 1 {
+						return errors.New("boundary revisited a post-drain refill")
+					}
+					// This hook deliberately keeps advertising another drain.
+					return &commandwalbarrier.PendingDrain{Drain: func() error {
+						drained[i]++
+						return nil
+					}}
+				})
+				defer unregister()
+			}
+			switch boundary {
+			case "checkpoint":
+				err = database.Checkpoint()
+			case "batch", "empty_batch":
+				batch := database.NewBatch()
+				if boundary == "batch" {
+					if err := batch.Set([]byte("later"), []byte("value")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err = batch.WriteSync()
+				_ = batch.Close()
+			case "conditional":
+				tx, e := database.NewConditionalTxn()
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer tx.Close()
+				if err := tx.Set([]byte("later"), []byte("value")); err != nil {
+					t.Fatal(err)
+				}
+				err = tx.CommitSync()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observed != [2]int{1, 1} || drained != [2]int{1, 1} {
+				t.Fatalf("observed=%v drained=%v want each registered hook drained once", observed, drained)
+			}
+		})
+	}
+}
+
+func TestNoWALSyncBarrierSnapshotPreservesUnregisterAndRegistrationCut(t *testing.T) {
+	database := &DB{}
+	var unregisterSecond, unregisterLate func()
+	firstCalled, secondCalled, lateCalled := false, false, false
+	defer func() {
+		if unregisterLate != nil {
+			unregisterLate()
+		}
+	}()
+	unregisterFirst := database.RegisterCommandWALRawPublishBarrier(func() error {
+		if firstCalled {
+			return errors.New("boundary restarted its registry snapshot")
+		}
+		firstCalled = true
+		return &commandwalbarrier.PendingDrain{Drain: func() error {
+			unregisterSecond()
+			unregisterLate = database.RegisterCommandWALRawPublishBarrier(func() error {
+				lateCalled = true
+				return nil
+			})
+			return nil
+		}}
+	})
+	defer unregisterFirst()
+	unregisterSecond = database.RegisterCommandWALRawPublishBarrier(func() error {
+		secondCalled = true
+		return nil
+	})
+	defer unregisterSecond()
+	if err := database.drainNoWALSyncPublishBarriers(); err != nil {
+		t.Fatal(err)
+	}
+	if secondCalled || lateCalled {
+		t.Fatalf("second=%v late=%v want removed and post-cut hooks skipped", secondCalled, lateCalled)
+	}
+}

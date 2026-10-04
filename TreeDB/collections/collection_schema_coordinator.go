@@ -44,10 +44,12 @@ type collectionSchemaCoordinator struct {
 	legacyVectorSidecarMu                  sync.Mutex
 	domainsMu                              sync.Mutex
 	domains                                map[*collectionWriteDomain]struct{}
-	chunkLifecycleMu                       sync.Mutex
-	chunkLifecycles                        map[string]*chunkLifecycleLock
-	chunkMutationOnce                      sync.Once
-	chunkMutationToken                     chan struct{}
+	// No-WAL sync drains pause workers across current and newly registered domains.
+	indexedSyncDrainWaiters atomic.Int64
+	chunkLifecycleMu        sync.Mutex
+	chunkLifecycles         map[string]*chunkLifecycleLock
+	chunkMutationOnce       sync.Once
+	chunkMutationToken      chan struct{}
 
 	// Includes reserved and attempted encoded work within the current explicit
 	// maintenance epoch. Reconciliation and pointer-pin release do not renew it.

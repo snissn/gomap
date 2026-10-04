@@ -656,6 +656,6 @@ publication and releases independent asset capture admission before native
 root publication. Replay identity expires when the existing callback restores
 its active frame state. No durable progress or recovery coverage is invented.
 
-The [authoritative no-WAL audit](no-wal-fast-audit.md) records public KV and
+The [production and benchmark profile audit](no-wal-fast-audit.md) records public KV and
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.

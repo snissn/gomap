@@ -718,7 +718,7 @@ Coverage:
 
 ## 6. Durability/Profile Defaults
 
-Authoritative no-WAL boundaries (#4980) are covered by
+Authoritative production `no_wal_fast` boundaries (#4980) are covered by
 `TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers` (separate managers,
 indexed/unindexed buffers, checkpoint/maintenance, point/batch/conditional/no-op
 sync and clean close reopened from the existing power-loss oracle),
@@ -728,6 +728,12 @@ sync and clean close reopened from the existing power-loss oracle),
 drain prevents the later mutation), and
 `TestNoWALFastPublicNoopSyncSealsEarlierWrites`.
 `TestNoWALReadOnlyConditionalSyncValidatesAfterDrain` preserves read conflicts.
+`TestNoWALSyncBarrierDoesNotChasePostDrainWrites` and
+`TestNoWALCheckpointCoversPriorCollectionWritesWithoutChasingRefill` bound the
+registered-hook frontier. `TestNoWALCheckpointBoundsActiveIndexedAsyncFrontier`
+checks prepared-worker completion and durable pre-entry ACKs;
+`TestNoWALIndexedAsyncDrainDefersSiblingWorkAndResumesAfterLastWaiter` checks
+sibling exclusion, overlapping drains, and deferred work resumption.
 `TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix` documents the
 autonomous-seal limitation across independently buffered ordinary ACKs.
 `TestApplyProfile_FastAndExplicitUnsafeCeiling` verifies the benchmark production

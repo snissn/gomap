@@ -18,7 +18,7 @@ The value log is persistent storage, including when the command WAL is disabled.
 | Collection insert/update batch under `no_wal_fast` | Local write-domain tables, overlays, queued or publishing indexed units can acknowledge before backend root publication. | Registered managers drain before a database checkpoint or a public raw backend synchronous batch; earlier acknowledged collection operations therefore cannot be omitted by a later successful KV sync. |
 | Public cached `SetSync`, `DeleteSync`, batch `WriteSync` | Complete the mutation, then `syncBarrierAfterWrite` invokes cached checkpoint in WAL-free mode. | Flush the cache, drain registered collection managers, then seal the captured backend root. |
 | Raw backend `SetSync`, `DeleteSync`, `UpdateSync`, batch `WriteSync`, conditional `CommitSync` | Point/combiner writes converge on the public batch entry. Synchronous nonphysical WAL-free batches drain registered manager barriers before acquiring publication leases. Empty synchronous batches use checkpoint. | The resulting root and its persistent dependencies are sealed before successful return. WAL-free no-op `UpdateSync` and empty/read-only `CommitSync` also checkpoint. Conditional transactions validate their read basis after the drain and retain their existing conflict behavior. |
-| `Checkpoint` | Drain pending registered collection managers outside teardown/write/publication locks, rerun all barriers, then capture backend state. | Persistent dependencies and namespace, index, seal/alternate meta, then meta sync. An error propagates; no clean result may hide a failed local drain. |
+| `Checkpoint` | Drain pending registered collection managers outside teardown/write/publication locks, drain each snapshotted barrier once, then capture backend state. | Persistent dependencies and namespace, index, seal/alternate meta, then meta sync. An error propagates; no clean result may hide a failed local drain. |
 | Clean `Close` | Manager close hooks stop admission/combiners and flush local state while backend writes remain available; cached close drains remaining memtables. | Seal and sync backend state before resource owners close. Failed Close is not a durable acknowledgement. |
 | `command_wal_relaxed` ordinary writes | Command frames/dependencies may remain userspace buffered. Deferred root publication does not grant durable ACK. | Explicit synchronous WAL barrier closes a dependency-complete command prefix; checkpoint additionally publishes durable roots and cleanup metadata. |
 | `command_wal_durable` ordinary writes | Durable command frame plus dependency closure precede acknowledgement, with normal executor apply for visibility. | Recovery replays the durable command prefix; later checkpoint may reclaim only root-covered command ranges. |
@@ -33,7 +33,7 @@ Source paths:
   [batch and conditional preflight](../../db/batch.go),
   [registered barriers and unlocked handoff](../../db/command_wal_barrier.go),
   [checkpoint loop](../../db/db.go): `checkpointTeardownPinned` captures only
-  after every barrier has rerun following its unlocked drain.
+  after every snapshotted barrier has completed its unlocked drain.
 - [Collection buffering and close](../../collections/api.go):
   `canBufferNoIndexInsertBatchAck`, `canBufferDirectUpdateAck`, `FlushAll`,
   `closeForBackend`, `SyncForStandaloneWriteConcern`;
@@ -79,7 +79,7 @@ collection callback returned early with the command WAL disabled. An
 acknowledged `InsertBatchValidatedBSON` remained buffered after successful
 backend `Checkpoint` (`domain.count=1`). A later raw synchronous KV batch also
 could seal its own root without those earlier collection writes. The fix uses
-the existing `PendingDrain` retry mechanism at checkpoint and public synchronous
+the existing `PendingDrain` handoff at checkpoint and public synchronous
 batch entry; it adds no new hook registry and changes no ordinary publication.
 
 [Boundary regression](../../collections/no_wal_checkpoint_test.go) uses the
@@ -92,7 +92,29 @@ checkpoint clears dirty native graph state before Close and reopens it.
 [Drain failure regression](../../db/no_wal_sync_barrier_test.go) proves the drain
 runs outside teardown/write locks, propagates failure, and does not publish the
 later KV mutation. Existing command-WAL lease/unregister tests cover the shared
-registry semantics.
+registry semantics. `TestNoWALSyncBarrierDoesNotChasePostDrainWrites` proves
+that each registered hook is observed and drained once per boundary, even when
+it advertises later work. `TestNoWALCheckpointCoversPriorCollectionWritesWithoutChasingRefill`
+uses a real collection refill and the stable-image oracle: the prior write
+survives while a write admitted during the drain stays buffered. Restarting all
+hooks after every no-WAL drain could otherwise starve sealing under continuous
+writes; command-WAL handoffs retain their existing retry behavior.
+
+An active indexed worker could also chase newly queued units while `FlushAll`
+waited for it to stop. A no-WAL drain now counts synchronous waiters on each
+existing schema coordinator before snapshotting sibling domains. Workers check
+this shared atomic count, so registration during a drain cannot bypass it.
+Uncoordinated domains use their existing async condition mutex. Workers finish
+their already-prepared publication and yield the queued tail;
+new starts defer until the last waiter exits. Synchronous publication keeps
+its existing vector-admission, mutation, and domain lock order. Deferred work
+resumes on release, including after a failed drain. Command-WAL drains never
+raise these counts. `TestNoWALCheckpointBoundsActiveIndexedAsyncFrontier`
+completes a prepared publish, queues a later refill, checks the worker yields,
+and reopens the stable image to verify both pre-entry ACKs.
+`TestNoWALIndexedAsyncDrainDefersSiblingWorkAndResumesAfterLastWaiter` checks
+late sibling registration, startup exclusion, and deferred work resumption after
+overlapping drains.
 
 A plain file-copy diagnostic was discarded as a durability witness: stable
 manifests bind resource identities, and copying outer-leaf files changes those
@@ -119,9 +141,16 @@ broad pointer/reopen/GC qualification.
 The new manager inspection and drain execute only at checkpoint/public sync
 boundaries. They use existing domain locks and pending checks; native-vector
 inspection can allocate an index snapshot, the existing barrier runner snapshots
-hooks, and `FlushAll` allocates slices of domains/handles. Their cost scales with registered managers/domains at the
-explicit boundary. Ordinary insert/update buffering and raw ordinary writes
-receive no new slice allocation or scan. Moving benchmark `fast` from unsafe
+hooks, and `FlushAll` allocates slices of domains/handles. Its no-WAL async
+handoff additionally allocates a deduplicated coordinator set and finite fresh
+coordinator-domain snapshots on release. It updates shared atomic waiter counts
+(or existing condition-lock counters for uncoordinated domains). Their cost
+scales with registered managers/domains at the explicit boundary. Ordinary
+insert/update buffering and raw ordinary writes receive no new slice allocation
+or scan. No-WAL async workers check the waiter count between finite publication
+units; starts suppressed during a drain use the existing deferred-start path.
+Only the final overlapping waiter resumes deferred work; a concurrent new waiter
+makes scheduling defer it again. Moving benchmark `fast` from unsafe
 CRC-skipping to verified `no_wal_fast` may add read CRC cost and removes writable
 mmap behavior; any comparison must record that resolved profile change.
 
@@ -147,6 +176,7 @@ filesystem preserves write ordering and `MDB_WRITEMAP` is absent. Native
 durable configurations are the primary comparison; native fast settings are
 separately disclosed sensitivities, not equivalent authoritative-data profiles.
 
-External #1242 / PR #4901 and PR #4933 remain outside this issue's ownership.
+External issues #1242 and #4933, and PR #4901, remain outside this issue's
+ownership.
 Their admission/resource changes may interact with these shared boundaries,
 so restacked heads require the relevant lease and recovery tests again.

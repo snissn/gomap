@@ -838,7 +838,7 @@ identity and SHA-256 digest.
 
 For `no_wal_fast`, explicit sync and checkpoint boundaries drain registered
 collection buffers before capturing the root. This changes no format bytes or
-versions; see [the authoritative no-WAL audit](no-wal-fast-audit.md) for the
+versions; see [the production and benchmark profile audit](no-wal-fast-audit.md) for the
 volatile ordinary-ACK and durable boundary contracts.
 
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
