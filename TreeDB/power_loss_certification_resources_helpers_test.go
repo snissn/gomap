@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -29,12 +31,13 @@ const (
 )
 
 type authoritativeResourceWitness struct {
-	primaryID      []byte
-	primaryJSON    []byte
-	templateID     []byte
-	templateJSON   []byte
-	dictionaryKey  []byte
-	dictionaryData []byte
+	physicalResources bool
+	primaryID         []byte
+	primaryJSON       []byte
+	templateID        []byte
+	templateJSON      []byte
+	dictionaryKey     []byte
+	dictionaryData    []byte
 }
 
 func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir string, backgroundErrors <-chan error) authoritativeResourceWitness {
@@ -43,6 +46,7 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 	if backend == nil {
 		t.Fatal("public TreeDB handle has no collection backend")
 	}
+	physicalResources := backend.DurabilityMode() == backenddb.DurabilityDurable && backend.CommandWALEnabled()
 	manager := collections.NewCollectionManager(backend)
 	meta := collections.CollectionMeta{
 		Name: authoritativeDocumentCollection,
@@ -126,21 +130,29 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := physicalCollection.InsertBatch(ids, docs); err != nil {
-		t.Fatal(err)
-	}
-	if err := physicalCollection.Flush(); err != nil {
-		t.Fatal(err)
+	if physicalResources {
+		if _, err := physicalCollection.InsertBatch(ids, docs); err != nil {
+			t.Fatal(err)
+		}
+		if err := physicalCollection.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		requireAuthoritativeResourceColumnInsertRejected(t, physicalCollection, ids, docs)
 	}
 	vectorCollection, err := manager.OpenCollection(vectorMeta.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vectorCollection.InsertBatch(ids, docs); err != nil {
-		t.Fatal(err)
-	}
-	if err := vectorCollection.Flush(); err != nil {
-		t.Fatal(err)
+	if physicalResources {
+		if _, err := vectorCollection.InsertBatch(ids, docs); err != nil {
+			t.Fatal(err)
+		}
+		if err := vectorCollection.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		requireAuthoritativeResourceColumnInsertRejected(t, vectorCollection, ids, docs)
 	}
 	templateCollection, err := manager.OpenCollection(templateMeta.Name)
 	if err != nil {
@@ -176,21 +188,36 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 		t.Fatal(err)
 	}
 	requireDictionaryEncodedValueLogFrame(t, database, filepath.Join(dir, "maindb", "value_vlog"), dictionaryKey, database.Stats())
-	status, err := vectorCollection.RebuildVectorIndex("embedding_graph")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.State != collections.VectorIndexStateColumnGraphLoaded || !status.Loaded || status.RebuildNeeded {
-		t.Fatalf("RebuildVectorIndex status=%+v want loaded column_graph state", status)
+	if physicalResources {
+		status, err := vectorCollection.RebuildVectorIndex("embedding_graph")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.State != collections.VectorIndexStateColumnGraphLoaded || !status.Loaded || status.RebuildNeeded {
+			t.Fatalf("RebuildVectorIndex status=%+v want loaded column_graph state", status)
+		}
 	}
 
 	return authoritativeResourceWitness{
-		primaryID:      append([]byte(nil), ids[authoritativePrimaryDocument]...),
-		primaryJSON:    append([]byte(nil), docs[authoritativePrimaryDocument]...),
-		templateID:     append([]byte(nil), ids[authoritativePrimaryDocument]...),
-		templateJSON:   append([]byte(nil), docs[authoritativePrimaryDocument]...),
-		dictionaryKey:  dictionaryKey,
-		dictionaryData: dictionaryData,
+		physicalResources: physicalResources,
+		primaryID:         append([]byte(nil), ids[authoritativePrimaryDocument]...),
+		primaryJSON:       append([]byte(nil), docs[authoritativePrimaryDocument]...),
+		templateID:        append([]byte(nil), ids[authoritativePrimaryDocument]...),
+		templateJSON:      append([]byte(nil), docs[authoritativePrimaryDocument]...),
+		dictionaryKey:     dictionaryKey,
+		dictionaryData:    dictionaryData,
+	}
+}
+
+func requireAuthoritativeResourceColumnInsertRejected(t *testing.T, collection *collections.Collection, ids, docs [][]byte) {
+	t.Helper()
+	if _, err := collection.InsertBatch(ids, docs); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("unsupported column-store InsertBatch: error=%v want ErrCommandWALRejected", err)
+	}
+	for _, id := range ids {
+		if value, err := collection.Get(id); err != nil || value != nil {
+			t.Fatalf("rejected column-store InsertBatch stored row %q: value=%q err=%v", id, value, err)
+		}
 	}
 }
 
@@ -231,44 +258,56 @@ func assertAuthoritativeResourceWitness(t *testing.T, reopened *treedb.DB, witne
 		t.Fatalf("SearchText results=%+v want document %q", text.Results, witness.primaryID)
 	}
 
-	physicalCollection, err := manager.OpenCollection(authoritativePhysicalCollection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	column, err := physicalCollection.RunColumnPhysicalQuery(collections.ColumnPhysicalQueryRequest{
-		Kind: collections.ColumnPhysicalQueryGroupCount, GroupColumn: "kind",
-	})
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery: %v", err)
-	}
-	wantGroups := map[string]int{"kind_even": authoritativeDocumentCount / 2, "kind_odd": authoritativeDocumentCount / 2}
-	if got := columnGroupCounts(column.Groups); !reflect.DeepEqual(got, wantGroups) {
-		t.Fatalf("RunColumnPhysicalQuery groups=%v want=%v diagnostics=%+v", got, wantGroups, column.Diagnostics)
-	}
-	diagnostics := column.Diagnostics
-	if diagnostics.ManifestRoot == 0 || diagnostics.AssetRefs == 0 || diagnostics.DictionaryCodeHits == 0 ||
-		diagnostics.StorageSource == collections.ColumnPhysicalQueryStorageSourceRowScan ||
-		diagnostics.StorageSource == collections.ColumnPhysicalQueryStorageSourceFallback ||
-		diagnostics.FallbackReason != collections.ColumnPhysicalQueryFallbackNone ||
-		diagnostics.RowMaterializations != 0 || diagnostics.DocumentMaterializations != 0 ||
-		diagnostics.ReduceRows != authoritativeDocumentCount {
-		t.Fatalf("RunColumnPhysicalQuery diagnostics=%+v want physical dictionary authority without row/document fallback", diagnostics)
-	}
+	if witness.physicalResources {
+		physicalCollection, err := manager.OpenCollection(authoritativePhysicalCollection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		column, err := physicalCollection.RunColumnPhysicalQuery(collections.ColumnPhysicalQueryRequest{
+			Kind: collections.ColumnPhysicalQueryGroupCount, GroupColumn: "kind",
+		})
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery: %v", err)
+		}
+		wantGroups := map[string]int{"kind_even": authoritativeDocumentCount / 2, "kind_odd": authoritativeDocumentCount / 2}
+		if got := columnGroupCounts(column.Groups); !reflect.DeepEqual(got, wantGroups) {
+			t.Fatalf("RunColumnPhysicalQuery groups=%v want=%v diagnostics=%+v", got, wantGroups, column.Diagnostics)
+		}
+		diagnostics := column.Diagnostics
+		if diagnostics.ManifestRoot == 0 || diagnostics.AssetRefs == 0 || diagnostics.DictionaryCodeHits == 0 ||
+			diagnostics.StorageSource == collections.ColumnPhysicalQueryStorageSourceRowScan ||
+			diagnostics.StorageSource == collections.ColumnPhysicalQueryStorageSourceFallback ||
+			diagnostics.FallbackReason != collections.ColumnPhysicalQueryFallbackNone ||
+			diagnostics.RowMaterializations != 0 || diagnostics.DocumentMaterializations != 0 ||
+			diagnostics.ReduceRows != authoritativeDocumentCount {
+			t.Fatalf("RunColumnPhysicalQuery diagnostics=%+v want physical dictionary authority without row/document fallback", diagnostics)
+		}
 
-	vectorCollection, err := manager.OpenCollection(authoritativeVectorCollection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vector, err := vectorCollection.SearchVectorIndex(collections.VectorIndexSearchOptions{
-		IndexName: "embedding_graph", Query: []float32{1, 7, 49}, TopK: 1, EfSearch: authoritativeDocumentCount,
-		StatsMode: collections.VectorIndexSearchStatsModeBenchmarkDebug,
-	})
-	if err != nil {
-		t.Fatalf("SearchVectorIndex: %v", err)
-	}
-	if vector.Status.State != collections.VectorIndexStateColumnGraphLoaded || !vector.Status.Loaded || vector.Status.RebuildNeeded ||
-		len(vector.Results) != 1 || !bytes.Equal(vector.Results[0].ID, witness.primaryID) {
-		t.Fatalf("SearchVectorIndex response=%+v want reopened loaded top-1 document %q", vector, witness.primaryID)
+		vectorCollection, err := manager.OpenCollection(authoritativeVectorCollection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vector, err := vectorCollection.SearchVectorIndex(collections.VectorIndexSearchOptions{
+			IndexName: "embedding_graph", Query: []float32{1, 7, 49}, TopK: 1, EfSearch: authoritativeDocumentCount,
+			StatsMode: collections.VectorIndexSearchStatsModeBenchmarkDebug,
+		})
+		if err != nil {
+			t.Fatalf("SearchVectorIndex: %v", err)
+		}
+		if vector.Status.State != collections.VectorIndexStateColumnGraphLoaded || !vector.Status.Loaded || vector.Status.RebuildNeeded ||
+			len(vector.Results) != 1 || !bytes.Equal(vector.Results[0].ID, witness.primaryID) {
+			t.Fatalf("SearchVectorIndex response=%+v want reopened loaded top-1 document %q", vector, witness.primaryID)
+		}
+	} else {
+		for _, name := range []string{authoritativePhysicalCollection, authoritativeVectorCollection} {
+			collection, err := manager.OpenCollection(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value, err := collection.Get(witness.primaryID); err != nil || value != nil {
+				t.Fatalf("reopened rejected column-store row %s/%q: value=%q err=%v", name, witness.primaryID, value, err)
+			}
+		}
 	}
 
 	templateCollection, err := manager.OpenCollection(authoritativeTemplateCollection)
