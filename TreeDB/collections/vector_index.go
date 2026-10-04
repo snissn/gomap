@@ -5486,9 +5486,12 @@ func (idx *VectorIndex) constructionNodesHaveIdenticalVectorsLocked(left, right 
 		return false
 	}
 	a, b := &idx.nodes[left], &idx.nodes[right]
+	// A differing coordinate rejects identity cheaply; matching probes still
+	// require full equality and validation. Both nodes use the same coordinates.
+	first, second := left%idx.dimensions, right%idx.dimensions
 	switch idx.encoding {
 	case VectorIndexEncodingFloat32:
-		if len(a.vector) != idx.dimensions || len(b.vector) != idx.dimensions || !slices.Equal(a.vector, b.vector) {
+		if len(a.vector) != idx.dimensions || len(b.vector) != idx.dimensions || a.vector[first] != b.vector[first] || (second != first && a.vector[second] != b.vector[second]) || !slices.Equal(a.vector, b.vector) {
 			return false
 		}
 		if validateFloat32Vector(a.vector) != nil {
@@ -5496,7 +5499,7 @@ func (idx *VectorIndex) constructionNodesHaveIdenticalVectorsLocked(left, right 
 		}
 		return idx.metric != VectorMetricCosine || vectorNormSquared(a.vector) > 0
 	case VectorIndexEncodingInt8:
-		if len(a.quantized) != idx.dimensions || len(b.quantized) != idx.dimensions || a.quantScale <= 0 || a.quantScale != b.quantScale || math.IsInf(float64(a.quantScale), 0) || math.IsNaN(float64(a.quantScale)) || !slices.Equal(a.quantized, b.quantized) {
+		if len(a.quantized) != idx.dimensions || len(b.quantized) != idx.dimensions || a.quantScale <= 0 || a.quantScale != b.quantScale || math.IsInf(float64(a.quantScale), 0) || math.IsNaN(float64(a.quantScale)) || a.quantized[first] != b.quantized[first] || (second != first && a.quantized[second] != b.quantized[second]) || !slices.Equal(a.quantized, b.quantized) {
 			return false
 		}
 		if idx.metric == VectorMetricCosine {
@@ -5513,85 +5516,19 @@ func (idx *VectorIndex) constructionNodesHaveIdenticalVectorsLocked(left, right 
 	}
 }
 
-// A phase-local rejection filter, never identity authority. Zero marks invalid
-// representations; valid zero hashes are remapped and collisions are confirmed
-// by the exact predicate. Signed zero has the same equality as slices.Equal.
-func (idx *VectorIndex) constructionNodeFingerprintLocked(nodeID int) uint64 {
-	if nodeID < 0 || nodeID >= len(idx.nodes) || idx.dimensions <= 0 {
-		return 0
-	}
-	switch idx.metric {
-	case VectorMetricCosine, VectorMetricL2, VectorMetricInnerProduct:
-	default:
-		return 0
-	}
-	const prime = uint64(1099511628211)
-	hash := uint64(14695981039346656037)
-	nonzero := false
-	node := &idx.nodes[nodeID]
-	switch idx.encoding {
-	case VectorIndexEncodingFloat32:
-		if len(node.vector) != idx.dimensions {
-			return 0
-		}
-		for _, value := range node.vector {
-			bits := math.Float32bits(value)
-			if bits&0x7f800000 == 0x7f800000 {
-				return 0
-			}
-			if value == 0 {
-				bits = 0
-			} else {
-				nonzero = true
-			}
-			hash = (hash ^ uint64(bits)) * prime
-		}
-	case VectorIndexEncodingInt8:
-		if len(node.quantized) != idx.dimensions || node.quantScale <= 0 || math.Float32bits(node.quantScale)&0x7f800000 == 0x7f800000 {
-			return 0
-		}
-		hash = (hash ^ uint64(math.Float32bits(node.quantScale))) * prime
-		for _, value := range node.quantized {
-			nonzero = nonzero || value != 0
-			hash = (hash ^ uint64(uint8(value))) * prime
-		}
-	default:
-		return 0
-	}
-	if idx.metric == VectorMetricCosine && !nonzero {
-		return 0
-	}
-	if hash == 0 {
-		return 1
-	}
-	return hash
-}
-
-func (idx *VectorIndex) constructionNodesMatchFingerprintLocked(left, right int, leftHash, rightHash uint64) bool {
-	return leftHash != 0 && leftHash == rightHash && idx.constructionNodesHaveIdenticalVectorsLocked(left, right)
-}
-
 // Candidates must already be distance-sorted. Unequal-distance singleton
-// groups need no representation comparisons or fingerprints.
-// ponytail: tied groups still scan quadratic hash pairs; a local table only if that scan becomes measurable.
+// groups need no representation comparisons on the ordinary construction path.
+// ponytail: tied groups remain quadratic; add a temporary identity table only if profiling warrants it.
 func (idx *VectorIndex) constructionCandidatesHaveIdenticalVectorsLocked(candidates []vectorIndexCandidate) bool {
-	var fingerprintsStack [128]uint64
 	for start := 0; start < len(candidates); {
 		end := start + 1
 		for end < len(candidates) && candidates[end].distance == candidates[start].distance {
 			end++
 		}
-		if end-start > 1 {
-			fingerprints := fingerprintsStack[:minInt(end-start, len(fingerprintsStack))]
-			if end-start > len(fingerprintsStack) {
-				fingerprints = make([]uint64, end-start)
-			}
-			for i := start; i < end; i++ {
-				fingerprints[i-start] = idx.constructionNodeFingerprintLocked(candidates[i].nodeID)
-				for j := start; j < i; j++ {
-					if idx.constructionNodesMatchFingerprintLocked(candidates[i].nodeID, candidates[j].nodeID, fingerprints[i-start], fingerprints[j-start]) {
-						return true
-					}
+		for i := start + 1; i < end; i++ {
+			for j := start; j < i; j++ {
+				if idx.constructionNodesHaveIdenticalVectorsLocked(candidates[i].nodeID, candidates[j].nodeID) {
+					return true
 				}
 			}
 		}
@@ -5643,13 +5580,10 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 	}
 	// Classify this bounded pool only when an admission needs to evict. Node
 	// ordinals remain immutable even when their candidate slots are overwritten.
-	// ponytail: class lookup scans EfConstruction hashes; a local table only if that scan becomes measurable.
+	// ponytail: initial classification is quadratic in EfConstruction; hash only if profiling warrants it.
 	var classNodesStack, classCountsStack, membershipsStack [128]int
-	var classFingerprintsStack [128]uint64
 	var classNodes, classCounts, memberships []int
-	var classFingerprints []uint64
 	classFor := func(nodeID int) int {
-		fingerprint := idx.constructionNodeFingerprintLocked(nodeID)
 		free := -1
 		for class, representative := range classNodes {
 			if classCounts[class] == 0 {
@@ -5658,12 +5592,11 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 				}
 				continue
 			}
-			if idx.constructionNodesMatchFingerprintLocked(nodeID, representative, fingerprint, classFingerprints[class]) {
+			if idx.constructionNodesHaveIdenticalVectorsLocked(nodeID, representative) {
 				return class
 			}
 		}
 		classNodes[free] = nodeID
-		classFingerprints[free] = fingerprint
 		return free
 	}
 	admit := func(nodeID int) {
@@ -5683,12 +5616,10 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 					classNodes = classNodesStack[:n]
 					classCounts = classCountsStack[:n]
 					memberships = membershipsStack[:n]
-					classFingerprints = classFingerprintsStack[:n]
 				} else {
 					classNodes = make([]int, n)
 					classCounts = make([]int, n)
 					memberships = make([]int, n)
-					classFingerprints = make([]uint64, n)
 				}
 				for i, candidate := range candidates {
 					class := classFor(candidate.nodeID)
@@ -5844,11 +5775,6 @@ func (idx *VectorIndex) selectConstructionDiverseCandidatesLocked(candidates []v
 	if limit > len(selectedStack) {
 		selected = make([]vectorIndexCandidate, 0, limit)
 	}
-	var selectedFingerprintsStack [128]uint64
-	selectedFingerprints := selectedFingerprintsStack[:]
-	if redundant && minInt(limit, len(candidates)) > len(selectedFingerprintsStack) {
-		selectedFingerprints = make([]uint64, minInt(limit, len(candidates)))
-	}
 	var rejectedStack [128]vectorIndexCandidate
 	rejected := rejectedStack[:0]
 	if len(candidates) > len(rejectedStack) {
@@ -5861,11 +5787,9 @@ func (idx *VectorIndex) selectConstructionDiverseCandidatesLocked(candidates []v
 			continue
 		}
 		identical := false
-		var fingerprint uint64
 		if redundant {
-			fingerprint = idx.constructionNodeFingerprintLocked(candidate.nodeID)
-			for i, existing := range selected {
-				if idx.constructionNodesMatchFingerprintLocked(candidate.nodeID, existing.nodeID, fingerprint, selectedFingerprints[i]) {
+			for _, existing := range selected {
+				if idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, existing.nodeID) {
 					identical = true
 					break
 				}
@@ -5873,9 +5797,6 @@ func (idx *VectorIndex) selectConstructionDiverseCandidatesLocked(candidates []v
 		}
 		if !identical && (idx.metric == VectorMetricInnerProduct || idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, dotScratch, context)) {
 			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1|1)
-			if redundant {
-				selectedFingerprints[len(selected)] = fingerprint
-			}
 			selected = append(selected, candidate)
 		} else {
 			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1)
