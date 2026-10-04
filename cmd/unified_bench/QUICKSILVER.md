@@ -98,6 +98,13 @@ these can be absent before insertion. Deleted present-class keys can disappear.
 `requested_present`, `requested_absent`, `observed_hits` and miss-class counters
 keep these distinctions explicit.
 
+Miss-class cycling and inserted-request cadence use each reader's request
+ordinal plus its worker offset, rather than a worker-strided global index.
+Every reader therefore traverses all three classes and the seven-request insert
+cadence even when the reader count is divisible by three or seven. With 100%
+absent requests, each reader's class counts differ by at most one regardless of
+its speed; at other percentages, absent selection remains a separate PCG draw.
+
 Mutation targets are a collision-free permutation, bounded by
 `-quicksilver-updates` (default min(40,000,keys)). Successive targets rotate
 update/delete/insert/repeated-overwrite. Groups contain up to 1000 targets; each

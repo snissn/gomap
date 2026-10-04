@@ -237,6 +237,32 @@ func TestQuicksilverMissRateAndWorkingSetIndependent(t *testing.T) {
 	}
 }
 
+func TestQuicksilverConcurrentMissClassesPerReader(t *testing.T) {
+	for _, mixture := range []string{"primary", "holdout"} {
+		for _, workers := range []int{3, 6, 7, 9, 12, 4, 8, 16, 32, 64} {
+			t.Run(mixture+"/"+strconv.Itoa(workers), func(t *testing.T) {
+				c := quicksilverRealisticSmokeConfig()
+				c.Mixture, c.Workers, c.MissPercent, c.ReadBatch = mixture, workers, 100, 1
+				c.Duration = 20 * time.Millisecond
+				f := newQuicksilverFixture(c)
+				p, err := quicksilverReadPhase(&fixedNameDB{}, c, f, 3, nil, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if p.RequestedPresent != 0 || p.RequestedAbsent != p.Ops {
+					t.Fatalf("incorrect all-miss phase accounting: %+v", p)
+				}
+				for w, reader := range f.readers {
+					counts := reader.missKinds
+					if reader.count == 0 || counts[0]+counts[1]+counts[2] != reader.count || max(counts[0], counts[1], counts[2])-min(counts[0], counts[1], counts[2]) > 1 {
+						t.Fatalf("reader %d: %d actual reads have skewed miss classes %v", w, reader.count, counts)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestQuicksilverRealisticConcurrentValidation(t *testing.T) {
 	c := quicksilverRealisticSmokeConfig()
 	id := uint64(2)

@@ -194,13 +194,13 @@ func quicksilverWorkingKeys(c quicksilverConfig) int {
 }
 func quicksilverDeletedKeys(c quicksilverConfig) int { return max(1, c.Keys/100) }
 
-func quicksilverAccess(c *quicksilverConfig, r *rand.Rand, mode, global, stride, offset int) (id uint64, absent bool, kind, distinct int) {
+func quicksilverAccess(c *quicksilverConfig, r *rand.Rand, mode, ordinal, stride, offset int) (id uint64, absent bool, kind, distinct int) {
 	i := int((int64(r.IntN(quicksilverWorkingKeys(*c)))*int64(stride) + int64(offset)) % int64(c.Keys))
 	id = uint64(i) * 2
 	absent = mode == 1 || (mode >= 2 && r.IntN(100) < c.MissPercent)
 	distinct = i * 5
 	if absent {
-		kind = global % 3 // Balanced classes are independent of key/working-set draws.
+		kind = ordinal % 3 // Each reader cycles classes independently of its speed.
 		switch kind {
 		case 0:
 			distinct++ // Arbitrary: reserved '!' prepended to the key.
@@ -212,7 +212,7 @@ func quicksilverAccess(c *quicksilverConfig, r *rand.Rand, mode, global, stride,
 			id = uint64(c.Keys+i) * 2
 			distinct = i*5 + 3
 		}
-	} else if mode == 3 && global%7 == 0 && c.Updates >= 3 {
+	} else if mode == 3 && ordinal%7 == 0 && c.Updates >= 3 {
 		// Readers also observe newly inserted identities, absent before publication.
 		j := (i%((c.Updates+1)/4))*4 + 2
 		id = uint64(2*c.Keys+j) * 2

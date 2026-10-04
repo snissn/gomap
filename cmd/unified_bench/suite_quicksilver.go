@@ -447,16 +447,16 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 						return
 					}
 				}
-				global := i*c.Workers + w
 				var key []byte
 				var id uint64
 				var absent bool
 				var distinctIndex int
 				kind := 0
 				if c.Case == "realistic" {
-					id, absent, kind, distinctIndex = quicksilverAccess(&c, rng, mode, global, readStride, readOffset)
+					id, absent, kind, distinctIndex = quicksilverAccess(&c, rng, mode, i+w, readStride, readOffset)
 					key = quicksilverLookupKey(keyScratch[:0], id, c.Seed, c.Mixture, absent && kind == 0)
 				} else {
+					global := i*c.Workers + w
 					pos := global % len(f.ids)
 					absent = mode == 1 || (mode >= 2 && global%11 != 0)
 					idx := pos * 2
