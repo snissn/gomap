@@ -871,11 +871,15 @@ these package packets are not benchprof profile-dir artifacts.
 
 The native `-suite quicksilver` uses the ordinary database registry and adapters.
 It measures a local KV workload, without reproducing Cloudflare replication.
-The default fixture is `random4k`: 100,000 keys and 4096-byte deterministic random
-values. `-quicksilver-case structured256` selects 250,000 keys and 256-byte
-compressible values. Values contain big-endian key ID and generation headers;
-32-byte keys share the reference's 24-byte prefix. Even keys exist; adjacent odd
-keys are absent. `-keys` bounds either case for smoke runs.
+The default `realistic` fixture loads 3M varied namespace/hostname/opaque keys
+and a seeded mixture of variable-size structured/opaque values. It supports
+primary/holdout mixtures, uniform/1%/20% working sets, independently selected
+miss percentages, exact distinct-access accounting and mutation bursts.
+See [the generic workload contract](QUICKSILVER.md) for flags, generation,
+compressibility sampling, correctness, allocation and durability boundaries.
+`random4k` (100k random 4 KiB values) and `structured256` (250k compressible
+256-byte values) retain historical fixed keys, seed and trace. `-keys` bounds
+all cases for smoke runs.
 
 ```sh
 GOWORK=off go build -o bin/unified-bench ./cmd/unified_bench
@@ -893,10 +897,15 @@ GOMAXPROCS=4 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable
 ./bin/benchprof -profiles-dir "$OUT"
 ```
 
-The workflow loads synchronous 1000-value batches, checkpoints, closes/reopens,
-and performs 50,000 deterministic untimed warmup reads. Each fixed phase executes
+The workflow loads groups of 1000 keys, checkpoints, closes/reopens, and
+performs 50,000 deterministic untimed warmup reads. `-quicksilver-commit=auto`
+resolves to ordinary batch Commit for realistic and CommitSync for historical
+cases; `ordinary|sync` explicitly choose the API. Native adapter durability
+remains engine-specific. The realistic case also performs a full initial
+reopen oracle before warmup. Each fixed phase executes
 **2,000,000 aggregate operations**, including reader-count remainders: hits,
-misses, and 10 misses/1 hit. Default 4 readers each reuse a snapshot for 64 owned
+misses, and mixed requests (realistic defaults to 90% absent; historical cases
+keep 10 misses/1 hit). Default 4 readers each reuse a snapshot for 64 owned
 `Get` reads. `-quicksilver-read-batch=1` uses ordinary owned `DB.Get`; larger
 values require `ReadSnapshotter` and fail clearly when unavailable. The current
 LevelDB adapter is unsupported, including `leveldb_block_comp_on`,
@@ -925,13 +934,16 @@ metrics exclude RocksDB's native allocations; reported cache/memtable properties
 are current engine observations, not peak RSS or a total native-memory budget.
 
 Concurrent mixed readers run for `-quicksilver-duration` (default 4s). A paced
-writer updates `-quicksilver-updates` distinct keys (default min(40,000,keys)),
-in 1000-value batches, checkpointing at four quarter intervals (up to four when
+writer processes `-quicksilver-updates` distinct mutation targets (default
+min(40,000,keys)) in groups of up to 1000, checkpointing at four quarter intervals (up to four when
 smoke runs have fewer batches). The reference's 7919 permutation stride is kept
 when coprime to the key count, otherwise the next coprime stride is reported.
-Every measured read validates absence or identity/length/generation. Final
+Historical cases update all targets once; realistic rotates updates, deletes,
+inserts and four separately committed overwrite generations. Actual operation
+and commit counts appear in the detailed report. Every measured read validates
+absence or identity/length/permitted generation. Final
 checkpoint/close/reopen is followed by byte-for-byte verification of **every**
-value and **every** adjacent absent key. Errors cancel and join all readers and
+surviving/inserted value and **every** miss domain. Errors cancel and join all readers and
 the writer before owner close. Failed suite DBs are retained with their path in
 the error; successful DBs are removed unless `-keep` is supplied.
 
@@ -980,13 +992,17 @@ activity and, in the concurrent phase, writer work overlapping the readers.
 Writer tail drain after reader join is outside these process metrics. They
 exclude fixture creation, quantile sorting and profiler stop; they are not
 isolated engine allocations.
-The reusable fixture holds 65,536 IDs and both present/absent keys (4,718,592 bytes)
-plus one 8,000,000-byte sample backing buffer, partitioned across readers. No
+Historical fixtures hold 65,536 IDs and both present/absent keys (4,718,592
+bytes); realistic uses full-run PCG streams and 128-byte key scratch per reader.
+All cases hold one 8,000,000-byte sample buffer and setup-allocated exact distinct
+bitmaps, whose capacity is reported. Realistic also holds one byte/key mutation
+state. No
 whole payload corpus or per-read key allocation is retained. Small goroutine,
 context and engine snapshot allocations are separate from those capacities.
 
-Compared with the retained scratch `quicksilver_eval_test.go`, the default is
-random4k and 64 reads/snapshot, fixed counts are explicit aggregate 2M instead of
+Compared with the retained scratch `quicksilver_eval_test.go`, the historical
+`-quicksilver-case random4k` uses 64 reads/snapshot, fixed counts are explicit
+aggregate 2M instead of
 per-worker `QS_OPS`, arbitrary key counts retain unique updates, all absent keys
 are verified, and failures always stop/join. The PCG seeds, payload bytes,
 key trace and 10:1 schedule match. Stock registered engine tuning and integrity
