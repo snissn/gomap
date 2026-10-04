@@ -488,6 +488,15 @@ When the cached layer is enabled:
   backed by a recycled snapshot object.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
+- `Snapshot.Get` returns caller-owned bytes that remain valid after subsequent
+  reads and snapshot closure. Present empty values return a non-nil empty slice.
+  Cached `Get` shares the `GetAppend` visibility and published/backend append
+  path, then detaches its result from pooled scratch. `GetAppend` is the
+  recommended point-read API when callers can reuse their own destination;
+  owned `Get` still allocates storage for positive results. Entry-only published
+  readers and active range spans retain their existing entry lookup fallback.
+  Diagnostic hit attribution follows `GetAppend`: with active range spans,
+  published entries found by its cached lookup are counted as cached hits.
 - Under the planned user-command WAL contract, collection scans and snapshots
   that can read pending collection-local state use a `CollectionReadView`. The
   view pins backend snapshot state, pending mutable/queued/publishing

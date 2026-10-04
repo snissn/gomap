@@ -1,12 +1,15 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -44,10 +47,12 @@ func (publishedAppendMissNilOutput) GetValueUnsafe(_ []byte) ([]byte, error) {
 type publishedAppendHit struct {
 	value       []byte
 	appendCalls int
+	entryCalls  int
 }
 
 func (p *publishedAppendHit) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	return nil, page.ValuePtr{}, 0, false
+	p.entryCalls++
+	return p.value, page.ValuePtr{}, node.FlagInline, true
 }
 
 func (p *publishedAppendHit) GetValueAppend(_ []byte, dst []byte) ([]byte, error) {
@@ -715,6 +720,56 @@ func TestSnapshotGetAppend_BackendPublishedMissSkipsEntryProbe(t *testing.T) {
 	}
 }
 
+func TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe(t *testing.T) {
+	for _, size := range []int{0, 128, 8 << 10} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			want := bytes.Repeat([]byte("v"), size)
+			published := &publishedAppendHit{value: want}
+			snap := &Snapshot{rootPointShards: []rootDomainSnapshot{{published: published}}}
+			first, err := snap.Get([]byte("k"))
+			if err != nil || first == nil || !bytes.Equal(first, want) {
+				t.Fatalf("Get = %q, %v; want owned value", first, err)
+			}
+			if size != 0 {
+				first[0] = 'x'
+			}
+			second, err := snap.Get([]byte("k"))
+			if err != nil || !bytes.Equal(second, want) {
+				t.Fatalf("second Get = %q, %v after caller mutation", second, err)
+			}
+			if published.appendCalls != 2 || published.entryCalls != 0 {
+				t.Fatalf("published append/entry probes = %d/%d; want 2/0", published.appendCalls, published.entryCalls)
+			}
+			if err := snap.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(second, want) || (size != 0 && first[0] != 'x') {
+				t.Fatal("owned result changed after another read or Close")
+			}
+		})
+	}
+}
+
+func TestSnapshotGet_BackendPublishedMissSkipsEntryProbe(t *testing.T) {
+	lookup := &publishedBackendLookupMissCounter{}
+	snap := &Snapshot{rootPointShards: []rootDomainSnapshot{{published: lookup}}}
+	got, err := snap.Get([]byte("missing"))
+	if got != nil || !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("Get(missing) = %q, %v; want nil, ErrKeyNotFound", got, err)
+	}
+	if lookup.appendCalls != 1 || lookup.entryCalls != 0 {
+		t.Fatalf("published append/entry probes = %d/%d; want 1/0", lookup.appendCalls, lookup.entryCalls)
+	}
+}
+
+func TestSnapshotGet_NilReceiverReturnsClosed(t *testing.T) {
+	var snap *Snapshot
+	got, err := snap.Get(nil)
+	if got != nil || !errors.Is(err, db.ErrClosed) {
+		t.Fatalf("Get(nil receiver) = %q, %v; want nil, ErrClosed", got, err)
+	}
+}
+
 func TestSnapshotGetAppend_NilReceiverMissReturnsNotFound(t *testing.T) {
 	var snap *Snapshot
 
@@ -803,5 +858,9 @@ func TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot(t 
 	_, err = snap.GetAppend([]byte("k"), nil)
 	if !errors.Is(err, tree.ErrKeyNotFound) {
 		t.Fatalf("GetAppend(k) err=%v want ErrKeyNotFound", err)
+	}
+	got, err := snap.Get([]byte("k"))
+	if got != nil || !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("Get(k) = %q, %v; want nil, ErrKeyNotFound at pinned root", got, err)
 	}
 }
