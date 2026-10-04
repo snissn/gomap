@@ -484,5 +484,12 @@ is added. The optional receipt proves actual current-FSM applied/root/WAL state,
 six retained original witnesses/chain and final known-ID canonical source/absence
 plus live membership. The prepared-owner wrapper may flush pending work; pending
 state or any changed physical/root/applied/summary binding refuses observation.
+Each original token obtains a fresh routed leader/quorum proof; only that proof
+is forwarded. Witness, source and live membership observations remain local to
+each voter. Current-FSM DB identity checks bracket prepared collection admission;
+the callback never takes the FSM lock, because follower apply holds that lock
+before taking the same admission. Physical root/WAL and summary checks remain
+inside admission, followed by current-DB, applied, ACTIVE and catalog rechecks.
+Concurrent apply must complete and make a changed-state audit refuse its receipt.
 Keep every voter live until all audit receipts are independently verified, then
 retain separate clean-stop evidence. Ordinary diagnostics omit the attachment.

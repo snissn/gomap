@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -113,6 +115,100 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		if err == nil {
 			t.Fatal("audit accepted missing current-FSM binding")
 		}
+		t.Run("ConcurrentFollowerApply", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			leader, err := node.client.leader(ctx, node.config.Groups[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var follower *FixedPeerTCPRuntimeV1
+			for _, n := range nodes {
+				if n.config.NodeID != leader {
+					follower = n
+					break
+				}
+			}
+			if follower == nil {
+				t.Fatal("missing follower")
+			}
+			writer, err := DialContext(ctx, "tcp", v.PublicAddresses[leader])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			paused := &colocatedAuditAdmissionContextV1{Context: ctx, admitted: make(chan struct{}), resume: make(chan struct{})}
+			var resumeOnce sync.Once
+			resume := func() { resumeOnce.Do(func() { close(paused.resume) }) }
+			var workers sync.WaitGroup
+			defer func() {
+				// Release the only test-owned pause on every exit, cancel network
+				// work and join both workers before fixture shutdown. An actual
+				// uninterruptible production lock cycle consumes the outer Go test
+				// timeout; it cannot be detached and mistaken for a clean test exit.
+				cancel()
+				resume()
+				workers.Wait()
+			}()
+			type auditResult struct {
+				receipt ColocatedAuditReceiptV1
+				err     error
+			}
+			audited := make(chan auditResult, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				receipt, err := follower.colocatedAuditV1(paused, p)
+				audited <- auditResult{receipt, err}
+			}()
+			select {
+			case <-paused.admitted:
+			case result := <-audited:
+				t.Fatalf("audit never reached prepared admission: %v", result.err)
+			case <-ctx.Done():
+				t.Fatal("audit admission rendezvous canceled")
+			}
+			// A new exact same-content outcome changes durable metadata but leaves
+			// the fixture's canonical source/live membership and revision intact.
+			request := public.ReplaceRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-x"), IdempotencyKey: []byte("audit-concurrent-noop"), Vector: []float32{-1, 0}, Document: original}
+			type writeResult struct {
+				response public.MutationResponseV1
+				err      error
+			}
+			written := make(chan writeResult, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				response, err := writer.VectorReplaceV1(ctx, request)
+				written <- writeResult{response, err}
+			}()
+			// Observe the actual lock acquisition, not a sleep-based arrival guess.
+			// Apply holds f.mu while blocked on the admission retained by this audit.
+			fixedPeerWaitV1(t, ctx, colocatedAuditApplyWaitingForAdmissionV1)
+			resume()
+			select {
+			case result := <-audited:
+				if result.err == nil || result.receipt.Version != 0 {
+					t.Fatalf("concurrent applied-state drift produced audit receipt: %+v err%v", result.receipt, result.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("audit and follower apply deadlocked")
+			}
+			var response public.MutationResponseV1
+			select {
+			case result := <-written:
+				response = result.response
+				if result.err != nil || response.Matched != 1 || response.Modified != 0 || response.LiveRevision != p.Writes[5].Response.LiveRevision {
+					t.Fatalf("concurrent no-op response %+v err%v", response, result.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("concurrent public apply did not finish")
+			}
+			fixedPeerWaitV1(t, ctx, func() bool {
+				s, err := follower.Status(ctx)
+				return err == nil && len(s.Groups) == 1 && s.Groups[0].Applied.Index >= response.CommitIndex
+			})
+		})
 	})
 }
 
@@ -129,4 +225,58 @@ func TestColocatedAuditOrdinarySchemaAndStrictDecodeV1(t *testing.T) {
 			t.Fatal("accepted malformed audit JSON")
 		}
 	}
+}
+
+// Pause only at the existing logical-state verifier's context check under the
+// audit's prepared admission. This is test-only scheduling of a real callback;
+// no production hook, fabricated FSM result, or network response is involved.
+type colocatedAuditAdmissionContextV1 struct {
+	context.Context
+	admitted, resume chan struct{}
+	once             sync.Once
+}
+
+func (c *colocatedAuditAdmissionContextV1) Err() error {
+	var pcs [16]uintptr
+	n := runtime.Callers(1, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	logical, audit := false, false
+	for {
+		frame, more := frames.Next()
+		logical = logical || strings.HasSuffix(frame.Function, ".(*Collection).colocatedVectorMutationLogicalStateV1")
+		audit = audit || strings.Contains(frame.Function, ".(*FixedPeerTCPRuntimeV1).colocatedAuditV1.func")
+		if !more {
+			break
+		}
+	}
+	if logical && audit {
+		c.once.Do(func() {
+			close(c.admitted)
+			select {
+			case <-c.resume:
+			case <-c.Context.Done():
+			}
+		})
+	}
+	return c.Context.Err()
+}
+
+func colocatedAuditApplyWaitingForAdmissionV1() bool {
+	// Bound diagnostic storage to this small RF4 fixture. A truncated dump cannot
+	// establish arrival; the outer fixture/context budget fails the test instead.
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	if n == len(buf) {
+		return false
+	}
+	for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+		// A fresh replay manager may first need the same admission's read lock
+		// while opening its collection; a cached handle reaches prepared write
+		// admission. Both are real f.mu -> native-admission apply paths.
+		admission := strings.Contains(stack, ".(*CollectionManager).openCollectionWithCommandWALIntent(") || strings.Contains(stack, ".(*Collection).lockVectorIndexCoverageMutationWithColdCarrier(")
+		if admission && strings.Contains(stack, ".(*FSM).ApplyCommittedEntryV1(") && strings.Contains(stack, "runtime_SemacquireRWMutex") {
+			return true
+		}
+	}
+	return false
 }

@@ -228,11 +228,9 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 		return out, err
 	}
 	for _, w := range p.Writes {
-		token, e := decodeColocatedVectorVisibilityV1(w.Response.VisibilityToken)
-		if e != nil {
-			return out, e
-		}
-		if e = r.proveColocatedVectorVisibilityV1(ctx, token); e != nil {
+		// Route only the fresh token/quorum proof. The audit below still reads
+		// this voter's own current FSM, covered witnesses and source/live roots.
+		if e := r.requireColocatedVectorVisibilityV1(ctx, public.SearchRequestV1{Version: 1, Generation: w.Response.Generation, VisibilityToken: w.Response.VisibilityToken}); e != nil {
 			return out, e
 		}
 	}
@@ -281,10 +279,16 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 	raw, _ := json.Marshal(p)
 	digest := sha256.Sum256(raw)
 	out = ColocatedAuditReceiptV1{Version: 1, RunID: p.RunID, PlanSHA256: hex.EncodeToString(digest[:]), NodeID: string(r.config.NodeID), OwnerGroup: string(owner), Scope: "six retained original outcomes and known-ID canonical source/absence plus exact live membership only; no entire population proof", AppliedTerm: term, AppliedIndex: index, PhysicalState: before, CommandWALNextLSN: nextLSN}
+	// Raft apply holds the FSM lock before acquiring shared collection admission.
+	// Never acquire that lock from the prepared callback: bracket admission with
+	// identity checks instead, and retain physical/WAL checks while admitted.
+	if !data.fsm.HasCurrentDBV1(db) {
+		return ColocatedAuditReceiptV1{}, ErrFixedPeerVectorProofStaleV1
+	}
 	err = c.WithPreparedCommandWALMutation(func(admitted *collections.CommandWALAdmittedCollection) error {
 		// Admission may flush pending writes: any state change makes this audit fail.
 		state, ok := db.StateToken()
-		if !ok || state != before || db.CommandWALNextLSN() != nextLSN || !data.fsm.HasCurrentDBV1(db) {
+		if !ok || state != before || db.CommandWALNextLSN() != nextLSN {
 			return ErrFixedPeerVectorProofStaleV1
 		}
 		logical, _, err := c.VerifyVectorPartitionColocatedMutationLogicalStateV1(ctx)
@@ -357,13 +361,16 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 			return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		state, ok = db.StateToken()
-		if !ok || state != before || db.CommandWALNextLSN() != nextLSN || !data.fsm.HasCurrentDBV1(db) {
+		if !ok || state != before || db.CommandWALNextLSN() != nextLSN {
 			return ErrFixedPeerVectorProofStaleV1
 		}
 		return ctx.Err()
 	})
 	if err != nil {
 		return ColocatedAuditReceiptV1{}, err
+	}
+	if !data.fsm.HasCurrentDBV1(db) {
+		return ColocatedAuditReceiptV1{}, ErrFixedPeerVectorProofStaleV1
 	}
 	readyAfter, e := r.readinessV1(ctx)
 	if e != nil || !readyAfter.Ready || readyAfter.Draining || readyAfter.VectorPhase != "active" {

@@ -547,7 +547,13 @@ DB opener, scheduler or shutdown hook is added.
 
 Every audit proves the actual current-FSM DB binding, ACTIVE/catalog/router
 scope, applied floor, exact original command digests/outcomes and physical WAL
-coverage. It verifies the retained ordinal/count/byte/SHA chain and performs
+coverage. The fresh original-token quorum proof routes to the current leader;
+only that proof is forwarded, and every voter observes its own local authority.
+Current-FSM identity checks run before and after prepared admission, never under
+its callback: follower Raft apply takes the FSM lock before shared admission.
+Physical root/WAL and summary checks stay inside that callback, with final
+current-DB/applied/ACTIVE/catalog rechecks rejecting concurrent drift.
+It verifies the retained ordinal/count/byte/SHA chain and performs
 six exact witness lookups, then uses the prepared source owner to prove final
 canonical content/absence and exact per-domain live membership for the known
 IDs. The receipt carries per-voter applied term/index, physical root state,
