@@ -164,6 +164,61 @@ func TestVectorIndexConstructionIdenticalRepresentationValidation(t *testing.T) 
 	}
 }
 
+func TestVectorIndexConstructionFingerprintPreservesIdentity(t *testing.T) {
+	for _, metric := range []VectorMetric{VectorMetricCosine, VectorMetricL2, VectorMetricInnerProduct} {
+		for _, encoding := range []VectorIndexEncoding{VectorIndexEncodingFloat32, VectorIndexEncodingInt8} {
+			t.Run(fmt.Sprintf("%s/%d", metric, encoding), func(t *testing.T) {
+				index := &VectorIndex{metric: metric, encoding: encoding, dimensions: 3}
+				if encoding == VectorIndexEncodingFloat32 {
+					for _, vector := range [][]float32{
+						{0, 1, 2}, {float32(math.Copysign(0, -1)), 1, 2}, {0, 1, 3},
+						{0, 0, 0}, {0, 0, 0}, {math.SmallestNonzeroFloat32, 0, 0},
+						{0, 1, float32(math.Inf(1))}, {0, 1, float32(math.Inf(1))},
+						{0, 1, float32(math.NaN())}, {0, 1, float32(math.NaN())},
+						{0, 1}, nil,
+					} {
+						index.nodes = append(index.nodes, vectorIndexNode{vector: vector})
+					}
+				} else {
+					for _, node := range []vectorIndexNode{
+						{quantized: []int8{0, 1, -128}, quantScale: 1}, {quantized: []int8{0, 1, -128}, quantScale: 1},
+						{quantized: []int8{0, 1, -128}, quantScale: 2}, {quantized: []int8{0, 1, 127}, quantScale: 1},
+						{quantized: []int8{0, 0, 0}, quantScale: 1}, {quantized: []int8{0, 0, 0}, quantScale: 1},
+						{quantized: []int8{0, 1, -128}, quantScale: float32(math.Inf(1))},
+						{quantized: []int8{0, 1, -128}, quantScale: float32(math.NaN())},
+						{quantized: []int8{0, 1, -128}}, {quantized: []int8{0, 1, -128}, quantScale: -1},
+						{quantized: []int8{0, 1}, quantScale: 1}, {quantScale: 1},
+					} {
+						index.nodes = append(index.nodes, node)
+					}
+				}
+				for left := -1; left <= len(index.nodes); left++ {
+					for right := -1; right <= len(index.nodes); right++ {
+						want := index.constructionNodesHaveIdenticalVectorsLocked(left, right)
+						got := index.constructionNodesMatchFingerprintLocked(left, right, index.constructionNodeFingerprintLocked(left), index.constructionNodeFingerprintLocked(right))
+						if got != want {
+							t.Fatalf("fingerprint changed exact identity %d/%d: %t want %t", left, right, got, want)
+						}
+					}
+				}
+				// Force a collision through the actual confirmation seam. A filter
+				// match must neither merge distinct geometries nor admit invalid ones.
+				if index.constructionNodesMatchFingerprintLocked(0, 2, 1, 1) || !index.constructionNodesMatchFingerprintLocked(0, 1, 1, 1) || index.constructionNodesMatchFingerprintLocked(0, 1, 0, 0) {
+					t.Fatal("fingerprint replaced exact confirmation or invalid singleton semantics")
+				}
+				index.metric = VectorMetric(255)
+				if index.constructionNodeFingerprintLocked(0) != 0 {
+					t.Fatal("unsupported metric has valid fingerprint")
+				}
+				index.metric, index.encoding = metric, VectorIndexEncoding(255)
+				if index.constructionNodeFingerprintLocked(0) != 0 {
+					t.Fatal("unsupported encoding has valid fingerprint")
+				}
+			})
+		}
+	}
+}
+
 func TestVectorIndexConstructionAdmissionPreservesLastGeometryAfterEvictions(t *testing.T) {
 	for _, capacity := range []int{7, 129} {
 		t.Run(fmt.Sprint(capacity), func(t *testing.T) {

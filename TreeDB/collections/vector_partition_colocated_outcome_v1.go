@@ -61,7 +61,9 @@ func colocatedVectorMutationUpdateItemsV1(meta CollectionMeta, v commitlog.Coloc
 	if v.Delete || len(ids) != 1 || len(documents) != 1 || !bytes.Equal(ids[0], v.ID) || !bytes.Equal(documents[0], v.Document) {
 		return nil, ErrVectorIndexPartitionLiveMismatchV1
 	}
-	id, document := bytes.Clone(ids[0]), bytes.Clone(documents[0])
+	// Both internal callers finish planning synchronously with owned WAL inputs;
+	// prepareUpdateBatchItems owns the ID and the plan arena owns changed content.
+	id, document := ids[0], documents[0]
 	return []UpdateBatchItem{{DocumentID: id, Update: func(current []byte) ([]byte, bool, error) {
 		if current == nil {
 			return nil, false, nil

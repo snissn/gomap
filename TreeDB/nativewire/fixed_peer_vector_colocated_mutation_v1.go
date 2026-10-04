@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"slices"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -168,7 +167,8 @@ func fixedPeerVectorColocatedEntryV1(collection string, catalog uint64, request 
 	if request.Delete {
 		command = iwire.CommandDeleteBatch
 	}
-	sections := []iwire.Section{{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: command, Version: 1})}, {ID: iwire.SectionIdempotencyKey, Bytes: slices.Clone(request.Request.IdempotencyKey)}, {ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalog)}, collectionNameRef(collection), {ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, request.Request.ID)}, {ID: iwire.SectionColocatedVectorMutationScopeV1, Bytes: raw}}
+	// AppendDeterministicEntry copies these borrowed sections before returning.
+	sections := []iwire.Section{{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: command, Version: 1})}, {ID: iwire.SectionIdempotencyKey, Bytes: request.Request.IdempotencyKey}, {ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalog)}, collectionNameRef(collection), {ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, request.Request.ID)}, {ID: iwire.SectionColocatedVectorMutationScopeV1, Bytes: raw}}
 	if !request.Delete {
 		sections = append(sections, documentFormatSection(collections.DocumentFormatJSON), iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, request.Request.Document)}, iwire.Section{ID: iwire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)})
 	}

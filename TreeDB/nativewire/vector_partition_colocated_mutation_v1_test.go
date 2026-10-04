@@ -96,6 +96,12 @@ func TestFixedPeerEntryRouteRejectsColocatedScopeV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		before := bytes.Clone(entry)
+		request.Request.IdempotencyKey[0] ^= 1
+		if !bytes.Equal(entry, before) {
+			t.Fatal("encoded entry retained caller-owned idempotency bytes")
+		}
+		request.Request.IdempotencyKey[0] ^= 1
 		if err := validateFixedPeerEntryRouteV1(entry, raftentry.RequestMetadataV1{}); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
 			t.Fatalf("generic peer admitted dedicated scope: %v", err)
 		}
