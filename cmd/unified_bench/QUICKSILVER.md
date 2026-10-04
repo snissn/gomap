@@ -148,7 +148,7 @@ Keys use one fixed 128-byte scratch per worker; PCG has worker lifetime and
 introduces no per-read allocation. Exact distinct tracking costs
 `8*ceil(5*keys/64)*(workers+1)` bytes, plus one byte per loaded key for mutation
 state. A 512 MiB tracking limit rejects excessive configurations before opening
-databases. At 10M keys/64 workers, bitmaps cost approximately 406 MiB. Samples
+databases. At 10M keys/64 workers, bitmaps cost 406,250,000 bytes (387.4 MiB). Samples
 retain the existing 8,000,000-byte aggregate buffer. Generic cases retain no
 payload/key corpus and no 65,536-entry trace.
 
