@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,25 @@ func TestMixedUnknownStopsAndRetainsUnissuedV1(t *testing.T) {
 		t.Fatal("incomplete ACK ledger audited")
 	}
 }
+func TestMixedFinalSlotHeadroomV1(t *testing.T) {
+	base := mixedOptions{Window: windowOptions{Admission: recallOptions{Timeout: 120 * time.Second, RPCTimeout: 10 * time.Second}, Concurrency: 1, Warmup: 64, MaxAttempts: 65536, OutputBytes: 128 << 20, Duration: time.Minute}, Interval: 5 * time.Second}
+	for _, tc := range []struct {
+		interval, rpc time.Duration
+		wantOK        bool
+	}{{5 * time.Second, 10 * time.Second, true}, {8 * time.Second, 9 * time.Second, true}, {8 * time.Second, 10 * time.Second, false}, {8 * time.Second, 11 * time.Second, false}, {5 * time.Second, 17500 * time.Millisecond, false}} {
+		o := base
+		o.Interval, o.Window.Admission.RPCTimeout = tc.interval, tc.rpc
+		if err := mixedValidate(o); (err == nil) != tc.wantOK {
+			t.Fatalf("interval%v rpc%v: %v", tc.interval, tc.rpc, err)
+		}
+	}
+	var out bytes.Buffer
+	err := runArgs(context.Background(), []string{"-mode", "mixed-window", "-mixed-interval", "8s", "-read-concurrency", "1"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "positive headroom") {
+		t.Fatalf("schedule must refuse before input or network access: %v", err)
+	}
+}
+
 func TestMixedModeAdmissionAndCanceledNoCallV1(t *testing.T) {
 	for _, args := range [][]string{{"-mode", "read-window", "-mixed-interval", "1s"}, {"-mode", "mixed-window", "-paced-inserts", "6"}, {"-mode", "mixed-window", "-fresh-inserts", "1"}, {"-mode", "mixed-window", "-read-window", "1s"}, {"-mode", "mixed-window", "-mixed-interval", "9s"}} {
 		var out bytes.Buffer

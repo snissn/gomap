@@ -569,7 +569,7 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	readOutputBytes := flags.Int("read-output-bytes", 128<<20, "read-window aggregate planned/result byte cap, 1MiB..256MiB")
 	readResourceGateDir := flags.String("read-resource-gate-dir", "", "optional fresh trusted run-local directory for ready/done resource sampling acknowledgments")
 	pacedInserts := flags.Int("paced-inserts", 6, "paced-window distinct ordinary insert slots, 1..10")
-	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window six serial writer slots, minimum interval1s..8s")
+	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window six serial writer slots, interval1s..8s; 5*interval+2*rpc-timeout must be less than60s")
 	pacedInterval := flags.Duration("paced-interval", 5*time.Second, "paced-window minimum interval between serial insert invocation starts")
 	if err := flags.Parse(args); err != nil {
 		return err

@@ -278,6 +278,9 @@ func mixedValidate(o mixedOptions) error {
 	if o.Window.Duration != time.Minute || o.Window.Warmup != 64 || o.Interval < time.Second || o.Interval > 8*time.Second {
 		return errors.New("mixed-window requires warmup64,window60s,interval1s..8s")
 	}
+	if 5*o.Interval+2*o.Window.Admission.RPCTimeout >= o.Window.Duration {
+		return errors.New("mixed-window final slot must leave positive headroom after write and visibility RPC budgets")
+	}
 	return nil
 }
 func mixedSummary(r *mixedReport) {

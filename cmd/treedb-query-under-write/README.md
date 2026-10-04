@@ -482,8 +482,10 @@ resource gates and retained attempts. Existing insert/read modes are unchanged.
 This mode admits exactly six serial slots in a 60-second window: replace A,
 supersede A, delete B, replace C, delete C, delete D. A/B/C/D are four existing
 corpus IDs outside every query's baseline and exported-corpus canonical top10.
-The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s), with
-full write and untimed visibility RPC budgets required before the cutoff.
+The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s).
+Admission also requires `5*interval + 2*rpc-timeout < 60s`, leaving positive
+headroom for the final write and its visibility check. Both full write and
+untimed visibility RPC budgets must fit before the cutoff.
 Warmup is 64 calls; read concurrency/caps use existing read-window limits.
 
 ```sh
