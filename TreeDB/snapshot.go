@@ -19,7 +19,9 @@ type Snapshot interface {
 	Pager() *pager.Pager
 	State() *backenddb.DBState
 
+	// Get returns caller-owned bytes, valid after later reads and Close.
 	Get(key []byte) ([]byte, error)
+	// GetAppend appends to dst; reuse its capacity for repeated point reads.
 	GetAppend(key, dst []byte) ([]byte, error)
 	GetVersioned(key []byte) ([]byte, EntryRevision, error)
 	GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error)

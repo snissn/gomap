@@ -30,4 +30,5 @@ capture() {
 capture node_metadata ./TreeDB/node '^BenchmarkLeafPointMetadata$'
 capture node_search ./TreeDB/node '^BenchmarkLeafCommonPrefixSuffixSearch$'
 capture tree_metadata ./TreeDB/tree '^BenchmarkPointValueMetadata$'
+capture cached_owned ./TreeDB/caching '^BenchmarkSnapshotPublishedOwnedRead$'
 printf 'point lookup profiles: %s\n' "$RUN_DIR"

@@ -404,8 +404,9 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
 ### Leaf point lookup microprofiles
 
 Capture `BenchmarkLeafPointMetadata`, `BenchmarkLeafCommonPrefixSuffixSearch`
-(`TreeDB/node`) and `BenchmarkPointValueMetadata` (`TreeDB/tree`) sequentially in
-fresh Go test processes:
+(`TreeDB/node`), `BenchmarkPointValueMetadata` (`TreeDB/tree`) and
+`BenchmarkSnapshotPublishedOwnedRead` (`TreeDB/caching`) sequentially in fresh
+Go test processes:
 
 ```sh
 RUN_DIR=/tmp/treedb_point_lookup_profiles scripts/treedb_point_lookup_profile.sh
@@ -416,12 +417,31 @@ BENCHTIME=1x RUN_DIR=/tmp/treedb_point_lookup_smoke scripts/treedb_point_lookup_
 The default is `BENCHTIME=200ms`, count 1, with `GOWORK=off`. Each benchmark family
 writes `<name>.txt` (Go benchmark stdout/stderr), `<name>.test` (test binary),
 `<name>_cpu.pprof`, `<name>_allocs.pprof`, and matching `_cpu_top.txt` /
-`_allocs_top.txt` reports. Names are `node_metadata`, `node_search`, and
-`tree_metadata`. `source-head.txt`, `source-status.txt`, `source-diff.patch`,
-`go-version.txt`, and `settings.txt` record source/toolchain provenance.
+`_allocs_top.txt` reports. Names are `node_metadata`, `node_search`,
+`tree_metadata`, and `cached_owned`. `source-head.txt`, `source-status.txt`,
+`source-diff.patch`, `go-version.txt`, and `settings.txt` record source/toolchain
+provenance.
 Profiles include fixture setup and the whole test process; compare unprofiled
 benchmark timing separately. These standalone Go profiles are **not benchprof
 inputs** or unified-bench profile-dir artifacts; inspect them with `go tool pprof`.
+
+The cached-owned family compares caller-owned `Get` and reusable-destination
+`GetAppend` on 4096 published 256-byte values while retaining a queued unrelated
+write. Setup/checkpoint/warmup are excluded from benchmark timers, but included
+in process profiles. It isolates the cached wrapper, not generic concurrent
+workload acceptance. See the [fixture and artifact contract](../unified_bench/README.md#owned-cached-snapshot-microprofile).
+
+The corresponding single-family Go test profile command, from the repository
+root, is:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkSnapshotPublishedOwnedRead$' \
+  -benchmem -benchtime=200ms -count=1 -timeout=2m \
+  -cpuprofile=/tmp/cached_owned_cpu.pprof -memprofile=/tmp/cached_owned_allocs.pprof \
+  -o=/tmp/cached_owned.test
+go tool pprof -top /tmp/cached_owned.test /tmp/cached_owned_cpu.pprof
+go tool pprof -top -alloc_space /tmp/cached_owned.test /tmp/cached_owned_allocs.pprof
+```
 
 ## Canonical Quicksilver workflow
 

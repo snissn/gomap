@@ -893,6 +893,23 @@ Coverage:
   - `TestAcquireSnapshot_IncludesCachedWrites_ValuePointers`
 - `TreeDB/caching/snapshot_test.go`:
   - `TestIteratorSnapshotIsolation`
+  - `TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe`: published
+    owned reads use one append lookup without an entry pre-read; empty, small,
+    and larger-than-scratch results survive caller mutation, later reads and close.
+  - `TestSnapshotGet_BackendPublishedMissSkipsEntryProbe`: published backend
+    misses use one append lookup without materializing a leaf entry.
+  - `TestSnapshotGet_NilReceiverReturnsClosed`: owned nil-receiver reads retain
+    `ErrClosed`, distinct from append's nil-receiver miss behavior.
+  - `TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot`:
+    both owned and append reads preserve the pinned root on a miss.
+- `TreeDB/caching/snapshot_pool_test.go`:
+  - `TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites`: alternating
+    owned and append reads with concurrent acquisition, closure and queued writes.
+- `TreeDB/caching/snapshot_owned_read_bench_test.go`:
+  - `BenchmarkSnapshotPublishedOwnedRead`: warmed published outer-leaf reads
+    through a cached snapshot with an unrelated queued write; owned `Get` and
+    reused-destination `GetAppend` allocation costs exclude setup/checkpoint.
+    This microbenchmark does not qualify the concurrent generic workload.
 - `TreeDB/caching/iterator_cached_writes_test.go`:
   - `TestIterator_IncludesCachedWrites_SnapshotIsolated`
   - `TestIterator_IncludesCachedWrites_ValuePointers`
