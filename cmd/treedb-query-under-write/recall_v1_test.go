@@ -111,7 +111,7 @@ func TestRecallProvenanceRefusesUnboundPopulation(t *testing.T) {
 		})
 	}
 }
-func recallTestProbe(t *testing.T, in *recallInput, r *recallReport) [2]struct {
+func recallTestProbe(t *testing.T, in *recallInput, r *recallReport, freshN int) [2]struct {
 	Event  string
 	Report report
 } {
@@ -122,8 +122,8 @@ func recallTestProbe(t *testing.T, in *recallInput, r *recallReport) [2]struct {
 	r.Provenance.ProbeBinarySHA256 = strings.Repeat("b", 64)
 	r.Provenance.ProbeSHA256 = strings.Repeat("c", 64)
 	b := in.bootstrap
-	o := options{RunID: "probe", Generation: r.Generation, BootstrapID: b.Insert.VisibleID, BootstrapRevision: 1, BootstrapCommitIndex: 9, OwnerGroup: "group-1", Dimensions: 128,
-		FreshInserts: 1, EfSearch: 64, Timeout: time.Minute, RPCTimeout: time.Second}
+	o := options{RunID: "probe", Generation: r.Generation, BootstrapID: b.Insert.VisibleID, BootstrapRevision: 1, BootstrapCommitIndex: b.Retry.CommitIndex, OwnerGroup: "group-1", Dimensions: 128,
+		FreshInserts: freshN, EfSearch: 64, Timeout: time.Minute, RPCTimeout: time.Second}
 	plan, err := makePlan(o)
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func recallTestProbe(t *testing.T, in *recallInput, r *recallReport) [2]struct {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatal(err)
 	}
-	commit := uint64(9)
+	commit, revision := b.Retry.CommitIndex, uint64(1)
 	for idx := range result.Operations {
 		op := &result.Operations[idx]
 		op.Outcome = "succeeded"
@@ -146,7 +146,10 @@ func recallTestProbe(t *testing.T, in *recallInput, r *recallReport) [2]struct {
 			op.InsertRequest.Deadline = time.Now().Add(time.Minute)
 			op.EndNS = 30
 			commit++
-			response := goodInsert(*op.InsertRequest, 2, commit)
+			if op.Phase != "explicit-retry" {
+				revision++
+			}
+			response := goodInsert(*op.InsertRequest, revision, commit)
 			op.InsertResponse = &response
 		} else {
 			op.SearchRequest.Deadline = time.Now().Add(time.Minute)
@@ -176,7 +179,7 @@ func recallTestProbeRaw(events [2]struct {
 }
 func TestRecallProbeLedgerDeduplicatesOnlyProvenRetry(t *testing.T) {
 	in, r := recallTestInput()
-	events := recallTestProbe(t, &in, &r)
+	events := recallTestProbe(t, &in, &r, 1)
 	if err := recallValidateProvenance(&in, &r); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +253,7 @@ func TestRecallProbeRefusesUnknownIncompleteOrForgedLedger(t *testing.T) {
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			in, r := recallTestInput()
-			events := recallTestProbe(t, &in, &r)
+			events := recallTestProbe(t, &in, &r, 1)
 			mutate(&events)
 			if err := recallAdmitProbe(context.Background(), recallTestProbeRaw(events), &in, &r); err == nil {
 				t.Fatal("accepted incomplete/forged mutation population")
@@ -258,7 +261,7 @@ func TestRecallProbeRefusesUnknownIncompleteOrForgedLedger(t *testing.T) {
 		})
 	}
 	in, r := recallTestInput()
-	events := recallTestProbe(t, &in, &r)
+	events := recallTestProbe(t, &in, &r, 1)
 	if err := recallAdmitProbe(context.Background(), append(recallTestProbeRaw(events), []byte("{}\n")...), &in, &r); err == nil {
 		t.Fatal("accepted trailing event")
 	}

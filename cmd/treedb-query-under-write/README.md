@@ -348,8 +348,10 @@ process timeout remains required. No server/public API or endpoint is changed.
 
 `-mode paced-window` is a separate admitted observation. Existing default,
 quiescent-recall and read-window behavior stays available. This first paced mode
-requires the complete accepted trial11 post65 input chain: population10069,
-highest acknowledged prefix155 and live revision66. Root must exclude other
+requires a complete accepted post65 input chain: population10069, live revision66
+and the highest acknowledged prefix recomputed from that campaign's validated
+write ledger. Raft entries may separate acknowledgments by more than one index.
+Root must exclude other
 writers before setup/pre-recall/warmup and after this mode's writer drains.
 During measurement this mode alone owns the serial ordinary writer. Existing
 provenance binds the original server source/ELF independently of this driver's
@@ -451,9 +453,9 @@ harness memory. No full-result duplicate is written to the resource directory.
 
 The initial admission deliberately cannot chain a later paced population.
 After any invocation, root must preserve its raw ledger/UNKNOWN history and never
-rerun the original10069/prefix155 inputs on the changed store. This source scope
-supports an initial C1 observation; a second C4 run needs separately qualified or
-reviewed chained population admission. Limits and elapsed time do not erase this
+rerun the admitted inputs on the changed store. This source scope supports an
+initial C1 observation; a second C4 run needs a separately qualified fresh cluster
+or reviewed chained population admission. Limits and elapsed time do not erase this
 sequencing restriction. Runtime collection, native/resource review, source/ELF
 freeze and predecessor integration remain root-owned gates; source construction
 alone does not establish a qualifying actual paced window or close #4959/#4250.

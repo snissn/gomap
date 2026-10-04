@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -21,6 +23,72 @@ func pacedTestWrite(r *recallReport, id string, vector []float32) pacedWrite {
 	}{vector, "query-under-write"})
 	return pacedWrite{Operation: operation{Kind: "insert", Phase: "paced-measured", ExpectedID: id, InsertRequest: &request, RequestSHA256: hashJSON(request), Outcome: "unissued"}}
 }
+
+func TestPacedPlanUsesValidatedPost65Prefix(t *testing.T) {
+	for _, bootstrapCommit := range []uint64{9, 300} {
+		t.Run(fmt.Sprint(bootstrapCommit), func(t *testing.T) {
+			in, admission := recallTestInput()
+			in.bootstrap.Insert.CommitIndex, in.bootstrap.Insert.AppliedIndex = bootstrapCommit-1, bootstrapCommit-1
+			in.bootstrap.Retry.CommitIndex, in.bootstrap.Retry.AppliedIndex = bootstrapCommit, bootstrapCommit
+			corpusVector := oracleVector(128, -1, 0)
+			for i := 0; i < 10000; i++ {
+				id := fmt.Sprintf("doc-%06d", i)
+				in.corpusIDs = append(in.corpusIDs, id)
+				in.vectors[id] = corpusVector
+			}
+			for i := 0; i < 16; i++ {
+				in.queries = append(in.queries, oracleVector(128, 1, 0))
+				in.exported = append(in.exported, append([]string(nil), in.corpusIDs[:10]...))
+			}
+			events := recallTestProbe(t, &in, &admission, 65)
+			// Legitimate Raft entries can separate acknowledgments by more than one.
+			for i := range events[1].Report.Operations {
+				if response := events[1].Report.Operations[i].InsertResponse; response != nil {
+					response.CommitIndex = bootstrapCommit + 2*(response.CommitIndex-bootstrapCommit)
+					response.AppliedIndex = response.CommitIndex
+				}
+			}
+			finish(&events[1].Report)
+			if _, err := admitBootstrap(in.config, in.bootstrap); err != nil {
+				t.Fatal(err)
+			}
+			if err := recallValidateProvenance(&in, &admission); err != nil {
+				t.Fatal(err)
+			}
+			forged := events
+			forged[1].Report.HighestCommitIndex++
+			rejected, rejectedAdmission := in, admission
+			rejected.vectors = maps.Clone(in.vectors)
+			if err := recallAdmitProbe(context.Background(), recallTestProbeRaw(forged), &rejected, &rejectedAdmission); err == nil {
+				t.Fatal("forged declared baseline prefix admitted")
+			}
+			if err := recallAdmitProbe(context.Background(), recallTestProbeRaw(events), &in, &admission); err != nil {
+				t.Fatal(err)
+			}
+			if err := recallPlan(context.Background(), &in, &admission); err != nil {
+				t.Fatal(err)
+			}
+			baselineCommit := bootstrapCommit + 132
+			if admission.PopulationRows != 10069 || admission.HighestCommitIndex != baselineCommit {
+				t.Fatalf("validated baseline rows=%d prefix=%d", admission.PopulationRows, admission.HighestCommitIndex)
+			}
+			o := pacedOptions{Window: windowOptions{Admission: recallOptions{RunID: "fresh-paced", Timeout: 120 * time.Second, RPCTimeout: 10 * time.Second}}, Inserts: 6, Interval: 5 * time.Second}
+			r := pacedReport{windowReport: windowReport{Admission: admission}}
+			if _, err := pacedPlan(context.Background(), o, &in, &r); err != nil {
+				t.Fatal(err)
+			}
+			if r.FinalCommitIndex != baselineCommit || r.BaselineLiveRevision != 66 || r.FinalLiveRevision != 66 || len(r.Writes) != 6 || len(r.PrefixProofs) != 7 {
+				t.Fatalf("paced plan lost validated baseline: %+v", r)
+			}
+			for _, write := range r.Writes {
+				if in.vectors[string(write.Operation.InsertRequest.ID)] != nil {
+					t.Fatal("paced plan reused a baseline ID")
+				}
+			}
+		})
+	}
+}
+
 func TestPacedFullBaselinePrefixInvariantAndCanonicalTie(t *testing.T) {
 	in, r := recallTestQueries(t)
 	low := pacedTestWrite(&r, "fresh-low", oracleVector(128, -1, 0))

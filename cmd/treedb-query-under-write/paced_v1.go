@@ -136,15 +136,16 @@ func pacedProvePrefixes(ctx context.Context, in *recallInput, admission *recallR
 }
 
 func pacedPlan(ctx context.Context, o pacedOptions, in *recallInput, r *pacedReport) (*recallInput, error) {
-	// This first checkpoint consumes only the independently accepted original
+	// This first checkpoint consumes only the independently accepted complete
 	// post65 ledger. Another paced run cannot reuse that stale baseline.
-	if r.Admission.PopulationRows != 10069 || r.Admission.HighestCommitIndex != 155 || in.bootstrap.Insert.LiveRevision != 1 {
-		return nil, errors.New("paced-window requires accepted trial11 post65 population10069/prefix155/live66")
+	baselineCommit := r.Admission.HighestCommitIndex
+	if r.Admission.PopulationRows != 10069 || baselineCommit <= in.bootstrap.Retry.CommitIndex || in.bootstrap.Insert.LiveRevision != 1 {
+		return nil, errors.New("paced-window requires complete accepted post65 population10069/live66 and validated acknowledged prefix")
 	}
-	r.BaselineLiveRevision, r.FinalLiveRevision, r.FinalCommitIndex = 66, 66, 155
+	r.BaselineLiveRevision, r.FinalLiveRevision, r.FinalCommitIndex = 66, 66, baselineCommit
 	r.BaselinePopulationRows, r.BaselinePopulationSHA256 = r.Admission.PopulationRows, r.Admission.PopulationSHA256
 	plan, err := makePlan(options{RunID: o.Window.Admission.RunID, Generation: r.Admission.Generation, BootstrapID: in.bootstrap.Insert.VisibleID,
-		BootstrapRevision: 1, BootstrapCommitIndex: 155, OwnerGroup: in.bootstrap.Insert.OwnerGroup,
+		BootstrapRevision: 1, BootstrapCommitIndex: baselineCommit, OwnerGroup: in.bootstrap.Insert.OwnerGroup,
 		Timeout: o.Window.Admission.Timeout, RPCTimeout: o.Window.Admission.RPCTimeout, Dimensions: 128, FreshInserts: o.Inserts, EfSearch: in.config.VectorInitialization.IndexDefinition.EfSearch})
 	if err != nil {
 		return nil, err
