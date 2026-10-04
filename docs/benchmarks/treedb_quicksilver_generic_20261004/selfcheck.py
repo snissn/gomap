@@ -32,4 +32,20 @@ except (AssertionError, ValueError):
     pass
 else:
     raise ValueError('mutated executed configuration accepted')
-print('PASS: 12 actual baseline packets; altered requests/configuration rejected; assertions retained under -O')
+plan = namespace['read'](root / 'baseline-primary-local/plan.json')
+build = namespace['read'](root / 'baseline-primary-local/build-receipt.json')
+tree_record = next(r for r in records if r['cell']['engine'] == 'treedb' and r['cell']['profile'] == 'durable')
+for mutation in ('wrong executable', 'undeclared compression'):
+    meta = copy.deepcopy(tree_record['run_metadata'])
+    if mutation == 'wrong executable':
+        # Same basename elsewhere must still fail absolute process binding.
+        meta['command'][0] = '/unrelated/bin/' + pathlib.Path(meta['command'][0]).name
+    else:
+        meta['command'].append('-treedb-vlog-compression=off')
+    try:
+        namespace['check_command'](meta, plan, build)
+    except ValueError:
+        pass
+    else:
+        raise ValueError('mutated retained command accepted: ' + mutation)
+print('PASS: 12 actual baseline packets; altered requests/configuration, wrong executable and undeclared compression rejected; assertions retained under -O')

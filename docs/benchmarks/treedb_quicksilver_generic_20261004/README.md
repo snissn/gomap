@@ -7,7 +7,8 @@ this construction commit, and no final performance measurements are invented.
 `assemble.py` uses the landed #4979/#4981 capture validator and the accepted
 full baseline packet. It verifies actual raw hashes, receipt/build/native/loader
 binding, frozen compiled project bytes, unchanged benchmark/capture code,
-declared plan cells, executed overrides, owned-value/reopen/request contracts,
+declared plan cells, exact retained argv and absolute built/loaded executable,
+executed overrides, owned-value/reopen/request contracts,
 and matched fixture/configuration before pairing observations. Assertions in
 the reused validator remain enabled even with `python -O`.
 
@@ -23,8 +24,10 @@ Mutable campaign amendments and later optimization diagnostics are not presented
 as new baseline inputs. To consume final frozen captures, add one `--bundle`
 for each copied capture directory and `--landed-final` with the coordinator's
 landed main SHA. Candidate source receipts retain their original SHAs: compiled
-project inputs and TreeDB must equal that frozen landed source. Documentation
-commits outside the compiled runtime do not invalidate this equality.
+project inputs and the entire TreeDB subtree must equal that frozen landed
+source. Documentation changes outside TreeDB, the protected harness/capture
+contract and compiled inputs do not invalidate this equality. Earlier candidate
+qualification captures are not substitutes for fresh final frozen captures.
 
 `plans.json` freezes all 43 required cells. Scaling reuses the matching four-reader
 held-out cell and adds 8/16/32/64 readers; 10M capacity uses holdout seed173.

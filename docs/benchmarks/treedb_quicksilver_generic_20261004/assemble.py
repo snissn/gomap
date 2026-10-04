@@ -73,10 +73,39 @@ def project_inputs(repo, head, files):
 
 
 def compact(result):
-    output = {k: v for k, v in result.items() if k not in ('initial_stats', 'final_stats', 'registered_cli_flags')}
+    output = {k: v for k, v in result.items() if k not in ('initial_stats', 'final_stats')}
     output['phases'] = [{k: v for k, v in p.items() if k not in ('stats_before', 'stats_after')}
                         for p in result['phases']]
     return output
+
+
+def check_command(meta, plan, build):
+    # Exact recipe in frozen capture.main; it has no reusable argv constructor.
+    cell, source = meta['cell'], meta['source']
+    temporary = pathlib.PurePosixPath(meta['env']['TMPDIR'])
+    require(temporary.is_absolute() and temporary.name == 'working-dbs', 'capture root contract')
+    root = temporary.parent
+    require(source['binary'] not in ('', '.', '..') and
+            pathlib.PurePosixPath(source['binary']).name == source['binary'], 'manifest binary basename')
+    binary = str(root / 'bin' / source['binary'])
+    require(any(b['rc'] == 0 and b['command'][-1] == './cmd/unified_bench' and
+                '-o' in b['command'] and b['command'][b['command'].index('-o') + 1] == binary
+                for b in build['builds'].values()), 'absolute built executable binding')
+    require(meta['native_resolution']['command'] == ['/usr/bin/ldd', binary], 'loader executable binding')
+    case, duration = cell.get('case', 'realistic'), cell.get('duration', '8s')
+    extra = cell.get('flags', [])
+    require(all(v.startswith('-' + cell['engine'] + '-') and '=' in v for v in extra), 'declared engine tuning only')
+    command = [binary, '-suite', 'quicksilver', '-dbs', cell['engine'], '-profile', cell.get('profile', 'durable'),
+               '-quicksilver-case', case, '-keys', str(cell.get('keys', 3000000)), '-read-workers', str(cell.get('workers', 4)),
+               '-quicksilver-reads', str(cell.get('reads', 6000000)), '-quicksilver-updates', str(cell.get('updates', 40000)),
+               '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', '30m']
+    if case == 'realistic':
+        command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
+                    '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
+    command += extra
+    if cell.get('profiled', False):
+        command += ['-profile-dir', str(root / plan['output'] / (str(meta['repeat']) + '-' + cell['label']))]
+    require(meta['command'] == command, 'exact declared capture argv')
 
 
 def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hashes, fixtures, evidence):
@@ -129,6 +158,7 @@ def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hash
         require(meta['source'] == manifest['sources'][cell['source']] and meta['source']['head'] == head, 'run source identity')
         require(receipts['build']['binaries'][meta['source']['binary']]['binary_sha256'] == meta['source']['binary_sha256'], 'built executable binding')
         require(meta['env'] == expected_env, 'matched final runtime environment')
+        check_command(meta, plan, receipts['build'])
         loader = meta['native_resolution']
         require(loader['rc'] == 0 and loader['libraries'] == libraries and loader['linkage'] == 'dynamic', 'actual native loader binding')
         require(all(not v for k, v in loader['loader_env'].items() if k != 'LD_LIBRARY_PATH'), 'loader injection')
