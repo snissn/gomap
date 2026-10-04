@@ -2,6 +2,26 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
+forced serialized, and physical build-group publication with multiple real
+within-apply rotations and an empty current lane. It requires zero fresh-load
+candidate scans, inclusion and stable frontiers for created/current identities
+before registration consumes them, unchanged logical pointer counts, exact
+projection for overwrite/delete/range-delete, retained snapshot bytes, and
+checkpoint/clean-close/reopen pointer bytes.
+`TestBuildValueLogRefDeltaProducerInventoryErrors` rejects created/current
+snapshot errors while preserving pager/untrackable eligibility. Existing
+`TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister`,
+`TestOuterLeafPointerCommitFailsClosedForUnreportedSegmentWithoutRefreshScan`,
+`TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath`,
+`TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures`,
+`TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration`,
+`TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses`, and
+`TestValueLogGC_IncrementalParityWithFullScan` retain ownership of registration,
+recovery-slot, pin, and GC safety checks. The tests establish correctness and
+path selection; same-harness native sync-load and ordinary guardrails remain
+required for performance acceptance.
+
 Prepared no-index JSON semantic-stream insertion is covered by
 `TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
 before publication, with no early acknowledgment),
@@ -394,6 +414,22 @@ directory sync. The stable identifiers `before-publication-seal-write` and
 `after-publication-seal-write` bracket the exact `DurableRootRecordV1` page
 write. The following index sync makes that record and its COW closure stable;
 only the later alternate-meta write and sync make it recovery-selectable.
+
+The full-index mapped-write barrier uses the pager's existing platform policy:
+Linux requires one retained-file data barrier rather than a preceding `MS_SYNC`
+per dirty chunk; flush-only and non-Linux mapped-range fences remain required.
+`pager.TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier` checks selective
+flush bookkeeping without a file barrier, exact retained-file identity, one file
+barrier per durable attempt, restoration after a failed barrier, and byte readback
+after retry. Existing `TestSyncIndexDataWithStableFile*`,
+`TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement` and
+`TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync` cover retained handles
+after close, nil-target cut ordering, path replacement and final dirty drainage.
+These guards do not count mapped syscalls or prove physical power-loss survival.
+An external Linux syscall comparison must show durable dirty-chunk `msync` calls
+on the prior source and none on the revised source, while flush-only calls still
+issue them. The crash-image oracle, platform CI and matched unprofiled load and
+checkpoint campaigns remain separate acceptance gates.
 
 `db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
 proves that ordinary copied dependencies fail before explicit snapshot rebind,

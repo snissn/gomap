@@ -49,6 +49,18 @@ and userspace `Flush` affect only volatile state. File sync promotes the covered
 file bytes. Directory sync promotes creation, rename, and unlink of names in
 that directory. A file sync cannot substitute for the required directory sync.
 
+The pager's durable full-index barrier uses the same mapped-write policy as its
+page-scoped barrier. On Linux, one data sync of the exact retained index file
+covers dirty mapped pages; `fdatasync` retries interruption and falls back to
+`fsync` when unavailable. It does not first issue `MS_SYNC` for each dirty chunk.
+Other platforms retain the explicit mapped-range flush before file sync.
+Flush-only `FlushDirtyChunksFrom` still flushes selected mapped ranges without
+a file durability barrier, retaining lower chunks for the final sync. Failed
+mapped or file sync restores all claimed dirty chunks for retry. These choices
+preserve dependency-data, index, publication-seal and alternate-meta ordering,
+including outstanding retained index handles after the pager closes; they grant
+no new durability to `relaxed`, `command_wal_durable` or `no_wal_fast` acknowledgements.
+
 Root-publication admission charges dependency bytes not fully covered by the
 selected durable root's owned closure, plus the candidate's new COW index pages.
 Credit requires matching physical identity, generation, digest, namespace and
@@ -96,6 +108,27 @@ The fixed consequences are:
 - A write or sync error after target-meta bytes may have been dirtied poisons
   the writable handle. Writes, publication, cleanup, GC, rewrite, and
   reclamation fail with the public recovery-required error until reopen.
+
+### Additive outer-leaf dependency capture
+
+For an ordinary outer-leaf apply, optimistic writes, serialized fallback, and
+physical build groups capture the exact producer's created and current segment
+inventory after apply and before final registration acknowledges created
+segments. The apply-local delta records this physical membership separately
+from logical `ValuePtr` counts. Capturing only current segments, or capturing
+after acknowledgment, loses non-current segments when one apply rotates more
+than once. Ordered-root publication uses the same inventory helper.
+
+Reuse remains conditional on the existing apply evidence: fresh additive
+publication may retain the predecessor's raw dependency superset, while
+ordinary overwrite, delete, and range-delete evidence requires exact candidate
+projection. Nil/untrackable deltas, pager-backed roots, and unchanged/no-op
+publication retain their existing eligibility. A missing inventory falls back
+to projection; inventory errors and unregistered required identities fail
+closed. Registration still precedes stable handle/frontier capture, and all
+required resource bytes and namespace entries are synced before recoverable
+meta publication. Successful `*Sync`, `Checkpoint`, and clean `Close` retain
+their durability guarantees.
 
 ### 0.1 Normative publication state machine
 
