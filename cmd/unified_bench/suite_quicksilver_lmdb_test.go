@@ -79,3 +79,14 @@ func TestQuicksilverLMDBRejectsReaderOverflowBeforeOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestQuicksilverRealisticLMDB(t *testing.T) {
+	c := quicksilverRealisticSmokeConfig()
+	r, err := runQuicksilverEngine(BenchConfig{}, c, "lmdb", NewLMDB, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.VerifiedKeys != c.Keys-r.Mutations.Deletes+r.Mutations.Inserts || r.Config.CommitMode != "ordinary" {
+		t.Fatalf("incomplete native proof: %+v", r)
+	}
+}

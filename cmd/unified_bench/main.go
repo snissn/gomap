@@ -507,11 +507,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
 	if strings.EqualFold(strings.TrimSpace(*suiteArg), "quicksilver") {
-		c, err := resolveQuicksilverConfig(BenchConfig{Keys: *numKeys, ReadWorkers: *readWorkers, ValueSize: *valSize, BatchSize: *batchSize}, isSet)
+		c, err := resolveQuicksilverConfig(BenchConfig{Keys: *numKeys, ReadWorkers: *readWorkers, ValueSize: *valSize, BatchSize: *batchSize, SeedUsed: seedUsed}, isSet)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "Quicksilver: case=%s keys=%d valsize=%d key_bytes=32 shared_prefix=24 load_batch=1000\n", c.Case, c.Keys, c.valueSize())
+		fmt.Fprintf(os.Stderr, "Quicksilver: case=%s generation=%s mixture=%s keys=%d commit=%s seed=%d working_set=%s miss_percent=%d\n", c.Case, c.Generation, c.Mixture, c.Keys, c.CommitMode, c.Seed, c.WorkingSet, c.MissPercent)
+		fmt.Fprintf(os.Stderr, "             keys=%s values=%s contents=%s load_batch=1000\n", c.KeyDistribution, c.ValueDistribution, c.ContentDistribution)
 		fmt.Fprintf(os.Stderr, "             readers=%d aggregate_reads=%d snapshot_reads=%d updates=%d duration=%s GOMAXPROCS=%d\n", c.Workers, c.Reads, c.ReadBatch, c.Updates, c.Duration, runtime.GOMAXPROCS(0))
 		fmt.Fprintf(os.Stderr, "DBs:         %s\nPhases:      %s\n", *dbsArg, strings.Join(quicksilverPhaseNames, ","))
 	} else {
