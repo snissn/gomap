@@ -170,21 +170,25 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		t.Fatalf("authoritative resource background error after pre-window drain: %v", err)
 	default:
 	}
-	// The marker uses the profile's explicit sync boundary, deliberately placed
-	// before arming. With autonomous checkpoint, vacuum, prune, value-log
-	// generation, and dictionary-training publishers disabled or quiesced above,
-	// the explicit Checkpoint below owns the marker's cached frontier and its
-	// main-root metadata publication.
+	// An ordinary Set leaves a dirty cached marker for the terminal Checkpoint.
+	// SetSync would already checkpoint and seal that marker under no_wal_fast,
+	// consuming its main-root publication before the replay cut is armed. With
+	// autonomous checkpoint, vacuum, prune, value-log generation, and dictionary
+	// training disabled or quiesced above, the explicit Checkpoint below owns the
+	// marker's cached frontier and its main-root metadata publication. A durable
+	// command-WAL profile may durably acknowledge Set through its WAL; this
+	// witness selects the subsequent main-root checkpoint publication in either
+	// profile, not the ordinary write's ACK.
 	boundaryKey := []byte("certification/authoritative-resource-boundary")
 	boundaryValue := []byte("stable")
 	observeMu.Lock()
 	phase = "boundary-set"
 	if armed {
 		observeMu.Unlock()
-		t.Fatal("authoritative-resource replay cut armed during boundary SetSync")
+		t.Fatal("authoritative-resource replay cut armed during boundary Set")
 	}
 	observeMu.Unlock()
-	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
+	if err := database.Set(boundaryKey, boundaryValue); err != nil {
 		restoreObserver()
 		t.Fatalf("write authoritative resource boundary: %v", err)
 	}
