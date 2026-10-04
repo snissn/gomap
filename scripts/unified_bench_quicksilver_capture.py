@@ -20,6 +20,12 @@ the prior 3M capture flow. Custom duration requires duration_ns and Go's canonic
 duration string. Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
 fast, wal_on_fast; auto commit resolves ordinary for realistic, sync for history.
 Raw stdout/stderr (including time-v), metadata, manifest and plan survive failures.
+Realistic mixed/concurrent miss ratios use Bernoulli configured p: endpoints are
+exact, otherwise a two-sided Hoeffding screening tolerance at alpha=1e-12.
+Actual counts and tolerance are retained in run.json even on ratio rejection.
+Concurrent readers stop before drawing at 256-request boundaries; time-dependent
+prefixes can include 255 tail requests per worker. This screening tolerance is
+not an optional-stopping confidence certificate or an exact seeded-trace proof.
 This captures evidence; it does not certify receipt contents or power-loss safety.
 """
 import hashlib
@@ -88,7 +94,7 @@ def validate_native(binary, source, libraries, env, root, directory, metadata):
     assert native['libraries'], 'dynamic resolution contained no absolute dependencies'
 
 
-def validate(reports, cell, directory, fixtures):
+def validate(reports, cell, directory, fixtures, metadata):
     assert len(reports) == 1
     r, c = reports[0], reports[0]['config']
     keys, reads = cell.get('keys', 3000000), cell.get('reads', 6000000)
@@ -177,6 +183,18 @@ def validate(reports, cell, directory, fixtures):
             assert p['requested_present'] == p['ops']
         if i == 1:
             assert p['requested_absent'] == p['ops']
+        if case == 'realistic' and i >= 2:
+            # A1 draws IntN(100) < miss_percent for every request; no rounding
+            # contract. The timed phase retains every selected successful read.
+            percent, alpha = c['miss_percent'], 1e-12
+            expected = p['ops']*percent/100
+            tolerance = 0 if percent in (0, 100) else math.sqrt(p['ops']*math.log(2/alpha)/2)
+            check = dict(phase=p['name'], model='Bernoulli configured p; Hoeffding screening',
+                         alpha=alpha, configured_miss_percent=percent, ops=p['ops'],
+                         requested_present=p['requested_present'], requested_absent=p['requested_absent'],
+                         expected_absent=expected, tolerance_requests=tolerance)
+            metadata.setdefault('miss_ratio_validation', []).append(check)
+            assert abs(p['requested_absent']-expected) <= tolerance, ('configured miss ratio rejected', check)
         if case == 'realistic' and (i == 1 or (i >= 2 and c['miss_percent'] == 100)):
             assert max(kinds)-min(kinds) <= workers
         for measured, total in [('process_bytes_per_op', 'process_allocated_bytes'), ('process_allocs_per_op', 'process_mallocs')]:
@@ -267,7 +285,7 @@ def main():
                 metadata['rc'] = result.returncode
                 assert result.returncode == 0, (directory, result.returncode)
                 reports = json.loads((directory/'stdout.json').read_text())
-                validate(reports, cell, directory, fixtures)
+                validate(reports, cell, directory, fixtures, metadata)
                 metadata['validated'] = True
             except BaseException as error:
                 metadata['error'] = traceback.format_exc()
