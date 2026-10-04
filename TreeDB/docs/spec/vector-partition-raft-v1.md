@@ -955,8 +955,12 @@ scope section to existing deterministic ReplaceBatch/DeleteBatch entries;
 generic native and peer ingress reject this section before submission. Request
 scope has no term/index, original counts, fsync or publication authority.
 
-The applying FSM supplies its actual group/term/index. Prepared collection
-admission derives original matched/modified/deleted counts, preflights retained
+The applying FSM supplies its actual group/term/index. Scope validation
+rejects malformed input or a mismatched applying group as a
+deterministic guard failure. An unreadable or conflicting covered outcome
+remains recovery-required because its persistent authority is uncertain.
+Prepared collection admission derives original matched/modified/deleted counts,
+preflights retained
 metadata and live owner/node/byte capacity, and appends the conditional command
 WAL payload. Existing source/column/live-root publication also writes the
 original outcome into SystemRoot. A same-content/missing operation performs a
@@ -1004,6 +1008,8 @@ value-log files remain governed by reachability; none are retired by age.
 Validation maps to `TestServiceV1ColocatedMutationContractV1`,
 `TestColocatedVectorMutationDeterministicScopeV1`,
 `TestColocatedVectorMutationConditionalPayloadV2`,
+`TestCollectionReplaceSourceRejectsNestedColocatedDeleteV2`,
+`TestColocatedVectorMutationApplyErrorClassificationV1`,
 `TestColocatedVectorMutationAtomicRecoveryV1`,
 `TestColocatedVectorMutationFSMCoveredRecoveryV1`,
 `TestVectorPartitionColocatedOutcomeSummaryVerificationV1`,

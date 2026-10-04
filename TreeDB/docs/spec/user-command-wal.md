@@ -1322,6 +1322,9 @@ original catalog guard/counts and actual applying FSM term/index. Total payload
 is at most 256 KiB. Decoder validation requires exact agreement with the v1
 base target/operation; unknown fields/versions, malformed lengths, trailing JSON
 and missing FSM authority fail closed. Unscoped payload bytes remain v1.
+The v2 delete payload is valid only as a top-level admitted command. Both
+legacy and typed source-replacement decoders reject it as a nested delete
+component, including direct decoding without frame validation.
 
 This extension feeds the existing same-publication SystemRoot delta; it does
 not extend ApplyResult or install another result store. The 144-byte authoritative
