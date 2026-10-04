@@ -203,6 +203,41 @@ func TestColocatedVectorMutationOrdinaryAdmissionAllocationV1(t *testing.T) {
 	}
 }
 
+func TestColocatedVectorMutationApplyErrorClassificationV1(t *testing.T) {
+	_, database, c, manifest := newSplitApplyRecoveryFixtureV1(t)
+	defer func() { _ = database.Close() }()
+	scope := commitlog.ColocatedVectorMutationScopeV1{Version: 1, Index: manifest.IndexName, Generation: manifest.Generation, OwnerGroup: "group-b", Digest: sha256.Sum256([]byte("colocated-scope"))}
+	id, document, attempt := []byte("base-x"), []byte(`{"embedding":[0,1],"kind":"replacement"}`), []byte("classification")
+	raw := colocatedApplyEntryV1(t, scope, id, document, false, attempt)
+	meta := applyMeta(3, 1)
+	meta.SyncLocalCommandWAL = true
+	before, err := c.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLSN := database.State().AppliedCommandLSN
+	for _, group := range []string{"", "forged"} {
+		meta.GroupID = group
+		result, err := ApplyCommittedEntryV1(database, raw, meta, Options{})
+		assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorTargetMismatchV1)
+		after, err := c.Get(id)
+		if err != nil || !bytes.Equal(before, after) || database.State().AppliedCommandLSN != beforeLSN {
+			t.Fatalf("input rejection mutated source: err=%v before=%q after=%q", err, before, after)
+		}
+	}
+	meta.GroupID = scope.OwnerGroup
+	result, err := ApplyCommittedEntryV1(database, raw, meta, Options{})
+	if err != nil || result.Status != raftentry.ApplyStatusApplied {
+		t.Fatalf("valid original result=%+v err=%v", result, err)
+	}
+	// An unreadable/conflicting covered witness is persistent-state uncertainty,
+	// which must keep the recovery path rather than look like an input rejection.
+	scope.Digest[0] ^= 1
+	conflict := colocatedApplyEntryV1(t, scope, id, document, false, attempt)
+	result, err = ApplyCommittedEntryV1(database, conflict, meta, Options{})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+}
+
 // Record arrival at the intended cut so a preapply error cannot masquerade as
 // a crash-window regression.
 type colocatedRecordedFaultV1 struct {

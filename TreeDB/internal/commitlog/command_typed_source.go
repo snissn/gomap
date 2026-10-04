@@ -87,6 +87,9 @@ func DecodeCollectionTypedSourcePayload(raw []byte) (CollectionTypedSourcePayloa
 	if err != nil {
 		return out, err
 	}
+	if deleted.Colocated != nil {
+		return out, ErrCorrupt
+	}
 	inserted, err := DecodeCollectionTypedBatchPayload(insertRaw)
 	if err != nil {
 		return out, err

@@ -3259,6 +3259,9 @@ func DecodeCollectionReplaceSourceByIDPayload(payload []byte) (CollectionReplace
 	if err != nil {
 		return CollectionReplaceSourceByIDPayload{}, err
 	}
+	if deleted.Colocated != nil {
+		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
+	}
 	inserted, err := DecodeCollectionInsertBatchByIDPayload(payload[4+deleteLen:])
 	if err != nil {
 		return CollectionReplaceSourceByIDPayload{}, err

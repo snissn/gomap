@@ -316,7 +316,10 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	scoped, originalOutcomeKnown, outcomeErr := h.colocatedVectorMutationOutcomeV1(entry, meta)
 	if outcomeErr != nil {
 		code, _ := ErrorCodeOf(outcomeErr)
-		return recoveryRequired(entry.Digest, code, outcomeErr)
+		if code == raftentry.ErrorUnsafeDurabilityModeV1 {
+			return recoveryRequired(entry.Digest, code, outcomeErr)
+		}
+		return reject(entry.Digest, code, outcomeErr)
 	}
 
 	if h.opts.ResultStore != nil {

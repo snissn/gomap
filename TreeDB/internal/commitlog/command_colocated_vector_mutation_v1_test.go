@@ -90,3 +90,41 @@ func TestColocatedVectorMutationOutcomeFormatV1(t *testing.T) {
 		t.Fatal("uncovered outcome encoded")
 	}
 }
+
+func TestCollectionReplaceSourceRejectsNestedColocatedDeleteV2(t *testing.T) {
+	v := ColocatedVectorMutationWALV1{Scope: ColocatedVectorMutationScopeV1{Version: 1, Index: "embedding", Generation: 7, OwnerGroup: "owner", Digest: sha256.Sum256([]byte("scope"))}, Collection: "docs", Delete: true, ID: []byte("id"), Attempt: []byte("attempt"), CommandDigest: sha256.Sum256([]byte("command")), Term: 2, Index: 9, Affected: 1}
+	deleted, err := EncodeColocatedVectorDeletePayloadV2(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := EncodeCollectionInsertBatchByIDPayload("docs", []CollectionDocument{{ID: v.ID, Document: []byte(`{"embedding":[1,0]}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, err := EncodeCollectionTypedBatchPayload(CollectionTypedBatchPayload{Collection: "docs", SchemaHash: 1, Columns: []CollectionTypedColumn{{Name: "embedding", Type: CollectionTypedFloat32Vector, Dimensions: 2}}, Documents: []CollectionTypedDocument{{ID: v.ID, Values: []CollectionTypedValue{{Vector: []float32{1, 0}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		format PayloadFormat
+		insert []byte
+		decode func([]byte) error
+	}{
+		{"legacy", PayloadFormatCollectionReplaceSourceByIDV1, ordinary, func(raw []byte) error { _, err := DecodeCollectionReplaceSourceByIDPayload(raw); return err }},
+		{"typed", PayloadFormatCollectionTypedSourceByIDV1, typed, func(raw []byte) error { _, err := DecodeCollectionTypedSourcePayload(raw); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := binary.LittleEndian.AppendUint32(nil, uint32(len(deleted)))
+			payload = append(payload, deleted...)
+			payload = append(payload, tc.insert...)
+			if err := tc.decode(payload); err != ErrCorrupt {
+				t.Fatalf("nested scoped metadata discarded: err=%v, want ErrCorrupt", err)
+			}
+			env := CommandEnvelope{Version: CommandFrameVersion, LSN: 1, Kind: CommandKindCollectionReplaceSourceByID, Scope: CommandScopeCollection, PayloadFormat: tc.format, Payload: payload}
+			if err := validateCommandEnvelopePayload(env); err == nil {
+				t.Fatal("frame admitted nested scoped delete")
+			}
+		})
+	}
+}
