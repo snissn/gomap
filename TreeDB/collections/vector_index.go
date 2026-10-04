@@ -4971,6 +4971,7 @@ func (idx *VectorIndex) searchCurrentCandidatesWithLiveDocsLocked(query []float3
 				return nil
 			}
 		}
+		scratch.out = seeds
 	}
 	result := idx.searchLayerWithCandidateSeedsScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, seeds, limit, remaining, 0, scratch, true, nil)
 	scratch.explored += upperExplored

@@ -339,4 +339,23 @@ func TestVectorIndexCurrentSearchPreservesLiveAndDeletedEntryRoutes(t *testing.T
 	if _, err := index.searchGraphOnlyCandidatesWithLiveDocsLocked(query, 2, 4, 2, &scratch); !errors.Is(err, ErrVectorIndexSearchUnavailable) || scratch.visitedEpochs[16] == scratch.visitedEpoch {
 		t.Fatalf("deleted original entry incorrectly admitted its neighborhood: err=%v", err)
 	}
+	// A smaller live result than the seed pool must retain grown seed capacity.
+	index.nodes[0].deleted = false
+	index.nodes[0].neighbors[0] = []vectorIndexNeighbor{{nodeID: 16}, {nodeID: 2}, {nodeID: 3}, {nodeID: 4}}
+	scratch.out = make([]vectorIndexCandidate, 0, 3)
+	scratch.startScoreTracking(0)
+	if got, err := index.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, norm, &prepared, 3, 4, 3, &scratch); err != nil || len(got) != 3 {
+		t.Fatalf("stale route allocation warmup: candidates=%v err=%v", got, err)
+	}
+	if !collectionsRaceEnabled && enterIsolatedVectorAllocationGate(t, "native-current-entry-routes") {
+		allocs := testing.AllocsPerRun(100, func() {
+			got, err := index.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, norm, &prepared, 3, 4, 3, &scratch)
+			if err != nil || len(got) != 3 {
+				panic("stale route allocation search lost candidates")
+			}
+		})
+		if allocs != 0 {
+			t.Fatalf("stale route steady-state allocs=%g want 0", allocs)
+		}
+	}
 }
