@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math/bits"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -22,11 +23,15 @@ import (
 )
 
 var (
-	quicksilverCase      = flag.String("quicksilver-case", "random4k", "quicksilver fixture: random4k (100k keys) or structured256 (250k keys)")
-	quicksilverReads     = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
-	quicksilverReadBatch = flag.Int("quicksilver-read-batch", 64, "quicksilver reads per owned-read snapshot; 1 uses ordinary Get")
-	quicksilverDuration  = flag.Duration("quicksilver-duration", 4*time.Second, "quicksilver concurrent read/update duration")
-	quicksilverUpdates   = flag.Int("quicksilver-updates", 40000, "quicksilver distinct updated keys (default capped at key count)")
+	quicksilverCase        = flag.String("quicksilver-case", "realistic", "quicksilver fixture: realistic (3M keys), random4k (100k keys), structured256 (250k keys)")
+	quicksilverReads       = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
+	quicksilverReadBatch   = flag.Int("quicksilver-read-batch", 64, "quicksilver reads per owned-read snapshot; 1 uses ordinary Get")
+	quicksilverDuration    = flag.Duration("quicksilver-duration", 4*time.Second, "quicksilver concurrent read/update duration")
+	quicksilverUpdates     = flag.Int("quicksilver-updates", 40000, "quicksilver mutation targets (default capped at key count); realistic mixes updates/deletes/inserts/overwrite bursts")
+	quicksilverCommit      = flag.String("quicksilver-commit", "auto", "quicksilver batch API: auto (ordinary for realistic, sync for historical cases), ordinary, sync")
+	quicksilverWorkingSet  = flag.String("quicksilver-working-set", "uniform", "quicksilver realistic read working set: uniform, 1%, 20%")
+	quicksilverMissPercent = flag.Int("quicksilver-miss-percent", 90, "quicksilver realistic mixed/concurrent absent-key request percentage (0..100)")
+	quicksilverMixture     = flag.String("quicksilver-mixture", "primary", "quicksilver realistic fixture mixture: primary, holdout (different key/value/content weights)")
 )
 
 const quicksilverTraceLength = 65536
@@ -35,13 +40,23 @@ const quicksilverSampleLimit = 1000000
 var quicksilverPhaseNames = []string{"quicksilver_hits", "quicksilver_misses", "quicksilver_mixed", "quicksilver_concurrent"}
 
 type quicksilverConfig struct {
-	Case      string        `json:"case"`
-	Keys      int           `json:"keys"`
-	Reads     int           `json:"aggregate_reads"`
-	Workers   int           `json:"workers"`
-	ReadBatch int           `json:"reads_per_snapshot"`
-	Duration  time.Duration `json:"concurrent_duration_ns"`
-	Updates   int           `json:"updates"`
+	Case                string        `json:"case"`
+	Keys                int           `json:"keys"`
+	Reads               int           `json:"aggregate_reads"`
+	Workers             int           `json:"workers"`
+	ReadBatch           int           `json:"reads_per_snapshot"`
+	Duration            time.Duration `json:"concurrent_duration_ns"`
+	Updates             int           `json:"updates"`
+	Mixture             string        `json:"mixture"`
+	Seed                int64         `json:"seed"`
+	CommitMode          string        `json:"commit_mode"`
+	BarrierPolicy       string        `json:"barrier_policy"`
+	WorkingSet          string        `json:"working_set"`
+	MissPercent         int           `json:"miss_percent"`
+	Generation          string        `json:"generation"`
+	KeyDistribution     string        `json:"key_distribution"`
+	ValueDistribution   string        `json:"value_distribution"`
+	ContentDistribution string        `json:"content_distribution"`
 }
 
 func (c quicksilverConfig) valueSize() int {
@@ -51,18 +66,41 @@ func (c quicksilverConfig) valueSize() int {
 	return 256
 }
 func (c quicksilverConfig) validate() error {
-	if c.Case != "random4k" && c.Case != "structured256" {
+	if c.Case != "random4k" && c.Case != "structured256" && c.Case != "realistic" {
 		return fmt.Errorf("quicksilver: unknown case %q", c.Case)
 	}
 	if c.Keys < 1 || c.Keys > 10000000 || c.Reads < 1 || c.Reads > 1000000000 || c.Workers < 1 || c.Workers > 1024 || c.ReadBatch < 1 || c.ReadBatch > 1000000 || c.Duration <= 0 || c.Duration > time.Hour || c.Updates < 1 || c.Updates > c.Keys {
 		return fmt.Errorf("quicksilver: invalid configuration: %+v", c)
 	}
+	if c.CommitMode != "" && c.CommitMode != "ordinary" && c.CommitMode != "sync" {
+		return fmt.Errorf("quicksilver: invalid commit mode %q", c.CommitMode)
+	}
+	if c.Case == "realistic" && (c.MissPercent < 0 || c.MissPercent > 100 || (c.Mixture != "" && c.Mixture != "primary" && c.Mixture != "holdout") || (c.WorkingSet != "" && c.WorkingSet != "uniform" && c.WorkingSet != "1%" && c.WorkingSet != "20%")) {
+		return fmt.Errorf("quicksilver: invalid read distribution")
+	}
+	if int64((c.Keys*5+63)/64)*8*int64(c.Workers+1) > 512<<20 {
+		return fmt.Errorf("quicksilver: distinct-access tracking exceeds 512 MiB; reduce read-workers or keys")
+	}
 	return nil
 }
 func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksilverConfig, error) {
-	c := quicksilverConfig{Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates}
+	c := quicksilverConfig{Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates, Seed: 24, CommitMode: *quicksilverCommit, WorkingSet: *quicksilverWorkingSet, MissPercent: *quicksilverMissPercent, Mixture: *quicksilverMixture}
+	if c.CommitMode == "auto" {
+		c.CommitMode = ""
+	} else if c.CommitMode != "ordinary" && c.CommitMode != "sync" {
+		return c, fmt.Errorf("quicksilver: unknown -quicksilver-commit %q", c.CommitMode)
+	}
+	if c.Case == "realistic" {
+		c.Seed = base.SeedUsed
+	} else if isSet["seed"] || isSet["quicksilver-working-set"] || isSet["quicksilver-miss-percent"] || isSet["quicksilver-mixture"] {
+		return c, fmt.Errorf("quicksilver: seed/working-set/miss-percent/mixture apply only to realistic; historical trace is fixed")
+	}
+	c = c.resolved()
 	if !isSet["keys"] {
 		c.Keys = 100000
+		if c.Case == "realistic" {
+			c.Keys = 3000000
+		}
 		if c.Case == "structured256" {
 			c.Keys = 250000
 		}
@@ -73,10 +111,13 @@ func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksil
 	if !isSet["quicksilver-updates"] {
 		c.Updates = min(c.Updates, c.Keys)
 	}
-	for _, name := range []string{"test", "seed", "keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "val-pattern", "val-pool-size", "read-require-hit", "checkpoint-between-tests", "checkpoint-every-ops", "checkpoint-every-bytes", "vacuum-between-tests", "settle-before-scans", "treedb-vlog-rewrite-after-run", "treedb-vacuum-after-vlog-rewrite-run", "checkpoint-settle-before-tests", "checkpoint-settle-timeout", "range-queries", "range-span", "write-workers", "batch-delete-range-width", "batch-delete-ranges-per-batch", "batch-delete-range-validate", "batch-delete-range-refill", "batch-write-steady-checkpoint-bytes", "batch-write-dict-warmup", "outdir", "format", "flushdrain-checkpoint-max", "treedb-cache-stats-before-reads", "treedb-cache-stats-after-tests"} {
+	for _, name := range []string{"test", "keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "val-pattern", "val-pool-size", "read-require-hit", "checkpoint-between-tests", "checkpoint-every-ops", "checkpoint-every-bytes", "vacuum-between-tests", "settle-before-scans", "treedb-vlog-rewrite-after-run", "treedb-vacuum-after-vlog-rewrite-run", "checkpoint-settle-before-tests", "checkpoint-settle-timeout", "range-queries", "range-span", "write-workers", "batch-delete-range-width", "batch-delete-ranges-per-batch", "batch-delete-range-validate", "batch-delete-range-refill", "batch-write-steady-checkpoint-bytes", "batch-write-dict-warmup", "outdir", "format", "flushdrain-checkpoint-max", "treedb-cache-stats-before-reads", "treedb-cache-stats-after-tests"} {
 		if isSet[name] {
 			return c, fmt.Errorf("quicksilver: -%s does not apply to this fixed workflow", name)
 		}
+	}
+	if isSet["valsize"] && c.Case == "realistic" {
+		return c, fmt.Errorf("quicksilver: -valsize does not apply to realistic variable-length values")
 	}
 	if isSet["valsize"] && base.ValueSize != c.valueSize() {
 		return c, fmt.Errorf("quicksilver: -valsize must match %s (%d)", c.Case, c.valueSize())
@@ -84,59 +125,80 @@ func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksil
 	if isSet["batchsize"] && base.BatchSize != 1000 {
 		return c, fmt.Errorf("quicksilver: load/update batchsize is fixed at 1000")
 	}
+	c = c.resolved()
 	return c, c.validate()
 }
 
 type quicksilverPhase struct {
-	Name               string            `json:"name"`
-	Ops                int               `json:"ops"`
-	Seconds            float64           `json:"seconds"`
-	CompositionSeconds float64           `json:"composition_seconds"`
-	OpsPerSec          float64           `json:"ops_per_sec"`
-	Samples            int               `json:"samples"`
-	P50US              float64           `json:"p50_us"`
-	P99US              float64           `json:"p99_us"`
-	P999US             float64           `json:"p999_us"`
-	MaxUS              float64           `json:"max_us"`
-	AllocatedBytes     uint64            `json:"process_allocated_bytes"`
-	Mallocs            uint64            `json:"process_mallocs"`
-	BytesPerOp         float64           `json:"process_bytes_per_op"`
-	AllocsPerOp        float64           `json:"process_allocs_per_op"`
-	HeapBefore         uint64            `json:"process_heap_alloc_before"`
-	HeapAfter          uint64            `json:"process_heap_alloc_after"`
-	GCPauseNS          uint64            `json:"process_gc_pause_ns"`
-	GCCycles           uint32            `json:"process_gc_cycles"`
-	StatsBefore        map[string]string `json:"stats_before,omitempty"`
-	StatsAfter         map[string]string `json:"stats_after,omitempty"`
+	Name                    string            `json:"name"`
+	DistinctAccesses        int               `json:"distinct_accesses"`
+	DistinctPresentRequests int               `json:"distinct_present_requests"`
+	DistinctAbsentRequests  int               `json:"distinct_absent_requests"`
+	RequestedPresent        int               `json:"requested_present"`
+	RequestedAbsent         int               `json:"requested_absent"`
+	ObservedHits            int               `json:"observed_hits"`
+	MissKinds               [3]int            `json:"miss_kind_requests_arbitrary_common_prefix_deleted"`
+	Ops                     int               `json:"ops"`
+	Seconds                 float64           `json:"seconds"`
+	CompositionSeconds      float64           `json:"composition_seconds"`
+	OpsPerSec               float64           `json:"ops_per_sec"`
+	Samples                 int               `json:"samples"`
+	P50US                   float64           `json:"p50_us"`
+	P95US                   float64           `json:"p95_us"`
+	P99US                   float64           `json:"p99_us"`
+	P999US                  float64           `json:"p999_us"`
+	MaxUS                   float64           `json:"max_us"`
+	AllocatedBytes          uint64            `json:"process_allocated_bytes"`
+	Mallocs                 uint64            `json:"process_mallocs"`
+	BytesPerOp              float64           `json:"process_bytes_per_op"`
+	AllocsPerOp             float64           `json:"process_allocs_per_op"`
+	HeapBefore              uint64            `json:"process_heap_alloc_before"`
+	HeapAfter               uint64            `json:"process_heap_alloc_after"`
+	GCPauseNS               uint64            `json:"process_gc_pause_ns"`
+	GCCycles                uint32            `json:"process_gc_cycles"`
+	StatsBefore             map[string]string `json:"stats_before,omitempty"`
+	StatsAfter              map[string]string `json:"stats_after,omitempty"`
 }
 type quicksilverResult struct {
-	wrapper             kvstore.DB
-	Engine              string             `json:"engine"`
-	DBName              string             `json:"db_name"`
-	Config              quicksilverConfig  `json:"config"`
-	GOMAXPROCS          int                `json:"gomaxprocs"`
-	Profiled            bool               `json:"profiled"`
-	UpdateStride        int                `json:"update_stride"`
-	TraceBytes          int                `json:"trace_bytes"`
-	SampleCapacity      int                `json:"sample_capacity"`
-	SampleBytes         int                `json:"sample_bytes"`
-	LoadSeconds         float64            `json:"load_seconds"`
-	InitialCheckpointMS float64            `json:"initial_checkpoint_ms"`
-	ReopenMS            float64            `json:"reopen_ms"`
-	FinalCheckpointMS   float64            `json:"final_checkpoint_ms"`
-	FinalReopenMS       float64            `json:"final_reopen_ms"`
-	Phases              []quicksilverPhase `json:"phases"`
-	UpdateBatches       []float64          `json:"update_batch_ms"`
-	Checkpoints         []float64          `json:"checkpoint_ms"`
-	UpdatedKeys         int                `json:"updated_keys"`
-	VerifiedKeys        int                `json:"verified_keys"`
-	VerifiedMisses      int                `json:"verified_misses"`
-	InitialStats        map[string]string  `json:"initial_stats,omitempty"`
-	FinalStats          map[string]string  `json:"final_stats,omitempty"`
-	InitialFiles        map[string]int64   `json:"initial_files"`
-	FinalFiles          map[string]int64   `json:"final_files"`
-	Flags               map[string]string  `json:"registered_cli_flags,omitempty"`
-	DataDir             string             `json:"data_dir,omitempty"`
+	wrapper                   kvstore.DB
+	Engine                    string                     `json:"engine"`
+	DBName                    string                     `json:"db_name"`
+	Config                    quicksilverConfig          `json:"config"`
+	GOMAXPROCS                int                        `json:"gomaxprocs"`
+	Profiled                  bool                       `json:"profiled"`
+	UpdateStride              int                        `json:"update_stride"`
+	TraceBytes                int                        `json:"trace_bytes"`
+	OracleStateBytes          int                        `json:"oracle_state_bytes"`
+	AccessGeneration          string                     `json:"access_generation"`
+	SampleCapacity            int                        `json:"sample_capacity"`
+	SampleBytes               int                        `json:"sample_bytes"`
+	LoadSeconds               float64                    `json:"load_seconds"`
+	DeletedPreparationSeconds float64                    `json:"deleted_preparation_seconds"`
+	FixtureAnalysisSeconds    float64                    `json:"fixture_analysis_seconds"`
+	MutationCommitBatches     int                        `json:"mutation_commit_batches"`
+	InitialCheckpointMS       float64                    `json:"initial_checkpoint_ms"`
+	ReopenMS                  float64                    `json:"reopen_ms"`
+	FinalCheckpointMS         float64                    `json:"final_checkpoint_ms"`
+	FinalReopenMS             float64                    `json:"final_reopen_ms"`
+	Phases                    []quicksilverPhase         `json:"phases"`
+	UpdateBatches             []float64                  `json:"update_batch_ms"`
+	Checkpoints               []float64                  `json:"checkpoint_ms"`
+	UpdatedKeys               int                        `json:"updated_keys"`
+	Mutations                 quicksilverMutations       `json:"mutations"`
+	Fixture                   quicksilverDistribution    `json:"loaded_distribution"`
+	Compressibility           quicksilverCompressibility `json:"compressibility"`
+	DistinctTrackingBytes     int                        `json:"distinct_tracking_bytes"`
+	InitialVerifiedKeys       int                        `json:"initial_verified_keys"`
+	InitialVerifiedMisses     int                        `json:"initial_verified_misses"`
+	Correctness               string                     `json:"correctness"`
+	VerifiedKeys              int                        `json:"verified_keys"`
+	VerifiedMisses            int                        `json:"verified_misses"`
+	InitialStats              map[string]string          `json:"initial_stats,omitempty"`
+	FinalStats                map[string]string          `json:"final_stats,omitempty"`
+	InitialFiles              map[string]int64           `json:"initial_files"`
+	FinalFiles                map[string]int64           `json:"final_files"`
+	Flags                     map[string]string          `json:"registered_cli_flags,omitempty"`
+	DataDir                   string                     `json:"data_dir,omitempty"`
 }
 
 func quicksilverKey(id uint64) [32]byte {
@@ -204,6 +266,9 @@ func quicksilverFiles(dir string) (map[string]int64, error) {
 	return out, err
 }
 func quicksilverWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride int, update bool) (err error) {
+	if c.Case == "realistic" {
+		return quicksilverRealisticWrite(db, c, offset, count, stride, update)
+	}
 	// Normal LMDB batches require creation, staging and commit on one OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -227,7 +292,7 @@ func quicksilverWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride 
 			return err
 		}
 	}
-	return b.CommitSync()
+	return quicksilverCommitBatch(b, c)
 }
 func quicksilverGet(get func([]byte) ([]byte, error), key []byte) ([]byte, error) {
 	v, err := get(key)
@@ -254,20 +319,51 @@ func quicksilverCheckValue(id uint64, v []byte, size int, concurrent bool) error
 }
 
 type quicksilverReader struct {
-	samples []int64
-	count   int
-	maximum int64
-	err     error
+	samples   []int64
+	count     int
+	maximum   int64
+	err       error
+	distinct  []uint64
+	present   int
+	absent    int
+	hits      int
+	missKinds [3]int
 }
 type quicksilverFixture struct {
-	keys    [][32]byte
-	ids     []uint64
-	readers []quicksilverReader
-	samples []int64
+	keys     [][32]byte
+	ids      []uint64
+	readers  []quicksilverReader
+	samples  []int64
+	distinct []uint64
+	states   []uint8
 }
 
 func newQuicksilverFixture(c quicksilverConfig) *quicksilverFixture {
-	f := &quicksilverFixture{keys: make([][32]byte, 2*quicksilverTraceLength), ids: make([]uint64, quicksilverTraceLength), readers: make([]quicksilverReader, c.Workers), samples: make([]int64, quicksilverSampleLimit)}
+	f := &quicksilverFixture{readers: make([]quicksilverReader, c.Workers), samples: make([]int64, quicksilverSampleLimit)}
+	if c.Case != "realistic" {
+		f.keys = make([][32]byte, 2*quicksilverTraceLength)
+		f.ids = make([]uint64, quicksilverTraceLength)
+	}
+	if c.Case == "realistic" {
+		f.states = make([]uint8, c.Keys)
+		stride := quicksilverUpdateStride(c.Keys)
+		for j := 0; j < c.Updates; j++ {
+			i := int(int64(j) * int64(stride) % int64(c.Keys))
+			switch j % 4 {
+			case 0:
+				f.states[i] = 1
+			case 1:
+				f.states[i] = 255
+			case 3:
+				f.states[i] = 4
+			}
+		}
+	}
+	words := (c.Keys*5 + 63) / 64
+	f.distinct = make([]uint64, words)
+	for w := range f.readers {
+		f.readers[w].distinct = make([]uint64, words)
+	}
 	r := rand.New(rand.NewPCG(24, 91))
 	for i := range f.ids {
 		id := uint64(r.IntN(c.Keys)) * 2
@@ -291,6 +387,9 @@ func newQuicksilverFixture(c quicksilverConfig) *quicksilverFixture {
 // Every worker and the paced writer use the same barrier; errors cancel waits,
 // then all goroutines join before this returns and the owner can close the DB.
 func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixture, mode int, guard *benchGuard, writer func(context.Context) error, stopProfile func()) (quicksilverPhase, error) {
+	c = c.resolved()
+	readStride := quicksilverUpdateStride(c.Keys)
+	readOffset := int(quicksilverMix(uint64(c.Seed)) % uint64(c.Keys))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
@@ -305,6 +404,9 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 		s.count = 0
 		s.maximum = 0
 		s.err = nil
+		clear(s.distinct)
+		s.present, s.absent, s.hits = 0, 0, 0
+		s.missKinds = [3]int{}
 		wg.Add(1)
 		go func(w int, s *quicksilverReader) {
 			defer wg.Done()
@@ -317,6 +419,12 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 					}
 				}
 			}()
+			var rng *rand.Rand
+			var keyScratch []byte
+			if c.Case == "realistic" {
+				rng = rand.New(rand.NewPCG(uint64(c.Seed), uint64(w)+91))
+				keyScratch = make([]byte, 0, 128)
+			}
 			ready.Done()
 			<-start
 			deadline := time.Now().Add(c.Duration)
@@ -340,14 +448,38 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 					}
 				}
 				global := i*c.Workers + w
-				pos := global % len(f.ids)
-				miss := mode == 1 || (mode >= 2 && global%11 != 0)
-				idx := pos * 2
-				id := f.ids[pos]
-				if miss {
-					idx++
-					id++
+				var key []byte
+				var id uint64
+				var absent bool
+				var distinctIndex int
+				kind := 0
+				if c.Case == "realistic" {
+					id, absent, kind, distinctIndex = quicksilverAccess(&c, rng, mode, global, readStride, readOffset)
+					key = quicksilverLookupKey(keyScratch[:0], id, c.Seed, c.Mixture, absent && kind == 0)
+				} else {
+					pos := global % len(f.ids)
+					absent = mode == 1 || (mode >= 2 && global%11 != 0)
+					idx := pos * 2
+					id = f.ids[pos]
+					if absent {
+						idx++
+						id++
+						kind = 1
+					}
+					key = f.keys[idx][:]
+					distinctIndex = int(id/2) * 5
+					if absent {
+						distinctIndex += 2
+					}
 				}
+				s.distinct[distinctIndex/64] |= uint64(1) << uint(distinctIndex%64)
+				if absent {
+					s.absent++
+					s.missKinds[kind]++
+				} else {
+					s.present++
+				}
+
 				t := time.Now()
 				if c.ReadBatch > 1 && i%c.ReadBatch == 0 {
 					if snap != nil {
@@ -373,15 +505,26 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 					}
 					getter = snap.Get
 				}
-				v, e := quicksilverGet(getter, f.keys[idx][:])
+				v, e := quicksilverGet(getter, key)
 				ns := time.Since(t).Nanoseconds()
 				if e == nil {
-					e = quicksilverCheckValue(id, v, c.valueSize(), mode == 3)
+					state := uint8(0)
+					if c.Case == "realistic" && mode == 3 && !absent {
+						if id/2 >= uint64(2*c.Keys) {
+							state = 5
+						} else {
+							state = f.states[id/2]
+						}
+					}
+					e = quicksilverCheckRead(&c, id, v, absent, mode == 3, state)
 				}
 				if e != nil {
 					s.err = e
 					cancel()
 					return
+				}
+				if len(v) != 0 {
+					s.hits++
 				}
 				s.count++
 				if ns > s.maximum {
@@ -433,10 +576,20 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	p.GCPauseNS = after.PauseTotalNs - before.PauseTotalNs
 	// Merge in the existing fixed-capacity backing buffers. Sorting is outside read timers.
 	all := f.samples[:0]
+	clear(f.distinct)
 	err := writerErr
 	for _, s := range f.readers {
 		err = errors.Join(err, s.err)
 		p.Ops += s.count
+		p.RequestedPresent += s.present
+		p.RequestedAbsent += s.absent
+		p.ObservedHits += s.hits
+		for j := range p.MissKinds {
+			p.MissKinds[j] += s.missKinds[j]
+		}
+		for j, word := range s.distinct {
+			f.distinct[j] |= word
+		}
 		p.MaxUS = max(p.MaxUS, float64(s.maximum)/1000)
 		n := len(all)
 		all = all[:n+len(s.samples)]
@@ -445,6 +598,15 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	if err != nil {
 		return p, err
 	}
+	// Slots 0/4 of each five-key group are present-class identities. The
+	// pattern repeats every five words; count both classes without visiting bits.
+	presentMasks := [5]uint64{0x18c6318c6318c631, 0x318c6318c6318c63, 0x6318c6318c6318c6, 0xc6318c6318c6318c, 0x8c6318c6318c6318}
+	for j, word := range f.distinct {
+		p.DistinctAccesses += bits.OnesCount64(word)
+		p.DistinctPresentRequests += bits.OnesCount64(word & presentMasks[j%5])
+	}
+	p.DistinctAbsentRequests = p.DistinctAccesses - p.DistinctPresentRequests
+
 	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
 	p.Samples = len(all)
 	q := func(frac float64) float64 {
@@ -454,6 +616,7 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 		return float64(all[int(float64(len(all)-1)*frac)]) / 1000
 	}
 	p.P50US = q(.5)
+	p.P95US = q(.95)
 	p.P99US = q(.99)
 	p.P999US = q(.999)
 	if p.Ops > 0 {
@@ -527,6 +690,9 @@ func quicksilverCheckpoint(db kvstore.DB, cfg BenchConfig, engine, label string)
 	return elapsed, err
 }
 func quicksilverVerify(db kvstore.DB, c quicksilverConfig, stride int, guard *benchGuard) (keys, misses int, err error) {
+	if c.Case == "realistic" {
+		return quicksilverRealisticVerify(db, c, stride, guard, true)
+	}
 	changed := make([]bool, c.Keys)
 	for i := 0; i < c.Updates; i++ {
 		changed[int(int64(i)*int64(stride)%int64(c.Keys))] = true
@@ -569,10 +735,17 @@ func quicksilverVerify(db kvstore.DB, c quicksilverConfig, stride int, guard *be
 	return
 }
 func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, open DBFactory, dir string) (res quicksilverResult, err error) {
+	c = c.resolved()
 	if err = c.validate(); err != nil {
 		return
 	}
-	res = quicksilverResult{Engine: engine, Config: c, GOMAXPROCS: runtime.GOMAXPROCS(0), Profiled: benchConfigHasAnyProfileOutput(cfg), UpdateStride: quicksilverUpdateStride(c.Keys), TraceBytes: quicksilverTraceLength * (64 + 8), SampleCapacity: quicksilverSampleLimit, SampleBytes: quicksilverSampleLimit * 8}
+	res = quicksilverResult{Correctness: "owned read identity/length/generation; full bytes and all miss classes after durable checkpoint/reopen", DistinctTrackingBytes: ((c.Keys*5 + 63) / 64) * 8 * (c.Workers + 1), Engine: engine, Config: c, GOMAXPROCS: runtime.GOMAXPROCS(0), Profiled: benchConfigHasAnyProfileOutput(cfg), UpdateStride: quicksilverUpdateStride(c.Keys), TraceBytes: quicksilverTraceLength * (64 + 8), SampleCapacity: quicksilverSampleLimit, SampleBytes: quicksilverSampleLimit * 8}
+	res.AccessGeneration = "historical repeated 65536-entry trace"
+	if c.Case == "realistic" {
+		res.TraceBytes = 0
+		res.OracleStateBytes = c.Keys
+		res.AccessGeneration = "per-worker PCG, full-duration stream, fixed 128-byte key scratch; PRNG/key construction and exact distinct bitmap writes included in read timer"
+	}
 	guard := newBenchGuard(cfg)
 	if err = guard.Checkpoint(); err != nil {
 		return
@@ -590,7 +763,7 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		}
 	}()
 	if _, ok := db.(kvstore.Batcher); !ok {
-		return res, fmt.Errorf("quicksilver: %s lacks CommitSync batches", engine)
+		return res, fmt.Errorf("quicksilver: %s lacks ordinary/sync batches", engine)
 	}
 	if _, ok := db.(checkpointer); !ok {
 		return res, fmt.Errorf("quicksilver: %s lacks Checkpoint", engine)
@@ -610,6 +783,19 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		}
 	}
 	res.LoadSeconds = time.Since(t).Seconds()
+	if c.Case == "realistic" {
+		t = time.Now()
+		if err = quicksilverPrepareDeleted(db, c, guard); err != nil {
+			return
+		}
+		res.DeletedPreparationSeconds = time.Since(t).Seconds()
+		t = time.Now()
+		res.Fixture = quicksilverLoadedDistribution(c)
+		if res.Compressibility, err = quicksilverMeasureCompressibility(c); err != nil {
+			return
+		}
+		res.FixtureAnalysisSeconds = time.Since(t).Seconds()
+	}
 	elapsed, e := quicksilverCheckpoint(db, cfg, engine, "quicksilver_initial")
 	if e != nil {
 		return res, e
@@ -630,12 +816,32 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 	if err != nil {
 		return
 	}
+	if c.Case == "realistic" {
+		res.InitialVerifiedKeys, res.InitialVerifiedMisses, err = quicksilverRealisticVerify(db, c, res.UpdateStride, guard, false)
+		if err != nil {
+			return
+		}
+	}
 	// Identical deterministic untimed warmup; no cold-device claim.
+	warmRNG := rand.New(rand.NewPCG(uint64(c.Seed), 91))
+	var warmKey [128]byte
 	for i := 0; i < 50000; i++ {
 		if i%256 == 0 {
 			if err = guard.Checkpoint(); err != nil {
 				return
 			}
+		}
+		if c.Case == "realistic" {
+			id, absent, kind, _ := quicksilverAccess(&c, warmRNG, 2, i, res.UpdateStride, int(quicksilverMix(uint64(c.Seed))%uint64(c.Keys)))
+			k := quicksilverLookupKey(warmKey[:0], id, c.Seed, c.Mixture, absent && kind == 0)
+			v, e := quicksilverGet(db.Get, k)
+			if e == nil {
+				e = quicksilverCheckRead(&c, id, v, absent, false, 0)
+			}
+			if e != nil {
+				return res, e
+			}
+			continue
 		}
 		id := uint64(int64(i)*7919%int64(c.Keys)) * 2
 		if i%11 != 0 {
@@ -683,6 +889,13 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 			}
 			res.UpdateBatches = append(res.UpdateBatches, float64(time.Since(start))/float64(time.Millisecond))
 			res.UpdatedKeys += count
+			if c.Case == "realistic" {
+				res.Mutations.add(i*1000, count)
+				res.MutationCommitBatches++
+				if count >= 4 {
+					res.MutationCommitBatches += 3
+				}
+			}
 			// Four checkpoints at approximately quarter intervals (all four at defaults).
 			if (i+1)*4/batches > i*4/batches {
 				start = time.Now()
@@ -729,6 +942,7 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 }
 
 func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string) (out string, err error) {
+	c = c.resolved()
 	if err := c.validate(); err != nil {
 		return "", err
 	}
@@ -833,12 +1047,20 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 // Separate runs represent key-count sweeps and would lose later-engine columns.
 func quicksilverBenchprofRuns(cfg BenchConfig, c quicksilverConfig, reports []quicksilverResult) []BenchRun {
 	cfg.Keys = c.Keys
+	c = c.resolved()
 	cfg.ValueSize = c.valueSize()
+	if c.Case == "realistic" {
+		cfg.ValueSize = 0
+	}
 	cfg.ReadWorkers = c.Workers
 	cfg.BatchSize = 1000
 	cfg.KeyShape = "shared_prefix24_be8"
 	cfg.ValuePattern = c.Case
-	cfg.SeedUsed = 24
+	cfg.SeedUsed = c.Seed
+	if c.Case == "realistic" {
+		cfg.KeyShape = c.KeyDistribution
+		cfg.ValuePattern = c.ValueDistribution + "; " + c.ContentDistribution
+	}
 	cfg.TestsArg = strings.Join(quicksilverPhaseNames, ",")
 	run := BenchRun{Config: cfg, Instances: make([]*DBInstance, 0, len(reports)), TestOrder: quicksilverPhaseNames, DisplayNames: map[string]string{}, Results: map[string]map[string]float64{}, TreeDBStats: map[string]map[string]string{}, CheckpointDurations: map[string]map[string]time.Duration{"quicksilver_initial": {}, "quicksilver_final": {}}}
 	for _, report := range reports {
