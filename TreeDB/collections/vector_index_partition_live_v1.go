@@ -2217,6 +2217,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 	if opts.MaxStableIDBytes > 0 && pinned.maxStableIDBytes > opts.MaxStableIDBytes {
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorIndexPartitionLiveUnavailableV1, pinned.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
+	if pinned.view.dimensions != 0 && len(query) != pinned.view.dimensions {
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), pinned.view.dimensions)
+	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: canonical query norm: %v", ErrVectorPartitionSearchUnavailable, err)

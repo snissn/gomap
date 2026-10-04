@@ -30,6 +30,24 @@ func canonicalLiveTestPinV1(base, delta []vectorIndexNode, dimensions int) *Vect
 	return &VectorIndexPartitionLiveSearchPinV1{domains: map[uint32]vectorIndexPartitionLiveDomainPinV1{0: {view: view, maxStableIDBytes: 16}}}
 }
 
+func TestVectorIndexPartitionLiveCanonicalQueryDimensionsV1(t *testing.T) {
+	pin := canonicalLiveTestPinV1(canonicalLiveTestNodesV1([]string{"a"}, [][]float32{{1, 0}}), nil, 2)
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16}
+	_, scratch, err := pin.DomainSearchPreflightV1(0, opts)
+	if err != nil || scratch != 64+2*4+16 {
+		t.Fatalf("scratch=%d err=%v", scratch, err)
+	}
+	query := make([]float32, 1<<18)
+	for _, value := range []float32{1, float32(math.NaN())} {
+		query[0] = value
+		results, metrics, err := pin.SearchDomainV1(t.Context(), 0, query, opts)
+		// Even an invalid norm must be rejected for shape before normalization.
+		if err == nil || err.Error() != "collections: vector query has dimension 262144, want 2" || results != nil || metrics != (VectorPartitionSearchMetricsV1{}) {
+			t.Fatalf("results=%v metrics=%+v err=%v", results, metrics, err)
+		}
+	}
+}
+
 func TestVectorIndexPartitionLiveCanonicalScoresAndCutsV1(t *testing.T) {
 	retained := make([]float32, 128)
 	retained[0], retained[1] = -.43388373, .90096885
