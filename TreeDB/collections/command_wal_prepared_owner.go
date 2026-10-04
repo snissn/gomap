@@ -204,7 +204,13 @@ func (owner *CommandWALAdmittedCollection) replaceBatch(ids, documents [][]byte,
 		return nil, errors.New("collections: admitted update requires command WAL intent")
 	}
 	c := owner.collection
-	items, err := replaceBatchUpdateItems(ids, documents)
+	var items []UpdateBatchItem
+	var err error
+	if p := colocatedVectorMutationAdmissionV1(owner.admission); p != nil {
+		items, err = colocatedVectorMutationUpdateItemsV1(c.meta, p.wal, ids, documents)
+	} else {
+		items, err = replaceBatchUpdateItems(ids, documents)
+	}
 	if err != nil {
 		return nil, err
 	}

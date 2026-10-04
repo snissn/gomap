@@ -1310,3 +1310,25 @@ projection/clear payloads omit canonical document bytes. Native root publication
 covers each frame, including idempotent no-op replay, before AppliedLSN advances.
 See [the bounded split insert contract](vector-partition-split-source-insert-v1.md)
 for group authority, replay trust, capacity and unqualified crash limits.
+
+### Conditional colocated mutation payloads
+
+Dedicated colocated exact-ID replacement/deletion retains existing collection
+command kinds 102/101, scopes and outer payload formats 5/4. Only the admitted
+scope uses internal payload version 2: little-endian u16 version 2, u32 ordinary
+v1 base length, the unchanged ordinary v1 payload, then bounded strict JSON
+metadata. Metadata retains exact ID/document/attempt, scope and command digest,
+original catalog guard/counts and actual applying FSM term/index. Total payload
+is at most 256 KiB. Decoder validation requires exact agreement with the v1
+base target/operation; unknown fields/versions, malformed lengths, trailing JSON
+and missing FSM authority fail closed. Unscoped payload bytes remain v1.
+The v2 delete payload is valid only as a top-level admitted command. Both
+legacy and typed source-replacement decoders reject it as a nested delete
+component, including direct decoding without frame validation.
+
+This extension feeds the existing same-publication SystemRoot delta; it does
+not extend ApplyResult or install another result store. The 144-byte authoritative
+outcome and collection-wide 65,536 / 32 MiB admission bound are specified in
+`vector-partition-raft-v1.md`. Conditional payload goldens are
+`internal/commitlog/testdata/colocated_{replace,delete}_v2_payload.hex`; encoder
+and decoder source is `internal/commitlog/command_colocated_vector_mutation_v1.go`.

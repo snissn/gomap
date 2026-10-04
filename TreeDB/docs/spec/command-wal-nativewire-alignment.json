@@ -127,6 +127,30 @@
       "notes": "The public vector command is local-only routing and is never itself a deterministic entry. After owner and generation proof validation, the owner lowers the exact-ID JSON document to the existing deterministic insert-batch entry and submits it through the owning Raft group."
     },
     {
+      "nativewire_command": "CommandVectorReplace",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "CollectionUpdateBatchByID (via fixed-peer Raft owner)",
+      "command_wal_payload_format": "CollectionUpdateBatchByIDV1 outer format; conditional internal payload V2",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_mutation_v1",
+      "notes": "Dedicated colocated exact-ID request lowers to existing deterministic replace with a server-owned scope. Ordinary bytes stay unchanged; conditional WAL retains actual FSM position/original counts and publishes authoritative outcome with source/live roots. Public command is not itself a deterministic entry."
+    },
+    {
+      "nativewire_command": "CommandVectorDelete",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "CollectionDeleteBatchByID (via fixed-peer Raft owner)",
+      "command_wal_payload_format": "CollectionDeleteBatchByIDV1 outer format; conditional internal payload V2",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_mutation_v1",
+      "notes": "Dedicated colocated exact-ID request lowers to existing deterministic delete with a server-owned scope. Ordinary bytes stay unchanged; conditional WAL retains actual FSM position/original counts and publishes authoritative outcome with source/live roots. Public command is not itself a deterministic entry."
+    },
+    {
       "nativewire_command": "CommandTypedSourceReplace",
       "nativewire_fixture": "",
       "nativewire_fixture_sha256": "",

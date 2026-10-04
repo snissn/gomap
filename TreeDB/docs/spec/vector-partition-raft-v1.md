@@ -933,3 +933,115 @@ It atomically persists source intent, projection-only graph/receipt and retireme
 using existing native publication and command-WAL boundaries. It retains explicit
 unsupported multi-owner/immutable/M7 mutation refusal and the fixed-generation
 64-completed-outcome lifetime ceiling; this is not broad #4810 completion.
+
+## Colocated exact-ID replace and delete checkpoint (#4977)
+
+`vectorpartition.OperationsV1` / `ServiceV1` and native clients expose
+`Replace` / `VectorReplaceV1` and `Delete` / `VectorDeleteV1`. Replacement is
+existing-only: one exact UTF-8 ID and one JSON document/vector; it never upserts.
+Deletion accepts one exact ID. These dedicated operations require a mutable,
+ACTIVE generation with the canonical stable-ID source and every admitted ANN
+pack/domain in the same fixed Raft group. Immutable/M7, split-source and
+cross-group layouts remain refused. This checkpoint does not complete #4810.
+Generic ReplaceBatch/DeleteBatch keep their existing invalidation barrier and
+ordinary duplicate-count semantics.
+
+The coordinator proves current catalog, ACTIVE ready set, router model and
+complete colocated placement. The runtime routes canonical ownership by stable
+ID independently of the replacement vector, then resolves the fixed owner
+leader. Fresh precommit admission repeats ownership/lifecycle/catalog checks and
+fences the current FSM DB. Only this dedicated producer adds the versioned
+scope section to existing deterministic ReplaceBatch/DeleteBatch entries;
+generic native and peer ingress reject this section before submission. Request
+scope has no term/index, original counts, fsync or publication authority.
+
+The applying FSM supplies its actual group/term/index. Scope validation
+rejects malformed input or a mismatched applying group as a
+deterministic guard failure. An unreadable or conflicting covered outcome
+remains recovery-required because its persistent authority is uncertain.
+Prepared collection admission derives original matched/modified/deleted counts,
+preflights retained
+metadata and live owner/node/byte capacity, and appends the conditional command
+WAL payload. Existing source/column/live-root publication also writes the
+original outcome into SystemRoot. A same-content/missing operation performs a
+real metadata-only publication: it advances durable command coverage without
+inventing a source generation or live revision. Deletion success proves exact
+source absence plus a matching durable live tombstone/base exclusion, under one
+snapshot; absence from ANN top-k is not the proof.
+
+The authoritative outcome is retained under a collection-wide hash of the
+exact attempt key. Its fixed 144-byte version-1 value binds scope digest,
+exact-command digest, catalog guard, actual FSM term/index, original counts,
+source/live coverage/revision, collection publication ordinal, and the local
+applied command LSN. A versioned 56-byte count/bytes/ordered SHA-256 summary
+shares the same conditional publication. A covered,
+matching witness can recover the lost reply before catalog-guard checking or
+source reapply, including after a later replacement, delete or reinsert. An
+external apply result without the covered witness is unsafe; wrong scope,
+command, version or coverage fails closed. ApplyResult bytes/types and generic
+zero-count duplicate behavior are unchanged. Result/progress recording retains
+its existing durable ordering.
+
+A successful public response reports the **original** term/index/counts and a
+current applied index covering them, plus a `CVM1` scoped visibility token.
+Strict reads validate its exact atomic outcome, fresh catalog/ACTIVE/router
+scope, real Raft ReadIndex/applied prefix, current FSM DB and live coverage /
+revision floor. A later operation may supersede the original postimage. The
+token is a read-your-write floor, not a global snapshot or proof that the old
+postimage is still present. A failure after possible submission remains typed
+commit-ambiguous; callers retry identical bytes with the same attempt key.
+Conflicting reuse is refused before another canonical append.
+
+Supported retained limits are **65,536 outcomes and 32 MiB of metadata per
+collection across all scopes**, 1,024-byte IDs/attempt keys, 64 KiB replacement
+documents, 256 KiB conditional WAL payloads and 8 KiB tokens. Admission refuses
+exhaustion before source commit; no outcome is evicted to make space. Existing
+live mutated-ID, node and byte ceilings remain additional bounds. This is a
+finite writable checkpoint, not an indefinite retention/lifetime claim. Exact
+outcome lookup and exact domain membership checks do not scan source population;
+ordinary/scoped/retry logical digest reads only the fixed summary. FSM reopen /
+restore and immutable snapshot verification recompute the bounded witness chain
+and reject ordinal/count/bytes/coverage/chain disagreement. Verification retains
+at most 2 MiB of ordinal-indexed record hashes. Persistent
+value-log files remain governed by reachability; none are retired by age.
+
+Validation maps to `TestServiceV1ColocatedMutationContractV1`,
+`TestColocatedVectorMutationDeterministicScopeV1`,
+`TestColocatedVectorMutationConditionalPayloadV2`,
+`TestCollectionReplaceSourceRejectsNestedColocatedDeleteV2`,
+`TestColocatedVectorMutationApplyErrorClassificationV1`,
+`TestColocatedVectorMutationAtomicRecoveryV1`,
+`TestColocatedVectorMutationFSMCoveredRecoveryV1`,
+`TestVectorPartitionColocatedOutcomeSummaryVerificationV1`,
+`TestVectorPartitionColocatedMutationProofV1`,
+`TestFixedPeerEntryRouteRejectsColocatedScopeV1` and
+`TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1`. The fault/reopen matrix
+covers before visible publication, after visible/before result, and after
+result/before progress, plus failed external result recording, including
+metadata-only no-ops and supersession. These
+are deterministic fault injection and graceful reopen controls, not SIGKILL or
+power-loss qualification. Fixed-host workload/latency/capacity qualification and
+cross-group projection remain separate coordinator gates.
+
+Focused reproduction (matching Go/toolchain, durable storage and concurrency):
+
+```sh
+go test ./TreeDB/vectorpartition ./TreeDB/internal/nativewire ./TreeDB/internal/commitlog ./TreeDB/collections ./TreeDB/internal/raftapply ./TreeDB/internal/raftfsm ./TreeDB/nativewire -run 'Colocated' -count=1 -timeout=12m
+go test -race ./TreeDB/vectorpartition ./TreeDB/internal/nativewire ./TreeDB/internal/commitlog ./TreeDB/collections ./TreeDB/internal/raftapply ./TreeDB/internal/raftfsm ./TreeDB/nativewire -run 'Colocated' -count=1 -timeout=18m
+go test ./TreeDB/internal/raftapply -run '^$' -bench '^BenchmarkColocatedVectorMutationDurableApplyV1$' -benchtime=100x -count=5 -timeout=12m
+```
+
+The matched benchmark compares ordinary/scoped replacement, same-content,
+delete and missing-delete under the same durable WAL/fsync fixture. It reports
+ns/op, B/op, allocations/op and actual declared retained metadata bytes/count.
+It is a small native apply control, not cluster throughput, latency or unlimited
+retention qualification. Scope detection returns before decoding/lowering on
+ordinary commands; optional WAL/publication ownership exists only for admitted
+scoped mutations. Ordinary result types and encoded command/WAL bytes are
+unchanged. Live logical digests add one bounded summary lookup (absent summary
+adds no logical field); its cost must be measured, not assumed insignificant.
+Full witness verification is restricted to reopen/restore and immutable
+snapshot qualification. New public methods/sections did not exist on the base,
+so the issue's compile-capability red exception applies; authored semantic
+regressions still require a runner-classified normal/race result. No unexecuted
+baseline is represented as an observed red.

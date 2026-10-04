@@ -12,6 +12,7 @@ import (
 // requests never retain it. Release runs the complete coverage finalizer;
 // acquire establishes a fresh baseline and active/search coverage state.
 type collectionCommandWALAdmission struct {
+	colocated      *colocatedVectorMutationPublicationV1
 	collection     *Collection
 	release        func()
 	acquire        func() func()

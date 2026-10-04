@@ -711,3 +711,32 @@ An explicit `tcd2` source directory retains `SCL2` source bytes and Merkle nodes
 
 
 `SIS2` completion bindings and historical directory headers retain the original semantic root across later imports. Explicit V2 asset discovery participates in ordinary recoverable-root/GC protection, with fail-closed metadata budgets. Replay retains the same immutable source identity and exact rows even if physical segment packing differs. Destructive GC/held-source tests and race qualification remain required on each candidate; canonical source admission and owner-only paged ANN lifecycle are still gated.
+
+### Colocated replace/delete original outcomes
+
+Conditional replacement/deletion WAL replay uses the existing prepared source
+owner and load-only durable live carrier restoration. An exact covered
+SystemRoot outcome proves that its source/live publication already happened;
+replay must not reinterpret original counts or reapply an old command against a
+later postimage. A missing witness executes the original bounded WAL intent,
+validates frozen counts, and atomically publishes source/live roots plus witness.
+The FSM shortcut additionally fences its current DB, exact scope/command and
+local durable coverage before bypassing catalog guard/source reapply. External
+result/progress ordering remains required and an external result alone cannot
+prove this original outcome. Metadata-only same-content/delete-missing cases
+recover through the same publication seam. Test mapping and finite retention
+bounds are in `vector-partition-raft-v1.md`; graceful reopen is not power-loss
+qualification.
+
+FSM open and snapshot restore fully recompute the versioned retained-outcome
+summary before trusting it. Live apply/retry digests read only its fixed 56 bytes.
+A production FSM local-coverage gap gets one dedicated exception: exactly one
+unrecorded command LSN, with a fully verified original witness at that LSN. Open
+admits recovery without creating a result/progress record. Apply must additionally
+prove the exact original command/scope and actual FSM group/term/index before
+crossing the existing gap/order fences. A different entry or an ordinary,
+uncovered, multi-LSN gap still refuses. Recovery records external result and
+progress in their existing order before success; no successful ACK is inferred
+from the witness alone. `TestColocatedVectorMutationFSMCoveredRecoveryV1` exercises
+real FSM open/apply at the publication/result/progress cuts for changed and
+metadata-only operations.

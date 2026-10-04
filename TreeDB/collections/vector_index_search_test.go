@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5918,6 +5919,68 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	}, &buffer)
 	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(buffer.results) != 0 {
 		t.Fatalf("work-accounting err=%v buffered_results=%d want fail-closed reset", err, len(buffer.results))
+	}
+}
+
+func TestSearchGraphOnlyPreservesEfAcrossTombstones(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfSearch: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A connected layer-0 chain isolates traversal budgeting from topology.
+	// The final two live nodes lie beyond the old 3*degree=12 visit bound.
+	const physicalNodes = 15
+	for i := 0; i < physicalNodes; i++ {
+		id := []byte(fmt.Sprintf("node-%02d", i))
+		node := index.newVectorIndexNode(id, []float32{1, 0}, 0)
+		node.deleted = i != 0 && i < physicalNodes-2
+		if i+1 < physicalNodes {
+			node.neighbors[0] = []vectorIndexNeighbor{{nodeID: uint32(i + 1)}}
+		}
+		index.nodes = append(index.nodes, node)
+		if !node.deleted {
+			index.currentNode[string(id)] = i
+		}
+	}
+	index.entry, index.maxLevel = 0, 0
+	for _, tt := range []struct {
+		name       string
+		ef, scores int
+		cancel     bool
+		wantErr    error
+	}{
+		{name: "requested_ef", ef: 16},
+		{name: "default_ef", ef: 0},
+		{name: "wide_ef_caps_physical_nodes", ef: 100},
+		{name: "tight_ef_remains_bounded", ef: 3, wantErr: ErrVectorIndexSearchUnavailable},
+		{name: "score_budget", ef: 16, scores: 14, wantErr: ErrVectorPartitionSearchUnavailable},
+		{name: "canceled", ef: 16, cancel: true, wantErr: context.Canceled},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var scratch vectorIndexSearchScratch
+			scratch.startScoreTracking(tt.scores)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancel {
+				cancel()
+			}
+			scratch.context = ctx
+			got, err := index.searchGraphOnlyCandidatesWithLiveDocsLocked([]float32{1, 0}, 3, tt.ef, len(index.currentNode), &scratch)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("candidates=%v err=%v want=%v", got, err, tt.wantErr)
+			}
+			if tt.wantErr == nil {
+				if len(got) != 3 || got[0].nodeID != 0 || got[1].nodeID != 13 || got[2].nodeID != 14 {
+					t.Fatalf("live candidates=%v want ordered nodes 0,13,14", got)
+				}
+				if scratch.explored != physicalNodes || scratch.explorationLimit != physicalNodes || scratch.scoreCalls != physicalNodes {
+					t.Fatalf("bounded work explored=%d limit=%d scores=%d want %d", scratch.explored, scratch.explorationLimit, scratch.scoreCalls, physicalNodes)
+				}
+			}
+			if scratch.explored > scratch.explorationLimit || tt.scores > 0 && scratch.scoreCalls > tt.scores || tt.cancel && scratch.scoreCalls != 0 {
+				t.Fatalf("unbounded work explored=%d limit=%d scores=%d", scratch.explored, scratch.explorationLimit, scratch.scoreCalls)
+			}
+		})
 	}
 }
 
