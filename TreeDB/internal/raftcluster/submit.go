@@ -500,12 +500,22 @@ func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry [
 		preCommit != nil && ((metadata.ClusterRouteShape == "vector_partition_exact_id" && decoded.Target.CommandID == iwire.CommandInsertBatch) ||
 		(metadata.ClusterRouteShape == "split_source_projection_insert" && decoded.Target.CommandID == iwire.CommandSplitVectorInsertV1)) &&
 		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0
+	// Only the dedicated colocated producer may send an old replace/delete guard
+	// to preflight. The FSM must prove the exact covered atomic outcome, and the
+	// owner callback must still validate current ACTIVE/layout authority.
+	allowStaleColocatedRetry := guardErr != nil && errors.Is(guardErr, ErrCatalogVersionMismatch) &&
+		preCommit != nil && metadata.ClusterRouteShape == "vector_partition_exact_id" &&
+		(decoded.Target.CommandID == iwire.CommandReplaceBatch || decoded.Target.CommandID == iwire.CommandDeleteBatch) &&
+		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0 &&
+		slices.ContainsFunc(decoded.Decoded.Sections, func(section iwire.Section) bool {
+			return section.ID == iwire.SectionColocatedVectorMutationScopeV1 && len(section.Bytes) != 0
+		})
 	// A stale prepare guard reaches preflight only to prove the full original
 	// durable key/digest identity. Unknown or changed entries cannot commit.
 	allowStalePrepareRetry := guardErr != nil && errors.Is(guardErr, ErrCatalogVersionMismatch) &&
 		decoded.Target.CommandID == iwire.CommandVectorPrepareV1 &&
 		decoded.Idempotency == raftentry.IdempotencyRequiredV1 && len(decoded.IdempotencyKey) != 0
-	if guardErr != nil && !allowStaleCreateRetry && !allowStaleVectorRetry && !allowStalePrepareRetry {
+	if guardErr != nil && !allowStaleCreateRetry && !allowStaleVectorRetry && !allowStaleColocatedRetry && !allowStalePrepareRetry {
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}
@@ -528,7 +538,7 @@ func (s *SingleGroupSubmitter) submitCommandEntryV1(ctx context.Context, entry [
 		}
 		return SubmitResultV1{}, err
 	}
-	if (allowStaleCreateRetry || allowStaleVectorRetry || allowStalePrepareRetry) && !preflightResult.KnownIdempotencyReplay {
+	if (allowStaleCreateRetry || allowStaleVectorRetry || allowStaleColocatedRetry || allowStalePrepareRetry) && !preflightResult.KnownIdempotencyReplay {
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}

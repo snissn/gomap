@@ -414,7 +414,7 @@ func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV
 		}
 	}
 	newHTTPClient := func() *http.Client {
-		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}
+		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout}
 		if security != nil {
 			transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 				node := endpointNodes[address]
@@ -880,7 +880,7 @@ func validateFixedPeerEntryRouteV1(entry []byte, metadata raftentry.RequestMetad
 	}
 	// Generic peer routes cannot supply the source proof required by the
 	// dedicated authenticated producer. Reuse the one route-validation decode.
-	if decoded.CommandID == iwire.CommandSplitVectorInsertV1 {
+	if _, scoped, scopeErr := singletonSection(decoded.Sections, iwire.SectionColocatedVectorMutationScopeV1); scopeErr != nil || scoped || decoded.CommandID == iwire.CommandSplitVectorInsertV1 {
 		return raftcluster.ErrRouteTargetUnsupported
 	}
 	request, err := clusterMutationRouteRequest(iwire.ValidatedCommand{Header: iwire.CommandHeader{ID: decoded.CommandID, Version: decoded.CommandVersion}, Known: decoded.Sections}, iwire.Limits{})
@@ -932,12 +932,15 @@ func (s fixedPeerRemoteSubmitterV1) SubmitCommandEntryV1(ctx context.Context, en
 }
 
 type fixedPeerRequestV1 struct {
-	Entry           []byte
-	Metadata        raftentry.RequestMetadataV1
-	Route           ClusterRouteRequest
-	VectorInsert    *VectorPartitionRoutedInsertV1     `json:",omitempty"`
-	VectorSearch    *public.SearchRequestV1            `json:",omitempty"`
-	VectorLifecycle *fixedPeerVectorLifecycleRequestV1 `json:",omitempty"`
+	ColocatedAudit           *ColocatedAuditPlanV1 `json:",omitempty"`
+	Entry                    []byte
+	Metadata                 raftentry.RequestMetadataV1
+	Route                    ClusterRouteRequest
+	VectorMutationVisibility []byte                             `json:",omitempty"`
+	VectorMutation           *VectorPartitionRoutedMutationV1   `json:",omitempty"`
+	VectorInsert             *VectorPartitionRoutedInsertV1     `json:",omitempty"`
+	VectorSearch             *public.SearchRequestV1            `json:",omitempty"`
+	VectorLifecycle          *fixedPeerVectorLifecycleRequestV1 `json:",omitempty"`
 }
 type fixedPeerReplyV1 struct {
 	ReplacementTail      *raftcluster.ReplacementTailV1            `json:",omitempty"`
@@ -960,6 +963,7 @@ type fixedPeerReplyV1 struct {
 	Catalog              raftplacement.CatalogMetaStatusV1
 	Submit               raftcluster.SubmitResultV1
 	Route                ClusterRouteTarget
+	VectorMutation       *public.MutationResponseV1                          `json:",omitempty"`
 	VectorInsert         *public.InsertResponseV1                            `json:",omitempty"`
 	VectorSearch         *public.SearchResponseV1                            `json:",omitempty"`
 	VectorReady          *raftplacement.VectorPartitionLifecycleGroupReadyV1 `json:",omitempty"`
@@ -1033,7 +1037,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward", "/v1/vector-forward", "/v1/vector-split-project", "/v1/vector-lifecycle":
 		requests = r.forwards
-	case "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
+	case "/v1/vector-mutation-visibility", "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
 		requests = r.proofs
 	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/vector-catalog-read", "/v1/vector-prepare-status", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
@@ -1068,6 +1072,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		err = fmt.Errorf("invalid trailing RPC payload")
 		return
 	}
+	if body.ColocatedAudit != nil && request.URL.Path != "/v1/diagnostics" {
+		err = errors.New("colocated audit attachment requires diagnostics")
+		return
+	}
 	if ownerTailCaller {
 		command, decodeErr := raftplacement.DecodeReplicaReplacementBeginV1(body.Entry)
 		if decodeErr != nil || command.OwnerPreparation == nil || command.NewPeer.ID != caller {
@@ -1097,6 +1105,13 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	case "/v1/diagnostics":
 		var report FixedPeerDiagnosticsV1
 		report, err = r.diagnosticsV1(ctx)
+		if err == nil && body.ColocatedAudit != nil {
+			var audit ColocatedAuditReceiptV1
+			audit, err = r.colocatedAuditV1(ctx, *body.ColocatedAudit)
+			if err == nil {
+				report.ColocatedAudit = &audit
+			}
+		}
 		reply.Diagnostics = &report
 	case "/v1/readiness":
 		var report FixedPeerReadinessV1
@@ -1166,7 +1181,35 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 	case "/v1/vector-split-project", "/v1/vector-split-source-proof", "/v1/vector-split-receipt":
 		err = r.handleSplitVectorControlV1(ctx, strings.TrimPrefix(request.URL.Path, "/v1/"), caller, body.Entry, &reply)
+	case "/v1/vector-mutation-visibility":
+		if r.vector == nil {
+			err = ErrFixedPeerVectorUnavailableV1
+			return
+		}
+		if err = r.vector.lockSearchAdmissionV1(ctx); err != nil {
+			return
+		}
+		defer r.vector.mutationMu.RUnlock()
+		vector := r.servingVectorConfigV1()
+		if vector == nil {
+			err = ErrFixedPeerVectorUnavailableV1
+			return
+		}
+		var token colocatedVectorVisibilityV1
+		token, err = decodeColocatedVectorVisibilityV1(body.VectorMutationVisibility)
+		if err == nil {
+			err = r.proveColocatedVectorVisibilityV1(ctx, token)
+		}
 	case "/v1/vector-forward":
+		if body.VectorMutation != nil {
+			if body.VectorInsert != nil {
+				err = ErrFixedPeerVectorProofMissingV1
+				return
+			}
+			response, applyErr := r.applyVectorColocatedMutationV1(ctx, *body.VectorMutation)
+			reply.VectorMutation, err = &response, applyErr
+			break
+		}
 		if body.VectorInsert == nil {
 			err = ErrFixedPeerVectorProofMissingV1
 			return
@@ -1306,6 +1349,19 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	httpClient, calls := c.http, c.calls
 	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "vector-prepare-status" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
+	}
+	if operation == "diagnostics" && body.ColocatedAudit != nil {
+		// The caller budget includes transfer plus the server's audit timeout.
+		// Reuse the bounded transport without shortening that budget or changing
+		// ordinary RPC timeouts and the shared configuration identity.
+		if _, bounded := ctx.Deadline(); !bounded {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 2*c.config.RequestTimeout)
+			defer cancel()
+		}
+		auditClient := *httpClient
+		auditClient.Timeout = 0
+		httpClient = &auditClient
 	}
 	select {
 	case calls <- struct{}{}:

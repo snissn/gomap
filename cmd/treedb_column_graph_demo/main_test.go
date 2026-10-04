@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,12 +38,32 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 		"row_fetches=",
 		"decoded_blocks=",
 		"max_resident_B=",
-		"result[0] id=doc-000000 ",
 	}
 	for _, needle := range required {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("demo output missing %q\nstdout:\n%s\nstderr:\n%s", needle, out, stderr.String())
 		}
+	}
+	// These synthetic vectors are identical; the native reader breaks their
+	// score ties by physical ordinal, which may change with graph construction.
+	want := map[string]bool{"doc-000000": true, "doc-000023": true, "doc-000046": true}
+	count, previousOrdinal := 0, -1
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "result[") {
+			continue
+		}
+		var rank, ordinal int
+		var id string
+		var score float64
+		if n, err := fmt.Sscanf(line, "result[%d] id=%s ordinal=%d score=%f", &rank, &id, &ordinal, &score); err != nil || n != 4 || rank != count || !want[id] || math.IsNaN(score) || math.Abs(score-1) > 1e-6 || ordinal <= previousOrdinal {
+			t.Fatalf("unexpected duplicate-vector result %q: parsed=%d err=%v", line, n, err)
+		}
+		delete(want, id)
+		count++
+		previousOrdinal = ordinal
+	}
+	if count != 3 || len(want) != 0 {
+		t.Fatalf("duplicate-vector results=%d missing=%v\n%s", count, want, out)
 	}
 	if !strings.Contains(stderr.String(), "OpenVectorIndexSearcher") {
 		t.Fatalf("demo stderr missing steady-state searcher tip: %s", stderr.String())

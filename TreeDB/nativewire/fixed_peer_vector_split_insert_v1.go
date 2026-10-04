@@ -504,6 +504,9 @@ func (r *FixedPeerTCPRuntimeV1) requireSplitVectorVisibilityV1(ctx context.Conte
 	if len(request.VisibilityToken) == 0 {
 		return nil
 	}
+	if bytes.HasPrefix(request.VisibilityToken, []byte(colocatedVectorVisibilityMagicV1)) {
+		return r.requireColocatedVectorVisibilityV1(ctx, request)
+	}
 	v, err := commitlog.DecodeSplitVectorInsertPayloadV1(request.VisibilityToken)
 	if err != nil || v.Operation != "clear" || v.Index != request.Generation.Index || v.Generation != request.Generation.Generation {
 		return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: errors.Join(ErrFixedPeerVectorProofStaleV1, err)}

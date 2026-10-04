@@ -383,6 +383,10 @@ func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
 		return "CommandTypedDocumentUpsert"
 	case iwire.CommandVectorInsert:
 		return "CommandVectorInsert"
+	case iwire.CommandVectorReplace:
+		return "CommandVectorReplace"
+	case iwire.CommandVectorDelete:
+		return "CommandVectorDelete"
 	case iwire.CommandTypedSourceReplace:
 		return "CommandTypedSourceReplace"
 	case iwire.CommandTypedMetadataUpdate:

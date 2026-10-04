@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 const (
@@ -404,6 +405,22 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section, limits Limi
 }
 
 func validateDeterministicCommand(commandID CommandID, deterministic []Section, limits Limits) error {
+	if _, scoped := deterministicSectionPayload(deterministic, SectionColocatedVectorMutationScopeV1); scoped {
+		if commandID != CommandReplaceBatch && commandID != CommandDeleteBatch {
+			return protocolError(ErrInvalidCommand, "colocated scope requires replace/delete")
+		}
+		count, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
+		if err != nil || count != 1 {
+			return protocolError(ErrInvalidCommand, "colocated mutation requires one exact ID")
+		}
+		if commandID == CommandReplaceBatch {
+			raw, _ := deterministicSectionPayload(deterministic, SectionDocumentFormat)
+			format, n, err := readUvarint(raw)
+			if err != nil || n != len(raw) || format != 1 {
+				return protocolError(ErrInvalidCommand, "colocated replacement requires JSON")
+			}
+		}
+	}
 	switch commandID {
 	case CommandInsertBatch, CommandReplaceBatch:
 		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
@@ -947,6 +964,11 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		}
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+	case SectionColocatedVectorMutationScopeV1:
+		_, err := commitlog.DecodeColocatedVectorMutationScopeV1(section.Bytes)
+		if err != nil {
+			return protocolError(ErrInvalidCommand, "invalid colocated scope: %v", err)
 		}
 	case SectionReplacementMode:
 		mode, n, err := readUvarint(section.Bytes)

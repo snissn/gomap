@@ -3956,3 +3956,33 @@ recovery applied LSN and physical mutation count before real Raft Append.
 Metadata responses retain those legitimate durable fields. Encoding errors
 propagate through existing client/server error returns. No collection-owned
 local WAL encoding, immutable initialization intent or configuration marker changes.
+
+### Colocated original mutation outcomes
+
+SystemRoot keys under `vector_colocated_outcome_v1:<SHA256(collection)>:` hold
+`attempt:<SHA256(exact-attempt-bytes)>` outcomes and one `usage` record. Outcome
+values are exactly 144 bytes: LE u64 version 1, 32-byte scope digest, 32-byte
+command digest, then LE u64 catalog guard, actual FSM term/index, coverage,
+revision, original matched/affected counts, collection publication ordinal and
+local AppliedCommandLSN. The ordinal starts at 1 and advances once per retained
+outcome. `usage` is exactly 56 bytes: LE u64 version 1, count, aggregate key/value
+bytes including itself, and a 32-byte ordered SHA-256 chain.
+
+For each publication, hash the bytes `gomap:colocated-outcome-record:v1` followed
+by NUL, LE u64 key length, complete SystemRoot attempt key, and complete outcome
+with its final physical LSN replaced by eight zero bytes. Chain from 32 zero
+bytes by hashing `gomap:colocated-outcome-chain:v1` followed by NUL, previous
+32-byte chain, then the new 32-byte record hash. The summary/witness conditional
+SystemRoot delta shares source/live publication; no-op cases keep source/live
+roots unchanged. The previous summary must match before publication.
+
+Live apply/retry logical digests read only the fixed summary. FSM open/restore
+and immutable snapshot logical verification recompute the full bounded witness
+set in publication-ordinal order, reject duplicate/gapped/out-of-range ordinals,
+malformed keys/values, uncovered LSNs and count/bytes/chain disagreement, then hash
+the identical summary. Verification retains at most 65,536 32-byte hashes
+(2 MiB), rather than all witness bytes. Physical LSN is validated for durable
+coverage and excluded from replica hashing. No ApplyResult format change or
+migration scaffold is introduced.
+Conditional collection WAL payload v2 is specified in `user-command-wal.md`.
+Old binaries reject this pre-alpha extension; rebuild experimental directories.

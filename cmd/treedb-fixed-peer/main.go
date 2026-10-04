@@ -65,6 +65,7 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	datasetPath := flags.String("dataset", "", "frozen system-export-dataset directory for dataset initialize/qualify; empty preserves three-row fixture")
 	requestID := flags.String("request-id", "", "stable ASCII fixture identity for initialize/qualify")
 	operationTimeout := flags.Duration("operation-timeout", 2*time.Minute, "initialize/qualify deadline, 1s..10m")
+	auditPath := flags.String("colocated-audit-plan", "", "bounded six-outcome JSON attachment for diagnostics only; all voters must remain live")
 	interval := flags.Duration("diagnostics-interval", 0, "emit diagnostics while serving; zero disables, minimum 1s")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -93,6 +94,25 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 		if *trusted {
 			return fmt.Errorf("initialize/qualify require authenticated peer credentials")
 		}
+	}
+	var audit *nativewire.ColocatedAuditPlanV1
+	if *auditPath != "" {
+		if *mode != "diagnostics" {
+			return fmt.Errorf("-colocated-audit-plan requires -mode diagnostics")
+		}
+		f, e := os.Open(*auditPath)
+		if e != nil {
+			return e
+		}
+		p, e := nativewire.DecodeColocatedAuditPlanV1(ctx, f)
+		closeErr := f.Close()
+		if e != nil {
+			return e
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		audit = &p
 	}
 	binary, err := inspectBinary()
 	if err != nil {
@@ -183,7 +203,13 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 			}
 			return e
 		case "diagnostics":
-			report, e := client.DiagnosticsV1(ctx, config.NodeID)
+			var report nativewire.FixedPeerDiagnosticsV1
+			var e error
+			if audit != nil {
+				report, e = client.DiagnosticsWithColocatedAuditV1(ctx, config.NodeID, *audit)
+			} else {
+				report, e = client.DiagnosticsV1(ctx, config.NodeID)
+			}
 			if out := encoder.Encode(report); out != nil {
 				return out
 			}
