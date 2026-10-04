@@ -4921,6 +4921,9 @@ func (idx *VectorIndex) searchCurrentCandidatesWithLiveDocsLocked(query []float3
 		}
 		explorationLimit += minInt(stale, minInt(maxExtra, len(idx.nodes)-explorationLimit))
 	}
+	if scratch == nil {
+		scratch = &vectorIndexSearchScratch{}
+	}
 	entryPoint := idx.entry
 	upperExplored := 0
 	// Keep the requested live-candidate budget plus one possible stale entry
@@ -4932,7 +4935,44 @@ func (idx *VectorIndex) searchCurrentCandidatesWithLiveDocsLocked(query []float3
 			return nil
 		}
 	}
-	result := idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit-upperExplored, 0, scratch)
+	remaining := explorationLimit - upperExplored
+	var seeds []vectorIndexCandidate
+	if remaining >= 4 && idx.entry < len(idx.nodes) && !idx.nodes[idx.entry].deleted && entryPoint >= 0 && entryPoint < len(idx.nodes) && idx.nodes[entryPoint].deleted && entryPoint != idx.entry {
+		// The closer tombstone route can starve a farther live entry. Admit its
+		// existing one-hop neighborhood, retaining both routes in the same budget.
+		seeds = scratch.out[:0]
+		// ponytail: duplicate checks are quadratic in this one-hop degree; use an epoch only if profiling warrants it.
+		admit := func(nodeID int) bool {
+			if nodeID < 0 || nodeID >= len(idx.nodes) {
+				return true
+			}
+			for _, seed := range seeds {
+				if seed.nodeID == nodeID {
+					return true
+				}
+			}
+			if scratch.finalContextErr() != nil {
+				return false
+			}
+			distance, ok := idx.scoreSearchNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, nodeID, scratch)
+			if !ok {
+				return false
+			}
+			seeds = append(seeds, vectorIndexCandidate{nodeID: nodeID, distance: distance})
+			return true
+		}
+		if !admit(entryPoint) || !admit(idx.entry) {
+			return nil
+		}
+		neighbors := idx.layerNeighborsLocked(idx.entry, 0)
+		// The endpoints consume two slots; reserve one for normal expansion.
+		for _, neighbor := range neighbors[:minInt(len(neighbors), remaining-3)] {
+			if !admit(int(neighbor.nodeID)) {
+				return nil
+			}
+		}
+	}
+	result := idx.searchLayerWithCandidateSeedsScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, seeds, limit, remaining, 0, scratch, true, nil)
 	scratch.explored += upperExplored
 	scratch.explorationLimit = explorationLimit
 	return result
@@ -5218,11 +5258,18 @@ func (idx *VectorIndex) searchLayerWithCandidateSeedsScratchModeObservedOrderLoc
 	}
 	scratch.explored = 0
 	for _, seed := range seeds {
-		if seed.nodeID < 0 || seed.nodeID >= len(idx.nodes) || idx.nodes[seed.nodeID].level < layer || visited[seed.nodeID] == mark || math.IsInf(float64(seed.distance), 1) {
+		if seed.nodeID < 0 || seed.nodeID >= len(idx.nodes) || idx.nodes[seed.nodeID].level < layer || visited[seed.nodeID] == mark || (!currentOnly && math.IsInf(float64(seed.distance), 1)) {
 			continue
+		}
+		if currentOnly && scratch.explored >= explorationLimit {
+			break
 		}
 		visited[seed.nodeID] = mark
 		scratch.explored++
+		// Pre-scored unusable seeds still consumed their layer-0 work allowance.
+		if math.IsInf(float64(seed.distance), 1) {
+			continue
+		}
 		if context != nil {
 			context.recordRow(seed.nodeID, false)
 		}
