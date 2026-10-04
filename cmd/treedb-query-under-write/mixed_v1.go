@@ -79,6 +79,19 @@ func mixedSameOutcome(a, b public.MutationResponseV1) error {
 	}
 	return nil
 }
+
+func mixedReadyStates(config nativewire.FixedPeerTCPConfigV1, history []observation, prefix uint64) error {
+	if len(config.Nodes) == 0 || len(history) < len(config.Nodes) {
+		return errors.New("incomplete mixed all-voter readiness round")
+	}
+	last := history[len(history)-len(config.Nodes):]
+	states := make([]nativewire.FixedPeerReadinessV1, len(last))
+	for i, v := range last {
+		states[i] = v.State
+	}
+	return recallReadyStates(config, states, prefix)
+}
+
 func mixedCall(ctx context.Context, c mixedClient, w *mixedWrite, origin time.Time, rpc time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -661,12 +674,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		if err != nil {
 			return err
 		}
-		last := receipt.Readiness[len(receipt.Readiness)-len(in.config.Nodes):]
-		states := make([]nativewire.FixedPeerReadinessV1, len(last))
-		for i, v := range last {
-			states[i] = v.State
-		}
-		return recallReadyStates(in.config, states, r.RequiredAppliedIndex)
+		return mixedReadyStates(in.config, receipt.Readiness, r.RequiredAppliedIndex)
 	}
 	if err = observe(&r.Admission.ReadinessBefore, 1); err != nil {
 		return err

@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 	"math"
 	"slices"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/nativewire"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 type mixedFakeV1 struct {
@@ -115,6 +117,32 @@ func TestMixedFullPrefixTruthAndSupersessionV1(t *testing.T) {
 	}
 	if _, err := mixedPopulation(&in, []mixedWrite{r.Writes[2], r.Writes[2]}); err == nil {
 		t.Fatal("admitted deletion of already missing ID")
+	}
+}
+
+func TestMixedFinalReadinessRoundRetainsFollowerLagV1(t *testing.T) {
+	in, _ := recallTestInput()
+	r := report{RPCTimeout: time.Second}
+	calls := 0
+	read := func(_ context.Context, node nativewire.FixedPeerTCPNodeV1) (nativewire.FixedPeerReadinessV1, error) {
+		calls++
+		if calls == 4 {
+			return nativewire.FixedPeerReadinessV1{}, errors.New("follower has not applied the retry floor")
+		}
+		return nativewire.FixedPeerReadinessV1{NodeID: node.ID, Live: true, Ready: true, VectorPhase: "active", CatalogEpoch: 1,
+			Groups: []nativewire.FixedPeerGroupReadinessV1{{GroupID: "group-1", Ready: true, LocalAppliedIndex: 42}}}, nil
+	}
+	if err := readinessWith(context.Background(), read, in.config, &r, 42, 2); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 8 || len(r.Readiness) != 8 || r.Readiness[3].Error == "" {
+		t.Fatalf("lost the first failed round: calls%d history%+v", calls, r.Readiness)
+	}
+	if err := mixedReadyStates(in.config, r.Readiness, 42); err != nil {
+		t.Fatal(err)
+	}
+	if mixedReadyStates(in.config, r.Readiness[:3], 42) == nil || mixedReadyStates(in.config, r.Readiness, 43) == nil {
+		t.Fatal("accepted incomplete or lagging final round")
 	}
 }
 
