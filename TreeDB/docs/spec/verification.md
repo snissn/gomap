@@ -415,6 +415,22 @@ directory sync. The stable identifiers `before-publication-seal-write` and
 write. The following index sync makes that record and its COW closure stable;
 only the later alternate-meta write and sync make it recovery-selectable.
 
+The full-index mapped-write barrier uses the pager's existing platform policy:
+Linux requires one retained-file data barrier rather than a preceding `MS_SYNC`
+per dirty chunk; flush-only and non-Linux mapped-range fences remain required.
+`pager.TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier` checks selective
+flush bookkeeping without a file barrier, exact retained-file identity, one file
+barrier per durable attempt, restoration after a failed barrier, and byte readback
+after retry. Existing `TestSyncIndexDataWithStableFile*`,
+`TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement` and
+`TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync` cover retained handles
+after close, nil-target cut ordering, path replacement and final dirty drainage.
+These guards do not count mapped syscalls or prove physical power-loss survival.
+An external Linux syscall comparison must show durable dirty-chunk `msync` calls
+on the prior source and none on the revised source, while flush-only calls still
+issue them. The crash-image oracle, platform CI and matched unprofiled load and
+checkpoint campaigns remain separate acceptance gates.
+
 `db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
 proves that ordinary copied dependencies fail before explicit snapshot rebind,
 a cut immediately before the first rebound-meta write leaves the installed
