@@ -5465,13 +5465,23 @@ func (idx *VectorIndex) constructionNodesHaveIdenticalVectorsLocked(left, right 
 	}
 }
 
+// Candidates must already be distance-sorted. Unequal-distance singleton
+// groups need no representation comparisons on the ordinary construction path.
+// ponytail: tied groups remain quadratic; add a temporary identity table only if profiling warrants it.
 func (idx *VectorIndex) constructionCandidatesHaveIdenticalVectorsLocked(candidates []vectorIndexCandidate) bool {
-	for i, candidate := range candidates {
-		for _, other := range candidates[:i] {
-			if candidate.distance == other.distance && idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, other.nodeID) {
-				return true
+	for start := 0; start < len(candidates); {
+		end := start + 1
+		for end < len(candidates) && candidates[end].distance == candidates[start].distance {
+			end++
+		}
+		for i := start + 1; i < end; i++ {
+			for j := start; j < i; j++ {
+				if idx.constructionNodesHaveIdenticalVectorsLocked(candidates[i].nodeID, candidates[j].nodeID) {
+					return true
+				}
 			}
 		}
+		start = end
 	}
 	return false
 }
@@ -5483,10 +5493,37 @@ func vectorIndexConstructionOrdinalOffset(nodeID, sourceNodeID int) int {
 	return nodeID - sourceNodeID
 }
 
+// This comparator is used only after the whole bounded construction pool has
+// passed the redundancy gate. Live status is a tie key, never a pairwise
+// identity condition: distance, live status, source offset and stable ID form
+// one transitive order across different geometries and deleted waypoints.
+func (idx *VectorIndex) compareConstructionCandidatesLocked(left, right vectorIndexCandidate, sourceNodeID int) int {
+	if left.distance == right.distance {
+		if left.nodeID >= 0 && right.nodeID >= 0 && left.nodeID < len(idx.nodes) && right.nodeID < len(idx.nodes) {
+			if idx.nodes[left.nodeID].deleted != idx.nodes[right.nodeID].deleted {
+				if idx.nodes[left.nodeID].deleted {
+					return 1
+				}
+				return -1
+			}
+		}
+		leftOffset := vectorIndexConstructionOrdinalOffset(left.nodeID, sourceNodeID)
+		rightOffset := vectorIndexConstructionOrdinalOffset(right.nodeID, sourceNodeID)
+		if leftOffset < rightOffset {
+			return -1
+		}
+		if leftOffset > rightOffset {
+			return 1
+		}
+	}
+	return idx.compareVectorIndexCandidatesByDistanceLocked(left, right)
+}
+
 // Admit only known local endpoints when SEARCH-LAYER contains an exact-vector
 // redundancy. Its capacity stays EfConstruction; a distinct geometry bridge is
 // never evicted to make room. Deleted endpoints remain useful traversal waypoints.
 func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, candidates []vectorIndexCandidate, sourceNodeID, oldCurrent int, scratch *vectorIndexSearchScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
+	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	if len(candidates) == 0 || !idx.constructionCandidatesHaveIdenticalVectorsLocked(candidates) {
 		return candidates
 	}
@@ -5504,8 +5541,17 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 			for i, candidate := range candidates {
 				for j, other := range candidates {
 					if i != j && idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, other.nodeID) {
-						if replace < 0 || vectorIndexConstructionOrdinalOffset(candidate.nodeID, sourceNodeID) > vectorIndexConstructionOrdinalOffset(candidates[replace].nodeID, sourceNodeID) {
+						// Re-evaluate stored identity against the current pool after
+						// every overwrite. Scores need not agree for this eviction
+						// predicate; never discard a sole geometry representative.
+						if replace < 0 {
 							replace = i
+						} else {
+							deleted := idx.nodes[candidate.nodeID].deleted
+							replacedDeleted := idx.nodes[candidates[replace].nodeID].deleted
+							if (deleted && !replacedDeleted) || (deleted == replacedDeleted && vectorIndexConstructionOrdinalOffset(candidate.nodeID, sourceNodeID) > vectorIndexConstructionOrdinalOffset(candidates[replace].nodeID, sourceNodeID)) {
+								replace = i
+							}
 						}
 						break
 					}
@@ -5583,27 +5629,16 @@ func (idx *VectorIndex) selectConstructionDiverseCandidatesLocked(candidates []v
 	if limit <= 0 || len(candidates) == 0 {
 		return nil, 0, 0, nil, nil
 	}
+	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	redundant := sourceNodeID >= 0 && idx.constructionCandidatesHaveIdenticalVectorsLocked(candidates)
 	compare := idx.compareVectorIndexCandidatesByDistanceLocked
 	if redundant {
 		// A single transitive tie order applies to this bounded redundant pool.
 		// Serving keeps its stable-ID comparator.
 		compare = func(left, right vectorIndexCandidate) int {
-			if left.distance == right.distance {
-				leftOffset := vectorIndexConstructionOrdinalOffset(left.nodeID, sourceNodeID)
-				rightOffset := vectorIndexConstructionOrdinalOffset(right.nodeID, sourceNodeID)
-				if leftOffset < rightOffset {
-					return -1
-				}
-				if leftOffset > rightOffset {
-					return 1
-				}
-			}
-			return idx.compareVectorIndexCandidatesByDistanceLocked(left, right)
+			return idx.compareConstructionCandidatesLocked(left, right, sourceNodeID)
 		}
 		slices.SortFunc(candidates, compare)
-	} else {
-		idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	}
 	orderedHash := uint64(0x4461)
 	if context != nil {

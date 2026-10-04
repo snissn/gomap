@@ -3,6 +3,7 @@ package collections
 import (
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -154,5 +155,78 @@ func TestVectorIndexConstructionIdenticalRepresentationValidation(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestVectorIndexRedundantConstructionLiveTieOrder(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding_graph", Field: "embedding", Metric: VectorMetricL2,
+		Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Several exact-vector classes share the same source distance. Pairwise
+	// identity-conditioned ties would cycle among these interleaved classes.
+	for ordinal, vector := range [][]float32{{0, 1}, {1, 0}, {0, -1}, {0, 1}, {-1, 0}, {0, -1}, {0, 1}, {0, 0}} {
+		index.nodes = append(index.nodes, index.newVectorIndexNode([]byte(fmt.Sprintf("geometry-%d", ordinal)), vector, 0))
+	}
+	const source = 7
+	candidates := []vectorIndexCandidate{{nodeID: 0, distance: 1}, {nodeID: 1, distance: 1}, {nodeID: 2, distance: 1}, {nodeID: 3, distance: 1}, {nodeID: 4, distance: 1}, {nodeID: 5, distance: 1}, {nodeID: 6, distance: 1}}
+	checkOrder := func(want []int) {
+		t.Helper()
+		if !index.constructionCandidatesHaveIdenticalVectorsLocked(candidates) {
+			t.Fatal("mixed equal-distance pool must establish the whole-pool redundancy gate")
+		}
+		compare := func(a, b vectorIndexCandidate) int { return index.compareConstructionCandidatesLocked(a, b, source) }
+		for _, a := range candidates {
+			if compare(a, a) != 0 {
+				t.Fatal("construction comparator is not reflexive")
+			}
+			for _, b := range candidates {
+				if (compare(a, b) < 0) != (compare(b, a) > 0) {
+					t.Fatalf("construction order is not antisymmetric: %d/%d", a.nodeID, b.nodeID)
+				}
+				for _, c := range candidates {
+					if compare(a, b) < 0 && compare(b, c) < 0 && compare(a, c) >= 0 {
+						t.Fatalf("construction comparator cycle: %d/%d/%d", a.nodeID, b.nodeID, c.nodeID)
+					}
+				}
+			}
+		}
+		ordered := append([]vectorIndexCandidate(nil), candidates...)
+		slices.SortFunc(ordered, compare)
+		got := make([]int, len(ordered))
+		for i, candidate := range ordered {
+			got[i] = candidate.nodeID
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("construction order %v want %v", got, want)
+		}
+		selected, _, _, _, _ := index.selectConstructionDiverseCandidatesLocked(append([]vectorIndexCandidate(nil), candidates...), len(candidates), false, true, false, nil, nil, source)
+		if len(selected) != len(want) {
+			t.Fatalf("selection fast path retained %d candidates want %d", len(selected), len(want))
+		}
+		for i, candidate := range selected {
+			if candidate.nodeID != want[i] {
+				t.Fatalf("selection fast path[%d]=%d want %d", i, candidate.nodeID, want[i])
+			}
+		}
+	}
+	checkOrder([]int{6, 5, 4, 3, 2, 1, 0})
+	for _, ordinal := range []int{0, 3, 6} {
+		index.nodes[ordinal].deleted = true
+	}
+	checkOrder([]int{5, 4, 2, 1, 6, 3, 0})
+	if index.compareConstructionCandidatesLocked(vectorIndexCandidate{nodeID: 0, distance: 0}, vectorIndexCandidate{nodeID: 5, distance: 1}, source) >= 0 {
+		t.Fatal("live status displaced primary distance")
+	}
+	// The fresh live equal-geometry endpoint must survive reciprocal pruning;
+	// deleted peers remain available for the remaining bounded degree slots.
+	index.nodes[6].deleted = false
+	neighbors := []vectorIndexNeighbor{{nodeID: 0, distance: 1}, {nodeID: 3, distance: 1}, {nodeID: 6, distance: 1}}
+	pruned := index.pruneLayerNeighborsLocked(source, neighbors, 2)
+	if len(pruned) != 2 || pruned[0].nodeID != 6 || pruned[1].nodeID != 3 || !index.nodes[pruned[1].nodeID].deleted || len(pruned) > index.maxNeighborsForLayer(0) {
+		t.Fatalf("live shortcut/deleted backfill/degree lost: %+v", pruned)
 	}
 }
