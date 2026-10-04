@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,60 @@ func TestQuicksilverGenericFixture(t *testing.T) {
 		quicksilverRealisticValue(b, c, id, 1)
 		if bytes.Equal(a, b) {
 			t.Fatal("generation unchanged")
+		}
+	}
+}
+
+func TestQuicksilverCommonPrefixMisses(t *testing.T) {
+	for _, mixture := range []string{"primary", "holdout"} {
+		for _, seed := range []int64{24, 91} {
+			t.Run(mixture+"/"+strconv.FormatInt(seed, 10), func(t *testing.T) {
+				const keys = 50000
+				seen := make(map[string]bool, keys*5)
+				var liveScratch, missScratch, domainScratch [128]byte
+				families := [3]int{}
+				for i := 0; i < keys; i++ {
+					id := uint64(i) * 2
+					live := quicksilverLookupKey(liveScratch[:0], id, seed, mixture, false)
+					miss := quicksilverLookupKey(missScratch[:0], id+1, seed, mixture, false)
+					// Infer prefixes from actual bytes, independently of the family selector.
+					var prefix []byte
+					switch live[0] {
+					case 'n':
+						prefix = []byte("namespace/")
+						families[0]++
+					case 'h':
+						prefix = []byte{'h'}
+						families[1]++
+					case 0x80:
+						prefix = []byte{0x80}
+						families[2]++
+					default:
+						t.Fatalf("unexpected live prefix %x", live)
+					}
+					if !bytes.HasPrefix(live, prefix) || !bytes.HasPrefix(miss, prefix) || bytes.Equal(live, miss) {
+						t.Fatalf("id %d: common-prefix miss %x does not preserve source %x", id, miss, live)
+					}
+					// Check actual byte-key disjointness across all generated identity domains.
+					for _, domainID := range []uint64{id, id + 1, uint64(keys+i) * 2, uint64(2*keys+i) * 2} {
+						key := quicksilverLookupKey(domainScratch[:0], domainID, seed, mixture, false)
+						if seen[string(key)] {
+							t.Fatalf("collision at id %d", domainID)
+						}
+						seen[string(key)] = true
+					}
+					arbitrary := quicksilverLookupKey(domainScratch[:0], id, seed, mixture, true)
+					if seen[string(arbitrary)] {
+						t.Fatalf("arbitrary key collision at id %d", id)
+					}
+					seen[string(arbitrary)] = true
+				}
+				for _, count := range families {
+					if count == 0 {
+						t.Fatal("missing actual key family")
+					}
+				}
+			})
 		}
 	}
 }

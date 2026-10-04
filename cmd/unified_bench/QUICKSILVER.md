@@ -87,7 +87,10 @@ absent-request percentage is independently selected by
 still force their respective request class.
 
 Misses balance arbitrary reserved-prefix keys, never-loaded common-prefix keys
-and previously loaded/deleted keys. A disjoint 1% population is inserted and
+and previously loaded/deleted keys. Adjacent odd miss identities keep the even
+source identity's family and leading prefix (`namespace/`, `h` or opaque `0x80`)
+in both mixtures; the bijective interior token remains distinct. A disjoint 1%
+population is inserted and
 committed, then deleted and committed before the initial checkpoint. Its actual
 domain is smaller than the loaded population and is disclosed here. During
 concurrent reads, some present-class requests target newly inserted identities;

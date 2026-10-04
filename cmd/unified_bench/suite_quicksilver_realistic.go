@@ -67,6 +67,9 @@ func quicksilverMix(x uint64) uint64 {
 	return x ^ (x >> 31)
 }
 func quicksilverKeyFamily(id uint64, seed int64, mixture string) int {
+	// Adjacent odd miss identities keep their loaded even key's family/prefix.
+	// The interior token still encodes the full ID, keeping those keys distinct.
+	id &^= 1
 	if mixture == "holdout" {
 		x := quicksilverMix(id^uint64(seed)^0x79c11a35) % 10
 		if x < 5 {
@@ -200,7 +203,7 @@ func quicksilverAccess(c *quicksilverConfig, r *rand.Rand, mode, global, stride,
 		kind = global % 3 // Balanced classes are independent of key/working-set draws.
 		switch kind {
 		case 0:
-			distinct++ // Arbitrary: first byte replaced with reserved '!'.
+			distinct++ // Arbitrary: reserved '!' prepended to the key.
 		case 1:
 			id++
 			distinct += 2 // Same family/prefix, never loaded.

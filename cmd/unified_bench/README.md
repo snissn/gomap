@@ -999,8 +999,9 @@ state. No
 whole payload corpus or per-read key allocation is retained. Small goroutine,
 context and engine snapshot allocations are separate from those capacities.
 
-Compared with the retained scratch `quicksilver_eval_test.go`, the default is
-random4k and 64 reads/snapshot, fixed counts are explicit aggregate 2M instead of
+Compared with the retained scratch `quicksilver_eval_test.go`, the historical
+`-quicksilver-case random4k` uses 64 reads/snapshot, fixed counts are explicit
+aggregate 2M instead of
 per-worker `QS_OPS`, arbitrary key counts retain unique updates, all absent keys
 are verified, and failures always stop/join. The PCG seeds, payload bytes,
 key trace and 10:1 schedule match. Stock registered engine tuning and integrity
