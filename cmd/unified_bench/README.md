@@ -681,6 +681,27 @@ not an apples-to-apples comparison with older uninstrumented samples.
 See [the full observation contract](../../docs/benchmarks/treedb_partition_accepted_cost_diagnostic.md)
 for framed-byte/RSS boundaries, validation and retained-collection limits.
 
+### Live partition canonical search cost
+
+`BenchmarkVectorIndexPartitionLiveCanonicalSearchV1` measures one pinned live
+partition domain with 16 base and 16 delta nodes, TopK 4 and EfSearch 16, at
+2 and 128 dimensions. Fixture and pin creation are outside timing;
+`SearchDomainV1` query preparation, candidate scoring and result allocations
+are included. Compare identical benchmark source and options on both revisions:
+
+```sh
+GOWORK=off GOMAXPROCS=2 GOFLAGS='-p=1 -mod=readonly' \
+  go test ./TreeDB/collections -run '^$' \
+    -bench '^BenchmarkVectorIndexPartitionLiveCanonicalSearchV1$' \
+    -count=5 -benchtime=500ms -benchmem -timeout=75s
+```
+
+Retain raw Go benchmark output (`ns/op`, `ops/s`, `B/op`, `allocs/op`, and
+`scorecalls/op`) with source and runner identities. For a separate CPU capture,
+use `-count=1 -benchtime=3s -cpuprofile=cpu.pprof -o collections.test` and
+inspect `go tool pprof -top collections.test cpu.pprof`. These standalone Go
+profiles are not benchprof inputs or `unified-bench -profile-dir` artifacts.
+
 ### MVCC ownership allocation diagnostic
 
 `BenchmarkMVCCOwnership` compares public GetAt, borrowed inspection and owned

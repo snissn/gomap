@@ -2181,12 +2181,17 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
 	}
 	// The live-delta ANN scratch consists of visited ordinals and bounded
-	// candidate heaps. Account a conservative 64 bytes for every allocated
+	// candidate heaps. Canonical rerank reuses those candidates in place and
+	// retains one FP32 normalized query. Account 64 bytes for every allocated
 	// node plus the largest possible returned stable IDs before doing work.
 	if nodes > ^uint64(0)/64 {
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
 	}
 	scratch := nodes * 64
+	if pin.view.dimensions < 0 || uint64(pin.view.dimensions) > (^uint64(0)-scratch)/4 {
+		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
+	}
+	scratch += uint64(pin.view.dimensions) * 4
 	resultRows := uint64(minInt(opts.TopK, pin.view.liveDocs))
 	resultBytes := resultRows * uint64(opts.MaxStableIDBytes)
 	if resultBytes/resultRows != uint64(opts.MaxStableIDBytes) || scratch > ^uint64(0)-resultBytes {
@@ -2212,11 +2217,16 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 	if opts.MaxStableIDBytes > 0 && pinned.maxStableIDBytes > opts.MaxStableIDBytes {
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorIndexPartitionLiveUnavailableV1, pinned.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
+	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
+	if err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: canonical query norm: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	canonical := CanonicalVectorPartitionCosineScorerV1{normalizedQuery: normalizedQuery}
 	var buffer VectorIndexSearchBuffer
 	buffer.nativeSearchWorkEnabled = true
 	buffer.nativeSearchScratch.context = ctx
 	defer func() { buffer.nativeSearchScratch.context = nil }()
-	results, err := pinned.view.searchGraphOnlyWithScoreBudget(query, opts.TopK, opts.EfSearch, opts.MaxScoreCalls, &buffer)
+	results, err := pinned.view.searchGraphOnlyWithCanonicalScoreBudget(query, opts.TopK, opts.EfSearch, opts.MaxScoreCalls, &canonical, &buffer)
 	if err != nil {
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}

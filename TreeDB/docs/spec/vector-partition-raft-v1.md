@@ -509,8 +509,13 @@ Generation-pinned exact scans operate only on the already validated persistent
 search pack and hold the same reader pin as HNSW search. Native HNSW traversal
 may use an optimized score kernel to discover candidates, but every published
 candidate is rescored with the canonical contract before shard and coordinator
-ordering. Empty IDs, non-finite scores, duplicate response IDs, noncanonical
-wire order, incomplete partition/group coverage, source-generation mismatch,
+ordering. Live partition domains likewise rescore the bounded ANN candidates
+from their pinned vectors before each base/delta top-k cut, adaptive delta
+retry decision, and merge. Canonical rescores consume the same score-work
+budget and are included in actual score-call counters; no population scan or
+score tolerance is substituted. Legacy nonpartition graph-only APIs retain
+their existing score semantics. Empty IDs, non-finite scores, duplicate response
+IDs, noncanonical wire order, incomplete partition/group coverage, source-generation mismatch,
 or partial top-k fail closed.
 
 Production evidence schema 3 reports recall independently for the full-source/
