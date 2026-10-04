@@ -512,6 +512,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
 				{ID: SectionReplacementMode, Name: "replacement_mode", Required: true, Deterministic: true},
+				{ID: SectionColocatedVectorMutationScopeV1, Name: "colocated_vector_mutation_scope", Deterministic: true},
 				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
@@ -528,6 +529,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
 				{ID: SectionDocumentIDs, Name: "document_ids", Required: true, Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionColocatedVectorMutationScopeV1, Name: "colocated_vector_mutation_scope", Deterministic: true},
 				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
@@ -797,6 +799,9 @@ func v1CommandSchemas() []CommandSchema {
 			LocalOnly: true,
 			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
 		},
+		{ID: CommandVectorReplace, Version: 1, Name: "vector_replace", Kind: CommandKindMutation, LocalOnly: true, Sections: []SectionRule{{ID: SectionVectorReplaceRequest, Name: "vector_replace_request", Required: true}, {ID: SectionDeadline, Name: "deadline", Required: true}}},
+		{ID: CommandVectorDelete, Version: 1, Name: "vector_delete", Kind: CommandKindMutation, LocalOnly: true, Sections: []SectionRule{{ID: SectionVectorDeleteRequest, Name: "vector_delete_request", Required: true}, {ID: SectionDeadline, Name: "deadline", Required: true}}},
+
 		{
 			ID: CommandVectorInsert, Version: 1, Name: "vector_insert", Kind: CommandKindMutation, LocalOnly: true,
 			Sections: []SectionRule{

@@ -38,6 +38,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	colocated            *colocatedVectorMutationPublicationV1
 	splitInsert          *splitInsertPublicationV1
 	splitProjection      *commitlog.SplitVectorInsertV1
 	sourceImportV2       *sourceImportPublicationV2
@@ -389,6 +390,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			iter, err = c.appendSplitInsertSystemDeltaV1(iter, input.splitInsert)
 		}
 		if err == nil {
+			iter, err = c.appendColocatedVectorMutationSystemDeltaV1(iter, input.colocated, replayAttempt, ctx.AppliedCommandLSN)
+		}
+		if err == nil {
 			updatedMeta = nextMeta
 		}
 		return iter, err
@@ -673,6 +677,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		}
 		if err == nil {
 			iter, err = c.appendSplitInsertSystemDeltaV1(iter, input.splitInsert)
+		}
+		if err == nil {
+			iter, err = c.appendColocatedVectorMutationSystemDeltaV1(iter, input.colocated, replayAttempt, ctx.AppliedCommandLSN)
 		}
 		if err == nil {
 			updatedMeta = nextMeta

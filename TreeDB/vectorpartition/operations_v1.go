@@ -41,6 +41,7 @@ type OperationsCountersV1 struct {
 	HNSWServedPartitions, ExactScanPartitions                       uint64
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes         uint64
 	Inserts, MutationRoutes, MutationForwards                       uint64
+	Replaces, Deletes                                               uint64
 	MutationCommits, MutationReplications, MutationApplies          uint64
 	MutationVisibilityProofs                                        uint64
 }

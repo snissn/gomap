@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
@@ -434,19 +435,27 @@ func (f *FSM) applyCommittedEntryLockedV1(entry CommittedEntryV1, storage *colle
 		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), raftentry.ErrorMalformedEntryV1, err)
 	}
 	digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
-	if err := f.checkCommittedOrder(id, digest); err != nil {
-		code, _ := ErrorCodeOf(err)
-		return reject(digest, code, err)
-	}
-	if err := f.requireStoredResultForLocalCoverageGap(id, digest); err != nil {
-		code, _ := ErrorCodeOf(err)
-		return reject(digest, code, err)
-	}
 	meta, err := f.applyMetadata(entry, id)
 	if err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(digest, code, err)
 	}
+	recoveredGap, err := f.coveredColocatedGapV1(entry, id, meta)
+	if err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(digest, code, err)
+	}
+	if !recoveredGap {
+		if err := f.checkCommittedOrder(id, digest); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if err := f.requireStoredResultForLocalCoverageGap(id, digest); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+	}
+
 	return raftapply.ApplyCommittedEntryV1(f.db, entry.Bytes, meta, raftapply.Options{
 		VectorPrepareStorageOwner: storage,
 		DecodeLimits:              f.decodeLimits,
@@ -566,6 +575,28 @@ func (f *FSM) lastAppliedProgressRecord() (raftapply.ApplyProgressRecordV1, bool
 }
 
 func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApplyProgressStore, results *raftapply.DurableApplyResultStore) error {
+	// Called at FSM open and restore, never on the apply hot path. Recompute the
+	// retained witness chain before trusting the O(1) live summary or retry lookup.
+	manager := collections.NewCommandWALReplayCollectionManager(db)
+	metas, err := manager.ListCollections()
+	var latest commitlog.ColocatedVectorMutationOutcomeV1
+	if err != nil {
+		return err
+	}
+	for _, meta := range metas {
+		collection, err := manager.OpenCollection(meta.Name)
+		if err != nil {
+			return err
+		}
+		_, outcome, err := collection.VerifyVectorPartitionColocatedMutationLogicalStateV1(context.Background())
+		if err != nil {
+			return err
+		}
+		if outcome.AppliedCommandLSN > latest.AppliedCommandLSN {
+			latest = outcome
+		}
+	}
+
 	if progress == nil {
 		return nil
 	}
@@ -575,6 +606,9 @@ func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApply
 	}
 	record, ok := progress.LastAppliedRecord()
 	if !ok {
+		if localLSN == 1 && latest.AppliedCommandLSN == localLSN {
+			return nil
+		}
 		if localLSN != 0 && (results == nil || results.Len() == 0) {
 			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing apply progress metadata for local AppliedCommandLSN coverage %d without durable result metadata", localLSN)
 		}
@@ -584,6 +618,9 @@ func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApply
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply progress metadata AppliedCommandLSN %d outruns local coverage %d", record.AppliedCommandLSN, localLSN)
 	}
 	if record.AppliedCommandLSN < localLSN && (results == nil || results.Len() <= progress.Len()) {
+		if localLSN-record.AppliedCommandLSN == 1 && latest.AppliedCommandLSN == localLSN && latest.Index > record.EntryID.Index && latest.Term >= record.EntryID.Term {
+			return nil
+		}
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d outruns apply progress metadata %d without durable result metadata beyond progress", localLSN, record.AppliedCommandLSN)
 	}
 	return nil
@@ -784,4 +821,37 @@ func (f *FSM) withVectorPrepareStorageV1(ctx context.Context, write bool, fn fun
 			return err
 		}
 	}
+}
+
+// A single interrupted source publication may be recovered only by its exact
+// original committed entry. Other local-coverage gaps retain the existing fence.
+func (f *FSM) coveredColocatedGapV1(entry CommittedEntryV1, id raftentry.ApplyEntryID, meta raftapply.ApplyMetadataV1) (bool, error) {
+	record, ok := f.progress.LastAppliedRecord()
+	localLSN, err := localAppliedCommandLSN(f.db)
+	if err != nil {
+		return false, err
+	}
+	baseline := uint64(0)
+	if ok {
+		baseline = record.AppliedCommandLSN
+	}
+	if localLSN <= baseline || localLSN-baseline != 1 {
+		return false, nil
+	}
+	if _, exists, err := f.results.LookupApplyResult(id); err != nil {
+		return false, err
+	} else if exists {
+		return false, nil
+	}
+	outcome, known, err := raftapply.CoveredColocatedVectorMutationOutcomeV1(f.db, entry.Bytes, meta, f.decodeOptions(entry, id))
+	if err != nil {
+		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "colocated gap outcome proof: %v", err)
+	}
+	if !known {
+		return false, nil
+	}
+	if outcome.AppliedCommandLSN != localLSN || outcome.Term != id.Term || outcome.Index != id.Index || (ok && (id.Index <= record.EntryID.Index || id.Term < record.EntryID.Term)) || (!ok && id.Index != 1 && !f.storeOptions.AllowInitialIndexGap) {
+		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "covered colocated outcome does not prove exact interrupted committed entry")
+	}
+	return true, nil
 }

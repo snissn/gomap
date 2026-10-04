@@ -806,13 +806,15 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	var responseSections []iwire.Section
 	var responseBody []byte
 	responseBodySet := false
-	if cmd.Header.ID == iwire.CommandSplitVectorInsertV1 {
+	if _, scoped, scopeErr := singletonSection(cmd.Known, iwire.SectionColocatedVectorMutationScopeV1); scopeErr != nil || scoped {
+		err = protocolError(iwire.ErrUnsupportedFeature, "colocated scope requires the dedicated authenticated producer")
+	} else if cmd.Header.ID == iwire.CommandSplitVectorInsertV1 {
 		err = protocolError(iwire.ErrUnsupportedFeature, "split insert deterministic command requires the dedicated authenticated runtime producer")
 	} else if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
 	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || cmd.Header.ID == iwire.CommandTypedSourceReplace || cmd.Header.ID == iwire.CommandTypedMetadataUpdate || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
-	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation && cmd.Header.ID != iwire.CommandVectorInsert {
+	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation && cmd.Header.ID != iwire.CommandVectorInsert && cmd.Header.ID != iwire.CommandVectorReplace && cmd.Header.ID != iwire.CommandVectorDelete {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
 	} else {
 		if cmd.Schema.Kind == iwire.CommandKindRead && !coordinatedReadCommand(cmd.Header.ID) {
@@ -880,7 +882,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandVectorPinSearchSnapshot,
 			iwire.CommandVectorSearchPinned,
 			iwire.CommandVectorClosePinnedSnapshot,
-			iwire.CommandVectorInsert:
+			iwire.CommandVectorInsert, iwire.CommandVectorReplace, iwire.CommandVectorDelete:
 			responseBody, err = s.handleVectorPartitionCommandV1(ctx, state, cmd, state.responseScratch())
 			responseBodySet = true
 		default:

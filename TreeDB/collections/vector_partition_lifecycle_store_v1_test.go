@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,6 +34,55 @@ func writeLifecycleSlotV1(t *testing.T, dir *os.File, name string, raw []byte) {
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVectorPartitionLifecycleStoreV1BoundedSlotRead(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	for _, test := range []struct {
+		name     string
+		raw      []byte
+		max      int
+		canceled bool
+		wantErr  error
+	}{
+		{name: "empty_max_zero", max: 0},
+		{name: "small_below_bound", raw: []byte("slot"), max: 8},
+		{name: "small_exact_bound", raw: []byte("slot"), max: 4},
+		{name: "multi_chunk_exact_bound", raw: bytes.Repeat([]byte("x"), (64<<10)+1), max: (64 << 10) + 1},
+		{name: "oversized", raw: []byte("slots"), max: 4, wantErr: ErrVectorPartitionManifestInvalid},
+		{name: "nonempty_max_zero", raw: []byte("x"), max: 0, wantErr: ErrVectorPartitionManifestInvalid},
+		{name: "canceled", raw: []byte("slot"), max: 4, canceled: true, wantErr: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := OpenVectorPartitionStoreV1(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir, err := store.openDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dir.Close()
+			name, err := vectorPartitionLifecycleNameV1("docs", "embedding", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeLifecycleSlotV1(t, dir, name, test.raw)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if test.canceled {
+				cancel()
+			}
+			got, err := readVectorPartitionLifecycleSlotWithContextV1(ctx, dir, name, test.max)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) || got != nil {
+					t.Fatalf("read bytes=%d err=%v want %v", len(got), err, test.wantErr)
+				}
+			} else if err != nil || !bytes.Equal(got, test.raw) {
+				t.Fatalf("read bytes=%d err=%v want exact %d bytes", len(got), err, len(test.raw))
+			}
+		})
 	}
 }
 

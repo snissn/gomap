@@ -4505,8 +4505,10 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query [
 	if limit < topK {
 		limit = topK
 	}
-	if limit > liveDocs {
-		limit = liveDocs
+	// Historical nodes remain traversal waypoints. Preserve the requested Ef
+	// budget through tombstones while bounding it by the allocated graph.
+	if limit > len(idx.nodes) {
+		limit = len(idx.nodes)
 	}
 	var candidates []vectorIndexCandidate
 	if scratch != nil && scratch.resumeEnabled && liveDocs == len(idx.nodes) {
