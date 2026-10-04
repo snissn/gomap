@@ -836,6 +836,11 @@ root generation. Roots, allocator state, the command-WAL frontier, and external
 resource reachability live in immutable pages that the meta page binds by page
 identity and SHA-256 digest.
 
+For `no_wal_fast`, explicit sync and checkpoint boundaries drain registered
+collection buffers before capturing the root. This changes no format bytes or
+versions; see [the authoritative no-WAL audit](no-wal-fast-audit.md) for the
+volatile ordinary-ACK and durable boundary contracts.
+
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
