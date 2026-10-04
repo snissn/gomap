@@ -2,6 +2,7 @@ package raftapply
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -31,9 +32,17 @@ type collectionMutationV1 struct {
 	bsonSetItems     []collections.BSONSetUpdateBatchItem
 	bsonSetMatched   int
 	frameDocuments   []commitlog.CollectionDocument
+	colocated        *commitlog.ColocatedVectorMutationWALV1
 }
 
 func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
+	scoped, known, err := h.colocatedVectorMutationOutcomeV1(entry, meta)
+	if err != nil {
+		return raftentry.ApplyResultV1{}, err
+	}
+	if known {
+		return h.recoveredColocatedVectorMutationResultV1(entry, meta)
+	}
 	expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
@@ -56,6 +65,17 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		applyResult, applyErr = func() (raftentry.ApplyResultV1, error) {
 			if err := h.preflightOpenedCollectionMutationV1(&mutation, true, owner); err != nil {
 				return raftentry.ApplyResultV1{}, err
+			}
+			if scoped {
+				v, _, err := colocatedVectorMutationInputsV1(entry, meta)
+				if err != nil {
+					return raftentry.ApplyResultV1{}, err
+				}
+				v, err = owner.PrepareVectorPartitionColocatedMutationV1(context.Background(), v, false)
+				if err != nil {
+					return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+				}
+				mutation.colocated = &v
 			}
 			frame, err := mutation.loweredFrame()
 			if err != nil {
@@ -131,6 +151,19 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 			}
 			if !handleFinalized {
 				if err := finalizeHandle(); err != nil {
+					return commandWALFinalizeRecoveryRequired(entry, err)
+				}
+			}
+			if v := mutation.colocated; v != nil {
+				proof, err := owner.ProvePreparedVectorPartitionColocatedMutationV1(context.Background(), matched, affected)
+				if err != nil {
+					return h.collectionMutationApplyError(entry, handle, err)
+				}
+				outcome, present, err := collection.ReadVectorPartitionColocatedOutcomeV1(v.Scope, v.Attempt, v.CommandDigest)
+				if err != nil || !present {
+					return commandWALFinalizeRecoveryRequired(entry, errors.Join(errors.New("atomic colocated outcome unavailable"), err))
+				}
+				if err := compareColocatedProofV1(proof, *v, outcome); err != nil {
 					return commandWALFinalizeRecoveryRequired(entry, err)
 				}
 			}
@@ -415,6 +448,20 @@ func collectionHasNoSecondaryIndexesV1(collection collectionMutationPreparationV
 }
 
 func (m collectionMutationV1) loweredFrame() (commandwalapply.LoweredFrame, error) {
+	if v := m.colocated; v != nil {
+		if v.Delete {
+			payload, err := commitlog.EncodeColocatedVectorDeletePayloadV2(*v)
+			if err != nil {
+				return commandwalapply.LoweredFrame{}, err
+			}
+			return commandwalapply.CollectionDeleteBatchByIDFrame(payload)
+		}
+		payload, err := commitlog.EncodeColocatedVectorReplacePayloadV2(*v)
+		if err != nil {
+			return commandwalapply.LoweredFrame{}, err
+		}
+		return commandwalapply.CollectionUpdateBatchByIDFrame(payload)
+	}
 	switch m.command {
 	case nativewire.CommandInsertBatch:
 		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(m.collection, m.frameDocuments)

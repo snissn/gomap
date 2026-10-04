@@ -236,7 +236,7 @@ func splitApplyRecoveryAssertV1(t *testing.T, c *collections.Collection, m colle
 
 // Same bounded construction as fixedPeerVectorSeedV1; no transport or authority
 // exemption and no new exported fixture API.
-func newSplitApplyRecoveryFixtureV1(t *testing.T) (string, *backenddb.DB, *collections.Collection, collections.VectorPartitionManifestV1) {
+func newSplitApplyRecoveryFixtureV1(t testing.TB) (string, *backenddb.DB, *collections.Collection, collections.VectorPartitionManifestV1) {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")

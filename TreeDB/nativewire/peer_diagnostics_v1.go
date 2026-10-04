@@ -15,6 +15,7 @@ import (
 // Unavailable lists unsupported/failed observations instead of treating zero as
 // measured. Status is observational; only Readiness performs quorum barriers.
 type FixedPeerDiagnosticsV1 struct {
+	ColocatedAudit  *ColocatedAuditReceiptV1 `json:",omitempty"`
 	Status          FixedPeerTCPStatusV1
 	Process         VectorPartitionProcessRuntimeStatsV1
 	FileDescriptors uint64

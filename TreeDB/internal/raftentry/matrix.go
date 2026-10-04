@@ -81,6 +81,8 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandDenseVectorSearch,
 		nativewire.CommandTypedDocumentUpsert,
 		nativewire.CommandVectorInsert,
+		nativewire.CommandVectorReplace,
+		nativewire.CommandVectorDelete,
 		nativewire.CommandTypedSourceReplace,
 		nativewire.CommandTypedMetadataUpdate,
 		nativewire.CommandSplitVectorInsertV1,
@@ -116,6 +118,8 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 
 	nativewire.CommandTypedDocumentUpsert: rejectedRow(nativewire.CommandTypedDocumentUpsert, "CommandTypedDocumentUpsert", "typed_document_upsert", "WAL-supported", "CollectionReplaceSourceByID (typed format 12)", "local_only_mutation_v1", "typed upsert has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
 	nativewire.CommandVectorInsert:        rejectedRow(nativewire.CommandVectorInsert, "CommandVectorInsert", "vector_insert", "WAL-supported", "CollectionInsertBatchByID (via fixed-peer Raft owner)", "local_only_mutation_v1", "public vector insert is local-only routing; the owner lowers the validated request to the existing deterministic insert-batch Raft entry"),
+	nativewire.CommandVectorReplace:       rejectedRow(nativewire.CommandVectorReplace, "CommandVectorReplace", "vector_replace", "WAL-supported", "CollectionUpdateBatchByID (via fixed-peer Raft owner)", "local_only_mutation_v1", "public colocated exact-ID replacement lowers to the existing scoped deterministic replace; original outcome is atomic SystemRoot metadata"),
+	nativewire.CommandVectorDelete:        rejectedRow(nativewire.CommandVectorDelete, "CommandVectorDelete", "vector_delete", "WAL-supported", "CollectionDeleteBatchByID (via fixed-peer Raft owner)", "local_only_mutation_v1", "public colocated exact-ID deletion lowers to the existing scoped deterministic delete; original outcome is atomic SystemRoot metadata"),
 	nativewire.CommandTypedSourceReplace:  rejectedRow(nativewire.CommandTypedSourceReplace, "CommandTypedSourceReplace", "typed_source_replace", "WAL-supported", "CollectionReplaceSourceByID (typed format 12 or delete-only format 10)", "local_only_mutation_v1", "typed source replacement has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
 	nativewire.CommandTypedMetadataUpdate: rejectedRow(nativewire.CommandTypedMetadataUpdate, "CommandTypedMetadataUpdate", "typed_metadata_update", "WAL-supported", "CollectionUpdateBatchByID (typed metadata format 13)", "local_only_mutation_v1", "typed metadata update has a local partial command-WAL/replay contract but no replicated deterministic-entry contract"),
 

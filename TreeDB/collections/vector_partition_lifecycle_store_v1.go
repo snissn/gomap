@@ -111,7 +111,7 @@ func readVectorPartitionLifecycleSlotWithContextV1(ctx context.Context, dir *os.
 		return nil, fmt.Errorf("%w: lifecycle slot %q is not a bounded regular file", ErrVectorPartitionManifestInvalid, name)
 	}
 	raw := make([]byte, 0, min(int(info.Size()), max))
-	buf := make([]byte, 64<<10)
+	buf := make([]byte, min(64<<10, int(info.Size())+1))
 	reader := io.LimitReader(f, int64(max)+1)
 	for {
 		if err := ctx.Err(); err != nil {

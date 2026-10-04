@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "treedb-query-under-write/mixed-report-v1",
+  "title": "Bounded mixed colocated window envelope",
+  "type": "object",
+  "required": [
+    "Event",
+    "Report"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "Event": {
+      "enum": [
+        "planned",
+        "result"
+      ]
+    },
+    "Report": {
+      "type": "object",
+      "required": [
+        "Version",
+        "Kind",
+        "Verdict",
+        "Admission",
+        "Anchors",
+        "Prefixes",
+        "Writes",
+        "Retries",
+        "Visibility",
+        "VisibilityEvidence",
+        "Attempts",
+        "ReadPrefixes",
+        "HighestNewCommitIndex",
+        "RequiredAppliedIndex",
+        "WriteCounts",
+        "RetryCounts",
+        "Audits",
+        "AuthorityBoundary"
+      ],
+      "properties": {
+        "Version": {
+          "const": 1
+        },
+        "Kind": {
+          "const": "fixed_cluster_mixed_window_v1"
+        },
+        "Verdict": {
+          "type": "string"
+        },
+        "Anchors": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "ID",
+              "VectorSHA256"
+            ]
+          }
+        },
+        "Prefixes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "required": [
+              "Prefix",
+              "PopulationRows",
+              "PopulationSHA256",
+              "Top10SHA256",
+              "Truth",
+              "Changed"
+            ]
+          }
+        },
+        "Writes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 6
+        },
+        "Retries": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 2
+        },
+        "Visibility": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 6
+        },
+        "VisibilityEvidence": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 6
+        },
+        "Attempts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 65600
+        },
+        "ReadPrefixes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 65536
+        },
+        "HighestNewCommitIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "RequiredAppliedIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "AuditPlan": {
+          "$ref": "#/$defs/auditPlan"
+        },
+        "Audits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 4
+        }
+      }
+    }
+  },
+  "$defs": {
+    "auditPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "Version",
+        "RunID",
+        "HighestNewCommitIndex",
+        "RequiredAppliedIndex",
+        "Writes",
+        "Final"
+      ],
+      "properties": {
+        "Version": {
+          "const": 1
+        },
+        "RunID": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "HighestNewCommitIndex": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "RequiredAppliedIndex": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "Writes": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "Final": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6
+        }
+      },
+      "$comment": "JSON encoded bytes <=524288. ValidateColocatedAuditPlanV1 additionally checks request/token/scope/ACK/ledger identity. Runtime proves current durable source/live authority. JSON Schema alone does not prove either.",
+      "x-maxEncodedBytes": 524288
+    }
+  }
+}
