@@ -89,6 +89,9 @@ func ValidateColocatedAuditPlanV1(ctx context.Context, p ColocatedAuditPlanV1) e
 	if p.Version != 1 || len(p.RunID) == 0 || len(p.RunID) > 64 || strings.Trim(p.RunID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6 || p.HighestNewCommitIndex == 0 || p.RequiredAppliedIndex < p.HighestNewCommitIndex {
 		return errors.New("audit requires version1, bounded run ID, six original outcomes and final known IDs")
 	}
+	if _, err := preflightPeerRequestBytesV1(fixedPeerRequestV1{ColocatedAudit: &p}); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(p)
 	if err != nil || len(raw) > ColocatedAuditPlanMaxBytesV1 {
 		return errors.New("audit plan encoded bound")
