@@ -212,11 +212,11 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 func requireAuthoritativeResourceColumnInsertRejected(t *testing.T, collection *collections.Collection, ids, docs [][]byte) {
 	t.Helper()
 	if _, err := collection.InsertBatch(ids, docs); !errors.Is(err, backenddb.ErrCommandWALRejected) {
-		t.Fatalf("unsupported column-store InsertBatch: error=%v want ErrCommandWALRejected", err)
+		t.Fatalf("unsupported typed-storage InsertBatch: error=%v want ErrCommandWALRejected", err)
 	}
 	for _, id := range ids {
 		if value, err := collection.Get(id); err != nil || value != nil {
-			t.Fatalf("rejected column-store InsertBatch stored row %q: value=%q err=%v", id, value, err)
+			t.Fatalf("rejected typed-storage InsertBatch stored row %q: value=%q err=%v", id, value, err)
 		}
 	}
 }
@@ -305,7 +305,7 @@ func assertAuthoritativeResourceWitness(t *testing.T, reopened *treedb.DB, witne
 				t.Fatal(err)
 			}
 			if value, err := collection.Get(witness.primaryID); err != nil || value != nil {
-				t.Fatalf("reopened rejected column-store row %s/%q: value=%q err=%v", name, witness.primaryID, value, err)
+				t.Fatalf("reopened rejected typed-storage row %s/%q: value=%q err=%v", name, witness.primaryID, value, err)
 			}
 		}
 	}

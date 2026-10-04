@@ -141,7 +141,7 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
 	t.Logf("authoritative resource scope profile=%s physical_resources=%t supported=documents,secondary,text,template,dictionary,persistent-pointers,outer-leaves", profile, witness.physicalResources)
 	if !witness.physicalResources {
-		t.Log("authoritative resource unsupported foreground writes rejected without inserted rows: column-store,column_graph-vector; physical auxiliary assets are outside this profile's witness")
+		t.Log("authoritative resource unsupported foreground writes rejected without inserted rows: typed-storage,column_graph-vector; physical auxiliary assets are outside this profile's witness")
 	}
 	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
 	// Stop the trainer and drain its final accepted-profile callback. Published
