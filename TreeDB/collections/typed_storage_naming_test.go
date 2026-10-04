@@ -340,6 +340,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/internal/nativewire/deterministic.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/internal/raftapply/column_store_create_v6_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 9},
 	{path: "TreeDB/internal/raftapply/create_collection.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	// Logical digests and their reconstruction fixture read the retained public
+	// typed-storage configuration and value-type API.
+	{path: "TreeDB/internal/raftapply/logical_digest.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/internal/raftapply/logical_digest_column_scan_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/internal/raftfsm/vector_prepare_storage_order_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	{path: "TreeDB/nativewire/column_store_metadata_v6_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 21, occurrences: 28},
 	{path: "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},

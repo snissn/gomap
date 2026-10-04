@@ -133,6 +133,10 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 		}
 		var ids [][]byte
 		var count uint64
+		// The scan API selects supported column reconstruction and its bounded
+		// windows. Hashing the full corpus remains O(N); avoid a visibility scan per ID.
+		columnStore := meta.Options.ColumnStore
+		scanColumnDocuments := !orderedSnapshot && columnStore != nil && columnStore.Enabled && columnStore.RetainedPayload != collections.ColumnRetainedPayloadFull
 		truncated, err := collection.ScanDocumentIDsFunc(maxInt(), func(id []byte) (bool, error) {
 			if orderedSnapshot {
 				if err := snapshotContext.Err(); err != nil {
@@ -140,7 +144,7 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 				}
 			}
 			count++
-			if !orderedSnapshot {
+			if !orderedSnapshot && !scanColumnDocuments {
 				ids = append(ids, id)
 			}
 			return true, nil
@@ -154,9 +158,11 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 		if truncated {
 			return LogicalDigestV1{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: logical digest document scan for %q truncated", meta.Name)
 		}
-		sort.Slice(ids, func(i, j int) bool {
-			return bytes.Compare(ids[i], ids[j]) < 0
-		})
+		if !orderedSnapshot && !scanColumnDocuments {
+			sort.Slice(ids, func(i, j int) bool {
+				return bytes.Compare(ids[i], ids[j]) < 0
+			})
+		}
 		materializer, err := collection.NewStoredDocumentJSONMaterializer()
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
@@ -202,21 +208,8 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 		writeLogicalDigestU64(h, "collection-document-count", count)
 		var documentScratch []byte
 		var hashed uint64
-		hashDocument := func(id []byte) (bool, error) {
-			if orderedSnapshot {
-				if err := snapshotContext.Err(); err != nil {
-					return false, err
-				}
-			}
+		hashStoredDocument := func(id, document []byte) (bool, error) {
 			hashed++
-			document, found, err := collection.GetInto(id, documentScratch[:0])
-			if err != nil {
-				return false, codeCollectionApplyError(err)
-			}
-			if !found {
-				return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
-			}
-			documentScratch = document
 			jsonDoc, err := materializer.StoredDocumentJSON(document)
 			if err != nil {
 				return false, codeCollectionApplyError(err)
@@ -225,7 +218,27 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 			writeLogicalDigestField(h, "collection-document-json", jsonDoc)
 			return true, nil
 		}
-		if orderedSnapshot {
+		hashDocument := func(id []byte) (bool, error) {
+			if orderedSnapshot {
+				if err := snapshotContext.Err(); err != nil {
+					return false, err
+				}
+			}
+			document, found, err := collection.GetInto(id, documentScratch[:0])
+			if err != nil {
+				return false, codeCollectionApplyError(err)
+			}
+			if !found {
+				return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
+			}
+			documentScratch = document
+			return hashStoredDocument(id, document)
+		}
+		if scanColumnDocuments {
+			truncated, err = collection.ScanDocumentsFunc(maxInt(), func(record collections.DocumentRecord) (bool, error) {
+				return hashStoredDocument(record.ID, record.Document)
+			})
+		} else if orderedSnapshot {
 			truncated, err = collection.ScanDocumentIDsFunc(maxInt(), hashDocument)
 		} else {
 			for _, id := range ids {
