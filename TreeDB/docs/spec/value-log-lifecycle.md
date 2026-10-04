@@ -267,6 +267,22 @@ installs the already computed counts without applying its commit delta twice.
 Aborted or mismatched candidates cannot repair the live tracker. This reuses the
 required scan; it does not add a scan or change the reachability authority for GC.
 
+Raw outer-leaf created/current identities in an apply delta are physical
+dependency membership only; they do not increment logical reference counters.
+An additive publication conservatively retains predecessor raw segments and
+all producer-created/current segments, including empty lanes and non-current
+segments created by rotations within the apply. This can retain bytes not
+reachable from the newest root and adds segment-frontier capture/sync work.
+Inventory snapshots occur before registration consumes the created list.
+
+The superset is durability protection, never permission to delete. Destructive
+ordinary publication restores exact candidate projection; older recoverable
+meta slots, read snapshots, and stable identity pins continue to protect their
+resources until released. GC/rewrite uses the existing reachability and pin
+rules, so this admission does not grant an independent indefinite-retention
+or reclamation authority. No directory enumeration or new on-disk format is
+part of this capture.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:

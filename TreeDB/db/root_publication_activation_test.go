@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.T) {
@@ -910,5 +912,238 @@ func TestRootPublicationDependencyBytesExcludesSelectedDurableClosure(t *testing
 	database.durableRoot.slotResources[0] = resources
 	if got, err := database.rootPublicationDependencyBytesV1(resources); err != nil || got != 0 {
 		t.Fatalf("selected durable debt=%d err=%v want=0", got, err)
+	}
+}
+
+// Every appended page rotates the active lane, while the second lane remains
+// empty. Registration consumes created inventory, just as the cached producer
+// does; current-only or post-registration snapshots lose intermediate segments.
+type rotatingReportedLeafPageLog struct {
+	*multiReportedLeafPageLog
+	t   *testing.T
+	dir string
+	seq uint32
+}
+
+func (l *rotatingReportedLeafPageLog) AppendLeafPage(leaf []byte) (page.LeafLogPtr, error) {
+	ptr, err := l.multiReportedLeafPageLog.AppendLeafPage(leaf)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	if err := l.writer.Close(); err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	l.seq++
+	segment, writer := openLeafPageLogTestWriter(l.t, LeafLogDirPath(l.dir), rewriteLeafLogLaneID, l.seq)
+	l.appendSegment, l.writer = segment, writer
+	l.currentSegments[0] = segment
+	l.createdSegments = append(l.createdSegments, segment)
+	return ptr, nil
+}
+
+func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
+	for _, path := range []string{"optimistic", "serialized", "build-group"} {
+		t.Run(path, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{Dir: dir, Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = database.Close() }()
+			leafLog := &rotatingReportedLeafPageLog{multiReportedLeafPageLog: newMultiReportedLeafPageLog(t, dir), t: t, dir: dir, seq: 4}
+			defer func() { _ = leafLog.Close() }()
+			database.SetLeafPageLog(leafLog)
+			// Establish a nonempty predecessor so first-publication admission cannot
+			// mask a missing current lane or missing within-apply rotations.
+			if err := database.SetSync([]byte("prime"), []byte("p")); err != nil {
+				t.Fatal(err)
+			}
+			const count = 128
+			values := appendPointersInNewSegment(t, dir, 0, 71, 71000, count*2, func(i int) []byte { return []byte(fmt.Sprintf("pointer-value-%04d", i)) })
+			key := func(i int) []byte { return []byte(fmt.Sprintf("key-%04d-%0120d", i, i)) }
+			for publication := 0; publication < 2; publication++ {
+				var group *RootPublicationBuildGroup
+				if path == "build-group" {
+					group, err = database.BeginRootPublicationBuildGroup()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				scans := 0
+				database.testScanCandidateExternalReferencesHook = func() { scans++ }
+				parts := 1
+				if group != nil {
+					parts = 2
+				}
+				for part := 0; part < parts; part++ {
+					b := database.NewPhysicalBatch().(*Batch)
+					for i := publication*count + part*count/parts; i < publication*count+(part+1)*count/parts; i++ {
+						if err := b.SetPointer(key(i), values[i]); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if group != nil {
+						if err := b.SetRootPublicationBuildGroup(group, part == parts-1); err != nil {
+							t.Fatal(err)
+						}
+					}
+					switch {
+					case path == "serialized":
+						err = b.writeSerialized(true, nil, database.assignBatchEntryRevisions(b.batch), nil)
+					case part == parts-1:
+						err = b.WriteSync()
+					default:
+						err = b.Write()
+					}
+					_ = b.Close()
+					if err != nil {
+						if group != nil {
+							_ = group.Close()
+						}
+						t.Fatal(err)
+					}
+				}
+				if group != nil {
+					if err := group.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				database.testScanCandidateExternalReferencesHook = nil
+				if scans != 0 {
+					t.Fatalf("fresh publication %d candidate scans=%d want 0", publication, scans)
+				}
+				registered := leafLog.registeredCalls[len(leafLog.registeredCalls)-1]
+				if len(registered) < 3 {
+					t.Fatalf("fixture rotations=%d want multiple within apply", len(registered))
+				}
+				if len(leafLog.createdSegments) != 0 {
+					t.Fatal("registration did not consume created inventory")
+				}
+				descriptors := mustStableResourceDescriptors(t, database.durableRoot.slotResources[database.durableRoot.slot])
+				for _, segment := range uniqueLeafPageLogSegmentsForTest(registered, leafLog.currentSegments) {
+					found := false
+					for _, descriptor := range descriptors {
+						if descriptor.Kind() == rootpublication.ResourceOuterLeafLog && descriptor.Generation() == uint64(segment.FileID) {
+							info, err := os.Stat(segment.Path)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if descriptor.Frontier().Bytes < uint64(info.Size()) {
+								t.Fatalf("segment %d frontier=%d size=%d", segment.FileID, descriptor.Frontier().Bytes, info.Size())
+							}
+							found = true
+						}
+					}
+					if !found {
+						t.Fatalf("published closure missing producer segment %d", segment.FileID)
+					}
+				}
+				tracked := snapshotCandidateTracker(database)
+				if !tracked.valid || tracked.sequence != database.currentCommitSeq() || tracked.counts[values[0].FileID] != uint64((publication+1)*count) {
+					t.Fatalf("logical tracker=%+v", tracked)
+				}
+				for fileID := range tracked.counts {
+					lane, _ := valuelog.DecodeFileID(fileID)
+					if lane == rewriteLeafLogLaneID {
+						t.Fatalf("physical membership became logical count: %d", fileID)
+					}
+				}
+			}
+			snapshot := database.AcquireSnapshot()
+			defer snapshot.Close()
+			for _, mutation := range []func() error{
+				func() error { return database.SetSync(key(0), []byte("replacement")) },
+				func() error { return database.DeleteSync(key(1)) },
+				func() error {
+					b := database.NewPhysicalBatch().(*Batch)
+					defer b.Close()
+					if err := b.DeleteRange(key(2), key(4)); err != nil {
+						return err
+					}
+					return b.WriteSync()
+				},
+			} {
+				scans := 0
+				database.testScanCandidateExternalReferencesHook = func() { scans++ }
+				if err := mutation(); err != nil {
+					t.Fatal(err)
+				}
+				database.testScanCandidateExternalReferencesHook = nil
+				if scans == 0 {
+					t.Fatal("destructive publication skipped exact candidate projection")
+				}
+				assertCandidateTrackerMatchesFullScan(t, database)
+			}
+			if got, err := snapshot.Get(key(0)); err != nil || string(got) != "pointer-value-0000" {
+				t.Fatalf("retained snapshot Get=(%q,%v)", got, err)
+			}
+			if err := snapshot.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := leafLog.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			for i := 0; i < count*2; i++ {
+				got, err := reopened.Get(key(i))
+				want := []byte(fmt.Sprintf("pointer-value-%04d", i))
+				if i == 0 {
+					want = []byte("replacement")
+				}
+				if i >= 1 && i < 4 {
+					want = nil
+				}
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("reopened Get(%d)=(%q,%v), want %q", i, got, err, want)
+				}
+			}
+		})
+	}
+}
+
+type errorReportedLeafPageLog struct {
+	multiReportedLeafPageLog
+	createdErr, currentErr error
+}
+
+func (l *errorReportedLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return nil, l.createdErr
+}
+
+func (l *errorReportedLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return nil, l.currentErr
+}
+
+func TestBuildValueLogRefDeltaProducerInventoryErrors(t *testing.T) {
+	injected := errors.New("producer inventory failure")
+	for _, created := range []bool{true, false} {
+		log := &errorReportedLeafPageLog{}
+		if created {
+			log.createdErr = injected
+		} else {
+			log.currentErr = injected
+		}
+		database := &DB{indexOuterLeavesInValueLog: true, leafPageLog: log}
+		delta, err := database.buildValueLogRefDelta(nil, 0, 0, nil, nil, nil, 0, false)
+		if delta != nil || !errors.Is(err, injected) {
+			t.Fatalf("created=%v delta=%v error=%v", created, delta, err)
+		}
+		// Pager-backed / untrackable publication must not consult leaf authority.
+		database.indexOuterLeavesInValueLog = false
+		delta, err = database.buildValueLogRefDelta(nil, 0, 0, nil, nil, nil, 0, false)
+		if delta != nil || err != nil {
+			t.Fatalf("pager delta=%v error=%v", delta, err)
+		}
 	}
 }
