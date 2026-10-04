@@ -67,6 +67,7 @@ class CaptureRehearsal(unittest.TestCase):
             self.assertEqual(command[:3], ['/usr/bin/time', '-v', str(root/'bin'/'fake-bench')])
             # Controlled ELF/ldd fixture avoids a native build. Execute its output
             # producer in a fresh real Python process; no claim of native timing.
+            kwargs['env'] = {k: v for k, v in kwargs['env'].items() if not k.startswith('LD_')}
             return real_run([sys.executable, str(root/'fake-engine.py'), *command[3:]], **kwargs)
 
         with tempfile.TemporaryDirectory() as temp:
