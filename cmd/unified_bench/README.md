@@ -1012,3 +1012,43 @@ Profiled and unprofiled runs must be labeled separately; retain three repeats
 before summarizing numerical comparisons. The standalone TreeDB workflow in
 [the canonical runbook](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
 remains a separate workload and artifact schema.
+
+### Owned cached snapshot microprofile
+
+The standalone `BenchmarkSnapshotPublishedOwnedRead` in `TreeDB/caching`
+compares caller-owned `Get` and reusable-destination `GetAppend` on 4096 published
+256-byte values. Setup, checkpoint and warmup are outside the benchmark timers;
+a queued unrelated write retains the cached snapshot view. Generic workload and
+concurrent-writer qualification remain the Quicksilver suite's responsibility.
+
+Capture it through the existing fresh-process point-lookup workflow:
+
+```sh
+RUN_DIR=/tmp/treedb_point_lookup_profiles scripts/treedb_point_lookup_profile.sh
+# Bounded artifact smoke check, not throughput evidence:
+BENCHTIME=1x RUN_DIR=/tmp/treedb_point_lookup_smoke scripts/treedb_point_lookup_profile.sh
+```
+
+The workflow uses `GOWORK=off`, count 1 and `BENCHTIME=200ms` by default. Alongside
+the node/tree families, `cached_owned.txt` contains Go benchmark stdout/stderr,
+`cached_owned.test` is the symbolization binary, `cached_owned_cpu.pprof` and
+`cached_owned_allocs.pprof` are Go test profiles, and matching `_cpu_top.txt` /
+`_allocs_top.txt` files contain pprof summaries. The shared `source-head.txt`,
+`source-status.txt`, `source-diff.patch`, `go-version.txt` and `settings.txt`
+retain source/toolchain provenance. Each benchmark family runs in a fresh Go
+test process. Profiles include fixture setup and the whole test process; keep
+profiled diagnostics separate from unprofiled benchmark timing. These profiles
+are **not benchprof inputs** or unified-bench `-profile-dir` artifacts. Inspect
+them with `go tool pprof`; see the [analyzer documentation](../benchprof/README.md#leaf-point-lookup-microprofiles).
+
+To profile only this family in one fresh process, the corresponding Go command
+from the repository root is:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkSnapshotPublishedOwnedRead$' \
+  -benchmem -benchtime=200ms -count=1 -timeout=2m \
+  -cpuprofile=/tmp/cached_owned_cpu.pprof -memprofile=/tmp/cached_owned_allocs.pprof \
+  -o=/tmp/cached_owned.test
+go tool pprof -top /tmp/cached_owned.test /tmp/cached_owned_cpu.pprof
+go tool pprof -top -alloc_space /tmp/cached_owned.test /tmp/cached_owned_allocs.pprof
+```
