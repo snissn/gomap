@@ -164,6 +164,58 @@ func TestVectorIndexConstructionIdenticalRepresentationValidation(t *testing.T) 
 	}
 }
 
+func TestVectorIndexConstructionAdmissionPreservesLastGeometryAfterEvictions(t *testing.T) {
+	for _, capacity := range []int{7, 129} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			index, err := newVectorIndex(nil, VectorIndexOptions{
+				Name: "embedding_graph", Field: "embedding", Metric: VectorMetricL2,
+				Dimensions: 2, M: 2, EfConstruction: capacity,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const extras = 8
+			for ordinal := 0; ordinal < capacity+extras; ordinal++ {
+				vector := []float32{float32(ordinal + 2), 1}
+				if ordinal < 3 {
+					vector = []float32{-1, 0}
+				} else if ordinal < 6 {
+					vector = []float32{1, 0}
+				} else if ordinal >= capacity {
+					vector = []float32{0, float32(ordinal - capacity + 2)}
+				}
+				index.nodes = append(index.nodes, index.newVectorIndexNode([]byte(fmt.Sprint(ordinal)), vector, 0))
+			}
+			oldCurrent, source := capacity, capacity+extras-1
+			for ordinal := oldCurrent + 1; ordinal <= oldCurrent+4; ordinal++ {
+				index.nodes[oldCurrent].neighbors[0] = append(index.nodes[oldCurrent].neighbors[0], vectorIndexNeighbor{nodeID: uint32(ordinal)})
+			}
+			query := []float32{0, 0}
+			candidates := make([]vectorIndexCandidate, capacity)
+			for ordinal := range candidates {
+				candidates[ordinal] = vectorIndexCandidate{nodeID: ordinal, distance: index.distanceToNodeWithPreparedQueryLocked(query, 0, nil, ordinal)}
+			}
+			scratch := &vectorIndexSearchScratch{scoreTracking: true, scoreLimit: 4}
+			got := index.admitRedundantConstructionNeighborhoodLocked(query, 0, nil, candidates, source, oldCurrent, scratch, nil)
+			// Two three-member classes fund exactly four evictions. Further
+			// admissions must leave their last members and every unique bridge.
+			want := []int{oldCurrent, oldCurrent + 1, 2, oldCurrent + 2, oldCurrent + 3, 5}
+			if len(got) != capacity || scratch.scoreCalls != 4 || scratch.scoreBudgetExceeded {
+				t.Fatalf("admission length=%d scores=%d exceeded=%t", len(got), scratch.scoreCalls, scratch.scoreBudgetExceeded)
+			}
+			for slot, candidate := range got {
+				expected := slot
+				if slot < len(want) {
+					expected = want[slot]
+				}
+				if candidate.nodeID != expected {
+					t.Fatalf("slot %d=%d want %d", slot, candidate.nodeID, expected)
+				}
+			}
+		})
+	}
+}
+
 func TestVectorIndexRedundantConstructionLiveTieOrder(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding_graph", Field: "embedding", Metric: VectorMetricL2,

@@ -5575,6 +5575,27 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 	if len(candidates) == 0 || !idx.constructionCandidatesHaveIdenticalVectorsLocked(candidates) {
 		return candidates
 	}
+	// Classify this bounded pool only when an admission needs to evict. Node
+	// ordinals remain immutable even when their candidate slots are overwritten.
+	// ponytail: initial classification is quadratic in EfConstruction; hash only if profiling warrants it.
+	var classNodesStack, classCountsStack, membershipsStack [128]int
+	var classNodes, classCounts, memberships []int
+	classFor := func(nodeID int) int {
+		free := -1
+		for class, representative := range classNodes {
+			if classCounts[class] == 0 {
+				if free < 0 {
+					free = class
+				}
+				continue
+			}
+			if idx.constructionNodesHaveIdenticalVectorsLocked(nodeID, representative) {
+				return class
+			}
+		}
+		classNodes[free] = nodeID
+		return free
+	}
 	admit := func(nodeID int) {
 		if nodeID < 0 || nodeID >= len(idx.nodes) || nodeID == sourceNodeID {
 			return
@@ -5586,22 +5607,34 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 		}
 		replace := -1
 		if len(candidates) >= idx.efConstruction {
+			if memberships == nil {
+				n := len(candidates)
+				if n <= len(membershipsStack) {
+					classNodes = classNodesStack[:n]
+					classCounts = classCountsStack[:n]
+					memberships = membershipsStack[:n]
+				} else {
+					classNodes = make([]int, n)
+					classCounts = make([]int, n)
+					memberships = make([]int, n)
+				}
+				for i, candidate := range candidates {
+					class := classFor(candidate.nodeID)
+					memberships[i] = class
+					classCounts[class]++
+				}
+			}
 			for i, candidate := range candidates {
-				for j, other := range candidates {
-					if i != j && idx.constructionNodesHaveIdenticalVectorsLocked(candidate.nodeID, other.nodeID) {
-						// Re-evaluate stored identity against the current pool after
-						// every overwrite. Scores need not agree for this eviction
-						// predicate; never discard a sole geometry representative.
-						if replace < 0 {
-							replace = i
-						} else {
-							deleted := idx.nodes[candidate.nodeID].deleted
-							replacedDeleted := idx.nodes[candidates[replace].nodeID].deleted
-							if (deleted && !replacedDeleted) || (deleted == replacedDeleted && vectorIndexConstructionOrdinalOffset(candidate.nodeID, sourceNodeID) > vectorIndexConstructionOrdinalOffset(candidates[replace].nodeID, sourceNodeID)) {
-								replace = i
-							}
-						}
-						break
+				if classCounts[memberships[i]] <= 1 {
+					continue
+				}
+				if replace < 0 {
+					replace = i
+				} else {
+					deleted := idx.nodes[candidate.nodeID].deleted
+					replacedDeleted := idx.nodes[candidates[replace].nodeID].deleted
+					if (deleted && !replacedDeleted) || (deleted == replacedDeleted && vectorIndexConstructionOrdinalOffset(candidate.nodeID, sourceNodeID) > vectorIndexConstructionOrdinalOffset(candidates[replace].nodeID, sourceNodeID)) {
+						replace = i
 					}
 				}
 			}
@@ -5618,6 +5651,10 @@ func (idx *VectorIndex) admitRedundantConstructionNeighborhoodLocked(query []flo
 		}
 		candidate := vectorIndexCandidate{nodeID: nodeID, distance: distance}
 		if replace >= 0 {
+			classCounts[memberships[replace]]--
+			class := classFor(nodeID)
+			memberships[replace] = class
+			classCounts[class]++
 			candidates[replace] = candidate
 		} else {
 			candidates = append(candidates, candidate)
