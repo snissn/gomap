@@ -760,3 +760,15 @@ durable pending intent for retry rather than reporting an unproved success.
 This fixed identity accepts one pending and at most 64 completed operations,
 with no completed-outcome eviction. This is a bounded checkpoint, not general
 indefinite write capacity. See [the split insert contract](vector-partition-split-source-insert-v1.md).
+
+### Mixed colocated qualification diagnostics
+
+Optional version1 `ColocatedAudit` on existing fixed-peer diagnostics is bounded
+to six original outcomes and final known IDs (524288 encoded plan bytes). Its
+current-FSM/ACTIVE/root/applied/physical-WAL/summary fences and prepared-owner
+source/live proof are mandatory; stale or torn evidence is refused. Ordinary
+serving/diagnostics and mutation formats are unchanged. This is not full-population
+authority or a distributed quiescence mechanism. All four RF4 voters must remain
+live through audit acquisition; root owns stop/join/catchup and clean shutdown
+verification. The mixed-window README and schema specify retained attempts,
+causal prefixes, original retries, observation limits and failure consumption.

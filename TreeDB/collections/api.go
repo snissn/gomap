@@ -14029,7 +14029,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		if commandWALIntent != nil {
 			if err := c.withCommandWALPublishCoordinatorAdmission(commandWALIntent, admission, func() error {
 				return c.validateRootDescriptorSystemDeltaForMeta(c.meta, baseCommitSeq, baseSystemRoot, []string{primaryRootName}, map[string]uint64{primaryRootName: catalog.rootID(primaryRootName)})
-			}, func() error { return c.db.PublishStagedCommandWALNoop(commandWALIntent, false) }); err != nil {
+			}, func() error { return c.publishColocatedVectorMutationNoopV1(commandWALIntent, admission) }); err != nil {
 				return 0, err
 			}
 		}
@@ -14091,12 +14091,16 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 		existing = append(existing, item)
 	}
+	if admission != nil && admission.colocated != nil && admission.colocated.wal.Affected != uint64(len(existing)) {
+		_ = snap.Close()
+		return 0, ErrVectorIndexPartitionLiveMismatchV1
+	}
 	if len(existing) == 0 {
 		_ = snap.Close()
 		if commandWALIntent != nil {
 			if err := c.withCommandWALPublishCoordinatorAdmission(commandWALIntent, admission, func() error {
 				return c.validateRootDescriptorSystemDeltaForMeta(c.meta, baseCommitSeq, baseSystemRoot, []string{primaryRootName}, map[string]uint64{primaryRootName: catalog.rootID(primaryRootName)})
-			}, func() error { return c.db.PublishStagedCommandWALNoop(commandWALIntent, false) }); err != nil {
+			}, func() error { return c.publishColocatedVectorMutationNoopV1(commandWALIntent, admission) }); err != nil {
 				return 0, err
 			}
 		}
@@ -14195,7 +14199,8 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	var immediateColumnInput columnWritePublishInput
 	if columnStoreWriteEnabled(c.meta) {
 		immediateColumnInput = columnWritePublishInput{
-			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			colocated: colocatedVectorMutationAdmissionV1(admission),
+			meta:      c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
 			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationDelete,
 			documents: columnWriteDocumentsFromIDs(deleteIDs), rows: len(existing),
@@ -18566,6 +18571,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		return nil, nil
 	}
 	defer plan.close()
+	if err := validateColocatedVectorMutationUpdatePlanV1(admission, plan); err != nil {
+		return nil, err
+	}
 	if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 		if err := c.withMutationLockAdmission(admission, func() error {
 			if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
@@ -18585,7 +18593,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						return err
 					}
 				}
-				if err := c.withCommandWALPublishCoordinatorAdmission(commandWALIntent, admission, func() error { return c.validateUpdateBatchPlanRootDescriptors(plan) }, func() error { return c.db.PublishStagedCommandWALNoop(commandWALIntent, false) }); err != nil {
+				if err := c.withCommandWALPublishCoordinatorAdmission(commandWALIntent, admission, func() error { return c.validateUpdateBatchPlanRootDescriptors(plan) }, func() error { return c.publishColocatedVectorMutationNoopV1(commandWALIntent, admission) }); err != nil {
 					return err
 				}
 			}
@@ -20012,6 +20020,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 
 func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, commandWALIntent *backenddb.CommandWALIntent, admissions ...*collectionCommandWALAdmission) ([]UpdateBatchResult, error) {
 	admission := collectionCommandWALAdmissionArgument(admissions)
+	if err := validateColocatedVectorMutationUpdatePlanV1(admission, plan); err != nil {
+		return nil, err
+	}
 	if plan == nil {
 		return nil, nil
 	}
@@ -20043,7 +20054,8 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			}
 		}
 		immediateColumnInput = columnWritePublishInput{
-			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
+			colocated: colocatedVectorMutationAdmissionV1(admission),
+			meta:      plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
 			documents: columnDocuments, rows: plan.stats.Modified, rowRemainderBytes: plan.rowRemainderBytes,

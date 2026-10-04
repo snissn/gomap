@@ -350,6 +350,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/nativewire/metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 10},
+	// Colocated outcomes and recovery use the retained public configuration API.
+	{path: "TreeDB/collections/vector_partition_colocated_outcome_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/internal/raftfsm/colocated_vector_mutation_recovery_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Split recovery constructs the retained public typed-column schema.
 	{path: "TreeDB/internal/raftapply/split_vector_insert_recovery_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Owner preparation and paged build/session consume the retained public schema API.

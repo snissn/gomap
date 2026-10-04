@@ -1692,3 +1692,44 @@ qualification or sustained fairness under every load. #4958 owns the retained
 representative-corpus probe failure and fresh >64 ordinary-write reconciliation;
 #4250 owns sustained QPS/p99/recall/resources. Increasing explicit driver budgets
 alone cannot make the failed unpaced trial a pass.
+
+### Colocated exact-ID vector mutations
+
+Local-only mutation commands `vector_replace` (71/v1) and `vector_delete`
+(72/v1) use required bounded deadline section 4 and request sections 148 and
+149 respectively; response section 150 contains the original durable outcome.
+Replacement section 148 reuses the exact insert-request v1 binary field order.
+Delete section 149 contains canonical uvarints/string/byte fields in order:
+version 1, index string, generation, attempt bytes, exact ID bytes, deadline
+Unix nanoseconds. Section 150 contains version 1, index, generation, owner,
+commit term/index, applied index, consensus boolean, coverage, live revision,
+matched/modified/deleted counts, route/forward/commit/replication/apply/visibility
+counters, and token bytes. Numeric values use canonical uvarints; consensus is
+strictly 0 or 1, and decoders reject extra bytes. IDs/keys are at most 1,024
+bytes, replacement JSON at most 64 KiB and the visibility token at most 8 KiB.
+
+Internal optional deterministic section 151 is a bounded strict JSON v1 scope
+(index, owner group, generation, scope digest), allowed only on one-ID,
+existing-only JSON ReplaceBatch or DeleteBatch. Unknown fields, versions,
+request-supplied authority and multi-ID widening are refused. Generic public and
+fixed-peer entry ingress refuse this scope even when syntactically valid. Only
+the dedicated owner producer lowers it into existing deterministic command IDs
+31/32. Ordinary command and insert/search bytes do not change. The canonical
+fixtures are `colocated_replace_v1_entry.hex` and
+`colocated_delete_v1_entry.hex`; source-of-truth registry remains
+`internal/nativewire/{types,schema,deterministic}.go` (no schema generator is
+currently in use). See `vector-partition-raft-v1.md` for outcome/floor semantics.
+
+### Bounded colocated audit diagnostics attachment
+
+The existing fixed-peer control `diagnostics` JSON request may carry optional
+`ColocatedAudit` (version1, encoded plan <=524288 bytes, six original replace or
+delete requests/ACKs and final unique-ID states). Other operations reject the
+attachment. Ordinary diagnostics omit it. This changes no public vector binary
+section, command opcode, deterministic entry or WAL format. The optional reply
+`ColocatedAudit` carries six exact original witnesses, retained chain/count/bytes,
+current-FSM applied/root/physical-WAL identity and final known-ID source/live
+proofs. It is evidence only, never caller-supplied commit authority. Missing,
+malformed, stale or torn authority refuses the attachment without retry or
+repair; it is not downgraded to a successful ordinary diagnostic. See the
+mixed-window README and `mixed-report-v1.schema.json` for shape and limits.

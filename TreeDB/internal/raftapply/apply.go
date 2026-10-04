@@ -195,8 +195,15 @@ func (h *Harness) PreflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 }
 
 func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (PreflightResultV1, error) {
+	scoped, known, err := h.colocatedVectorMutationOutcomeV1(entry, meta)
+	if err != nil || known {
+		return PreflightResultV1{KnownIdempotencyReplay: known}, err
+	}
 	if ok, err := h.preflightKnownIdempotencyReplayV1(entry); err != nil || ok {
-		return PreflightResultV1{KnownIdempotencyReplay: ok}, err
+		if err == nil {
+			err = requireColocatedRecordedOutcomeV1(scoped, known)
+		}
+		return PreflightResultV1{KnownIdempotencyReplay: ok && err == nil}, err
 	}
 	switch entry.Target.CommandID {
 	case nativewire.CommandCreateCollection:
@@ -229,6 +236,11 @@ func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 		mutation, err := lowerCollectionMutationV1(entry, h.opts.DecodeLimits)
 		if err != nil {
 			return PreflightResultV1{}, err
+		}
+		if scoped {
+			if err := h.preflightColocatedVectorMutationV1(entry, meta); err != nil {
+				return PreflightResultV1{}, err
+			}
 		}
 		if err := h.preflightCollectionMutationOnlyV1(&mutation); err != nil {
 			return PreflightResultV1{}, err
@@ -301,6 +313,15 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		return reject(entry.Digest, code, err)
 	}
 
+	scoped, originalOutcomeKnown, outcomeErr := h.colocatedVectorMutationOutcomeV1(entry, meta)
+	if outcomeErr != nil {
+		code, _ := ErrorCodeOf(outcomeErr)
+		if code == raftentry.ErrorUnsafeDurabilityModeV1 {
+			return recoveryRequired(entry.Digest, code, outcomeErr)
+		}
+		return reject(entry.Digest, code, outcomeErr)
+	}
+
 	if h.opts.ResultStore != nil {
 		record, ok, err := h.opts.ResultStore.LookupApplyResult(meta.EntryID)
 		if err != nil {
@@ -308,6 +329,10 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			return reject(entry.Digest, code, err)
 		}
 		if ok {
+			if err := requireColocatedRecordedOutcomeV1(scoped, originalOutcomeKnown); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: apply entry %d/%d digest conflicts with existing result", meta.EntryID.Term, meta.EntryID.Index))
 			}
@@ -338,6 +363,10 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			return reject(entry.Digest, code, err)
 		}
 		if ok {
+			if err := requireColocatedRecordedOutcomeV1(scoped, originalOutcomeKnown); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: idempotency key conflicts with existing result for apply entry %d/%d", meta.EntryID.Term, meta.EntryID.Index))
 			}

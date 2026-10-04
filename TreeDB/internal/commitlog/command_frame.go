@@ -1704,11 +1704,13 @@ type CollectionInsertBatchByIDPayload struct {
 }
 
 type CollectionDeleteBatchByIDPayload struct {
+	Colocated  *ColocatedVectorMutationWALV1
 	Collection string
 	IDs        [][]byte
 }
 
 type CollectionUpdateBatchByIDPayload struct {
+	Colocated  *ColocatedVectorMutationWALV1
 	Collection string
 	Documents  []CollectionDocument
 }
@@ -2232,6 +2234,10 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 				return ErrCorrupt
 			}
 			return validateCollectionTypedBatchPayload(env.Payload)
+		}
+		if len(env.Payload) >= 2 && binary.LittleEndian.Uint16(env.Payload) == 2 {
+			_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+			return err
 		}
 		return validateCollectionInsertBatchByIDPayload(env.Payload)
 	case CommandKindCollectionReplaceSourceByID:
@@ -3119,11 +3125,20 @@ func EncodeCollectionUpdateBatchByIDPayload(collection string, docs []Collection
 }
 
 func DecodeCollectionUpdateBatchByIDPayload(payload []byte) (CollectionUpdateBatchByIDPayload, error) {
+	base, colocated, err := decodeColocatedVectorMutationPayloadV2(payload)
+	if err != nil {
+		return CollectionUpdateBatchByIDPayload{}, err
+	}
+	payload = base
 	decoded, err := DecodeCollectionInsertBatchByIDPayload(payload)
 	if err != nil {
 		return CollectionUpdateBatchByIDPayload{}, err
 	}
+	if colocated != nil && (colocated.Delete || colocated.Collection != decoded.Collection || len(decoded.Documents) != 1 || !bytes.Equal(decoded.Documents[0].ID, colocated.ID) || !bytes.Equal(decoded.Documents[0].Document, colocated.Document)) {
+		return CollectionUpdateBatchByIDPayload{}, ErrCorrupt
+	}
 	return CollectionUpdateBatchByIDPayload{
+		Colocated:  colocated,
 		Collection: decoded.Collection,
 		Documents:  decoded.Documents,
 	}, nil
@@ -3159,6 +3174,11 @@ func EncodeCollectionDeleteBatchByIDPayload(collection string, ids [][]byte) ([]
 }
 
 func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBatchByIDPayload, error) {
+	base, colocated, err := decodeColocatedVectorMutationPayloadV2(payload)
+	if err != nil {
+		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	payload = base
 	collection, count, off, err := decodeCollectionBatchHeader(payload)
 	if err != nil {
 		return CollectionDeleteBatchByIDPayload{}, err
@@ -3193,7 +3213,10 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 	if err := validateStrictlyIncreasingCollectionIDs(ids); err != nil {
 		return CollectionDeleteBatchByIDPayload{}, err
 	}
-	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+	if colocated != nil && (!colocated.Delete || colocated.Collection != collection || len(ids) != 1 || !bytes.Equal(ids[0], colocated.ID)) {
+		return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+	}
+	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids, Colocated: colocated}, nil
 }
 
 func EncodeCollectionReplaceSourceByIDPayload(collection string, deleteIDs [][]byte, docs []CollectionDocument) ([]byte, error) {
@@ -3236,6 +3259,9 @@ func DecodeCollectionReplaceSourceByIDPayload(payload []byte) (CollectionReplace
 	if err != nil {
 		return CollectionReplaceSourceByIDPayload{}, err
 	}
+	if deleted.Colocated != nil {
+		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
+	}
 	inserted, err := DecodeCollectionInsertBatchByIDPayload(payload[4+deleteLen:])
 	if err != nil {
 		return CollectionReplaceSourceByIDPayload{}, err
@@ -3251,6 +3277,10 @@ func DecodeCollectionReplaceSourceByIDPayload(payload []byte) (CollectionReplace
 }
 
 func validateCollectionDeleteBatchByIDPayload(payload []byte) error {
+	if len(payload) >= 2 && binary.LittleEndian.Uint16(payload) == 2 {
+		_, err := DecodeCollectionDeleteBatchByIDPayload(payload)
+		return err
+	}
 	_, count, off, err := parseCollectionBatchHeader(payload)
 	if err != nil {
 		return err

@@ -6,6 +6,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 // Authenticated native traffic starts with a 1 MiB frame profile; legacy
@@ -83,7 +84,7 @@ func preflightPeerRequestBytesV1(body fixedPeerRequestV1) (int64, error) {
 		remaining -= int64(length) * multiplier
 		return true
 	}
-	if !charge(len(body.Entry), 2) || !charge(len(body.Metadata.TraceContext), 2) || !charge(len(body.Route.Tokens), 22) || len(body.Metadata.ClusterRouteMembers) > fixedPeerMaxPeersV1 {
+	if !charge(len(body.VectorMutationVisibility), 2) || !charge(len(body.Entry), 2) || !charge(len(body.Metadata.TraceContext), 2) || !charge(len(body.Route.Tokens), 22) || len(body.Metadata.ClusterRouteMembers) > fixedPeerMaxPeersV1 {
 		return 0, raftcluster.ErrRouteTargetUnsupported
 	}
 	m, r := body.Metadata, body.Route
@@ -102,10 +103,55 @@ func preflightPeerRequestBytesV1(body fixedPeerRequestV1) (int64, error) {
 			return 0, raftcluster.ErrRouteTargetUnsupported
 		}
 	}
-	if body.VectorInsert != nil {
-		v := body.VectorInsert
-		if !charge(len(v.Request.ID), 2) || !charge(len(v.Request.Document), 2) || !charge(len(v.Request.IdempotencyKey), 2) || !charge(len(v.Request.Vector), 24) || !charge(len(v.Request.Generation.Index), 6) || !charge(len(v.SourceGroup), 6) || !charge(len(v.OwnerGroup), 6) {
+	chargeInsert := func(r public.InsertRequestV1) bool {
+		return charge(len(r.ID), 2) && charge(len(r.Document), 2) && charge(len(r.IdempotencyKey), 2) && charge(len(r.Vector), 24) && charge(len(r.Generation.Index), 6)
+	}
+	routed := [2]*VectorPartitionRoutedInsertV1{body.VectorInsert}
+	if body.VectorMutation != nil {
+		routed[1] = &body.VectorMutation.VectorPartitionRoutedInsertV1
+	}
+	for _, v := range routed {
+		if v == nil {
+			continue
+		}
+		if !chargeInsert(v.Request) {
 			return 0, raftcluster.ErrRouteTargetUnsupported
+		}
+		i, s := v.Identity.Index, v.Identity.SourceV2
+		for _, value := range []string{string(v.SourceGroup), string(v.OwnerGroup), v.ReadySetDigest, v.RouterModelDigest, v.CatalogProof.Digest, i.Collection.Database, i.Collection.Catalog, i.Collection.Collection, i.IndexName, i.IndexDefinitionDigest, i.CatalogDigest, v.Identity.Immutable.ManifestDigest, v.Identity.Immutable.PlacementDigest, s.SourceMapDigest, s.SnapshotSetDigest, s.GraphProfileDigest, s.PlacementDigest} {
+			if !charge(len(value), 6) {
+				return 0, raftcluster.ErrRouteTargetUnsupported
+			}
+		}
+	}
+	if p := body.ColocatedAudit; p != nil {
+		// Each bounded write includes fixed request/response fields, numbers,
+		// deadlines and JSON punctuation; final states have their own envelope.
+		if len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6 || !charge(len(p.RunID), 6) || !charge(len(p.Writes), 2048) || !charge(len(p.Final), 256) {
+			return 0, raftcluster.ErrRouteTargetUnsupported
+		}
+		for _, w := range p.Writes {
+			if (w.Replace == nil) == (w.Delete == nil) {
+				return 0, raftcluster.ErrRouteTargetUnsupported
+			}
+			if w.Replace != nil && !chargeInsert(*w.Replace) {
+				return 0, raftcluster.ErrRouteTargetUnsupported
+			}
+			if w.Delete != nil {
+				r := w.Delete
+				if !charge(len(r.ID), 2) || !charge(len(r.IdempotencyKey), 2) || !charge(len(r.Generation.Index), 6) {
+					return 0, raftcluster.ErrRouteTargetUnsupported
+				}
+			}
+			r := w.Response
+			if !charge(len(r.VisibilityToken), 2) || !charge(len(r.Generation.Index), 6) || !charge(len(r.OwnerGroup), 6) {
+				return 0, raftcluster.ErrRouteTargetUnsupported
+			}
+		}
+		for _, f := range p.Final {
+			if !charge(len(f.ID), 2) || !charge(len(f.Document), 2) {
+				return 0, raftcluster.ErrRouteTargetUnsupported
+			}
 		}
 	}
 	if body.VectorLifecycle != nil && !charge(len(body.VectorLifecycle.Action), 6) {
