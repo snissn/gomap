@@ -2,12 +2,15 @@ package nativewire
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestPeerSecurityByteRefusalIsDefiniteBeforeSendV1(t *testing.T) {
@@ -142,5 +145,118 @@ func TestSplitProofNodeReservePreservesNestedReadsV1(t *testing.T) {
 		if peerControlScopeV1(operation) != "control-proof" || peerControlRequestModeV1(operation, peerRequestIngressV1) != peerRequestInternalV1 {
 			t.Fatalf("proof dependency classification changed: %s", operation)
 		}
+	}
+}
+
+func TestPeerSecurityColocatedRequestPreflightV1(t *testing.T) {
+	audit := func() *ColocatedAuditPlanV1 {
+		p := &ColocatedAuditPlanV1{Version: 1, RunID: "preflight", HighestNewCommitIndex: math.MaxUint64, RequiredAppliedIndex: math.MaxUint64, Final: []ColocatedAuditStateV1{{ID: []byte{1}, Document: []byte{2}}}}
+		for i := 0; i < 6; i++ {
+			r := public.InsertRequestV1{Version: math.MaxUint32, Generation: public.GenerationIDV1{Index: "\x00", Generation: math.MaxUint64}, ID: []byte{1}, IdempotencyKey: []byte{2}, Vector: []float32{math.MaxFloat32, -math.SmallestNonzeroFloat32}, Document: []byte{3}}
+			w := ColocatedAuditWriteV1{Response: public.MutationResponseV1{Generation: r.Generation, OwnerGroup: "\x00", VisibilityToken: []byte{4}, CommitTerm: math.MaxUint64, CommitIndex: math.MaxUint64, AppliedIndex: math.MaxUint64, Coverage: math.MaxUint64, LiveRevision: math.MaxUint64, Matched: math.MaxUint64, Modified: math.MaxUint64, Deleted: math.MaxUint64, Counters: public.MutationCountersV1{Routes: math.MaxUint64, Forwards: math.MaxUint64, Commits: math.MaxUint64, Replications: math.MaxUint64, Applies: math.MaxUint64, VisibilityProofs: math.MaxUint64}}}
+			if i%2 == 0 {
+				w.Replace = &r
+			} else {
+				w.Delete = &public.DeleteRequestV1{Version: r.Version, Generation: r.Generation, ID: r.ID, IdempotencyKey: r.IdempotencyKey}
+			}
+			p.Writes = append(p.Writes, w)
+		}
+		return p
+	}
+	p := audit()
+	// Conservative accounting may exceed the exact 512 KiB plan limit. It must
+	// still admit the finite pre-Marshal shape; validation keeps its exact cap.
+	p.Writes[0].Replace.Document = make([]byte, 300<<10)
+	body := fixedPeerRequestV1{ColocatedAudit: p, VectorInsert: &VectorPartitionRoutedInsertV1{Request: *p.Writes[0].Replace}, VectorMutation: &VectorPartitionRoutedMutationV1{VectorPartitionRoutedInsertV1: VectorPartitionRoutedInsertV1{Request: *p.Writes[0].Replace}}, VectorMutationVisibility: []byte{1}}
+	bound, err := preflightPeerRequestBytesV1(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound < int64(len(raw)) || bound <= ColocatedAuditPlanMaxBytesV1 {
+		t.Fatalf("undercharged JSON: bound %d actual %d", bound, len(raw))
+	}
+	planRaw, err := json.Marshal(p)
+	if err != nil || len(planRaw) >= ColocatedAuditPlanMaxBytesV1 {
+		t.Fatalf("near-limit fixture: bytes %d err %v", len(planRaw), err)
+	}
+	oversized := make([]byte, fixedPeerMaxRPCBytesV1/2)
+	escaped := strings.Repeat("\x00", fixedPeerMaxRPCBytesV1/6)
+	vectors := make([]float32, fixedPeerMaxRPCBytesV1/24)
+	cases := []struct {
+		name string
+		grow func(*ColocatedAuditPlanV1)
+	}{
+		{"run", func(p *ColocatedAuditPlanV1) { p.RunID = escaped }},
+		{"replace-id", func(p *ColocatedAuditPlanV1) { p.Writes[0].Replace.ID = oversized }},
+		{"replace-key", func(p *ColocatedAuditPlanV1) { p.Writes[0].Replace.IdempotencyKey = oversized }},
+		{"replace-document", func(p *ColocatedAuditPlanV1) { p.Writes[0].Replace.Document = oversized }},
+		{"replace-vector", func(p *ColocatedAuditPlanV1) { p.Writes[0].Replace.Vector = vectors }},
+		{"replace-index", func(p *ColocatedAuditPlanV1) { p.Writes[0].Replace.Generation.Index = escaped }},
+		{"delete-id", func(p *ColocatedAuditPlanV1) { p.Writes[1].Delete.ID = oversized }},
+		{"delete-key", func(p *ColocatedAuditPlanV1) { p.Writes[1].Delete.IdempotencyKey = oversized }},
+		{"delete-index", func(p *ColocatedAuditPlanV1) { p.Writes[1].Delete.Generation.Index = escaped }},
+		{"response-token", func(p *ColocatedAuditPlanV1) { p.Writes[0].Response.VisibilityToken = oversized }},
+		{"response-index", func(p *ColocatedAuditPlanV1) { p.Writes[0].Response.Generation.Index = escaped }},
+		{"response-owner", func(p *ColocatedAuditPlanV1) { p.Writes[0].Response.OwnerGroup = escaped }},
+		{"final-id", func(p *ColocatedAuditPlanV1) { p.Final[0].ID = oversized }},
+		{"final-document", func(p *ColocatedAuditPlanV1) { p.Final[0].Document = oversized }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := audit()
+			tc.grow(p)
+			if _, err := preflightPeerRequestBytesV1(fixedPeerRequestV1{ColocatedAudit: p}); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+				t.Fatalf("unbounded audit accepted: %v", err)
+			}
+		})
+	}
+	for _, body := range []fixedPeerRequestV1{
+		{VectorMutationVisibility: oversized},
+		{VectorMutation: &VectorPartitionRoutedMutationV1{VectorPartitionRoutedInsertV1: VectorPartitionRoutedInsertV1{Request: public.InsertRequestV1{Document: oversized}}}},
+		{VectorInsert: &VectorPartitionRoutedInsertV1{RouterModelDigest: escaped}},
+		{VectorMutation: &VectorPartitionRoutedMutationV1{VectorPartitionRoutedInsertV1: VectorPartitionRoutedInsertV1{ReadySetDigest: escaped}}},
+	} {
+		if _, err := preflightPeerRequestBytesV1(body); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+			t.Fatalf("unbounded sibling accepted: %v", err)
+		}
+	}
+}
+
+func TestPeerSecurityAuditBytesRefusedBeforeSendV1(t *testing.T) {
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	client, err := NewFixedPeerTCPClientWithTransportV1(config, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	empty, err := preflightPeerRequestBytesV1(fixedPeerRequestV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := transport.admission.acquire("control-diagnostics", peerBytesV1, transport.admission.scopes["control-diagnostics"].limits[peerBytesV1]-peerControlBytesV1(empty))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocked.release()
+	p := ColocatedAuditPlanV1{RunID: "audit", Writes: make([]ColocatedAuditWriteV1, 6), Final: []ColocatedAuditStateV1{{ID: []byte("id")}}}
+	for i := range p.Writes {
+		p.Writes[i].Replace = &public.ReplaceRequestV1{Document: make([]byte, 64<<10)}
+	}
+	before := transport.ResourceStatsV1().WrittenBytes
+	if _, err := client.call(context.Background(), config.NodeID, "diagnostics", fixedPeerRequestV1{ColocatedAudit: &p}, false); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("audit did not refuse at byte admission: %v", err)
+	}
+	if after := transport.ResourceStatsV1().WrittenBytes; after != before {
+		t.Fatalf("refused audit sent bytes: %d->%d", before, after)
+	}
+	blocked.release()
+	stats := transport.ResourceStatsV1().Current
+	if stats[peerRequestsV1] != 0 || stats[peerBytesV1] != 0 {
+		t.Fatalf("refused audit leaked leases: %v", stats)
 	}
 }

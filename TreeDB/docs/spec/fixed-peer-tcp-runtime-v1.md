@@ -473,3 +473,23 @@ qualification or sustained fairness under every load. #4958 owns the retained
 representative-corpus probe failure and fresh >64 ordinary-write reconciliation;
 #4250 owns sustained QPS/p99/recall/resources. Increasing explicit driver budgets
 alone cannot make the failed unpaced trial a pass.
+
+### Explicit bounded audit attachment
+
+`treedb-fixed-peer -mode diagnostics -colocated-audit-plan plan.json` loads and
+validates a version1 <=524288-byte six-outcome plan before client networking.
+It reuses the existing authenticated diagnostics operation and all-voter live
+readiness/proof paths. No serving flag, shutdown hook, endpoint or offline opener
+is added. The optional receipt proves actual current-FSM applied/root/WAL state,
+six retained original witnesses/chain and final known-ID canonical source/absence
+plus live membership. The prepared-owner wrapper may flush pending work; pending
+state or any changed physical/root/applied/summary binding refuses observation.
+Each original token obtains a fresh routed leader/quorum proof; only that proof
+is forwarded. Witness, source and live membership observations remain local to
+each voter. Current-FSM DB identity checks bracket prepared collection admission;
+the callback never takes the FSM lock, because follower apply holds that lock
+before taking the same admission. Physical root/WAL and summary checks remain
+inside admission, followed by current-DB, applied, ACTIVE and catalog rechecks.
+Concurrent apply must complete and make a changed-state audit refuse its receipt.
+Keep every voter live until all audit receipts are independently verified, then
+retain separate clean-stop evidence. Ordinary diagnostics omit the attachment.
