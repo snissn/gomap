@@ -2,6 +2,7 @@ package pager
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,92 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	chunkSize := syncPagesTestChunkSize(1)
+	p, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.SetSyncConcurrency(2)
+	pagesPerChunk := int(chunkSize / int64(page.PageSize))
+	if _, err := p.Alloc(pagesPerChunk + 1); err != nil {
+		t.Fatal(err)
+	}
+	stable, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stable.Close()
+	beforeSize := p.durableFileSize.Load()
+	originalFile := syncPageFileFn
+	fileCalls := 0
+	failSync := true
+	wantErr := errors.New("injected index-data sync failure")
+	syncPageFileFn = func(file *os.File) error {
+		fileCalls++
+		if file != stable {
+			t.Fatal("sync did not use the exact retained file")
+		}
+		if failSync {
+			return wantErr
+		}
+		return originalFile(file)
+	}
+	t.Cleanup(func() { syncPageFileFn = originalFile })
+	for _, id := range []uint64{0, uint64(pagesPerChunk)} {
+		if err := p.Write(id, bytes.Repeat([]byte{0x5a}, page.PageSize)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.FlushDirtyChunksFrom(1); err != nil {
+		t.Fatal(err)
+	}
+	_, lowerDirty := p.dirtyChunks[0]
+	_, upperDirty := p.dirtyChunks[1]
+	if !lowerDirty || upperDirty || fileCalls != 0 || p.durableFileSize.Load() != beforeSize {
+		t.Fatalf("flush-only state: lower=%t upper=%t file_calls=%d durable_size=%d", lowerDirty, upperDirty, fileCalls, p.durableFileSize.Load())
+	}
+	want := bytes.Repeat([]byte{0xa5}, page.PageSize)
+	if err := p.Write(uint64(pagesPerChunk), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SyncIndexDataWithStableFile(stable); !errors.Is(err, wantErr) {
+		t.Fatalf("failed file barrier=%v want %v", err, wantErr)
+	}
+	if len(p.dirtyChunks) != 2 || fileCalls != 1 || p.durableFileSize.Load() != beforeSize {
+		t.Fatalf("failed barrier: dirty=%d file_calls=%d durable_size=%d", len(p.dirtyChunks), fileCalls, p.durableFileSize.Load())
+	}
+	failSync = false
+	if err := p.SyncIndexDataWithStableFile(stable); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.dirtyChunks) != 0 || fileCalls != 2 {
+		t.Fatalf("retry barrier: dirty=%d file_calls=%d", len(p.dirtyChunks), fileCalls)
+	}
+	info, err := stable.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.durableFileSize.Load(); got != info.Size() {
+		t.Fatalf("durable file size=%d want %d", got, info.Size())
+	}
+	got := make([]byte, page.PageSize)
+	for _, id := range []uint64{0, uint64(pagesPerChunk)} {
+		if _, err := stable.ReadAt(got, int64(id)*int64(page.PageSize)); err != nil {
+			t.Fatal(err)
+		}
+		expected := want
+		if id == 0 {
+			expected = bytes.Repeat([]byte{0x5a}, page.PageSize)
+		}
+		if !bytes.Equal(got, expected) {
+			t.Fatalf("retained file page %d differs after retry", id)
+		}
+	}
+}
 
 func TestSyncIndexDataWithStableFileRejectsNilBeforeDurabilityCut(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")

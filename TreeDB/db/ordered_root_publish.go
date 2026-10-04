@@ -1188,7 +1188,7 @@ func mergeValueLogRefDeltaInto(dst **valueLogRefDelta, src *valueLogRefDelta) {
 	})
 }
 
-func addOrderedRootOuterLeafSegmentsToValueLogRefDelta(log LeafPageLog, delta *valueLogRefDelta) error {
+func addOuterLeafSegmentsToValueLogRefDelta(log LeafPageLog, delta *valueLogRefDelta) error {
 	if log == nil || delta == nil || !delta.outerLeafDependencyReuse {
 		return nil
 	}
@@ -3075,7 +3075,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 			releaseValueLogRefDelta(vlogRefDelta)
 			vlogRefDelta = nil
 		}
-		if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
+		if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
 			return 0, nil, err
 		}
 		touchedValueLogSegments = positiveValueLogRefDeltaFileIDs(vlogRefDelta, touchedValueLogSegments)
@@ -3586,7 +3586,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			releaseValueLogRefDelta(optimisticVlogRefDelta)
 			optimisticVlogRefDelta = nil
 		}
-		if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, optimisticVlogRefDelta); err != nil {
+		if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, optimisticVlogRefDelta); err != nil {
 			_ = systemDelta.Close()
 			return 0, nil, false, err
 		}
@@ -3963,7 +3963,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			releaseValueLogRefDelta(vlogRefDelta)
 			vlogRefDelta = nil
 		}
-		if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
+		if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
 			return 0, nil, err
 		}
 		touchedValueLogSegments = positiveValueLogRefDeltaFileIDs(vlogRefDelta, touchedValueLogSegments)
@@ -4388,7 +4388,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		releaseValueLogRefDelta(vlogRefDelta)
 		vlogRefDelta = nil
 	}
-	if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
+	if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
 		return 0, nil, err
 	}
 	phaseStart = time.Now()

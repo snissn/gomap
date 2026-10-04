@@ -718,12 +718,16 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
 	delta, err := db.buildValueLogRefDeltaWithOptions(p, rootID, baseSeq, entries, ranges, oldPointerRefs, oldEntriesRemoved, oldPointerRefsCollected, false)
-	if delta != nil {
-		// The ordinary DB root follows the configured outer-leaf storage policy.
-		// Mark that evidence explicitly so durable capture replaces, rather than
-		// inherits, raw-leaf dependencies. Ordered multi-root callers override
-		// this per root because their system roots remain pager-backed.
-		delta.outerLeafDependencyReuse = db.indexOuterLeavesInValueLog
+	if err != nil || delta == nil {
+		return delta, err
+	}
+	// All ordinary apply paths capture the producer inventory here, before
+	// final registration acknowledges and clears created non-current segments.
+	// Physical membership must not become a logical ValuePtr reference count.
+	delta.outerLeafDependencyReuse = db.indexOuterLeavesInValueLog
+	if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, delta); err != nil {
+		releaseValueLogRefDelta(delta)
+		return nil, err
 	}
 	return delta, err
 }
