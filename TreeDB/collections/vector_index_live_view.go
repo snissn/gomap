@@ -407,6 +407,10 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 }
 
 func (view *vectorIndexSearchView) searchGraphOnlyWithScoreBudget(query []float32, topK, efSearch, maxScoreCalls int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	return view.searchGraphOnlyWithCanonicalScoreBudget(query, topK, efSearch, maxScoreCalls, nil, buffer)
+}
+
+func (view *vectorIndexSearchView) searchGraphOnlyWithCanonicalScoreBudget(query []float32, topK, efSearch, maxScoreCalls int, canonical *CanonicalVectorPartitionCosineScorerV1, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
 	if view == nil {
 		return nil, errors.New("collections: vector index search view is unavailable")
 	}
@@ -439,13 +443,13 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithScoreBudget(query []float3
 		buffer.nativeSearchScratch.stopScoreTracking()
 	}()
 	if len(view.deltaNodes) == 0 {
-		results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+		results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
 		if buffer.nativeSearchWorkEnabled {
 			buffer.nativeSearchWork.baseVisited = buffer.nativeSearchScratch.explored
 		}
 		return results, err
 	}
-	baseResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	baseResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +468,7 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithScoreBudget(query []float3
 	}
 	buffer.nativeSearchScratch.startResumableSearch()
 	defer buffer.nativeSearchScratch.stopResumableSearch()
-	deltaResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	deltaResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +486,7 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithScoreBudget(query []float3
 		buffer.nativeSearchScratch.resumeSearch()
 		deltaTopK = minInt(topK, deltaTopK*2)
 		deltaEfSearch = maxInt(deltaEfSearch, deltaTopK)
-		deltaResults, err = searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+		deltaResults, err = searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -528,7 +532,7 @@ func vectorIndexLiveDeltaSearchBudget(requested, deltaDocs, totalDocs int) int {
 	return minInt(budget, requested)
 }
 
-func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
+func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, canonical *CanonicalVectorPartitionCosineScorerV1, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
 	runtimeIndex := VectorIndex{
 		metric:     view.metric,
 		encoding:   view.encoding,
@@ -542,6 +546,43 @@ func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *pr
 	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, prepared, topK, efSearch, liveDocs, scratch)
 	if err != nil {
 		return nil, err
+	}
+	if canonical != nil {
+		// Rerank the bounded ANN candidates before either plane's TopK cut.
+		// Negative scores preserve the exact FP32 bits; 1-score would round.
+		live := candidates[:0]
+		for i, candidate := range candidates {
+			if i&255 == 0 {
+				if err := scratch.finalContextErr(); err != nil {
+					return nil, err
+				}
+			}
+			if candidate.nodeID < 0 || candidate.nodeID >= len(nodes) {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			if nodes[candidate.nodeID].deleted {
+				continue
+			}
+			if scratch.scoreLimit > 0 && scratch.scoreCalls >= scratch.scoreLimit {
+				scratch.scoreBudgetExceeded = true
+				return nil, scratch.finalScoreBudgetErr()
+			}
+			node := &nodes[candidate.nodeID]
+			// The pinned FP32 node caches the same binary64 norm used by the
+			// canonical scorer; round its inverse to FP32 before normalizing.
+			score, err := canonicalVectorPartitionScoreWithInvNormV1(canonical.normalizedQuery, node.vector, float32(node.cachedInvNorm))
+			if err != nil {
+				return nil, err
+			}
+			scratch.scoreCalls++
+			candidate.distance = -score
+			live = append(live, candidate)
+		}
+		candidates = live
+		runtimeIndex.sortVectorIndexCandidatesByDistanceLocked(candidates)
+		if err := scratch.finalContextErr(); err != nil {
+			return nil, err
+		}
 	}
 	resultCount := 0
 	idByteCount := 0
@@ -573,7 +614,11 @@ func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *pr
 		nextIDOffset := idOffset + len(node.documentID)
 		id := (*idBytes)[idOffset:nextIDOffset:nextIDOffset]
 		copy(id, node.documentID)
-		(*results)[resultIndex] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
+		score := 1 - float64(candidate.distance)
+		if canonical != nil {
+			score = -float64(candidate.distance)
+		}
+		(*results)[resultIndex] = VectorIndexSearchResult{ID: id, Score: score}
 		resultIndex++
 		idOffset = nextIDOffset
 	}

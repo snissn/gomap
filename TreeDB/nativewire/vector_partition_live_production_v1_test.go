@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -920,5 +921,51 @@ func replaceVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.
 	matched, err := collection.Replace([]byte(id), document)
 	if err != nil || !matched {
 		t.Fatalf("replace %s matched=%v: %v", id, matched, err)
+	}
+}
+
+func TestVectorPartitionLiveProductionCanonicalScoreV1(t *testing.T) {
+	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
+	defer fixture.database.Close()
+	services, sources := newVectorPartitionLiveProductionServicesV1(t, fixture)
+	defer func() {
+		for _, source := range sources {
+			_ = source.Close()
+		}
+	}()
+	dispatcher := &vectorPartitionLiveProductionDispatcherV1{services: services}
+	coordinator, err := NewVectorPartitionCoordinatorForTopologyV1(vectorPartitionLiveCoordinatorTopologyV1(fixture), CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: fixture.collection}, dispatcher, VectorPartitionCoordinatorLimitsV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coordinator.Close()
+	search := func(id string, query []float32) VectorPartitionCoordinatorResponseV1 {
+		t.Helper()
+		response, err := coordinator.Search(t.Context(), VectorPartitionCoordinatorRequestV1{
+			Version: VectorPartitionCoordinatorVersionV1, RequestID: id, CancellationID: "cancel-" + id,
+			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
+			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
+			Query:                 query, Metric: VectorPartitionShardSearchMetricCosineV1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), PartitionProbes: 1,
+			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
+			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
+			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
+		})
+		if err != nil {
+			t.Fatalf("search %s: %v", id, err)
+		}
+		if response.Counters.ExactScanPartitions != 0 || response.Counters.RequestPathFullRebuilds != 0 ||
+			response.Counters.HNSWServedPartitions != response.Counters.SelectedPartitions {
+			t.Fatalf("search %s fallback/rebuild counters=%+v", id, response.Counters)
+		}
+		return response
+	}
+
+	search("canonical-warm", []float32{1, 0})
+	vector := []float32{-.43388373, .90096885}
+	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "doc-01", vector)
+	response := search("canonical-live", vector)
+	if len(response.Neighbors) != 1 || response.Neighbors[0].ID != "doc-01" || math.Float32bits(response.Neighbors[0].Score) != 0x3f7fffff || response.Counters.DeltaResults != 1 {
+		t.Fatalf("response=%+v want doc-01 score bits=3f7fffff via live search", response)
 	}
 }
