@@ -8,6 +8,11 @@ receipts {source|build|native|runner: {path, sha256}}. Relative receipt paths ar
 root-relative; source binaries are under root/bin. Receipts attest landed build
 inputs, build command/toolchain/tags, native identities and runner respectively;
 the coordinator reviews their contents, this wrapper verifies their hashes.
+Libraries must include every same-environment ldd resolution, including libc and
+the dynamic loader. Only LD_LIBRARY_PATH may be nonempty among LD_* controls.
+Source linkage defaults to dynamic; linkage=static explicitly requires a static
+ldd result. Benchmark binaries must be Linux ELF executables, not scripts.
+Raw ldd output and actual loader environment are retained per cell.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
 commit, seed, mixture, working_set, miss_percent, profiled, flags}]. Defaults match
@@ -22,6 +27,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -39,6 +45,47 @@ def sha256(path):
         for block in iter(lambda: stream.read(1 << 20), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_native(binary, source, libraries, env, root, directory, metadata):
+    loader_env = {k: v for k, v in env.items() if k.startswith('LD_') or k == 'GLIBC_TUNABLES'}
+    for name in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT'):
+        loader_env.setdefault(name, '')
+    native = dict(command=['/usr/bin/ldd', str(binary)], loader_env=loader_env, libraries={}, virtual=[])
+    metadata['native_resolution'] = native
+    stdout_path, stderr_path = directory/'ldd.stdout.txt', directory/'ldd.stderr.txt'
+    stdout_path.touch()
+    stderr_path.touch()
+    assert not any(v for k, v in loader_env.items() if k.startswith('LD_') and k != 'LD_LIBRARY_PATH'), 'unsupported loader injection/control'
+    with binary.open('rb') as executable:
+        assert executable.read(4) == b'\x7fELF', 'benchmark executable must be ELF'
+    with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
+        result = subprocess.run(native['command'], cwd=root, env=env, stdout=stdout, stderr=stderr, timeout=30)
+    native['rc'] = result.returncode
+    output, errors = stdout_path.read_text().strip(), stderr_path.read_text().strip()
+    linkage = source.get('linkage', 'dynamic')
+    native['linkage'] = linkage
+    if linkage == 'static':
+        assert result.returncode in (0, 1) and (output, errors) in (
+            ('statically linked', ''), ('', 'statically linked'), ('', 'not a dynamic executable'), ('not a dynamic executable', '')), 'unrecognized static resolution'
+        return
+    assert linkage == 'dynamic' and result.returncode == 0 and not errors, 'dynamic resolution failed'
+    for line in output.splitlines():
+        fields = line.split()
+        if fields and fields[0] in ('linux-vdso.so.1', 'linux-gate.so.1'):
+            assert len(fields) == 2 and re.fullmatch(r'\(0x[0-9a-fA-F]+\)', fields[1]), line
+            native['virtual'].append(fields[0])
+            continue
+        if '=>' in fields:
+            assert len(fields) == 4 and fields[1] == '=>', line
+            path, address = fields[2:]
+        else:
+            assert len(fields) == 2, line
+            path, address = fields
+        assert pathlib.Path(path).is_absolute() and re.fullmatch(r'\(0x[0-9a-fA-F]+\)', address), line
+        native['libraries'][path] = sha256(pathlib.Path(path))
+        assert native['libraries'][path] == libraries.get(path, {}).get('sha256'), 'unattested resolved dependency: '+path
+    assert native['libraries'], 'dynamic resolution contained no absolute dependencies'
 
 
 def validate(reports, cell, directory, fixtures):
@@ -200,9 +247,9 @@ def main():
             metadata = dict(cell=cell, repeat=repeat+1, command=command, source=source,
                             manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(), plan_sha256=hashlib.sha256(plan_raw).hexdigest(),
                             collector_sha256=sha256(pathlib.Path(__file__)),
-                            env={k: v for k, v in env.items() if k.startswith('TREEDB_') or k in
+                            env={k: v for k, v in env.items() if k.startswith(('TREEDB_', 'LD_')) or k in
                                  ('GOROOT', 'GOWORK', 'GOGC', 'GODEBUG', 'GOMAXPROCS', 'GOMEMLIMIT', 'TMPDIR', 'LD_LIBRARY_PATH',
-                                  'PATH', 'CGO_ENABLED', 'GOFLAGS', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_LDFLAGS')},
+                                  'GLIBC_TUNABLES', 'PATH', 'CGO_ENABLED', 'GOFLAGS', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_LDFLAGS')},
                             load_before=os.getloadavg(), started=time.time())
             metadata_path = directory/'run.json'
             metadata_path.write_text(json.dumps(metadata, indent=2)+'\n')
@@ -214,6 +261,7 @@ def main():
                 assert all(v.startswith('-'+cell['engine']+'-') and '=' in v for v in extra), 'extra flags must be engine tuning only'
                 assert case != 'realistic' or cell.get('seed', 24) != 0
                 assert source['head'] and sha256(binary) == source['binary_sha256']
+                validate_native(binary, source, manifest['libraries'], env, root, directory, metadata)
                 with (directory/'stdout.json').open('w') as stdout, (directory/'stderr.log').open('w') as stderr:
                     result = subprocess.run(['/usr/bin/time', '-v', *command], cwd=root, env=env, stdout=stdout, stderr=stderr)
                 metadata['rc'] = result.returncode
