@@ -84,6 +84,21 @@ func TestNativePublishedDuplicateVectorsRemainSearchableAfterDeletes(t *testing.
 					}
 				}
 			}
+			// The public fixture inserts and retries a fresh vector after deleting
+			// the cohort, then searches with its original TopK4/Ef8 request.
+			insert("fresh-y", []float32{0, 1})
+			index.acknowledgeSearchViewStateLocked()
+			index.publishSearchViewLocked(false)
+			view := index.acquireSearchView()
+			var buffer VectorIndexSearchBuffer
+			got, err := view.searchGraphOnlyWithBuffer([]float32{0, 1}, 4, 8, &buffer)
+			index.releaseSearchView(view)
+			if err != nil {
+				t.Fatalf("fresh insert after cohort deletion (%s): %v", order, err)
+			}
+			if len(got) != 2 || string(got[0].ID) != "fresh-y" || float32(got[0].Score) != 1 || string(got[1].ID) != "base-minus-x" || float32(got[1].Score) != 0 {
+				t.Fatalf("fresh insert after cohort deletion: candidates=%+v want fresh-y then base-minus-x", got)
+			}
 		})
 	}
 }
