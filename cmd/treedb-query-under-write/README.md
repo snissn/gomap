@@ -521,11 +521,18 @@ the next writer invocation.
 
 After drain, the driver explicitly retries original slot0 after supersession and
 original slot2 after deletion. It retains their original request identity and
-requires identical original term/index/counts/coverage/live revision/token, with
+requires identical original term/index/outcome counts (`Matched`, `Modified`,
+`Deleted`)/coverage/live revision/token, with
 returned applied index covering that outcome. `HighestNewCommitIndex` excludes
 these retries; `RequiredAppliedIndex` additionally covers their observed apply
 positions. A complete acknowledged ledger reconstructs the final expected
-population; quiescent canonical recall and all-voter catchup follow. Any failed,
+population; quiescent canonical recall and all-voter catchup follow. Per-call
+proof counters are independently validated; `Forwards` may change with the
+ingress route and is not part of the retained durable outcome. The quiescent
+pre-check uses one readiness round; post-write checks allow up to 64 bounded
+rounds and retain every observation, validating the final complete round.
+Each voter audit gets at least the server request timeout within the overall
+run deadline. Any failed,
 UNKNOWN, malformed, truncated, mismatched or missing sample consumes the run:
 no automatic retry, discarded sample, exact fallback or fast-read substitution.
 

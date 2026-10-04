@@ -39,9 +39,18 @@ func TestMixedOriginalOutcomeAndFailureV1(t *testing.T) {
 	original := public.MutationResponseV1{Generation: g, OwnerGroup: "g", CommitTerm: 2, CommitIndex: 7, AppliedIndex: 7, ProductionConsensus: true, Coverage: 9, LiveRevision: 4, Matched: 1, Modified: 1, VisibilityToken: []byte("original"), Counters: public.MutationCountersV1{Routes: 1, Commits: 1, Replications: 1, Applies: 1, VisibilityProofs: 1}}
 	retry := original
 	retry.AppliedIndex = 12
+	retry.Counters.Forwards = 1
 	if err := mixedSameOutcome(original, retry); err != nil {
 		t.Fatal(err)
 	}
+	if err := public.ValidateMutationResponseV1(g, false, retry); err != nil {
+		t.Fatal(err)
+	}
+	retry.Modified = 0
+	if mixedSameOutcome(original, retry) == nil {
+		t.Fatal("accepted changed original outcome count")
+	}
+	retry.Modified = original.Modified
 	retry.CommitIndex++
 	if mixedSameOutcome(original, retry) == nil {
 		t.Fatal("accepted new outcome position")
@@ -75,6 +84,11 @@ func TestMixedFullPrefixTruthAndSupersessionV1(t *testing.T) {
 	final, err := mixedPlan(context.Background(), &in, &r)
 	if err != nil || len(r.Writes) != 6 || len(r.Prefixes) != 7 {
 		t.Fatalf("plan %+v err%v", r.Prefixes, err)
+	}
+	pre := pacedRecallCopy(r.Admission, "quiescent-before-mixed")
+	post, _, err := mixedTruth(context.Background(), final, r.Admission, 6)
+	if err != nil || r.Admission.Verdict != "ACCEPTED_INPUTS_INVARIANT_PENDING_RUNTIME" || pre.Verdict != r.Admission.Verdict || post.Verdict != r.Admission.Verdict {
+		t.Fatalf("missing nested input verdict: admission%q pre%q post%q err%v", r.Admission.Verdict, pre.Verdict, post.Verdict, err)
 	}
 	if len(final.vectors) != len(in.vectors)-3 || len(in.vectors) != 17 {
 		t.Fatalf("population ownership final%d base%d", len(final.vectors), len(in.vectors))

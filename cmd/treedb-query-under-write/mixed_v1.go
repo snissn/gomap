@@ -73,6 +73,7 @@ type mixedReport struct {
 }
 
 func mixedSameOutcome(a, b public.MutationResponseV1) error {
+	// Forwards describes this call's ingress route, not its retained outcome.
 	if a.Generation != b.Generation || a.OwnerGroup != b.OwnerGroup || a.CommitTerm != b.CommitTerm || a.CommitIndex != b.CommitIndex || a.Coverage != b.Coverage || a.LiveRevision != b.LiveRevision || a.Matched != b.Matched || a.Modified != b.Modified || a.Deleted != b.Deleted || !bytes.Equal(a.VisibilityToken, b.VisibilityToken) || !b.ProductionConsensus || b.AppliedIndex < a.CommitIndex {
 		return errors.New("retry changed original durable outcome")
 	}
@@ -254,6 +255,7 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 		r.Prefixes = append(r.Prefixes, proof)
 		final = state
 	}
+	r.Admission.Verdict = "ACCEPTED_INPUTS_INVARIANT_PENDING_RUNTIME"
 	return final, nil
 }
 func mixedValidate(o mixedOptions) error {
@@ -582,7 +584,7 @@ func mixedEmit(output io.Writer, event string, r *mixedReport) error {
 func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (runErr error) {
 	ctx, cancel := context.WithTimeout(parent, o.Window.Admission.Timeout)
 	defer cancel()
-	r := mixedReport{windowReport: windowReport{Version: 1, Kind: "fixed_cluster_mixed_window_v1", Verdict: "FAILED", Concurrency: o.Window.Concurrency, WarmupPlanned: o.Window.Warmup, MaxAttempts: o.Window.MaxAttempts, OutputBytes: o.Window.OutputBytes, RequestedDuration: o.Window.Duration, ResourceGateDir: o.Window.ResourceGateDir, Counts: counts{Planned: o.Window.MaxAttempts, Unissued: o.Window.MaxAttempts}, WarmupCounts: counts{Planned: o.Window.Warmup, Unissued: o.Window.Warmup}, Scope: "six serial colocated exact-ID mutations with invariant full canonical FP32 top10 strict reads; observational only, no capacity/host-loss/general changing-topK/full-source population claim", Schedule: "six serial original writes plus untimed token strict visibility before next mutation; no failed/UNKNOWN retry or discarded sample", LatencyBasis: "public client submit-to-visible ACK; six raw samples only, no p99/per-request allocation attribution; read QPS includes validation/retention/drain but excludes setup/full-prefix oracle/warmup/resource gate/post-join causal recheck/retry/post-recall/audit", Admission: recallReport{Version: 1, Kind: "fixed_cluster_mixed_window_admission_v1", Phase: o.Window.Admission.Phase, RunID: o.Window.Admission.RunID, Timeout: o.Window.Admission.Timeout, RPCTimeout: o.Window.Admission.RPCTimeout}}, PaceInterval: o.Interval, RetryRule: "after drain explicitly retry original replacement0 after supersession and deletion2; require original term/index/counts/coverage/revision/token with applied index covering outcome", AuthorityBoundary: "all-voter current-FSM audits before any shutdown prove only six witnesses and four changed IDs; ANN absence is not source authority"}
+	r := mixedReport{windowReport: windowReport{Version: 1, Kind: "fixed_cluster_mixed_window_v1", Verdict: "FAILED", Concurrency: o.Window.Concurrency, WarmupPlanned: o.Window.Warmup, MaxAttempts: o.Window.MaxAttempts, OutputBytes: o.Window.OutputBytes, RequestedDuration: o.Window.Duration, ResourceGateDir: o.Window.ResourceGateDir, Counts: counts{Planned: o.Window.MaxAttempts, Unissued: o.Window.MaxAttempts}, WarmupCounts: counts{Planned: o.Window.Warmup, Unissued: o.Window.Warmup}, Scope: "six serial colocated exact-ID mutations with invariant full canonical FP32 top10 strict reads; observational only, no capacity/host-loss/general changing-topK/full-source population claim", Schedule: "six serial original writes plus untimed token strict visibility before next mutation; no failed/UNKNOWN retry or discarded sample", LatencyBasis: "public client submit-to-visible ACK; six raw samples only, no p99/per-request allocation attribution; read QPS includes validation/retention/drain but excludes setup/full-prefix oracle/warmup/resource gate/post-join causal recheck/retry/post-recall/audit", Admission: recallReport{Version: 1, Kind: "fixed_cluster_mixed_window_admission_v1", Phase: o.Window.Admission.Phase, RunID: o.Window.Admission.RunID, Timeout: o.Window.Admission.Timeout, RPCTimeout: o.Window.Admission.RPCTimeout}}, PaceInterval: o.Interval, RetryRule: "after drain explicitly retry original replacement0 after supersession and deletion2; require original term/index/outcome counts/coverage/revision/token with applied index covering outcome; per-call route counters independently validated", AuthorityBoundary: "all-voter current-FSM audits before any shutdown prove only six witnesses and four changed IDs; ANN absence is not source authority"}
 	defer func() {
 		if runErr == nil {
 			runErr = ctx.Err()
@@ -652,20 +654,21 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		return err
 	}
 	defer control.Close()
-	observe := func(target *[]observation) error {
+	observe := func(target *[]observation, rounds int) error {
 		receipt := report{RPCTimeout: r.Admission.RPCTimeout}
-		err := readiness(ctx, control, in.config, &receipt, r.RequiredAppliedIndex, 1)
+		err := readiness(ctx, control, in.config, &receipt, r.RequiredAppliedIndex, rounds)
 		*target = receipt.Readiness
 		if err != nil {
 			return err
 		}
-		states := make([]nativewire.FixedPeerReadinessV1, len(receipt.Readiness))
-		for i, v := range receipt.Readiness {
+		last := receipt.Readiness[len(receipt.Readiness)-len(in.config.Nodes):]
+		states := make([]nativewire.FixedPeerReadinessV1, len(last))
+		for i, v := range last {
 			states[i] = v.State
 		}
 		return recallReadyStates(in.config, states, r.RequiredAppliedIndex)
 	}
-	if err = observe(&r.Admission.ReadinessBefore); err != nil {
+	if err = observe(&r.Admission.ReadinessBefore, 1); err != nil {
 		return err
 	}
 	dial := func(call context.Context) (ownedVectorClient, error) {
@@ -755,7 +758,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 			return err
 		}
 	}
-	if err = observe(&r.Admission.ReadinessAfter); err != nil {
+	if err = observe(&r.Admission.ReadinessAfter, 64); err != nil {
 		return err
 	}
 	// Reconstruct from complete ACKs, not the planned postimage or retries.
@@ -776,7 +779,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err = pacedRunRecall(ctx, post, final, &r.PostRecall); err != nil {
 		return err
 	}
-	if err = observe(&r.PostRecall.ReadinessAfter); err != nil {
+	if err = observe(&r.PostRecall.ReadinessAfter, 64); err != nil {
 		return err
 	}
 	plan, err := mixedAuditPlan(&r)
@@ -785,7 +788,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	}
 	r.AuditPlan = &plan
 	for _, node := range in.config.Nodes {
-		call, cancel := context.WithTimeout(ctx, r.Admission.RPCTimeout)
+		call, cancel := context.WithTimeout(ctx, max(r.Admission.RPCTimeout, in.config.RequestTimeout))
 		audit, e := control.DiagnosticsWithColocatedAuditV1(call, node.ID, plan)
 		cancel()
 		r.Audits = append(r.Audits, audit)
