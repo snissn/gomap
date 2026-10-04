@@ -207,3 +207,117 @@ func TestValueLogBlockRawLimitEligibility(t *testing.T) {
 		})
 	}
 }
+
+type vlogHandoffPolicyWriter struct {
+	vlogDirtyOrderWriter
+	lane          *lane
+	codec         valuelog.BlockCodec
+	block         bool
+	keep          [3]float64
+	wantKeep      [3]float64
+	compete       chan struct{}
+	competed      chan struct{}
+	injected      bool
+	boundary      int
+	records       int
+	frames        int
+	resumedFrames int
+}
+
+func (w *vlogHandoffPolicyWriter) SetBlockCompression(codec valuelog.BlockCodec, enabled bool) {
+	w.codec, w.block = codec, enabled
+}
+
+func (w *vlogHandoffPolicyWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
+	w.keep = [3]float64{ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin}
+}
+
+func (w *vlogHandoffPolicyWriter) AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error) {
+	if !w.block || w.codec != valuelog.BlockCodecSnappy || w.keep != w.wantKeep {
+		return nil, fmt.Errorf("batch policy changed: block=%t codec=%v keep=%v, want Snappy/%v", w.block, w.codec, w.keep, w.wantKeep)
+	}
+	ptrs, err := w.vlogDirtyOrderWriter.AppendFrame(dictID, dict, records)
+	if err != nil {
+		return nil, err
+	}
+	w.frames++
+	w.records += len(records)
+	if w.injected {
+		w.resumedFrames++
+	} else if w.records >= 4096 {
+		w.injected, w.boundary = true, w.records
+		// Fake-only deterministic injection: let a competing append own the same
+		// mutex at the last frame return before the production loop's handoff.
+		// This checks policy restoration, not physical scheduler timing.
+		close(w.compete)
+		w.lane.vlogMu.Unlock()
+		<-w.competed
+		w.lane.vlogMu.Lock()
+	}
+	return ptrs, nil
+}
+
+func TestAppendValueLog_RestoresWriterPolicyAfterBoundedHandoff(t *testing.T) {
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		valueLogThreshold:        1,
+	}
+	db.valueLogAutotuneOptions.Mode = valuelog.AutotuneOff
+	l := &lane{id: 0}
+	_, _, margin := db.valueLogKeepPolicy()
+	w := &vlogHandoffPolicyWriter{lane: l, wantKeep: [3]float64{0, 0, margin}, compete: make(chan struct{}), competed: make(chan struct{})}
+	l.vlog = w
+	observeLaneVlogBlockRatio(l, valuelog.BlockCodecSnappy, 2, 1)
+	values := [][]byte{make([]byte, 1024), make([]byte, 1024), make([]byte, 30<<10), make([]byte, 40<<10), nil}
+	records := make([]valuelog.Record, 12000)
+	for i := range records {
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: values[i%len(values)]}
+	}
+
+	cancel := make(chan struct{})
+	competingErr := make(chan error, 1)
+	go func() {
+		defer close(w.competed)
+		select {
+		case <-cancel:
+			return
+		case <-w.compete:
+		}
+		l.vlogMu.Lock()
+		defer l.vlogMu.Unlock()
+		db.setVlogWriterMode(l, w, vlogWriteOff, valuelog.BlockCodecZSTD)
+		w.SetKeepPolicy(11, 22, 33)
+		_, err := w.Append(0, nil, 12001, []byte("competing raw value"))
+		competingErr <- err
+	}()
+	defer func() { close(cancel); <-w.competed }()
+
+	ptrs, err := db.appendValueLog(l, 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer putValueLogPtrs(ptrs)
+	if err := waitErr(t, competingErr, "competing append"); err != nil {
+		t.Fatal(err)
+	}
+	if !w.injected || w.boundary%4096 == 0 || w.frames <= 4096 || w.resumedFrames == 0 {
+		t.Fatalf("missing variable-span handoff: boundary=%d frames=%d resumed=%d", w.boundary, w.frames, w.resumedFrames)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("pointer count=%d, want %d", len(ptrs), len(records))
+	}
+	for start := 0; start < len(records); {
+		end := nextValueLogFrameEnd(records, start, valuelog.MaxFrameK, 32<<10)
+		for i := start; i < end; i++ {
+			if int(page.ValuePtrSubIndex(ptrs[i])) != i-start || i > 0 && ptrs[i].Offset <= ptrs[i-1].Offset {
+				t.Fatalf("pointer order/subindex changed at record %d", i)
+			}
+		}
+		start = end
+	}
+}

@@ -588,6 +588,10 @@ Coverage:
   - `TestValueLogBlockFrameBoundary` covers exact/empty/mixed/oversized payloads
     and K ceilings; `TestValueLogBlockRawLimitEligibility` preserves excluded
     leaf/template/retained and explicit compression-policy paths.
+  - `TestAppendValueLog_RestoresWriterPolicyAfterBoundedHandoff` injects a
+    competing same-lane policy change at a variable-span handoff and checks the
+    resumed batch's mode/codec/keep policy and pointer order. The fake writer
+    controls the interleaving; this is not a physical scheduler timing proof.
 
 ## 2. Recovery Coherence
 

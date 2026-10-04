@@ -18141,6 +18141,15 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 					l.vlogCaps = computeVlogWriterCaps(w)
 				}
 				caps = l.vlogCaps
+				// Another append may have changed the shared writer while unlocked.
+				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+				if caps.keep != nil {
+					caps.keep.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
+				}
+				compressionResetter = caps.reset
+				if resetBlockCompressionHints && compressionResetter != nil {
+					compressionResetter.ResetCompressionHints()
+				}
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				hasStats = statsWriter != nil
@@ -18169,6 +18178,9 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 					}
 					caps = l.vlogCaps
 					db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+					if caps.keep != nil {
+						caps.keep.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
+					}
 					compressionResetter = caps.reset
 					if resetBlockCompressionHints && compressionResetter != nil {
 						compressionResetter.ResetCompressionHints()
