@@ -111,7 +111,7 @@
             "array",
             "null"
           ],
-          "maxItems": 65536
+          "maxItems": 65600
         },
         "ReadPrefixes": {
           "type": [
