@@ -2,6 +2,26 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
+forced serialized, and physical build-group publication with multiple real
+within-apply rotations and an empty current lane. It requires zero fresh-load
+candidate scans, inclusion and stable frontiers for created/current identities
+before registration consumes them, unchanged logical pointer counts, exact
+projection for overwrite/delete/range-delete, retained snapshot bytes, and
+checkpoint/clean-close/reopen pointer bytes.
+`TestBuildValueLogRefDeltaProducerInventoryErrors` rejects created/current
+snapshot errors while preserving pager/untrackable eligibility. Existing
+`TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister`,
+`TestOuterLeafPointerCommitFailsClosedForUnreportedSegmentWithoutRefreshScan`,
+`TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath`,
+`TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures`,
+`TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration`,
+`TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses`, and
+`TestValueLogGC_IncrementalParityWithFullScan` retain ownership of registration,
+recovery-slot, pin, and GC safety checks. The tests establish correctness and
+path selection; same-harness native sync-load and ordinary guardrails remain
+required for performance acceptance.
+
 Prepared no-index JSON semantic-stream insertion is covered by
 `TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
 before publication, with no early acknowledgment),

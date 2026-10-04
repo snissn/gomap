@@ -97,6 +97,27 @@ The fixed consequences are:
   the writable handle. Writes, publication, cleanup, GC, rewrite, and
   reclamation fail with the public recovery-required error until reopen.
 
+### Additive outer-leaf dependency capture
+
+For an ordinary outer-leaf apply, optimistic writes, serialized fallback, and
+physical build groups capture the exact producer's created and current segment
+inventory after apply and before final registration acknowledges created
+segments. The apply-local delta records this physical membership separately
+from logical `ValuePtr` counts. Capturing only current segments, or capturing
+after acknowledgment, loses non-current segments when one apply rotates more
+than once. Ordered-root publication uses the same inventory helper.
+
+Reuse remains conditional on the existing apply evidence: fresh additive
+publication may retain the predecessor's raw dependency superset, while
+ordinary overwrite, delete, and range-delete evidence requires exact candidate
+projection. Nil/untrackable deltas, pager-backed roots, and unchanged/no-op
+publication retain their existing eligibility. A missing inventory falls back
+to projection; inventory errors and unregistered required identities fail
+closed. Registration still precedes stable handle/frontier capture, and all
+required resource bytes and namespace entries are synced before recoverable
+meta publication. Successful `*Sync`, `Checkpoint`, and clean `Close` retain
+their durability guarantees.
+
 ### 0.1 Normative publication state machine
 
 | State | Stable authority | Permitted next action | Failure rule |
