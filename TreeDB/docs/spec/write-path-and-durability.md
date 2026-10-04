@@ -59,7 +59,7 @@ a file durability barrier, retaining lower chunks for the final sync. Failed
 mapped or file sync restores all claimed dirty chunks for retry. These choices
 preserve dependency-data, index, publication-seal and alternate-meta ordering,
 including outstanding retained index handles after the pager closes; they grant
-no new durability to relaxed, command-WAL or no-WAL acknowledgements.
+no new durability to `relaxed`, `command_wal_durable` or `no_wal_fast` acknowledgements.
 
 Root-publication admission charges dependency bytes not fully covered by the
 selected durable root's owned closure, plus the candidate's new COW index pages.
