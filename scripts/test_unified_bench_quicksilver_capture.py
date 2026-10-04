@@ -1,6 +1,7 @@
 """Small fake-process rehearsal; no databases, Go builds or retained timings."""
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -48,47 +49,98 @@ def report():
 
 
 class CaptureRehearsal(unittest.TestCase):
-    def test_process_capture_rejects_collapsed_overwrite_commits_and_keeps_raw(self):
+    def test_process_capture_rejects_wrong_contract_and_native_identity_keeps_raw(self):
         real_run = subprocess.run
 
         def timed_run(command, **kwargs):
+            if command[0] == '/usr/bin/ldd':
+                self.assertEqual(command, ['/usr/bin/ldd', str(binary)])
+                self.assertEqual(kwargs['env']['LD_LIBRARY_PATH'], str(root))
+                if scenario in ('static', 'script'):
+                    kwargs['stderr'].write('not a dynamic executable\n')
+                    return subprocess.CompletedProcess(command, 1)
+                resolved = other if scenario == 'wrong-path' else library
+                if scenario == 'wrong-hash':
+                    library.write_bytes(b'changed after manifest preflight')
+                kwargs['stdout'].write(f'linux-vdso.so.1 (0x1234)\nlibc.so.6 => {resolved} (0x2345)\n{loader} (0x3456)\n')
+                return subprocess.CompletedProcess(command, 0)
             self.assertEqual(command[:3], ['/usr/bin/time', '-v', str(root/'bin'/'fake-bench')])
-            # Darwin time lacks -v. Only replace this measurement prefix; execute
-            # the fake binary in a fresh OS process using the real capture files.
-            return real_run(command[2:], **kwargs)
+            # Controlled ELF/ldd fixture avoids a native build. Execute its output
+            # producer in a fresh real Python process; no claim of native timing.
+            return real_run([sys.executable, str(root/'fake-engine.py'), *command[3:]], **kwargs)
 
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
             (root/'bin').mkdir()
             binary = root/'bin'/'fake-bench'
-            binary.write_text('#!'+sys.executable+'\nimport pathlib, sys\nsys.stderr.write("fake raw stderr\\n")\nprint(pathlib.Path("payload.json").read_text())\n')
+            binary.write_bytes(b'\x7fELFcontrolled test placeholder')
+            (root/'fake-engine.py').write_text('import pathlib, sys\nsys.stderr.write("fake raw stderr\\n")\nprint(pathlib.Path("payload.json").read_text())\n')
             binary.chmod(0o755)
+            library, loader, other = root/'libc.so.6', root/'ld-linux.so.2', root/'other-libc.so.6'
+            loader.write_bytes(b'approved loader')
+            other.write_bytes(b'unapproved runtime')
             receipt = root/'receipt.json'
             receipt.write_text('{"scope":"fake-process rehearsal only"}')
-            manifest = dict(build_env={'GOWORK': 'off'}, libraries={},
+            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root)}, libraries={},
                             sources={'fake': dict(head='0'*40, binary='fake-bench', binary_sha256=capture.sha256(binary))},
                             receipts={role: dict(path='receipt.json', sha256=capture.sha256(receipt)) for role in ('source', 'build', 'native', 'runner')})
             manifest_path, plan_path = root/'manifest.json', root/'plan.json'
-            manifest_path.write_text(json.dumps(manifest))
             cell = dict(label='fake', source='fake', engine='treedb', keys=40000, reads=16)
-            for output, commits in [('accepted', 160), ('rejected', 40)]:
+            for scenario in ('dynamic', 'static', 'commits', 'wrong-path', 'wrong-hash', 'ambient-preload', 'manifest-audit', 'script'):
+                commits = 40 if scenario == 'commits' else 160
+                accepted = scenario in ('dynamic', 'static')
+                binary.write_bytes(b'#!/bin/sh\n' if scenario == 'script' else b'\x7fELFcontrolled test placeholder')
+                manifest['sources']['fake'].update(linkage='static' if scenario in ('static', 'script') else 'dynamic', binary_sha256=capture.sha256(binary))
+                library.write_bytes(b'approved runtime')
+                manifest['libraries'] = {str(path): dict(sha256=capture.sha256(path)) for path in (library, loader)}
+                manifest['build_env']['LD_AUDIT'] = '/injected.so' if scenario == 'manifest-audit' else ''
+                manifest_path.write_text(json.dumps(manifest))
                 packet = report()
                 packet['mutation_commit_batches'] = commits
                 (root/'payload.json').write_text(json.dumps([packet]))
-                plan_path.write_text(json.dumps(dict(output=output, cells=[cell])))
-                with mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run):
-                    if commits == 160:
+                plan_path.write_text(json.dumps(dict(output=scenario, cells=[cell])))
+                clean_loader = {k: '' for k in os.environ if k.startswith('LD_')}
+                clean_loader['LD_PRELOAD'] = '/injected.so' if scenario == 'ambient-preload' else ''
+                with mock.patch.dict(os.environ, clean_loader), mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run):
+                    if accepted:
                         capture.main()
                     else:
                         with self.assertRaises(AssertionError):
                             capture.main()
-                directory = root/output/'1-fake'
+                directory = root/scenario/'1-fake'
                 metadata = json.loads((directory/'run.json').read_text())
-                self.assertEqual(metadata['rc'], 0)
-                self.assertEqual(metadata.get('validated', False), commits == 160)
+                self.assertEqual(metadata.get('validated', False), accepted)
                 self.assertEqual(metadata['plan_sha256'], hashlib.sha256(plan_path.read_bytes()).hexdigest())
-                self.assertEqual(json.loads((directory/'stdout.json').read_text())[0]['mutation_commit_batches'], commits)
-                self.assertIn('fake raw stderr', (directory/'stderr.log').read_text())
+                if accepted or scenario == 'commits':
+                    self.assertEqual(metadata['rc'], 0)
+                    self.assertEqual(json.loads((directory/'stdout.json').read_text())[0]['mutation_commit_batches'], commits)
+                    self.assertIn('fake raw stderr', (directory/'stderr.log').read_text())
+                else:
+                    self.assertNotIn('rc', metadata)
+                    self.assertEqual((directory/'stdout.json').read_text(), '')
+                    self.assertIn('error', metadata)
+                resolution = metadata['native_resolution']
+                self.assertEqual(resolution['loader_env']['LD_LIBRARY_PATH'], str(root))
+                if scenario in ('ambient-preload', 'manifest-audit', 'script'):
+                    self.assertNotIn('rc', resolution)
+                    self.assertEqual((directory/'ldd.stdout.txt').read_text(), '')
+                    if scenario == 'script':
+                        self.assertIn('benchmark executable must be ELF', metadata['error'])
+                    else:
+                        variable = 'LD_PRELOAD' if scenario == 'ambient-preload' else 'LD_AUDIT'
+                        self.assertEqual(resolution['loader_env'][variable], '/injected.so')
+                elif scenario == 'static':
+                    self.assertEqual(resolution['rc'], 1)
+                    self.assertIn('not a dynamic executable', (directory/'ldd.stderr.txt').read_text())
+                else:
+                    self.assertEqual(resolution['rc'], 0)
+                    self.assertIn('libc.so.6 =>', (directory/'ldd.stdout.txt').read_text())
+                if scenario == 'dynamic':
+                    self.assertEqual(resolution['libraries'], {str(path): capture.sha256(path) for path in (library, loader)})
+                if scenario == 'wrong-path':
+                    self.assertIn(str(other), resolution['libraries'])
+                if scenario == 'wrong-hash':
+                    self.assertNotEqual(resolution['libraries'][str(library)], manifest['libraries'][str(library)]['sha256'])
                 self.assertIn('finished', metadata)
             optimized = real_run([sys.executable, '-O', str(pathlib.Path(capture.__file__)), str(manifest_path), str(plan_path)], capture_output=True, text=True)
             self.assertNotEqual(optimized.returncode, 0)
