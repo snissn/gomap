@@ -531,8 +531,9 @@ proof counters are independently validated; `Forwards` may change with the
 ingress route and is not part of the retained durable outcome. The quiescent
 pre-check uses one readiness round; post-write checks allow up to 64 bounded
 rounds and retain every observation, validating the final complete round.
-Each voter audit gets at least the server request timeout within the overall
-run deadline. Any failed,
+Each voter audit uses the larger of the RPC timeout and twice the server request
+timeout, allowing transfer overhead within the overall run deadline. Ordinary
+RPC timeouts remain unchanged. Any failed,
 UNKNOWN, malformed, truncated, mismatched or missing sample consumes the run:
 no automatic retry, discarded sample, exact fallback or fast-read substitution.
 

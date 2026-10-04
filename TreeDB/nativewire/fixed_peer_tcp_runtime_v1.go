@@ -414,7 +414,7 @@ func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV
 		}
 	}
 	newHTTPClient := func() *http.Client {
-		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}
+		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout}
 		if security != nil {
 			transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 				node := endpointNodes[address]
@@ -1349,6 +1349,19 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	httpClient, calls := c.http, c.calls
 	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "vector-catalog-read" || operation == "vector-prepare-status" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
+	}
+	if operation == "diagnostics" && body.ColocatedAudit != nil {
+		// The caller budget includes transfer plus the server's audit timeout.
+		// Reuse the bounded transport without shortening that budget or changing
+		// ordinary RPC timeouts and the shared configuration identity.
+		if _, bounded := ctx.Deadline(); !bounded {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 2*c.config.RequestTimeout)
+			defer cancel()
+		}
+		auditClient := *httpClient
+		auditClient.Timeout = 0
+		httpClient = &auditClient
 	}
 	select {
 	case calls <- struct{}{}:

@@ -796,7 +796,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	}
 	r.AuditPlan = &plan
 	for _, node := range in.config.Nodes {
-		call, cancel := context.WithTimeout(ctx, max(r.Admission.RPCTimeout, in.config.RequestTimeout))
+		call, cancel := context.WithTimeout(ctx, max(r.Admission.RPCTimeout, 2*in.config.RequestTimeout))
 		audit, e := control.DiagnosticsWithColocatedAuditV1(call, node.ID, plan)
 		cancel()
 		r.Audits = append(r.Audits, audit)
