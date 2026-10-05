@@ -15,9 +15,11 @@ ldd result. Benchmark binaries must be Linux ELF executables, not scripts.
 Raw ldd output and actual loader environment are retained per cell.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
-commit, seed, mixture, working_set, miss_percent, profiled, keep, flags}]. Defaults match
+commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns}]. Defaults match
 the prior 3M capture flow. Custom duration requires duration_ns and Go's canonical
-duration string. Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
+duration string. Churn pauses require matching nanoseconds and canonical text
+(`1m` is an accepted alias for `1m0s`); the pair is checked before launch.
+Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
 fast, wal_on_fast; auto commit resolves ordinary for realistic, sync for history.
 Raw stdout/stderr (including time-v), metadata, manifest and plan survive failures.
 Realistic mixed/concurrent miss ratios use Bernoulli configured p: endpoints are
@@ -94,6 +96,43 @@ def validate_native(binary, source, libraries, env, root, directory, metadata):
     assert native['libraries'], 'dynamic resolution contained no absolute dependencies'
 
 
+def churn_pause_text(pause):
+    if pause == 60000000000:
+        return '1m0s'
+    for unit, ns in (('s', 1000000000), ('ms', 1000000), ('µs', 1000), ('ns', 1)):
+        if pause >= ns:
+            whole, tail = divmod(pause, ns)
+            fraction = ('.' + f'{tail:0{len(str(ns))-1}d}'.rstrip('0')) if tail else ''
+            return f'{whole}{fraction}{unit}'
+
+
+def churn_settings(cell):
+    rounds = cell.get('churn_rounds', 0)
+    assert type(rounds) is int and 0 <= rounds <= 32, 'churn rounds must be bounded 0..32'
+    if not rounds:
+        assert 'churn_pause' not in cell and 'churn_pause_ns' not in cell, 'pause requires churn rounds'
+        return 0, 0
+    assert cell['engine'] == 'treedb' and cell.get('case', 'realistic') == 'realistic', 'churn requires realistic cached TreeDB'
+    pause = cell.get('churn_pause_ns', 6000000000)
+    assert type(pause) is int and 0 < pause <= 60000000000, 'churn pause must be bounded positive up to 1m'
+    text = cell.get('churn_pause', '6s')
+    assert text == '6s' or 'churn_pause_ns' in cell, 'custom pause requires churn_pause_ns'
+    canonical = churn_pause_text(pause)
+    assert text == canonical or (text == '1m' and canonical == '1m0s'), 'churn pause text must match nanoseconds in canonical form (1m also accepted)'
+    return rounds, pause
+
+
+def capture_wall_limit(cell):
+    rounds, pause = churn_settings(cell)
+    if not rounds:
+        return '30m'  # Keep ordinary capture commands identical.
+    seconds, ns = divmod(1800000000000 + rounds*pause, 1000000000)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    fraction = ('.' + f'{ns:09d}'.rstrip('0')) if ns else ''
+    return (f'{hours}h' if hours else '') + f'{minutes}m{seconds}{fraction}s'
+
+
 def validate(reports, cell, directory, fixtures, metadata):
     assert len(reports) == 1
     r, c = reports[0], reports[0]['config']
@@ -155,7 +194,33 @@ def validate(reports, cell, directory, fixtures, metadata):
     else:
         assert c['generation'] == 'legacy-v1' and c['seed'] == 24 and c['working_set'] == 'legacy-65536-trace'
         assert r['verified_keys'] == r['verified_misses'] == keys
+    rounds, pause = churn_settings(cell)
     stats = [r.get('initial_stats', {}), r.get('final_stats', {})]
+    if rounds:
+        assert (c['churn_rounds'], c['churn_pause_ns']) == (rounds, pause)
+        assert flags['max-wall'] == capture_wall_limit(cell), 'churn guard must retain 30m work allowance plus all requested pauses'
+        assert flags['quicksilver-churn-rounds'] == str(rounds)
+        assert flags['quicksilver-churn-pause'] == churn_pause_text(pause)
+        churn = r['maintenance_churn']
+        assert churn['label'] == 'bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound'
+        assert churn['leaf_generation_pack_maintenance_env'] == metadata['env'].get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '')
+        assert len(churn['rounds']) == rounds
+        for index, round in enumerate(churn['rounds'], 1):
+            assert (round['round'], round['restored_keys'], round['mutation_targets']) == (index, keys, updates)
+            assert round['mutation_commit_batches'] == r['mutation_commit_batches'] and round['mutations'] == r['mutations']
+            assert (round['verified_keys'], round['verified_misses']) == (r['verified_keys'], r['verified_misses'])
+            times = [round[k] for k in ('write_seconds', 'checkpoint_seconds', 'verification_seconds', 'pause_seconds')]
+            assert all(math.isfinite(v) and v >= 0 for v in times)
+            assert math.isfinite(round['wall_seconds']) and round['wall_seconds'] >= sum(times)
+            assert round['pause_seconds'] >= pause/1e9
+            for snapshot in (round['before'], round['after']):
+                assert type(snapshot['process_rss_supported']) is bool
+                assert snapshot['process_heap_alloc_bytes'] > 0 and snapshot['process_rss_bytes'] >= 0
+                assert snapshot['process_rss_supported'] or snapshot['process_rss_bytes'] == 0
+                stats.append(snapshot['engine_stats'])
+        assert churn['final_files_after_close'] and all(v >= 0 for v in churn['final_files_after_close'].values())
+    else:
+        assert 'maintenance_churn' not in r and not c.get('churn_rounds', 0) and not c.get('churn_pause_ns', 0)
     for p in r['phases']:
         stats += [p.get('stats_before', {}), p.get('stats_after', {})]
     if cell['engine'] == 'treedb':
@@ -241,11 +306,14 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith('TREEDB_')}
     env.update(manifest['build_env'])
     assert env['GOWORK'] == 'off'
+    assert env.get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '') in ('', '0', '1'), 'maintenance manifest env must be unset, 0 or 1'
     env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='2GiB',
                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
     (root/'working-dbs').mkdir(exist_ok=True)
     assert plan.get('repeats', 1) >= 1 and plan['cells']
     assert all(isinstance(cell.get('keep', False), bool) for cell in plan['cells']), 'keep must be boolean'
+    for cell in plan['cells']:
+        churn_settings(cell)
     labels = [cell['label'] for cell in plan['cells']]
     assert len(set(labels)) == len(labels) and all(pathlib.Path(v).name == v and v not in ('.', '..') for v in labels)
     fixtures = {}
@@ -262,10 +330,12 @@ def main():
             command = [str(binary), '-suite', 'quicksilver', '-dbs', cell['engine'], '-profile', cell.get('profile', 'durable'),
                        '-quicksilver-case', case, '-keys', str(cell.get('keys', 3000000)), '-read-workers', str(cell.get('workers', 4)),
                        '-quicksilver-reads', str(cell.get('reads', 6000000)), '-quicksilver-updates', str(cell.get('updates', 40000)),
-                       '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', '30m']
+                       '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', capture_wall_limit(cell)]
             if case == 'realistic':
                 command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
                             '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
+            if cell.get('churn_rounds', 0):
+                command += ['-quicksilver-churn-rounds', str(cell['churn_rounds']), '-quicksilver-churn-pause', cell.get('churn_pause', '6s')]
             command += extra
             if cell.get('keep', False):
                 command += ['-keep']
