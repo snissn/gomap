@@ -107,28 +107,41 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 	}
 }
 
-func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *testing.T) {
-	for _, directory := range []bool{false, true} {
+func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *testing.T) {
+	for _, test := range []struct {
+		kind      rootpublication.ResourceKind
+		directory bool
+	}{
+		{rootpublication.ResourceDictionary, false},
+		{rootpublication.ResourceDictionary, true},
+		{rootpublication.ResourceTemplate, false},
+		{rootpublication.ResourceTemplate, true},
+	} {
 		name := "manifest-v1"
-		if directory {
+		if test.directory {
 			name = "directory-v2"
 		}
-		t.Run(name, func(t *testing.T) {
+		t.Run(string(test.kind)+"/"+name, func(t *testing.T) {
+			sideName := "dictdb"
+			if test.kind == rootpublication.ResourceTemplate {
+				sideName = "templatedb"
+			}
 			source := filepath.Join(t.TempDir(), "source")
 			mainDir := filepath.Join(source, "maindb")
-			dictDir := filepath.Join(source, "dictdb")
-			for _, dir := range []string{mainDir, dictDir} {
+			sideDir := filepath.Join(source, sideName)
+			for _, dir := range []string{mainDir, sideDir} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if directory {
+			if test.directory {
 				if err := SaveFormatConfig(mainDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			dictionary := []byte("restored dictionary namespace dependency")
-			provider := newPublicLayoutDictionaryProviderV1(t, dictDir, 9702, dictionary)
+			dictionary := []byte("restored " + string(test.kind) + " namespace dependency")
+			provider := newPublicLayoutDictionaryProviderV1(t, sideDir, 9702, dictionary)
+			provider.kind = test.kind
 			publication := 0
 			publish := func(database *DB, provider *publicLayoutDictionaryProviderV1) {
 				t.Helper()
@@ -145,7 +158,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 						Iter:             mustFrozenRawMemtable(t, "side-layout/root", []byte(value)).NewIterator(nil, nil),
 						DurableResources: resources,
 						DurableResourceRequirements: rootpublication.StableLogicalObligationRequirements{
-							ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
+							ScopedFields: []rootpublication.ReachabilityField{provider.logicalObligation().Reachability},
 							Obligations:  []rootpublication.StableLogicalObligation{provider.logicalObligation()},
 						},
 					}}, nil,
@@ -154,10 +167,10 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 					},
 				)
 				if err != nil {
-					t.Fatalf("publish dictionary authority: %v", err)
+					t.Fatalf("publish side-store authority: %v", err)
 				}
 				if err := database.Checkpoint(); err != nil {
-					t.Fatalf("checkpoint dictionary publication: %v", err)
+					t.Fatalf("checkpoint side-store publication: %v", err)
 				}
 			}
 			database, err := Open(Options{Dir: mainDir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
@@ -197,12 +210,12 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 			if restored.durableRoot.slotCommit != sourceCommits {
 				t.Fatalf("rebind changed slot sequences: source=%v target=%v", sourceCommits, restored.durableRoot.slotCommit)
 			}
-			file, err := os.Open(filepath.Join(target, "dictdb", indexFileName))
+			file, err := os.Open(filepath.Join(target, sideName, indexFileName))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer file.Close()
-			freshProvider := &publicLayoutDictionaryProviderV1{file: file, dictionary: dictionary, id: provider.id}
+			freshProvider := &publicLayoutDictionaryProviderV1{file: file, dictionary: dictionary, id: provider.id, kind: test.kind}
 			fresh, err := freshProvider.CaptureDictionaryResources(context.Background(), provider.id)
 			if err != nil {
 				t.Fatal(err)
@@ -232,7 +245,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 					}
 				}
 				if !matched {
-					t.Errorf("slot=%d restored closure lost dictionary child identity %+v", slot, freshDescriptors[0].Identity())
+					t.Errorf("slot=%d restored closure lost side-store child identity %+v", slot, freshDescriptors[0].Identity())
 				}
 				inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(retained)
 				if err != nil {
@@ -243,7 +256,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 					inherited.Release()
 					t.Fatal(err)
 				}
-				builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+				builder := rootpublication.NewStableResourceSetBuilder(provider.logicalObligation().Reachability)
 				err = builder.Merge(inherited)
 				if err == nil {
 					err = builder.Merge(additional)
@@ -252,7 +265,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 				inherited.Release()
 				additional.Release()
 				if err != nil {
-					t.Errorf("slot=%d restored dictionary cannot merge with fresh destination authority: %v", slot, err)
+					t.Errorf("slot=%d restored side-store cannot merge with fresh destination authority: %v", slot, err)
 				}
 			}
 			if t.Failed() {
@@ -267,15 +280,21 @@ type publicLayoutDictionaryProviderV1 struct {
 	file       *os.File
 	dictionary []byte
 	id         uint64
+	kind       rootpublication.ResourceKind
 }
 
 func (provider *publicLayoutDictionaryProviderV1) logicalObligation() rootpublication.StableLogicalObligation {
 	digest := sha256.Sum256(provider.dictionary)
-	return rootpublication.StableLogicalObligation{
+	logical := rootpublication.StableLogicalObligation{
 		Class: "dictionary-generation", Kind: "dictionary", Namespace: "dictdb",
 		Generation: provider.id, FileID: provider.id, Length: int64(len(provider.dictionary)),
 		Reachability: rootpublication.ReachabilityDictionaryGeneration, Digest: digest,
 	}
+	if provider.kind == rootpublication.ResourceTemplate {
+		logical.Class, logical.Kind, logical.Namespace = "template-generation", "template", "templatedb"
+		logical.Reachability = rootpublication.ReachabilityTemplateGeneration
+	}
+	return logical
 }
 
 func newPublicLayoutDictionaryProviderV1(t *testing.T, dir string, id uint64, dictionary []byte) *publicLayoutDictionaryProviderV1 {
@@ -322,14 +341,18 @@ func (provider *publicLayoutDictionaryProviderV1) CaptureDictionaryResources(_ c
 		return nil, err
 	}
 	logical := provider.logicalObligation()
+	domain := rootpublication.StableProducerDictionary
+	if provider.kind == rootpublication.ResourceTemplate {
+		domain = rootpublication.StableProducerTemplate
+	}
 	token, err := rootpublication.NewStableProducerResourceTokenForDomain(
-		rootpublication.StableProducerDictionary,
+		domain,
 		rootpublication.StableResourceSpec{
-			Kind: rootpublication.ResourceDictionary, LogicalLane: "dictdb/index", ResourceID: "index",
+			Kind: rootpublication.ResourceKind(logical.Kind), LogicalLane: logical.Namespace + "/index", ResourceID: "index",
 			Generation: id, DiagnosticPath: indexFileName, File: provider.file,
 			Frontier:           rootpublication.DurableFrontier{Bytes: uint64(len(provider.dictionary))},
-			Digest:             sha256.Sum256([]byte("public-layout-dictionary-index-v1")),
-			Reachability:       rootpublication.ReachabilityDictionaryGeneration,
+			Digest:             sha256.Sum256([]byte("public-layout-" + logical.Kind + "-index-v1")),
+			Reachability:       logical.Reachability,
 			LogicalObligations: []rootpublication.StableLogicalObligation{logical},
 			Namespace:          namespace, ContentSynced: true,
 		},
@@ -339,7 +362,7 @@ func (provider *publicLayoutDictionaryProviderV1) CaptureDictionaryResources(_ c
 		namespace.Release()
 		return nil, err
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+	builder := rootpublication.NewStableResourceSetBuilder(logical.Reachability)
 	if err := builder.Add(token); err != nil {
 		token.Release()
 		builder.Abandon()
