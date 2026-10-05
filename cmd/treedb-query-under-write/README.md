@@ -481,7 +481,8 @@ API overlap/cancellation; private short clocks are not distributed runtime proof
 resource gates and retained attempts. Existing insert/read modes are unchanged.
 This mode admits exactly six serial slots in a 60-second window: replace A,
 supersede A, delete B, replace C, delete C, delete D. A/B/C/D are four existing
-corpus IDs outside every query's baseline and exported-corpus canonical top10.
+corpus IDs outside every query's baseline and exported-corpus canonical top10
+when `-mixed-profile` is omitted.
 The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s).
 Admission also requires `5*interval + 2*rpc-timeout < 60s`, leaving positive
 headroom for the final write and its visibility check. Both full write and
@@ -505,7 +506,23 @@ bootstrap's fixture anchors and prior explicitly proven rows are counted too.
 retain that actual reconstructed identity. Never reuse a prior campaign's final
 population, revisions or commit positions. Root must freeze/export the actual
 fresh source and verify this admission population before starting this mode.
-Any planned canonical top10 ID or score-bit change refuses admission.
+The default profile refuses any planned canonical top10 ID or score-bit change.
+
+Add `-mixed-profile changing-top10` explicitly to observe changing top10. This
+selects the first four existing corpus IDs in frozen corpus order and replaces
+A with query0, supersedes A with query1, and replaces C with query2 before the
+same three deletions. The six originals and two explicit retries are unchanged.
+Admission requires at least one canonical top10 membership change across the
+seven populations. It still validates the unchanged exported corpus truth at
+prefix0. Later oracles score the actual changed corpus and entire population;
+they never rewrite or masquerade as that export. Derived recall reports carry
+`OracleBasis=derived-changing-prefix-full-canonical-fp32`; every prefix retains
+its own population and top10 hashes. All seven oracles are computed before
+networking, and setup remains outside the measured window. Omission preserves
+the original profile, admission rules and verdict. The explicit profile emits
+`Profile=changing-top10` and the distinct
+`ACCEPT_MIXED_CHANGING_TOP10_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION`
+verdict; acceptance still requires root shutdown/resource verification.
 
 Each prefix also retains all four changed IDs' canonical `ScoreBits` and
 `Present` values for each query in `Prefixes[].Changed`. A measured response must
@@ -513,11 +530,16 @@ match **one** permitted prefix in its entirety, including changed-ID absence;
 unchanged IDs retain baseline canonical scores. The permitted interval is bounded
 by original mutation ACKs before call entry and issued mutations before call
 return. Online validation is tightened after both reader and writer join against
-actual retained `StartNS`/`EndNS`; `ReadPrefixes` records lower/upper/matched
-prefix per measured ordinal. This prevents mixing two postimages or accepting
-an arbitrary old state. Approximate HNSW results remain allowed: recall uses the
-existing invariant full-population top10 and existing external acceptance
-threshold, not an added recall=1 gate. Each ACK gets an untimed strict query with
+actual retained `StartNS`/`EndNS`; `ReadPrefixes` records lower/upper bounds,
+`CompatibleMask` and conservative `RecallAt10` per measured ordinal. Bit p marks
+whole-response compatibility with prefix p. Several set bits explicitly record
+ambiguity: `Matched` is only the first compatible diagnostic witness, not an
+exact publication time or a selected recall oracle. Recall is the **minimum**
+across every compatible prefix's full canonical truth. Final call/ACK bounds
+recompute the retained attempt values before query counts and aggregate mean
+are summarized. This prevents mixing two postimages, favorable-prefix selection
+or accepting an arbitrary old state. Approximate HNSW results remain allowed:
+recall uses the existing external acceptance threshold, not an added recall=1 gate. Each ACK gets an untimed strict query with
 its visibility token, validated against exactly that acknowledged prefix before
 the next writer invocation.
 
@@ -548,6 +570,21 @@ from the final result and independently collect the same existing operation:
 treedb-fixed-peer -mode diagnostics -config voter.json \
   -colocated-audit-plan extracted-plan.json > voter-audit.json
 ```
+
+The schema also permits an optional external `Population` attachment, supported
+by the separate population-proof product contract. This independently compiled
+driver does not construct it and continues to emit its six known-ID audit.
+Root may attach a separately frozen full-population expectation to independent
+initial/final diagnostics. Its fields are `Rows`, `Dimensions`, `SHA256` and
+`Limits` (`MaxRows`, `MaxIDBytes`, `MaxSourceRecordBytes`, `MaxTotalBytes`,
+`MaxInspected`). The observed proof uses encoding `id-le32-fp32-le-v1` and carries
+`Rows`, `Dimensions`, `SHA256`, `SourceRecordBytes`, `AssetBytes`, `TotalBytes`,
+`HashedBytes` and `Inspected`. It hashes stable IDs and projected FP32 vectors;
+`SourceRecordBytes` charges materialized inline entries or fixed value-pointer
+descriptors plus the vector projection. It does not measure retained primary
+payload sizes or prove their readability or equality of reconstructed documents.
+An empty population uses `Rows: 0`. Schema compatibility
+and the driver's known-ID receipts alone are not whole-population proof.
 
 The plan is at most 524288 encoded bytes, version1, six unique original attempts,
 zero logical deadlines and at most six final unique IDs (this mode has four).
@@ -629,3 +666,45 @@ pre-implementation API test. This capability-absence exception is not a compiler
 failure presented as product-red evidence. Linux Go1.26 normal/race, matched
 existing-mode allocation guards, exact-head CI/review and a landed independently
 verified two-host campaign remain required for acceptance.
+
+
+### Changing-top10 validation allocation audit
+
+Full population copies, sorted IDs, hash streams and seven canonical oracles are
+setup work, excluded from measured read latency/QPS. Changed-prefix planning and
+quiescent checks reuse the sixteen admitted canonical scorers; ordinary exported
+baseline admission still prepares and verifies them independently. The measured
+validator uses prepared scorers, ten-neighbor duplicate/order checks, four
+changed-ID entries and at most seven truth rows. After full canonical ID/score
+bit equality is proved, prefix planning reuses immutable admitted truth rows.
+Validation reuses a previous compatible row's hit count only for the same slice
+identity; distinct truths still contribute independently to the minimum,
+regardless of the profile label. It constructs no per-read maps, truth slices
+or population copies. Existing response byte encoding and private
+retention remain included in the timed read call. Post-join revalidation borrows
+those retained responses and updates existing recall scalars. It allocates the
+bounded prefix receipt array and encodes one attempt at a time to recompute final
+`RetainedAttemptBytes`, including warmup. Collection-time byte charges remain
+conservative and are not refunded by shorter final recall encodings; complete
+pair encoding still enforces the cap. A synthetic missing scalar may allocate
+one value.
+The byte budget reserves `128 * read-max-attempts` additional bytes for prefix
+receipts within the existing output cap; complete planned/result encoding remains
+the final byte authority. No per-request server allocation attribution follows
+from these driver measurements.
+
+Root runs normal/race `TestMixed*` including changed canonical truths, ambiguity
+minimum, stale/future/mixed postimages, post-join tightening, cancellation,
+UNKNOWN/fallback refusals and default-profile compatibility. For local allocation
+measurement (not network throughput), use the same Go/toolchain/GOMAXPROCS,
+`-benchtime=10000x -count=5 -benchmem` and retain raw results. Compare unchanged
+`BenchmarkMixedRetainedCallV1` and `BenchmarkWindowRetainedCallGuardV1` on frozen
+base/candidate. The self-contained `mixed_validation_bench_v1_test.go` uses only
+predecessor APIs: overlay its identical bytes on base to pair
+`BenchmarkMixedPrefixValidationGuardV1` (seven invariant compatible prefixes).
+Candidate-only `BenchmarkMixedPrefixValidationV2/{invariant,changing-top10}`
+validates ten immutable neighbors against all seven compatible oracles with
+setup excluded. No speed or allocation equivalence is asserted before root runs
+these checks. Optional standalone profiles use Go `-cpuprofile=cpu.pprof` and
+`-memprofile=alloc.pprof` for that exact benchmark selector; inspect with
+`go tool pprof -alloc_space` and retain the command, source head and raw profiles.

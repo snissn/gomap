@@ -22,7 +22,12 @@ type mixedClient interface {
 	VectorReplaceV1(context.Context, public.ReplaceRequestV1) (public.MutationResponseV1, error)
 	VectorDeleteV1(context.Context, public.DeleteRequestV1) (public.MutationResponseV1, error)
 }
+
+const mixedProfileChangingTop10 = "changing-top10"
+const mixedReadPrefixMaxBytes = 128
+
 type mixedOptions struct {
+	Profile  string
 	Window   windowOptions
 	Interval time.Duration
 }
@@ -48,9 +53,14 @@ type mixedPrefix struct {
 	PopulationSHA256, Top10SHA256 string
 	Truth                         [][]public.NeighborV1
 }
-type mixedReadPrefix struct{ Ordinal, Lower, Upper, Matched int }
+type mixedReadPrefix struct {
+	Ordinal, Lower, Upper, Matched int
+	CompatibleMask                 uint8
+	RecallAt10                     float64
+}
 type mixedAnchor struct{ ID, VectorSHA256 string }
 type mixedReport struct {
+	Profile      string `json:",omitempty"`
 	Anchors      []mixedAnchor
 	ReadPrefixes []mixedReadPrefix
 	windowReport
@@ -181,15 +191,31 @@ func mixedPopulation(in *recallInput, writes []mixedWrite) (*recallInput, error)
 	return &out, nil
 }
 func mixedTruth(ctx context.Context, in *recallInput, baseline recallReport, prefix int) (recallReport, mixedPrefix, error) {
+	return mixedTruthForProfile(ctx, in, baseline, prefix, "")
+}
+func mixedTruthForProfile(ctx context.Context, in *recallInput, baseline recallReport, prefix int, profile string) (recallReport, mixedPrefix, error) {
 	r := pacedRecallCopy(baseline, "mixed-prefix")
 	r.Queries = nil
-	if err := recallPlan(ctx, in, &r); err != nil {
+	var err error
+	if profile == mixedProfileChangingTop10 && prefix > 0 {
+		err = recallPlanChangedPopulation(ctx, in, &r, &baseline)
+	} else {
+		err = recallPlan(ctx, in, &r)
+	}
+	if err != nil {
 		return r, mixedPrefix{}, err
 	}
 	p := mixedPrefix{Prefix: prefix, PopulationRows: r.PopulationRows, PopulationSHA256: r.PopulationSHA256}
 	for i, q := range r.Queries {
-		if !pacedSameTruth(q.Truth, baseline.Queries[i].Truth) {
+		same := pacedSameTruth(q.Truth, baseline.Queries[i].Truth)
+		if profile != mixedProfileChangingTop10 && !same {
 			return r, p, fmt.Errorf("query%s canonical top10 changes at mixed prefix%d", q.QueryID, prefix)
+		}
+		if same {
+			// Full canonical ID/score equality was just proved. Reuse the
+			// immutable admitted row so validation can recognize identical truth.
+			q.Truth = baseline.Queries[i].Truth
+			r.Queries[i].Truth = q.Truth
 		}
 		p.Truth = append(p.Truth, q.Truth)
 	}
@@ -197,6 +223,15 @@ func mixedTruth(ctx context.Context, in *recallInput, baseline recallReport, pre
 	return r, p, nil
 }
 func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(in.queries) != 16 || len(r.Admission.Queries) != 16 {
+		return nil, errors.New("mixed requires sixteen admitted queries")
+	}
+	if r.Profile != "" && r.Profile != mixedProfileChangingTop10 {
+		return nil, errors.New("unsupported mixed profile")
+	}
 	excluded := map[string]bool{}
 	for _, q := range r.Admission.Queries {
 		for _, n := range q.Truth {
@@ -208,7 +243,7 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 	}
 	ids := make([]string, 0, 4)
 	for _, id := range in.corpusIDs {
-		if !excluded[id] {
+		if r.Profile == mixedProfileChangingTop10 || !excluded[id] {
 			ids = append(ids, id)
 			if len(ids) == 4 {
 				break
@@ -216,11 +251,10 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 		}
 	}
 	if len(ids) != 4 {
-		return nil, errors.New("four existing IDs outside every baseline top10 required")
+		return nil, errors.New("four eligible existing corpus IDs required")
 	}
 	g := r.Admission.Generation
-	replace := func(id, vectorID string, ordinal int) mixedWrite {
-		v := in.vectors[vectorID]
+	replace := func(id string, v []float32, ordinal int) mixedWrite {
 		document, _ := json.Marshal(struct {
 			Embedding []float32 `json:"embedding"`
 			Kind      string    `json:"kind"`
@@ -232,14 +266,18 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 		request := public.DeleteRequestV1{Version: 1, Generation: g, ID: []byte(id), IdempotencyKey: []byte(fmt.Sprintf("%s-mixed-%d", r.Admission.RunID, ordinal))}
 		return mixedWrite{Ordinal: ordinal, Kind: "delete", Phase: "mixed-measured", Delete: &request, LogicalSHA256: hashJSON(request), Outcome: "unissued", IntendedOffsetNS: int64(time.Duration(ordinal) * r.PaceInterval)}
 	}
-	r.Writes = []mixedWrite{replace(ids[0], ids[1], 0), replace(ids[0], ids[3], 1), deletion(ids[1], 2), replace(ids[2], ids[3], 3), deletion(ids[2], 4), deletion(ids[3], 5)}
+	first, second, third := in.vectors[ids[1]], in.vectors[ids[3]], in.vectors[ids[3]]
+	if r.Profile == mixedProfileChangingTop10 {
+		first, second, third = in.queries[0], in.queries[1], in.queries[2]
+	}
+	r.Writes = []mixedWrite{replace(ids[0], first, 0), replace(ids[0], second, 1), deletion(ids[1], 2), replace(ids[2], third, 3), deletion(ids[2], 4), deletion(ids[3], 5)}
 	var final *recallInput
 	for prefix := 0; prefix <= len(r.Writes); prefix++ {
 		state, err := mixedPopulation(in, r.Writes[:prefix])
 		if err != nil {
 			return nil, err
 		}
-		_, proof, err := mixedTruth(ctx, state, r.Admission, prefix)
+		_, proof, err := mixedTruthForProfile(ctx, state, r.Admission, prefix, r.Profile)
 		if err != nil {
 			return nil, err
 		}
@@ -269,9 +307,30 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 		final = state
 	}
 	r.Admission.Verdict = "ACCEPTED_INPUTS_INVARIANT_PENDING_RUNTIME"
+	if r.Profile == mixedProfileChangingTop10 {
+		changed := false
+		for _, p := range r.Prefixes[1:] {
+			for qi, truth := range p.Truth {
+				for _, n := range truth {
+					present := false
+					for _, initial := range r.Prefixes[0].Truth[qi] {
+						present = present || initial.ID == n.ID
+					}
+					changed = changed || !present
+				}
+			}
+		}
+		if !changed {
+			return nil, errors.New("changing-top10 profile did not change any full canonical top10 membership")
+		}
+		r.Admission.Verdict = "ACCEPTED_INPUTS_CHANGING_TOP10_PENDING_RUNTIME"
+	}
 	return final, nil
 }
 func mixedValidate(o mixedOptions) error {
+	if o.Profile != "" && o.Profile != mixedProfileChangingTop10 {
+		return errors.New("mixed-profile must be changing-top10 or omitted")
+	}
 	if err := windowValidate(o.Window); err != nil {
 		return err
 	}
@@ -321,9 +380,14 @@ func mixedSummary(r *mixedReport) {
 // One entire response must agree with one causally permitted prefix. Changed
 // IDs have precomputed exact scores/presence; unchanged vectors remain immutable.
 func mixedValidatePrefix(q *recallQuery, response public.SearchResponseV1, in *recallInput, r *mixedReport, lower, upper int) (float64, error) {
+	proof, err := mixedValidatePrefixProof(q, response, in, r, lower, upper)
+	return proof.RecallAt10, err
+}
+func mixedValidatePrefixProof(q *recallQuery, response public.SearchResponseV1, in *recallInput, r *mixedReport, lower, upper int) (mixedReadPrefix, error) {
+	proof := mixedReadPrefix{Lower: lower, Upper: upper, Matched: -1}
 	c := response.Counters
 	if response.Generation != q.Request.Generation || len(response.Neighbors) != 10 || c.SelectedPartitions == 0 || c.HNSWServedPartitions != c.SelectedPartitions || c.ExactScanPartitions != 0 || c.ReadProofs == 0 || c.Retries != 0 || c.Redirects != 0 {
-		return 0, errors.New("mixed strict proof/fallback mismatch")
+		return proof, errors.New("mixed strict proof/fallback mismatch")
 	}
 	qi := -1
 	for i, v := range r.Admission.Queries {
@@ -332,68 +396,95 @@ func mixedValidatePrefix(q *recallQuery, response public.SearchResponseV1, in *r
 			break
 		}
 	}
-	if qi < 0 || lower < 0 || upper >= len(r.Prefixes) || lower > upper {
-		return 0, errors.New("invalid mixed causal prefix range")
+	if qi < 0 || len(r.Prefixes) > 7 || lower < 0 || upper >= len(r.Prefixes) || lower > upper || qi >= len(r.Prefixes[0].Changed) {
+		return proof, errors.New("invalid mixed causal prefix range")
 	}
 	scorer := q.scorer
 	if scorer == nil {
-		var e error
-		scorer, e = collections.NewCanonicalVectorPartitionCosineScorerV1(q.Request.Query)
-		if e != nil {
-			return 0, e
+		var err error
+		scorer, err = collections.NewCanonicalVectorPartitionCosineScorerV1(q.Request.Query)
+		if err != nil {
+			return proof, err
 		}
 	}
-	seen := map[string]bool{}
-	changed := map[string]bool{}
-	hits := 0
-	for _, v := range r.Prefixes[0].Changed[qi] {
-		changed[v.ID] = true
-	}
+	changed := r.Prefixes[0].Changed[qi]
 	for i, n := range response.Neighbors {
-		if seen[n.ID] || math.IsNaN(float64(n.Score)) || math.IsInf(float64(n.Score), 0) || (i > 0 && !recallLess(response.Neighbors[i-1], n)) {
-			return 0, errors.New("mixed duplicate/nonfinite/order mismatch")
+		if math.IsNaN(float64(n.Score)) || math.IsInf(float64(n.Score), 0) || (i > 0 && !recallLess(response.Neighbors[i-1], n)) {
+			return proof, errors.New("mixed duplicate/nonfinite/order mismatch")
 		}
-		seen[n.ID] = true
-		if !changed[n.ID] {
+		for _, earlier := range response.Neighbors[:i] {
+			if earlier.ID == n.ID {
+				return proof, errors.New("mixed duplicate/nonfinite/order mismatch")
+			}
+		}
+		isChanged := false
+		for _, v := range changed {
+			isChanged = isChanged || v.ID == n.ID
+		}
+		if !isChanged {
 			v := in.vectors[n.ID]
 			if v == nil {
-				return 0, errors.New("mixed unknown neighbor")
+				return proof, errors.New("mixed unknown neighbor")
 			}
-			score, e := scorer.ScoreV1(v)
-			if e != nil || math.Float32bits(score) != math.Float32bits(n.Score) {
-				return 0, errors.New("mixed unchanged canonical score mismatch")
-			}
-		}
-		for _, v := range q.Truth {
-			if v.ID == n.ID {
-				hits++
-				break
+			score, err := scorer.ScoreV1(v)
+			if err != nil || math.Float32bits(score) != math.Float32bits(n.Score) {
+				return proof, errors.New("mixed unchanged canonical score mismatch")
 			}
 		}
 	}
+	minimumHits := 10
+	var countedTruth []public.NeighborV1
+	countedHits := 0
 	for prefix := lower; prefix <= upper; prefix++ {
+		p := &r.Prefixes[prefix]
+		if qi >= len(p.Changed) || qi >= len(p.Truth) || len(p.Truth[qi]) != 10 || len(p.Changed[qi]) != len(changed) {
+			return proof, errors.New("missing mixed canonical prefix oracle")
+		}
+		for i, item := range changed {
+			if p.Changed[qi][i].ID != item.ID {
+				return proof, errors.New("changed mixed prefix identity")
+			}
+		}
 		valid := true
 		for _, n := range response.Neighbors {
-			if !changed[n.ID] {
-				continue
-			}
-			found := false
-			for _, v := range r.Prefixes[prefix].Changed[qi] {
-				if v.ID == n.ID {
-					found = v.Present && v.ScoreBits == math.Float32bits(n.Score)
+			for _, v := range p.Changed[qi] {
+				if v.ID == n.ID && (!v.Present || v.ScoreBits != math.Float32bits(n.Score)) {
+					valid = false
 					break
 				}
 			}
-			if !found {
-				valid = false
+			if !valid {
 				break
 			}
 		}
-		if valid {
-			return float64(hits) / 10, nil
+		if !valid {
+			continue
 		}
+		if proof.Matched < 0 {
+			proof.Matched = prefix
+		}
+		proof.CompatibleMask |= 1 << uint(prefix)
+		truth := p.Truth[qi] // both rows have the already-checked length ten
+		hits := countedHits
+		if countedTruth == nil || &countedTruth[0] != &truth[0] {
+			hits = 0
+			for _, n := range response.Neighbors {
+				for _, want := range truth {
+					if n.ID == want.ID {
+						hits++
+						break
+					}
+				}
+			}
+			countedTruth, countedHits = truth, hits
+		}
+		minimumHits = min(minimumHits, hits)
 	}
-	return 0, errors.New("response matches no single causally permitted mixed prefix")
+	if proof.Matched < 0 {
+		return proof, errors.New("response matches no single causally permitted mixed prefix")
+	}
+	proof.RecallAt10 = float64(minimumHits) / 10
+	return proof, nil
 }
 func mixedVisibility(ctx context.Context, c vectorClient, w mixedWrite, q recallQuery, state *recallInput, r *mixedReport) error {
 	origin := time.Now()
@@ -508,7 +599,7 @@ func mixedMeasured(parent context.Context, readers []ownedVectorClient, writer m
 					r.RequiredAppliedIndex = w.Response.AppliedIndex
 				}
 				// Every prefix truth was fully scored before networking; the
-				// unchanged top10 vectors are immutable and safe to borrow.
+				// unchanged vectors are immutable; changed-ID scores are prefix-local.
 				err = mixedVisibility(phase, proofClient, *w, r.Admission.Queries[i%16], in, r)
 				if err != nil {
 					runErr = err
@@ -522,9 +613,36 @@ func mixedMeasured(parent context.Context, readers []ownedVectorClient, writer m
 	if err != nil {
 		return err
 	}
-	// After joining the writer, actual call boundaries (not publication of a
-	// concurrent ledger update) are authoritative for the final causal proof.
-	for _, a := range r.Attempts {
+	return mixedRecheck(ctx, in, r)
+}
+
+// Exact call boundaries after writer/reader join narrow the online ledger range.
+// Reuse retained recall scalars; no response copies or favorable-prefix choice.
+func mixedRecheck(ctx context.Context, in *recallInput, r *mixedReport) (runErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Collection charged the online encoding conservatively. Corrected recall
+	// can change its size; report the final actual encoding without refunding
+	// that collection budget. Also account partial updates on a failed recheck.
+	defer func() {
+		retainedBytes := 0
+		for _, a := range r.Attempts {
+			encoded, err := json.Marshal(a)
+			if err != nil {
+				runErr = errors.Join(runErr, err)
+				return
+			}
+			retainedBytes += len(encoded) + 1
+		}
+		r.RetainedAttemptBytes = retainedBytes
+	}()
+	r.ReadPrefixes = make([]mixedReadPrefix, 0, len(r.Attempts))
+	for i := range r.Attempts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		a := &r.Attempts[i]
 		if a.Phase != "measured" {
 			continue
 		}
@@ -537,21 +655,20 @@ func mixedMeasured(parent context.Context, readers []ownedVectorClient, writer m
 				upper = i + 1
 			}
 		}
-		matched := -1
-		q := r.Admission.Queries[a.Ordinal%len(r.Admission.Queries)]
-		if a.Response == nil {
-			return errors.New("missing mixed response at final causal proof")
+		if a.Response == nil || a.Outcome != "succeeded" {
+			return errors.New("missing successful mixed response at final causal proof")
 		}
-		for p := lower; p <= upper; p++ {
-			if _, e := mixedValidatePrefix(&q, *a.Response, in, r, p, p); e == nil {
-				matched = p
-				break
-			}
+		q := &r.Admission.Queries[a.Ordinal%len(r.Admission.Queries)]
+		proof, err := mixedValidatePrefixProof(q, *a.Response, in, r, lower, upper)
+		proof.Ordinal = a.Ordinal
+		r.ReadPrefixes = append(r.ReadPrefixes, proof)
+		if err != nil {
+			return fmt.Errorf("mixed response violates final call/ACK causal prefix: %w", err)
 		}
-		r.ReadPrefixes = append(r.ReadPrefixes, mixedReadPrefix{Ordinal: a.Ordinal, Lower: lower, Upper: upper, Matched: matched})
-		if matched < 0 {
-			return errors.New("mixed response violates final call/ACK causal prefix")
+		if a.RecallAt10 == nil {
+			a.RecallAt10 = new(float64)
 		}
+		*a.RecallAt10 = proof.RecallAt10
 	}
 	return nil
 }
@@ -618,6 +735,10 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err := mixedValidate(o); err != nil {
 		return err
 	}
+	r.Profile = o.Profile
+	if r.Profile == mixedProfileChangingTop10 {
+		r.Scope = "six serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
+	}
 	gate, err := newWindowResourceGate(ctx, o.Window.ResourceGateDir, o.Window.Admission.RunID)
 	if err != nil {
 		return err
@@ -644,7 +765,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		return err
 	}
 	r.PreRecall = pacedRecallCopy(r.Admission, "quiescent-before-mixed")
-	r.PostRecall, _, err = mixedTruth(ctx, final, r.Admission, 6)
+	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, 6, r.Profile)
 	if err != nil {
 		return err
 	}
@@ -653,7 +774,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	// Reserve bounded original/retry/probe/audit receipts in addition to each
 	// retained read attempt. Complete pair encoding remains the final authority.
 	planned, _ := json.Marshal(r)
-	budget := o.Window.OutputBytes - 2*len(planned) - (4 << 20)
+	budget := o.Window.OutputBytes - 2*len(planned) - (4 << 20) - o.Window.MaxAttempts*mixedReadPrefixMaxBytes
 	if budget < 0 {
 		return errors.New("mixed evidence byte cap insufficient")
 	}
@@ -777,7 +898,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err != nil {
 		return err
 	}
-	r.PostRecall, _, err = mixedTruth(ctx, final, r.Admission, 6)
+	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, 6, r.Profile)
 	if err != nil {
 		return err
 	}
@@ -818,5 +939,8 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		}
 	}
 	r.Verdict = "ACCEPT_MIXED_INVARIANT_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION"
+	if r.Profile == mixedProfileChangingTop10 {
+		r.Verdict = "ACCEPT_MIXED_CHANGING_TOP10_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION"
+	}
 	return ctx.Err()
 }

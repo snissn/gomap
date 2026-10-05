@@ -82,6 +82,7 @@ type recallReport struct {
 	Kind, Verdict, Scope, Phase, RunID, ScoreContract                                          string
 	ConfigSHA256, BootstrapSHA256, ManifestSHA256, ProvenanceSHA256, ProbeSHA256, BinarySHA256 string
 	PopulationSHA256                                                                           string
+	OracleBasis                                                                                string `json:",omitempty"`
 	ConfigIdentity                                                                             nativewire.FixedPeerConfigIdentityV1
 	Generation                                                                                 public.GenerationIDV1
 	Manifest                                                                                   recallManifest
@@ -588,6 +589,21 @@ func recallTop10(ctx context.Context, s *collections.CanonicalVectorPartitionCos
 	return best, nil
 }
 func recallPlan(ctx context.Context, in *recallInput, r *recallReport) error {
+	r.OracleBasis = ""
+	return recallPlanCanonical(ctx, in, r, nil)
+}
+
+// Only the explicit changing-top10 profile calls this after unchanged exported
+// baseline admission. Changed corpus truth is derived, never exported authority.
+func recallPlanChangedPopulation(ctx context.Context, in *recallInput, r *recallReport, baseline *recallReport) error {
+	if baseline == nil || len(baseline.Queries) != 16 {
+		return errors.New("changed population requires sixteen admitted baseline queries")
+	}
+	r.OracleBasis = "derived-changing-prefix-full-canonical-fp32"
+	return recallPlanCanonical(ctx, in, r, baseline)
+}
+
+func recallPlanCanonical(ctx context.Context, in *recallInput, r *recallReport, baseline *recallReport) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -628,17 +644,29 @@ func recallPlan(ctx context.Context, in *recallInput, r *recallReport) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(q)
-		if err != nil {
-			return err
+		var scorer *collections.CanonicalVectorPartitionCosineScorerV1
+		if baseline != nil {
+			if !reflect.DeepEqual(q, baseline.Queries[i].Request.Query) {
+				return errors.New("changed population query differs from admitted baseline")
+			}
+			scorer = baseline.Queries[i].scorer
+		}
+		if scorer == nil {
+			var err error
+			scorer, err = collections.NewCanonicalVectorPartitionCosineScorerV1(q)
+			if err != nil {
+				return err
+			}
 		}
 		corpus, err := recallTop10(ctx, scorer, in.corpusIDs, in.vectors)
 		if err != nil {
 			return err
 		}
-		for j, want := range in.exported[i] {
-			if corpus[j].ID != want {
-				return errors.New("canonical corpus oracle differs from unchanged exported truth")
+		if baseline == nil {
+			for j, want := range in.exported[i] {
+				if corpus[j].ID != want {
+					return errors.New("canonical corpus oracle differs from unchanged exported truth")
+				}
 			}
 		}
 		truth, err := recallTop10(ctx, scorer, ids, in.vectors)

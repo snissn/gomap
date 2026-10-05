@@ -1049,11 +1049,18 @@ baseline is represented as an observed red.
 ### Six-outcome mixed-window observation
 
 The mixed-window driver precomputes full-population canonical FP32 truth for all
-seven planned prefixes and rejects changing top10 ID/score bits. Measured reads
-use one causally permitted prefix's changed-ID presence/scores and unchanged
-baseline scores; recall retains the existing threshold. Serial ACK token probes,
-original superseded-replace/delete retries and final acknowledged-ledger recall
-are separate untimed checks. No failed/UNKNOWN sample is retried or discarded.
+seven planned prefixes. Omitted profile rejects changing top10 ID/score bits;
+explicit `changing-top10` selects deterministic existing corpus IDs and requires
+a real top10 membership change. Exported corpus truth remains mandatory baseline
+admission; later prefix oracles derive actual changed corpus/population truth
+without rewriting the export. A complete measured response must match a causal
+prefix's changed-ID presence/scores and unchanged baseline scores. Recall is the
+minimum over all compatible prefixes, tightened against actual call/ACK bounds
+after join before aggregate accounting. Its mask records ambiguity; a first
+matched prefix is only a diagnostic witness, not exact publication timing.
+Recall retains the existing threshold. Serial ACK token probes, original
+superseded-replace/delete retries and final acknowledged-ledger recall are
+separate untimed checks. No failed/UNKNOWN sample is retried or discarded.
 
 An explicit optional existing diagnostics attachment proves six retained original
 outcomes and final known-ID content/absence plus exact live membership, while all
