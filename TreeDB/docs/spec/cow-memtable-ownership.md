@@ -57,6 +57,25 @@ cut/vector/backend-lease/retirement and temporary allocations. Use
 capacities. This is an obligation on every C2 allocation site, not permission
 to declare external allocations free.
 
+`budget.AcquireExternal(bytes)` admits caller-owned allocations that precede
+memtable preparation: grouped mutations, file-ID and scratch arrays, initial
+cache/fixed-vector/backend-basis wrappers, and persistent cut wrappers. Sum
+`COWAllocationCharge` applied once to each raw wrapper/backing capacity, then
+acquire before allocating that storage. C1 reserves its own lease wrapper before
+allocating it. The lease has no callback or resource tracker. Release the owned
+storage/resources first, then call its idempotent, concurrently safe `Close`.
+Persistent cuts may keep this small lease until final cut drain; cancelled cuts
+keep it until their outside-lock cleanup finishes. Do not charge the same caller
+allocation again in `ExtraBytes` or transfer its ownership to generation history.
+
+External lease bytes/count appear in `ExternalBytes`/`ExternalLeases`, and its
+full lifetime contributes to `TotalBytes` and `ReservedBytes`. This deliberately
+treats persistent wrappers as in-flight until released, so they share the finite
+`MaxInFlightBytes` admission with Prepare and the potential-retirement bound.
+It is a conservative capacity policy, not a second prepare/publication engine.
+Budget Close denies new external leases and root Retain; existing owners remain
+valid, and the budget control wrapper survives all external leases.
+
 `AttachResources` accepts newly introduced, distinct `COWResourceID{Kind, ID}`
 identities and one independently retained owner callback. The generation's
 identity and callback arrays have fixed capacities, allocated and charged when
@@ -94,8 +113,8 @@ capacity and 64 MiB in-flight reservations. They are internal starting limits,
 not public production tuning or an RSS quota.
 
 The source-bound mixed-operation charge remains intentionally conservative.
-The measured 1,024-operation mixed witness reserves about 45.5 MiB and fits the
-default in-flight limit; its 4,096-operation counterpart reserves about 182 MiB
+The measured 1,024-operation mixed witness reserves about 50.5 MiB and fits the
+default in-flight limit; its 4,096-operation counterpart reserves about 202 MiB
 and is refused under those defaults. Callers must admit the complete command
 before its WAL frame, use validated larger finite limits when needed, or return
 capacity refusal. A batch must not be split after acceptance to evade admission.
@@ -108,7 +127,8 @@ last old source lease is gone and cleanup finishes, including flushed
 generations pinned by readers.
 `MaxGenerations` covers writable, frozen and pinned generations together. Views
 and cursors consume the same view limit. Total charge includes budget control,
-generation history, pending preparations and active view/iterator wrappers.
+generation history, pending preparations, external allocation leases and active
+view/iterator wrappers.
 
 Capacity refusal happens before private allocation. The cached installer must
 roll over from cumulative history on the write/maintenance side and stop before
@@ -129,6 +149,11 @@ The audited methods are `Copy`, `copy`, `nodeSet`, `nodeSplit`, `Set`, `delete`,
   Go slice growth is at most doubling before allocator rounding. Reservations
   bound 126 pairs and 128 children, rounded conservatively. A generation's
   maximum cardinality retains the bound after deletes shrink a small tree.
+  The allocator helper includes a 16-byte allowance above Go1.26's pointer-size
+  times pointer-bits small-object GC-header threshold before rounding; its actual
+  header is eight bytes. Requests at 32,768 bytes already use the large-object
+  page path. Apply the helper once to raw sizes; it is not idempotent. Copy bounds
+  use actual dependency capacities, not repeated application to a charge.
 - A replacement copies one path and cannot split/grow. An insertion copies its
   original path, adds at most one split node per level and a root, and grows
   bounded pair/child arrays. Split arrays are shared; retry uses private nodes.
@@ -148,7 +173,11 @@ The audited methods are `Copy`, `copy`, `nodeSet`, `nodeSplit`, `Set`, `delete`,
   ID/callback arrays, writer/generation/budget wrappers and caller-supplied
   publication/lease allocations. No temporary entry array or payload clone is
   needed during preparation. Cursor reservations include wrapper, independently
-  closable view, bound string and doubled read-only dependency stack capacity.
+  closable view, bound string and every geometric read-only stack backing,
+  including discarded growth arrays. Go1.26 doubles through 32 frames; for larger
+  synthetic heights the charge uses eight times the rounded twice-height backing
+  to bound its at-least-1.25 growth, allocator rounding and headers. Admitted
+  degree-32 trees never approach that conservative tail on supported int sizes.
 
 `SeekGE` traverses immutable nodes under its existing source owner without
 allocating a cursor/view. `CursorWithExtraBytes` reserves an existing merging
@@ -165,6 +194,11 @@ not ordinary passing tests. `cow_test.go` covers input/output alias attempts,
 published header identity, legacy arena poison/reuse isolation, cancellation,
 split/delete/replacement/batch height, resource exact-once release, Close races,
 finite retention, restart after release and source/allocator reserve witnesses.
+Cheap degree-2 immutable iterator fixtures witness heights 5/7/9/11 without
+changing production degree-32 construction; synthetic pointer-frame appends also
+cover large-stack growth. External admission tests cover zero-allocation refusal,
+shared Prepare/retirement capacity, plateau, overflow, concurrent Close and
+shutdown control ownership. Root Retain races budget Close safely.
 
 Foundation costs are measured with:
 

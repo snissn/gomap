@@ -190,7 +190,10 @@ writer/frozen/root/view generation references. Published dependency headers
 never Copy or mutate, so independent immutable cursors do not hold the writer
 lock. One view/cursor serializes traversal versus its own Close. Preparation
 reserves cumulative node/payload history and eventual retirement before private
-allocation; long readers may stop new writes. Deferred resource callbacks run
+allocation; long readers may stop new writes. External allocation leases reserve
+caller scratch/cut wrappers before allocation and share finite in-flight
+capacity until cleanup; Close refuses fresh leases and root Retain. The budget
+control owner survives all such leases. Deferred resource callbacks run
 outside publication and admission locks. This capability is not yet a public
 DB dispatch mode; see [ownership and accounting](cow-memtable-ownership.md).
 

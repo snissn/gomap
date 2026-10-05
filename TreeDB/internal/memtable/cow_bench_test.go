@@ -92,3 +92,29 @@ func BenchmarkCOWScan(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkCOWExternalLease(b *testing.B) {
+	budget, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		b.Fatal(err)
+	}
+	baseline := budget.Stats().TotalBytes
+	lease, err := budget.AcquireExternal(COWAllocationCharge(128))
+	if err != nil {
+		b.Fatal(err)
+	}
+	charge := budget.Stats().TotalBytes - baseline
+	lease.Close()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		lease, err := budget.AcquireExternal(COWAllocationCharge(128))
+		if err != nil {
+			b.Fatal(err)
+		}
+		lease.Close()
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(charge), "charged-B/op")
+	budget.Close()
+}

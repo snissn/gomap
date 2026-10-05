@@ -44,11 +44,13 @@ func (l COWLimits) Validate() error {
 
 type COWStats struct {
 	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes, DeferredBytes uint64
-	Views, Generations, Sources                                                                   int
+	ExternalBytes                                                                                 uint64
+	Views, Generations, Sources, ExternalLeases                                                   int
 }
 
 // COWBudget is shared by the fixed shard vector and its frozen generations.
-// C2 must include its own cut/vector/backend-lease allocations in ExtraBytes.
+// C2 charges caller-owned cut/vector/backend-lease allocations through an
+// external lease before allocation, or ExtraBytes before private preparation.
 type COWBudget struct {
 	mu     sync.Mutex
 	limits COWLimits
@@ -79,7 +81,7 @@ func (b *COWBudget) Close() {
 	b.releaseControlLocked()
 }
 func (b *COWBudget) releaseControlLocked() {
-	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 {
+	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 {
 		b.stats.TotalBytes -= b.stats.ControlBytes
 		b.stats.ControlBytes = 0
 	}
@@ -87,7 +89,69 @@ func (b *COWBudget) releaseControlLocked() {
 
 // COWAllocationCharge lets C2 charge concrete wrapper/backing capacities using
 // the same conservative Go allocator rounding as the source reservation.
+// Apply it once to each raw size/capacity, then sum the returned charges.
 func COWAllocationCharge(n uint64) uint64 { return cowAllocation(n) }
+
+// COWExternalLease admits caller-owned storage before that storage is allocated.
+// Its entire lifetime counts as in-flight, including persistent cut wrappers.
+// It owns no callback or physical resource; Close follows the caller's cleanup.
+// Keep the returned pointer; do not copy the lease struct after acquisition.
+type COWExternalLease struct {
+	budget *COWBudget
+	charge uint64
+	closed bool // guarded by budget.mu, including concurrent Close calls
+}
+
+func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
+	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if !ok {
+		return nil, ErrCOWCapacity
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, ErrCOWClosed
+	}
+	if b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
+		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
+		return nil, ErrCOWCapacity
+	}
+	b.stats.ReservedBytes += charge
+	b.stats.ExternalBytes += charge
+	b.stats.ExternalLeases++
+	return &COWExternalLease{budget: b, charge: charge}, nil
+}
+
+// Close is idempotent and may race another Close. The owning caller releases
+// all charged buffers/wrappers/resources before closing this allocation lease.
+func (l *COWExternalLease) Close() {
+	if l == nil {
+		return
+	}
+	b := l.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if l.closed {
+		return
+	}
+	l.closed = true
+	b.stats.TotalBytes -= l.charge
+	b.stats.ReservedBytes -= l.charge
+	b.stats.ExternalBytes -= l.charge
+	b.stats.ExternalLeases--
+	b.releaseControlLocked()
+}
+
+func cowFits(limit, used, n uint64) bool { return used <= limit && n <= limit-used }
+
+func (b *COWBudget) retirementFitsLocked(n uint64) bool {
+	used, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
+	if !ok {
+		return false
+	}
+	used, ok = cowAdd(used, b.stats.DeferredBytes)
+	return ok && cowFits(b.limits.MaxRetiredBytes, used, n)
+}
 
 func cowAdd(a, c uint64) (uint64, bool) {
 	if c > math.MaxUint64-a {
@@ -97,14 +161,21 @@ func cowAdd(a, c uint64) (uint64, bool) {
 }
 
 // Allocation charge bounds the Go allocator's rounding, including slice backing
-// capacity. Powers of two cover small size classes; large objects round to pages.
-// It is idempotent, so copying a rounded dependency capacity cannot escape it.
+// capacity. Include conservative space for pointer-bearing small-object GC
+// headers before rounding; callers apply this once to raw allocation capacities.
+// This deliberately also charges the allowance for pointer-free payload bytes.
 func cowAllocation(n uint64) uint64 {
 	if n == 0 {
 		return 0
 	}
-	if n > math.MaxInt64-8192 {
+	if n > math.MaxInt64-8192-16 {
 		return math.MaxUint64
+	}
+	// Go1.26 gc.MinSizeForMallocHeader is PtrSize*PtrBits; its header is
+	// eight bytes. Sixteen bytes conservatively covers it before rounding.
+	ptrSize := uint64(unsafe.Sizeof(uintptr(0)))
+	if n > ptrSize*ptrSize*8 && n < 32768 {
+		n += 16
 	}
 	if n <= 32768 {
 		c := uint64(16)
@@ -156,7 +227,7 @@ func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
 		return nil, ErrCOWClosed
 	}
 	if b.stats.Generations >= b.limits.MaxGenerations || base > b.limits.MaxGenerationBytes ||
-		base > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes-b.stats.DeferredBytes || !b.addLocked(base) {
+		!b.retirementFitsLocked(base) || !b.addLocked(base) {
 		return nil, ErrCOWCapacity
 	}
 	b.stats.Generations++

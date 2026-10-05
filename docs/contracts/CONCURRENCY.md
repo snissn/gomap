@@ -28,7 +28,10 @@
 The internal immutable memtable foundation uses writer-private preparation and
 separate immutable read headers with owned strings. Retained views/cursors keep
 their source generation and concrete resource owners alive until Close; budget
-Close denies new admissions while existing views remain valid. Release callbacks
+Close denies new admissions, including root Retain and external allocation
+leases, while existing views remain valid. External leases reserve caller
+storage before allocation and close idempotently after owned cleanup.
+Release callbacks
 are deferred outside publication/admission locks. It supplies no standalone
 public DB mode at this stage. See
 [the precise ownership contract](../../TreeDB/docs/spec/cow-memtable-ownership.md).

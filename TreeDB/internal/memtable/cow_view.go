@@ -83,18 +83,56 @@ func (r *COWRoot) Cursor(start, end []byte) (*COWCursor, error) {
 	return r.CursorWithExtraBytes(start, end, 0)
 }
 
+// Charge every discarded stack backing, not only its retained final capacity.
+// Through 32 frames Go doubles capacity. For larger synthetic heights, Go1.26
+// nextslicecap grows by at least 1.25 and at most 2; allocator/header rounding
+// adds slack. Eight times the rounded 2*height backing bounds the geometric
+// sum (the unrounded sum is at most five times the final backing). Degree-32
+// trees on supported int cardinalities never need this conservative tail.
+func cowCursorStackCharge(height int) (uint64, bool) {
+	if height < 1 {
+		return 0, true
+	}
+	frame := 2 * uint64(unsafe.Sizeof(uintptr(0)))
+	if height > 32 {
+		if uint64(height) > (^uint64(0)-16)/(2*frame) {
+			return 0, false
+		}
+		last := cowAllocation(2*uint64(height)*frame + 16)
+		if last > ^uint64(0)/8 {
+			return 0, false
+		}
+		return 8 * last, true
+	}
+	var sum uint64
+	for capacity := 1; ; capacity *= 2 {
+		var ok bool
+		sum, ok = cowAdd(sum, cowAllocation(uint64(capacity)*frame))
+		if !ok {
+			return 0, false
+		}
+		if capacity >= height {
+			return sum, true
+		}
+	}
+}
+
 // CursorWithExtraBytes reserves an existing iterator adapter's wrapper and
 // copied domain bounds in the same view admission as the cursor itself.
 func (r *COWRoot) CursorWithExtraBytes(start, end []byte, extraBytes uint64) (*COWCursor, error) {
-	// Dependency iterator stack has 16-byte frames and doubles from capacity 1.
-	// Charge its rounded maximum from the immutable tree height before Seek.
-	h := r.Height()
-	stack := 1
-	for stack < h {
-		stack *= 2
+	stack, ok := cowCursorStackCharge(r.Height())
+	if !ok {
+		return nil, ErrCOWCapacity
 	}
-	extra := cowAllocation(uint64(unsafe.Sizeof(COWCursor{}))) + cowAllocation(uint64(stack)*2*uint64(unsafe.Sizeof(uintptr(0)))) + cowAllocation(uint64(len(end)))
-	extra, ok := cowAdd(extra, extraBytes)
+	extra, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWCursor{}))), stack)
+	if !ok {
+		return nil, ErrCOWCapacity
+	}
+	extra, ok = cowAdd(extra, cowAllocation(uint64(len(end))))
+	if !ok {
+		return nil, ErrCOWCapacity
+	}
+	extra, ok = cowAdd(extra, extraBytes)
 	if !ok {
 		return nil, ErrCOWCapacity
 	}

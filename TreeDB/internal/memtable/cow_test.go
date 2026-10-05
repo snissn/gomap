@@ -667,6 +667,9 @@ func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
 	}
 	b.Close()
 	b.Close()
+	if root.Retain() {
+		t.Fatal("budget close admitted another root owner")
+	}
 	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWClosed) {
 		t.Fatal(e)
 	}
@@ -688,6 +691,232 @@ func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
 	view.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWPointerAllocationCharge(t *testing.T) {
+	for _, count := range []int{64, 128, 256, 512, 1024, 4096} {
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		data := make([]*int, count)
+		runtime.ReadMemStats(&after)
+		charge := COWAllocationCharge(uint64(count) * uint64(unsafe.Sizeof(uintptr(0))))
+		allocated := after.TotalAlloc - before.TotalAlloc
+		if allocated > charge {
+			t.Fatalf("pointer backing count=%d allocated=%d charge=%d", count, allocated, charge)
+		}
+		t.Logf("pointer backing count=%d allocated=%d charge=%d", count, allocated, charge)
+		runtime.KeepAlive(data)
+	}
+}
+
+func TestCOWExternalAdmissionLifetimeAndRefusal(t *testing.T) {
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 1024
+	l.MaxTotalBytes = 4096
+	l.MaxRetiredBytes = 2048
+	l.MaxInFlightBytes = 256
+	b, err := NewCOWBudget(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := b.Stats()
+	var leases []*COWExternalLease
+	for {
+		lease, err := b.AcquireExternal(COWAllocationCharge(32))
+		if errors.Is(err, ErrCOWCapacity) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		leases = append(leases, lease)
+	}
+	plateau := b.Stats()
+	if len(leases) != 4 || plateau.ExternalBytes != 256 || plateau.ReservedBytes != 256 || plateau.ExternalLeases != 4 || plateau.TotalBytes-baseline.TotalBytes != 256 {
+		t.Fatalf("external plateau %+v leases=%d", plateau, len(leases))
+	}
+	if allocations := testing.AllocsPerRun(100, func() {
+		lease, err := b.AcquireExternal(1)
+		if lease != nil || !errors.Is(err, ErrCOWCapacity) {
+			panic("refusal admitted storage")
+		}
+	}); allocations != 0 {
+		t.Fatalf("refusal allocated %g objects", allocations)
+	}
+	if _, err := b.AcquireExternal(^uint64(0)); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("overflow admitted", err)
+	}
+	if b.Stats() != plateau {
+		t.Fatal("refused lease changed accounting")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); leases[0].Close() }()
+	}
+	wg.Wait()
+	lease, err := b.AcquireExternal(32)
+	if err != nil {
+		t.Fatal("release did not restore admission", err)
+	}
+	leases = append(leases, lease)
+	b.Close()
+	if b.Stats().ControlBytes == 0 {
+		t.Fatal("external leases lost budget control")
+	}
+	if _, err := b.AcquireExternal(0); !errors.Is(err, ErrCOWClosed) {
+		t.Fatal("closed budget admitted external allocation", err)
+	}
+	for _, lease := range leases {
+		lease.Close()
+		lease.Close()
+	}
+	if got := b.Stats(); got.TotalBytes != 0 || got.ReservedBytes != 0 || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatal(got)
+	}
+	var nilLease *COWExternalLease
+	nilLease.Close()
+}
+
+func TestCOWExternalAdmissionSharesPrepareAndRetirementBounds(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	charge, err := w.Estimate(nil, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fill in-flight storage so another Prepare cannot allocate its candidate.
+	lease, err := b.AcquireExternal(b.Limits().MaxInFlightBytes - charge.Total())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := b.Stats()
+	if allocations := testing.AllocsPerRun(100, func() {
+		p, e := w.Prepare(nil, COWPrepareOptions{})
+		if p != nil || !errors.Is(e, ErrCOWCapacity) {
+			panic("Prepare ignored external admission")
+		}
+	}); allocations != 0 {
+		t.Fatal("refused preparation allocated", allocations)
+	}
+	if b.Stats() != before {
+		t.Fatal("refused preparation changed charge")
+	}
+	lease.Close()
+	p, err := w.Prepare(nil, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Cancel()
+	d.Drain()
+	cowTestClose(w)
+	b.Close()
+	// Retirement may be smaller than in-flight: external admission must not
+	// allow its reserved bytes to underflow later retirement subtraction.
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 1024
+	l.MaxRetiredBytes = 1024
+	l.MaxInFlightBytes = 4096
+	b, err = NewCOWBudget(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err = b.AcquireExternal(1024)
+	if !errors.Is(err, ErrCOWCapacity) || lease != nil {
+		t.Fatal("retirement bound ignored", err)
+	}
+	if !cowFits(10, 10, 0) || cowFits(10, 11, 0) || cowFits(10, 0, ^uint64(0)) {
+		t.Fatal("capacity arithmetic underflow")
+	}
+	b.Close()
+}
+
+func TestCOWRetainCloseRace(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, nil)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 128; j++ {
+				if root.Retain() {
+					cowTestRelease(root)
+				}
+			}
+		}()
+	}
+	close(start)
+	b.Close()
+	wg.Wait()
+	if root.Retain() {
+		t.Fatal("post-close root retained")
+	}
+	if root.Len() != 0 {
+		t.Fatal("existing source invalidated")
+	}
+	cowTestRelease(root)
+	cowTestClose(w)
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWCursorGeometricStackWitness(t *testing.T) {
+	for _, count := range []int{64, 256, 1024, 4096} {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		// Only this immutable iterator fixture uses degree2 to reach heights
+		// cheaply. Production COW construction remains fixed at degree32.
+		m := btree.NewMap[string, cowValue](2)
+		for i := 0; i < count; i++ {
+			m.Set(fmt.Sprintf("%08d", i), cowValue{})
+		}
+		root := &COWRoot{tree: m, generation: w.generation, refs: 1}
+		w.generation.retain()
+		beforeCharge := b.Stats().TotalBytes
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		cursor, err := root.Cursor(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&after)
+		charge := b.Stats().TotalBytes - beforeCharge
+		if after.TotalAlloc-before.TotalAlloc > charge {
+			t.Fatalf("height%d allocated%d charge%d", root.Height(), after.TotalAlloc-before.TotalAlloc, charge)
+		}
+		t.Logf("iterator height=%d allocated=%d charge=%d", root.Height(), after.TotalAlloc-before.TotalAlloc, charge)
+		cursor.Close()
+		cowTestRelease(root)
+		cowTestClose(w)
+		b.Close()
+	}
+	type frame struct {
+		pointer *int
+		index   int
+	}
+	for _, height := range []int{9, 33, 65, 257, 4097} {
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		var stack []frame
+		for i := 0; i < height; i++ {
+			stack = append(stack, frame{})
+		}
+		runtime.ReadMemStats(&after)
+		charge, ok := cowCursorStackCharge(height)
+		if !ok || after.TotalAlloc-before.TotalAlloc > charge {
+			t.Fatalf("stack height%d allocated%d charge%d", height, after.TotalAlloc-before.TotalAlloc, charge)
+		}
+		t.Logf("synthetic stack height=%d allocated=%d charge=%d", height, after.TotalAlloc-before.TotalAlloc, charge)
+		runtime.KeepAlive(stack)
+	}
+	if _, ok := cowCursorStackCharge(int(^uint(0) >> 1)); ok {
+		t.Fatal("unbounded stack charge overflow accepted")
 	}
 }
 
