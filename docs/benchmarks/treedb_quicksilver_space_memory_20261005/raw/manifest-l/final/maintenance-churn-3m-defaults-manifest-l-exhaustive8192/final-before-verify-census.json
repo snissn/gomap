@@ -1,0 +1,2085 @@
+{
+  "label": "final-before-verify",
+  "files": [
+    {
+      "path": "dictdb/LOCK",
+      "kind": "dictionary",
+      "apparent": 12,
+      "allocated": 4096
+    },
+    {
+      "path": "dictdb/format.json",
+      "kind": "dictionary",
+      "apparent": 335,
+      "allocated": 4096
+    },
+    {
+      "path": "dictdb/index.db",
+      "kind": "dictionary",
+      "apparent": 589824,
+      "allocated": 589824
+    },
+    {
+      "path": "dictdb/value_vlog/value-l0-000001.log",
+      "kind": "dictionary",
+      "apparent": 65584,
+      "allocated": 69632
+    },
+    {
+      "path": "dictdb/value_vlog/value-l0-000002.log",
+      "kind": "dictionary",
+      "apparent": 131120,
+      "allocated": 135168
+    },
+    {
+      "path": "dictdb/value_vlog/value-l0-000003.log",
+      "kind": "dictionary",
+      "apparent": 65584,
+      "allocated": 69632
+    },
+    {
+      "path": "dictdb/vlog_ref_counts.meta",
+      "kind": "dictionary",
+      "apparent": 64,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/LOCK",
+      "kind": "metadata",
+      "apparent": 12,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/format.json",
+      "kind": "metadata",
+      "apparent": 433,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/index.db",
+      "kind": "index",
+      "apparent": 46137344,
+      "allocated": 46137344
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000001.json",
+      "kind": "outer_leaf",
+      "apparent": 253,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000002.json",
+      "kind": "outer_leaf",
+      "apparent": 301,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000003.json",
+      "kind": "outer_leaf",
+      "apparent": 1531,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000004.json",
+      "kind": "outer_leaf",
+      "apparent": 2767,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000005.json",
+      "kind": "outer_leaf",
+      "apparent": 4003,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000006.json",
+      "kind": "outer_leaf",
+      "apparent": 6475,
+      "allocated": 8192
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000007.json",
+      "kind": "outer_leaf",
+      "apparent": 7505,
+      "allocated": 8192
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000008.json",
+      "kind": "outer_leaf",
+      "apparent": 8947,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000009.json",
+      "kind": "outer_leaf",
+      "apparent": 10829,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000a.json",
+      "kind": "outer_leaf",
+      "apparent": 11039,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000b.json",
+      "kind": "outer_leaf",
+      "apparent": 12293,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000c.json",
+      "kind": "outer_leaf",
+      "apparent": 12502,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000d.json",
+      "kind": "outer_leaf",
+      "apparent": 12711,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000e.json",
+      "kind": "outer_leaf",
+      "apparent": 13965,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000000f.json",
+      "kind": "outer_leaf",
+      "apparent": 15637,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000010.json",
+      "kind": "outer_leaf",
+      "apparent": 17727,
+      "allocated": 20480
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000011.json",
+      "kind": "outer_leaf",
+      "apparent": 20235,
+      "allocated": 20480
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000012.json",
+      "kind": "outer_leaf",
+      "apparent": 21705,
+      "allocated": 24576
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000013.json",
+      "kind": "outer_leaf",
+      "apparent": 24015,
+      "allocated": 24576
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000014.json",
+      "kind": "outer_leaf",
+      "apparent": 25275,
+      "allocated": 28672
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000015.json",
+      "kind": "outer_leaf",
+      "apparent": 26535,
+      "allocated": 28672
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000016.json",
+      "kind": "outer_leaf",
+      "apparent": 27795,
+      "allocated": 28672
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000017.json",
+      "kind": "outer_leaf",
+      "apparent": 30315,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000018.json",
+      "kind": "outer_leaf",
+      "apparent": 31575,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000019.json",
+      "kind": "outer_leaf",
+      "apparent": 33465,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001a.json",
+      "kind": "outer_leaf",
+      "apparent": 34725,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001b.json",
+      "kind": "outer_leaf",
+      "apparent": 37245,
+      "allocated": 40960
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001c.json",
+      "kind": "outer_leaf",
+      "apparent": 38505,
+      "allocated": 40960
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001d.json",
+      "kind": "outer_leaf",
+      "apparent": 39765,
+      "allocated": 40960
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001e.json",
+      "kind": "outer_leaf",
+      "apparent": 42285,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000001f.json",
+      "kind": "outer_leaf",
+      "apparent": 43545,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000020.json",
+      "kind": "outer_leaf",
+      "apparent": 44805,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000021.json",
+      "kind": "outer_leaf",
+      "apparent": 46905,
+      "allocated": 49152
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000022.json",
+      "kind": "outer_leaf",
+      "apparent": 48585,
+      "allocated": 49152
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000023.json",
+      "kind": "outer_leaf",
+      "apparent": 49845,
+      "allocated": 53248
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000024.json",
+      "kind": "outer_leaf",
+      "apparent": 52365,
+      "allocated": 53248
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000025.json",
+      "kind": "outer_leaf",
+      "apparent": 53625,
+      "allocated": 57344
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000026.json",
+      "kind": "outer_leaf",
+      "apparent": 55095,
+      "allocated": 57344
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000027.json",
+      "kind": "outer_leaf",
+      "apparent": 56565,
+      "allocated": 57344
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000028.json",
+      "kind": "outer_leaf",
+      "apparent": 57825,
+      "allocated": 61440
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000029.json",
+      "kind": "outer_leaf",
+      "apparent": 60345,
+      "allocated": 61440
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002a.json",
+      "kind": "outer_leaf",
+      "apparent": 61605,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002b.json",
+      "kind": "outer_leaf",
+      "apparent": 62865,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002c.json",
+      "kind": "outer_leaf",
+      "apparent": 64965,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002d.json",
+      "kind": "outer_leaf",
+      "apparent": 66645,
+      "allocated": 69632
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002e.json",
+      "kind": "outer_leaf",
+      "apparent": 67905,
+      "allocated": 69632
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000002f.json",
+      "kind": "outer_leaf",
+      "apparent": 70425,
+      "allocated": 73728
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000030.json",
+      "kind": "outer_leaf",
+      "apparent": 71685,
+      "allocated": 73728
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000031.json",
+      "kind": "outer_leaf",
+      "apparent": 73155,
+      "allocated": 73728
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000032.json",
+      "kind": "outer_leaf",
+      "apparent": 75045,
+      "allocated": 77824
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000033.json",
+      "kind": "outer_leaf",
+      "apparent": 76725,
+      "allocated": 77824
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000034.json",
+      "kind": "outer_leaf",
+      "apparent": 77985,
+      "allocated": 81920
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000035.json",
+      "kind": "outer_leaf",
+      "apparent": 79665,
+      "allocated": 81920
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000036.json",
+      "kind": "outer_leaf",
+      "apparent": 80295,
+      "allocated": 81920
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000037.json",
+      "kind": "outer_leaf",
+      "apparent": 81555,
+      "allocated": 81920
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000038.json",
+      "kind": "outer_leaf",
+      "apparent": 84075,
+      "allocated": 86016
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000039.json",
+      "kind": "outer_leaf",
+      "apparent": 85335,
+      "allocated": 86016
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003a.json",
+      "kind": "outer_leaf",
+      "apparent": 86595,
+      "allocated": 90112
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003b.json",
+      "kind": "outer_leaf",
+      "apparent": 88695,
+      "allocated": 90112
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003c.json",
+      "kind": "outer_leaf",
+      "apparent": 90375,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003d.json",
+      "kind": "outer_leaf",
+      "apparent": 92265,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003e.json",
+      "kind": "outer_leaf",
+      "apparent": 94155,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000003f.json",
+      "kind": "outer_leaf",
+      "apparent": 95415,
+      "allocated": 98304
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000040.json",
+      "kind": "outer_leaf",
+      "apparent": 96885,
+      "allocated": 98304
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000041.json",
+      "kind": "outer_leaf",
+      "apparent": 98775,
+      "allocated": 102400
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000042.json",
+      "kind": "outer_leaf",
+      "apparent": 100455,
+      "allocated": 102400
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000043.json",
+      "kind": "outer_leaf",
+      "apparent": 102345,
+      "allocated": 102400
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000044.json",
+      "kind": "outer_leaf",
+      "apparent": 102975,
+      "allocated": 106496
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000045.json",
+      "kind": "outer_leaf",
+      "apparent": 104235,
+      "allocated": 106496
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000046.json",
+      "kind": "outer_leaf",
+      "apparent": 117039,
+      "allocated": 118784
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000047.json",
+      "kind": "outer_leaf",
+      "apparent": 119559,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000048.json",
+      "kind": "outer_leaf",
+      "apparent": 120819,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000049.json",
+      "kind": "outer_leaf",
+      "apparent": 122079,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004a.json",
+      "kind": "outer_leaf",
+      "apparent": 124179,
+      "allocated": 126976
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004b.json",
+      "kind": "outer_leaf",
+      "apparent": 125884,
+      "allocated": 126976
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004c.json",
+      "kind": "outer_leaf",
+      "apparent": 127162,
+      "allocated": 131072
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004d.json",
+      "kind": "outer_leaf",
+      "apparent": 128866,
+      "allocated": 131072
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004e.json",
+      "kind": "outer_leaf",
+      "apparent": 130570,
+      "allocated": 131072
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000004f.json",
+      "kind": "outer_leaf",
+      "apparent": 132274,
+      "allocated": 135168
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000050.json",
+      "kind": "outer_leaf",
+      "apparent": 133552,
+      "allocated": 135168
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000051.json",
+      "kind": "outer_leaf",
+      "apparent": 135256,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000052.json",
+      "kind": "outer_leaf",
+      "apparent": 136960,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000053.json",
+      "kind": "outer_leaf",
+      "apparent": 138664,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000054.json",
+      "kind": "outer_leaf",
+      "apparent": 140368,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000055.json",
+      "kind": "outer_leaf",
+      "apparent": 141220,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000056.json",
+      "kind": "outer_leaf",
+      "apparent": 143776,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000057.json",
+      "kind": "outer_leaf",
+      "apparent": 145054,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000058.json",
+      "kind": "outer_leaf",
+      "apparent": 146332,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000059.json",
+      "kind": "outer_leaf",
+      "apparent": 148462,
+      "allocated": 151552
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005a.json",
+      "kind": "outer_leaf",
+      "apparent": 150166,
+      "allocated": 151552
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005b.json",
+      "kind": "outer_leaf",
+      "apparent": 152083,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005c.json",
+      "kind": "outer_leaf",
+      "apparent": 154000,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005d.json",
+      "kind": "outer_leaf",
+      "apparent": 155278,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005e.json",
+      "kind": "outer_leaf",
+      "apparent": 156982,
+      "allocated": 159744
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000005f.json",
+      "kind": "outer_leaf",
+      "apparent": 159112,
+      "allocated": 159744
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000060.json",
+      "kind": "outer_leaf",
+      "apparent": 160390,
+      "allocated": 163840
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000061.json",
+      "kind": "outer_leaf",
+      "apparent": 162094,
+      "allocated": 163840
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000062.json",
+      "kind": "outer_leaf",
+      "apparent": 163585,
+      "allocated": 163840
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000063.json",
+      "kind": "outer_leaf",
+      "apparent": 164863,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000064.json",
+      "kind": "outer_leaf",
+      "apparent": 167420,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000065.json",
+      "kind": "outer_leaf",
+      "apparent": 167420,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000066.json",
+      "kind": "outer_leaf",
+      "apparent": 167633,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000067.json",
+      "kind": "outer_leaf",
+      "apparent": 176033,
+      "allocated": 176128
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000068.json",
+      "kind": "outer_leaf",
+      "apparent": 81984,
+      "allocated": 86016
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.0000000000000069.json",
+      "kind": "outer_leaf",
+      "apparent": 167633,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000006a.json",
+      "kind": "outer_leaf",
+      "apparent": 167846,
+      "allocated": 167936
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000006b.json",
+      "kind": "outer_leaf",
+      "apparent": 179956,
+      "allocated": 180224
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000006c.json",
+      "kind": "outer_leaf",
+      "apparent": 85907,
+      "allocated": 86016
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000006d.json",
+      "kind": "outer_leaf",
+      "apparent": 93587,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.durable.000000000000006e.json",
+      "kind": "outer_leaf",
+      "apparent": 26814,
+      "allocated": 28672
+    },
+    {
+      "path": "maindb/leaf_vlog/manifest.json",
+      "kind": "outer_leaf",
+      "apparent": 26814,
+      "allocated": 28672
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000611.log",
+      "kind": "outer_leaf",
+      "apparent": 33555599,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000611.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 41784,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000612.log",
+      "kind": "outer_leaf",
+      "apparent": 33556206,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000612.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 142608,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000613.log",
+      "kind": "outer_leaf",
+      "apparent": 33556423,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000613.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143168,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000614.log",
+      "kind": "outer_leaf",
+      "apparent": 33556405,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000614.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 142984,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000615.log",
+      "kind": "outer_leaf",
+      "apparent": 33554651,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000615.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 144272,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000616.log",
+      "kind": "outer_leaf",
+      "apparent": 33555027,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000616.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143664,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000617.log",
+      "kind": "outer_leaf",
+      "apparent": 33554669,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000617.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143000,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000618.log",
+      "kind": "outer_leaf",
+      "apparent": 33556579,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000618.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 34968,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000619.log",
+      "kind": "outer_leaf",
+      "apparent": 33554744,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000619.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 33704,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000620.log",
+      "kind": "outer_leaf",
+      "apparent": 33556284,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000620.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 32720,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000621.log",
+      "kind": "outer_leaf",
+      "apparent": 33555595,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000621.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 31896,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000622.log",
+      "kind": "outer_leaf",
+      "apparent": 33556063,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000622.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 34648,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000623.log",
+      "kind": "outer_leaf",
+      "apparent": 33554658,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000623.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143600,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000624.log",
+      "kind": "outer_leaf",
+      "apparent": 33556467,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000624.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 68824,
+      "allocated": 69632
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000625.log",
+      "kind": "outer_leaf",
+      "apparent": 33555944,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000625.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 75192,
+      "allocated": 77824
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000626.log",
+      "kind": "outer_leaf",
+      "apparent": 33555706,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000626.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 74600,
+      "allocated": 77824
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000627.log",
+      "kind": "outer_leaf",
+      "apparent": 33555969,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000627.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 65888,
+      "allocated": 69632
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000628.log",
+      "kind": "outer_leaf",
+      "apparent": 33557009,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000628.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 64528,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000629.log",
+      "kind": "outer_leaf",
+      "apparent": 33555047,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000629.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 138808,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000630.log",
+      "kind": "outer_leaf",
+      "apparent": 33556966,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000630.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 121984,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000631.log",
+      "kind": "outer_leaf",
+      "apparent": 33556299,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000631.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 119336,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000632.log",
+      "kind": "outer_leaf",
+      "apparent": 33555880,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000632.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 110968,
+      "allocated": 114688
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000633.log",
+      "kind": "outer_leaf",
+      "apparent": 33554982,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000633.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 109024,
+      "allocated": 110592
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000634.log",
+      "kind": "outer_leaf",
+      "apparent": 33555690,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000634.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 102656,
+      "allocated": 106496
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000635.log",
+      "kind": "outer_leaf",
+      "apparent": 33554679,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000635.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 139536,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000636.log",
+      "kind": "outer_leaf",
+      "apparent": 33555109,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000636.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 142728,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000637.log",
+      "kind": "outer_leaf",
+      "apparent": 33555734,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000637.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143680,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000638.log",
+      "kind": "outer_leaf",
+      "apparent": 33556533,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000638.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 141312,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000639.log",
+      "kind": "outer_leaf",
+      "apparent": 33555074,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000639.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 140888,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000640.log",
+      "kind": "outer_leaf",
+      "apparent": 33554571,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000640.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 141888,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000641.log",
+      "kind": "outer_leaf",
+      "apparent": 33556059,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000641.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 134016,
+      "allocated": 135168
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000642.log",
+      "kind": "outer_leaf",
+      "apparent": 33556509,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000642.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 22504,
+      "allocated": 24576
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000643.log",
+      "kind": "outer_leaf",
+      "apparent": 33556671,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000643.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 18904,
+      "allocated": 20480
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000644.log",
+      "kind": "outer_leaf",
+      "apparent": 33555892,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000644.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 10544,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000645.log",
+      "kind": "outer_leaf",
+      "apparent": 33556062,
+      "allocated": 33562624
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000645.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 145392,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000646.log",
+      "kind": "outer_leaf",
+      "apparent": 33556780,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000646.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 147216,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000647.log",
+      "kind": "outer_leaf",
+      "apparent": 33557000,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000647.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 145088,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000648.log",
+      "kind": "outer_leaf",
+      "apparent": 33555648,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000648.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 58616,
+      "allocated": 61440
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000649.log",
+      "kind": "outer_leaf",
+      "apparent": 33555961,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000649.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 54456,
+      "allocated": 57344
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000650.log",
+      "kind": "outer_leaf",
+      "apparent": 33554788,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000650.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 44232,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000651.log",
+      "kind": "outer_leaf",
+      "apparent": 33554986,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000651.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 38296,
+      "allocated": 40960
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000652.log",
+      "kind": "outer_leaf",
+      "apparent": 33556302,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000652.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 32168,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000653.log",
+      "kind": "outer_leaf",
+      "apparent": 33554519,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000653.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 155952,
+      "allocated": 159744
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000654.log",
+      "kind": "outer_leaf",
+      "apparent": 33557157,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000654.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 155088,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000655.log",
+      "kind": "outer_leaf",
+      "apparent": 33557017,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000655.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 154872,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000656.log",
+      "kind": "outer_leaf",
+      "apparent": 33555340,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000656.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 152192,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000657.log",
+      "kind": "outer_leaf",
+      "apparent": 33554976,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000657.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 145176,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000658.log",
+      "kind": "outer_leaf",
+      "apparent": 33555377,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000658.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 132568,
+      "allocated": 135168
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000659.log",
+      "kind": "outer_leaf",
+      "apparent": 33555967,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000659.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 125360,
+      "allocated": 126976
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000660.log",
+      "kind": "outer_leaf",
+      "apparent": 33555962,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000660.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 15976,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000661.log",
+      "kind": "outer_leaf",
+      "apparent": 33556227,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000661.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 12392,
+      "allocated": 16384
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000662.log",
+      "kind": "outer_leaf",
+      "apparent": 33555098,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000662.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 144440,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000663.log",
+      "kind": "outer_leaf",
+      "apparent": 33554522,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000663.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 144192,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000664.log",
+      "kind": "outer_leaf",
+      "apparent": 33555515,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000664.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 144736,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000665.log",
+      "kind": "outer_leaf",
+      "apparent": 33556411,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000665.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 142696,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000666.log",
+      "kind": "outer_leaf",
+      "apparent": 33555925,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000666.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 49624,
+      "allocated": 53248
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000667.log",
+      "kind": "outer_leaf",
+      "apparent": 33555938,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000667.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 45552,
+      "allocated": 49152
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000668.log",
+      "kind": "outer_leaf",
+      "apparent": 33554877,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000668.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 35168,
+      "allocated": 36864
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000669.log",
+      "kind": "outer_leaf",
+      "apparent": 33556170,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000669.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 30856,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000670.log",
+      "kind": "outer_leaf",
+      "apparent": 33557726,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000670.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 18960,
+      "allocated": 20480
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000671.log",
+      "kind": "outer_leaf",
+      "apparent": 33554529,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000671.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143664,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000672.log",
+      "kind": "outer_leaf",
+      "apparent": 33555998,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000672.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 92800,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000673.log",
+      "kind": "outer_leaf",
+      "apparent": 33555072,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000673.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 88232,
+      "allocated": 90112
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000674.log",
+      "kind": "outer_leaf",
+      "apparent": 33554495,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000674.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 72632,
+      "allocated": 73728
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000675.log",
+      "kind": "outer_leaf",
+      "apparent": 33555996,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000675.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 64056,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000676.log",
+      "kind": "outer_leaf",
+      "apparent": 33556203,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000676.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 50840,
+      "allocated": 53248
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000677.log",
+      "kind": "outer_leaf",
+      "apparent": 33555408,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000677.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143712,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000678.log",
+      "kind": "outer_leaf",
+      "apparent": 33555143,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000678.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 148392,
+      "allocated": 151552
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000679.log",
+      "kind": "outer_leaf",
+      "apparent": 33557069,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000679.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143888,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000680.log",
+      "kind": "outer_leaf",
+      "apparent": 33555914,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000680.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143408,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000681.log",
+      "kind": "outer_leaf",
+      "apparent": 33556263,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000681.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 136144,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000682.log",
+      "kind": "outer_leaf",
+      "apparent": 33555543,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000682.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 117712,
+      "allocated": 118784
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000683.log",
+      "kind": "outer_leaf",
+      "apparent": 33555325,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000683.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 111696,
+      "allocated": 114688
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000684.log",
+      "kind": "outer_leaf",
+      "apparent": 33555229,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000684.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 23512,
+      "allocated": 24576
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000685.log",
+      "kind": "outer_leaf",
+      "apparent": 33556330,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000685.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 144600,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000686.log",
+      "kind": "outer_leaf",
+      "apparent": 33558008,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000686.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 142664,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000687.log",
+      "kind": "outer_leaf",
+      "apparent": 33554811,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000687.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 141960,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000688.log",
+      "kind": "outer_leaf",
+      "apparent": 33554674,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000688.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143792,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000689.log",
+      "kind": "outer_leaf",
+      "apparent": 33556404,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000689.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 139328,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000690.log",
+      "kind": "outer_leaf",
+      "apparent": 33555041,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000690.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 59992,
+      "allocated": 61440
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000691.log",
+      "kind": "outer_leaf",
+      "apparent": 33556098,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000691.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 48648,
+      "allocated": 49152
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000692.log",
+      "kind": "outer_leaf",
+      "apparent": 33556200,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000692.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 30728,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000693.log",
+      "kind": "outer_leaf",
+      "apparent": 33554912,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000693.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 31800,
+      "allocated": 32768
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000694.log",
+      "kind": "outer_leaf",
+      "apparent": 33557590,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000694.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 10560,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000695.log",
+      "kind": "outer_leaf",
+      "apparent": 33554785,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000695.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 141736,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000696.log",
+      "kind": "outer_leaf",
+      "apparent": 33556772,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000696.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 102984,
+      "allocated": 106496
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000697.log",
+      "kind": "outer_leaf",
+      "apparent": 33555596,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000697.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 92584,
+      "allocated": 94208
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000698.log",
+      "kind": "outer_leaf",
+      "apparent": 33554491,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000698.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 64800,
+      "allocated": 65536
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000699.log",
+      "kind": "outer_leaf",
+      "apparent": 33555712,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000699.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 66088,
+      "allocated": 69632
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000700.log",
+      "kind": "outer_leaf",
+      "apparent": 33555941,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000700.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 42552,
+      "allocated": 45056
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000701.log",
+      "kind": "outer_leaf",
+      "apparent": 33556889,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000701.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 139256,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000702.log",
+      "kind": "outer_leaf",
+      "apparent": 33555861,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000702.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 135352,
+      "allocated": 139264
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000703.log",
+      "kind": "outer_leaf",
+      "apparent": 33555738,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000703.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 135032,
+      "allocated": 135168
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000704.log",
+      "kind": "outer_leaf",
+      "apparent": 26778806,
+      "allocated": 26779648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000704.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 107088,
+      "allocated": 110592
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000705.log",
+      "kind": "outer_leaf",
+      "apparent": 26940791,
+      "allocated": 26943488
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000705.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 107744,
+      "allocated": 110592
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000706.log",
+      "kind": "outer_leaf",
+      "apparent": 18891849,
+      "allocated": 18894848
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000706.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 73272,
+      "allocated": 73728
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000707.log",
+      "kind": "outer_leaf",
+      "apparent": 19614254,
+      "allocated": 19615744
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000707.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 76512,
+      "allocated": 77824
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000708.log",
+      "kind": "outer_leaf",
+      "apparent": 3227215,
+      "allocated": 3227648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000708.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 11720,
+      "allocated": 12288
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000709.log",
+      "kind": "outer_leaf",
+      "apparent": 255967,
+      "allocated": 258048
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000709.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 928,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000710.log",
+      "kind": "outer_leaf",
+      "apparent": 33556550,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000710.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 143072,
+      "allocated": 143360
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000711.log",
+      "kind": "outer_leaf",
+      "apparent": 33555745,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000711.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 146296,
+      "allocated": 147456
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000712.log",
+      "kind": "outer_leaf",
+      "apparent": 33556306,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000712.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 152368,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000713.log",
+      "kind": "outer_leaf",
+      "apparent": 33555375,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000713.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 152136,
+      "allocated": 155648
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000714.log",
+      "kind": "outer_leaf",
+      "apparent": 33557172,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000714.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 128552,
+      "allocated": 131072
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000715.log",
+      "kind": "outer_leaf",
+      "apparent": 33555297,
+      "allocated": 33558528
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000715.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 122776,
+      "allocated": 122880
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000716.log",
+      "kind": "outer_leaf",
+      "apparent": 30190958,
+      "allocated": 30191616
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000716.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 110968,
+      "allocated": 114688
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000735.log",
+      "kind": "outer_leaf",
+      "apparent": 245414206,
+      "allocated": 245420032
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000736.log",
+      "kind": "outer_leaf",
+      "apparent": 154638663,
+      "allocated": 154644480
+    },
+    {
+      "path": "maindb/leaf_vlog/value-l255-000736.log.lenidx",
+      "kind": "outer_leaf",
+      "apparent": 634472,
+      "allocated": 634880
+    },
+    {
+      "path": "maindb/value_vlog/value-l0-000011.log",
+      "kind": "user_value",
+      "apparent": 263982083,
+      "allocated": 263987200
+    },
+    {
+      "path": "maindb/value_vlog/value-l1-000011.log",
+      "kind": "user_value",
+      "apparent": 268419415,
+      "allocated": 268427264
+    },
+    {
+      "path": "maindb/value_vlog/value-l1-000012.log",
+      "kind": "user_value",
+      "apparent": 1908123,
+      "allocated": 1908736
+    },
+    {
+      "path": "maindb/value_vlog/value-l2-000007.log",
+      "kind": "user_value",
+      "apparent": 10964914,
+      "allocated": 10964992
+    },
+    {
+      "path": "maindb/value_vlog/value-l254-000001.log",
+      "kind": "user_value",
+      "apparent": 134204817,
+      "allocated": 134209536
+    },
+    {
+      "path": "maindb/value_vlog/value-l254-000002.log",
+      "kind": "user_value",
+      "apparent": 134217416,
+      "allocated": 134217728
+    },
+    {
+      "path": "maindb/value_vlog/value-l254-000003.log",
+      "kind": "user_value",
+      "apparent": 108396974,
+      "allocated": 108404736
+    },
+    {
+      "path": "maindb/vlog_health.json",
+      "kind": "metadata",
+      "apparent": 54883,
+      "allocated": 57344
+    },
+    {
+      "path": "maindb/vlog_ref_counts.meta",
+      "kind": "metadata",
+      "apparent": 112,
+      "allocated": 4096
+    },
+    {
+      "path": "maindb/wal/command-wal-journal-owner.lock",
+      "kind": "wal",
+      "apparent": 12,
+      "allocated": 4096
+    }
+  ],
+  "apparent": 4837371540,
+  "allocated": 4838182912,
+  "apparent_excluding_wal": 4837371528,
+  "allocated_excluding_wal": 4838178816
+}

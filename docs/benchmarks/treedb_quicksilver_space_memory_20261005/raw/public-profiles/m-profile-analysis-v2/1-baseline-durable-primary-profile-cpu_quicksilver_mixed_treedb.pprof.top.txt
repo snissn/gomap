@@ -1,0 +1,29 @@
+File: unified-bench-baseline
+Build ID: d591e3b148796173d183376a2da2c5d446024650
+Type: cpu
+Time: 2026-10-04 22:19:37 HST
+Duration: 3.80s, Total samples = 14990ms (394.93%)
+Showing nodes accounting for 11040ms, 73.65% of 14990ms total
+Dropped 198 nodes (cum <= 74.95ms)
+Showing top 20 nodes out of 97
+      flat  flat%   sum%        cum   cum%
+    2350ms 15.68% 15.68%     2720ms 18.15%  github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock
+     950ms  6.34% 22.01%      950ms  6.34%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     830ms  5.54% 27.55%     1150ms  7.67%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal
+     810ms  5.40% 32.96%      810ms  5.40%  runtime.memmove
+     750ms  5.00% 37.96%      750ms  5.00%  cmpbody
+     690ms  4.60% 42.56%    14860ms 99.13%  main.quicksilverReadPhase.func1
+     610ms  4.07% 46.63%      610ms  4.07%  encoding/binary.littleEndian.Uint32 (inline)
+     610ms  4.07% 50.70%      620ms  4.14%  github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)
+     540ms  3.60% 54.30%      650ms  4.34%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo
+     510ms  3.40% 57.71%     1200ms  8.01%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     380ms  2.54% 60.24%    12610ms 84.12%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     340ms  2.27% 62.51%      530ms  3.54%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState
+     270ms  1.80% 64.31%      270ms  1.80%  hash/crc32.ieeeCLMUL
+     250ms  1.67% 65.98%      270ms  1.80%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     230ms  1.53% 67.51%     5360ms 35.76%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo
+     210ms  1.40% 68.91%      210ms  1.40%  hash/crc32.simpleUpdate (inline)
+     200ms  1.33% 70.25%      200ms  1.33%  time.runtimeNow
+     170ms  1.13% 71.38%      180ms  1.20%  github.com/golang/snappy.decode
+     170ms  1.13% 72.52%      290ms  1.93%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+     170ms  1.13% 73.65%      170ms  1.13%  github.com/snissn/gomap/TreeDB/tree.outerLeafRecentRingContains (inline)

@@ -1,0 +1,124 @@
+{
+  "build_env": {
+    "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+    "CGO_ENABLED": "1",
+    "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+    "GOCACHE": "/mnt/fast4tb/go-build-cache",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOMAP_QS_DIAG_CACHE_JSONL": "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-cache.jsonl",
+    "GOMAP_QS_DIAG_SNAPSHOT_DIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs",
+    "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin"
+  },
+  "diagnostic_inputs": {
+    "path": "5004-diagnostic-overlay/native-builds.json",
+    "sha256": "8a8de602c785d79a48c06d5d26504b4a9d52825a90f3ac14da0415932f092936"
+  },
+  "libraries": {
+    "/lib/x86_64-linux-gnu/libbz2.so.1.0": {
+      "bytes": 74848,
+      "sha256": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9"
+    },
+    "/lib/x86_64-linux-gnu/libc.so.6": {
+      "bytes": 2220400,
+      "sha256": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793"
+    },
+    "/lib/x86_64-linux-gnu/libdl.so.2": {
+      "bytes": 14432,
+      "sha256": "3eaaa4aefd9c28f3867c96a427c3cbec9191cb61c4c9d0a2cb4a765d66064499"
+    },
+    "/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "bytes": 125488,
+      "sha256": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a"
+    },
+    "/lib/x86_64-linux-gnu/liblz4.so.1": {
+      "bytes": 125152,
+      "sha256": "65f47a3dc2cec5f938379b7b625f0621657bf1254551895d22462c6a204cbad8"
+    },
+    "/lib/x86_64-linux-gnu/libm.so.6": {
+      "bytes": 940560,
+      "sha256": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6"
+    },
+    "/lib/x86_64-linux-gnu/libpthread.so.0": {
+      "bytes": 21448,
+      "sha256": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78"
+    },
+    "/lib/x86_64-linux-gnu/librt.so.1": {
+      "bytes": 14664,
+      "sha256": "5f20d34fb3bb4d84b4edeb6ca11fa5b48c705207253741619acab7cc758185fb"
+    },
+    "/lib/x86_64-linux-gnu/libsnappy.so.1": {
+      "bytes": 35184,
+      "sha256": "0b6e39db37cdefb38b1b874a72d60d13159665fe0f02d64cd72f41e11b03a48a"
+    },
+    "/lib/x86_64-linux-gnu/libstdc++.so.6": {
+      "bytes": 2260296,
+      "sha256": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128"
+    },
+    "/lib/x86_64-linux-gnu/libz.so.1": {
+      "bytes": 108936,
+      "sha256": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370"
+    },
+    "/lib/x86_64-linux-gnu/libzstd.so.1": {
+      "bytes": 841808,
+      "sha256": "5df4f4df42d76270bb6981fabc7c1fdccd8ad28a23d84d67f73203fb3f537667"
+    },
+    "/lib64/ld-linux-x86-64.so.2": {
+      "bytes": 240936,
+      "sha256": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01"
+    },
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/librocksdb.so.6.11": {
+      "bytes": 6461040,
+      "sha256": "dcd497d9c4a635f8dfe0edff3e3690acb81fd85ac4fbdb1af756a0c3e9a63a2f"
+    },
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2": {
+      "bytes": 162808,
+      "sha256": "f3c7dc509e8da8f780666a7c74c92b98af95aecd26d3ef0f3e36470c7490e400"
+    }
+  },
+  "method_inputs": {
+    "builder_sha256": "bc8f39e81be117131e3869af3e80ba8ada06340b85fe2911322e12af7dcd5861",
+    "measurement_plan_sha256": "52d5ee762dc83cac8c7167f6cc0f0ea4c0bdc2b0ec7fcc57d2b37a2ccb89e7dc"
+  },
+  "provisional": true,
+  "purpose": "DIAGNOSTIC OVERLAYS: structural metadata and full profiles; not throughput/RSS qualification",
+  "receipts": {
+    "build": {
+      "path": "receipts-offsets/build.json",
+      "sha256": "040ffcd38c1e4f8f3b6c43eb8bdd39de4230d585095df2d248b8cb306101e834"
+    },
+    "native": {
+      "path": "receipts-offsets/native.json",
+      "sha256": "3a97d398e12cd8c780d22d596647fcb5e0119ce47d7dfce0db486684818860d4"
+    },
+    "runner": {
+      "path": "receipts-offsets/runner.json",
+      "sha256": "554adece376ed7c7d868d55ddcb63fd363220ff901dd2fe7193449013b11004c"
+    },
+    "source": {
+      "path": "receipts-offsets/source.json",
+      "sha256": "d8413e534e2352c3bfc4fdded67133052328d86c2d44fe6360bd4eff2576a55f"
+    }
+  },
+  "sources": {
+    "diag-baseline": {
+      "binary": "unified-bench-diag-baseline",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562",
+      "diagnostic_overlay": true,
+      "head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+      "linkage": "dynamic"
+    },
+    "diag-candidate": {
+      "binary": "unified-bench-diag-candidate",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54",
+      "diagnostic_overlay": true,
+      "head": "90219d64ced3539accff5d0e50d9b5fa6424ed20",
+      "linkage": "dynamic"
+    }
+  }
+}

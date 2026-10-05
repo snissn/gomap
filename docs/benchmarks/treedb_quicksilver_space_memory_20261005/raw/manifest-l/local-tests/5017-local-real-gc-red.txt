@@ -1,0 +1,5 @@
+--- FAIL: TestLeafGenerationGC_DeletesFullyDeadGeneration (0.13s)
+    leaf_generation_gc_test.go:800: GC published an invalid runtime source manifest: treedb: manifest.json generation_id 2 appears more than once (generations=[{GenerationID:2 State:writable FileIDs:[2139095042] CreatedCommitSeq:3 SealedCommitSeq:0 RetiredCommitSeq:0 DeletedCommitSeq:0 PublishedCommitSeq:3} {GenerationID:2 State:writable FileIDs:[2139095042] CreatedCommitSeq:3 SealedCommitSeq:0 RetiredCommitSeq:0 DeletedCommitSeq:0 PublishedCommitSeq:3}])
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.838s
+FAIL

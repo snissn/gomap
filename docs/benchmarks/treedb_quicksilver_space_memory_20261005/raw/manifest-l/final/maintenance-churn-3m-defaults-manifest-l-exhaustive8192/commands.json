@@ -1,0 +1,738 @@
+[
+  {
+    "label": "pre-maintenance-verify",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-manifest-l",
+      "-suite",
+      "quicksilver",
+      "-dbs",
+      "treedb",
+      "-profile",
+      "durable",
+      "-quicksilver-case",
+      "realistic",
+      "-keys",
+      "3000000",
+      "-read-workers",
+      "4",
+      "-quicksilver-reads",
+      "6000000",
+      "-quicksilver-updates",
+      "40000",
+      "-quicksilver-duration",
+      "8s",
+      "-quicksilver-read-batch",
+      "64",
+      "-quicksilver-commit",
+      "auto",
+      "-max-wall",
+      "33m0s",
+      "-seed",
+      "24",
+      "-quicksilver-mixture",
+      "primary",
+      "-quicksilver-working-set",
+      "uniform",
+      "-quicksilver-miss-percent",
+      "90",
+      "-quicksilver-verify-dir",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-defaults-manifest-l-copy"
+    ],
+    "started": 1791195982.2181754,
+    "finished": 1791196038.272748,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3189090,
+    "disk_samples": []
+  },
+  {
+    "label": "exhaustive",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-manifest-l",
+      "compact",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-defaults-manifest-l-copy",
+      "-rw",
+      "-json",
+      "-mode",
+      "exhaustive",
+      "-sync-each-phase",
+      "-leaf-pack-max-passes",
+      "64",
+      "-rewrite-batch-size",
+      "8192"
+    ],
+    "started": 1791196038.2799058,
+    "finished": 1791196162.7778091,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3189654,
+    "disk_samples": [
+      {
+        "time": 1791196038.283045,
+        "apparent": 4837371540,
+        "allocated": 4838182912
+      },
+      {
+        "time": 1791196039.286676,
+        "apparent": 4837371540,
+        "allocated": 4838182912
+      },
+      {
+        "time": 1791196040.29198,
+        "apparent": 4838703046,
+        "allocated": 4839522304
+      },
+      {
+        "time": 1791196041.295604,
+        "apparent": 4854096036,
+        "allocated": 4854919168
+      },
+      {
+        "time": 1791196042.2987049,
+        "apparent": 4860442424,
+        "allocated": 4861267968
+      },
+      {
+        "time": 1791196043.302743,
+        "apparent": 4868704655,
+        "allocated": 4869529600
+      },
+      {
+        "time": 1791196044.3067763,
+        "apparent": 4882098663,
+        "allocated": 4882923520
+      },
+      {
+        "time": 1791196045.310733,
+        "apparent": 4882098663,
+        "allocated": 4882923520
+      },
+      {
+        "time": 1791196046.3167992,
+        "apparent": 4908070443,
+        "allocated": 4908900352
+      },
+      {
+        "time": 1791196047.3206449,
+        "apparent": 4908070443,
+        "allocated": 4908900352
+      },
+      {
+        "time": 1791196048.3237047,
+        "apparent": 4929498962,
+        "allocated": 4930330624
+      },
+      {
+        "time": 1791196049.327655,
+        "apparent": 4929498962,
+        "allocated": 4930330624
+      },
+      {
+        "time": 1791196050.331701,
+        "apparent": 4941809420,
+        "allocated": 4942643200
+      },
+      {
+        "time": 1791196051.3356476,
+        "apparent": 4950199225,
+        "allocated": 4951031808
+      },
+      {
+        "time": 1791196052.3391895,
+        "apparent": 4950199225,
+        "allocated": 4951031808
+      },
+      {
+        "time": 1791196053.3433292,
+        "apparent": 4971642075,
+        "allocated": 4972478464
+      },
+      {
+        "time": 1791196054.34737,
+        "apparent": 4971642075,
+        "allocated": 4972478464
+      },
+      {
+        "time": 1791196055.3530242,
+        "apparent": 4983778218,
+        "allocated": 4984614912
+      },
+      {
+        "time": 1791196056.356654,
+        "apparent": 4992838014,
+        "allocated": 4993671168
+      },
+      {
+        "time": 1791196057.3596413,
+        "apparent": 4992838014,
+        "allocated": 4993671168
+      },
+      {
+        "time": 1791196058.3627777,
+        "apparent": 5014045797,
+        "allocated": 5014880256
+      },
+      {
+        "time": 1791196059.3666666,
+        "apparent": 5014045797,
+        "allocated": 5014880256
+      },
+      {
+        "time": 1791196060.369668,
+        "apparent": 5014045797,
+        "allocated": 5014880256
+      },
+      {
+        "time": 1791196061.3726883,
+        "apparent": 5035280163,
+        "allocated": 5036118016
+      },
+      {
+        "time": 1791196062.3766608,
+        "apparent": 5035280163,
+        "allocated": 5036118016
+      },
+      {
+        "time": 1791196063.3796568,
+        "apparent": 5051983044,
+        "allocated": 5052825600
+      },
+      {
+        "time": 1791196064.3827,
+        "apparent": 5060670030,
+        "allocated": 5061513216
+      },
+      {
+        "time": 1791196065.386751,
+        "apparent": 5060670030,
+        "allocated": 5061513216
+      },
+      {
+        "time": 1791196066.3908079,
+        "apparent": 5081595676,
+        "allocated": 5082435584
+      },
+      {
+        "time": 1791196067.3947766,
+        "apparent": 5081595676,
+        "allocated": 5082435584
+      },
+      {
+        "time": 1791196068.4010613,
+        "apparent": 5081595676,
+        "allocated": 5082435584
+      },
+      {
+        "time": 1791196069.4053345,
+        "apparent": 5102359131,
+        "allocated": 5103202304
+      },
+      {
+        "time": 1791196070.4093776,
+        "apparent": 5102359131,
+        "allocated": 5103202304
+      },
+      {
+        "time": 1791196071.4133947,
+        "apparent": 5102359131,
+        "allocated": 5103202304
+      },
+      {
+        "time": 1791196072.4166393,
+        "apparent": 5124165802,
+        "allocated": 5125009408
+      },
+      {
+        "time": 1791196073.4197302,
+        "apparent": 5124165802,
+        "allocated": 5125009408
+      },
+      {
+        "time": 1791196074.423731,
+        "apparent": 5132363809,
+        "allocated": 5133205504
+      },
+      {
+        "time": 1791196075.4278002,
+        "apparent": 5145137238,
+        "allocated": 5145985024
+      },
+      {
+        "time": 1791196076.4316676,
+        "apparent": 5145137238,
+        "allocated": 5145985024
+      },
+      {
+        "time": 1791196077.4347017,
+        "apparent": 5153327750,
+        "allocated": 5154172928
+      },
+      {
+        "time": 1791196078.4383032,
+        "apparent": 5170162613,
+        "allocated": 5171007488
+      },
+      {
+        "time": 1791196079.4424272,
+        "apparent": 5170162613,
+        "allocated": 5171007488
+      },
+      {
+        "time": 1791196080.445707,
+        "apparent": 5178311768,
+        "allocated": 5179154432
+      },
+      {
+        "time": 1791196081.4496796,
+        "apparent": 5191535266,
+        "allocated": 5192380416
+      },
+      {
+        "time": 1791196082.4527307,
+        "apparent": 5191535266,
+        "allocated": 5192380416
+      },
+      {
+        "time": 1791196083.4567087,
+        "apparent": 5195559334,
+        "allocated": 5196402688
+      },
+      {
+        "time": 1791196084.4613907,
+        "apparent": 5212611099,
+        "allocated": 5213458432
+      },
+      {
+        "time": 1791196085.4646435,
+        "apparent": 5212611099,
+        "allocated": 5213458432
+      },
+      {
+        "time": 1791196086.468671,
+        "apparent": 5216671693,
+        "allocated": 5217517568
+      },
+      {
+        "time": 1791196087.4716392,
+        "apparent": 5234066271,
+        "allocated": 5234913280
+      },
+      {
+        "time": 1791196088.4746423,
+        "apparent": 5234066271,
+        "allocated": 5234913280
+      },
+      {
+        "time": 1791196089.4833474,
+        "apparent": 5234066271,
+        "allocated": 5234913280
+      },
+      {
+        "time": 1791196090.4866714,
+        "apparent": 5255269561,
+        "allocated": 5256114176
+      },
+      {
+        "time": 1791196091.4897096,
+        "apparent": 5255269561,
+        "allocated": 5256114176
+      },
+      {
+        "time": 1791196092.4959502,
+        "apparent": 5255269561,
+        "allocated": 5256114176
+      },
+      {
+        "time": 1791196093.4996517,
+        "apparent": 5278468754,
+        "allocated": 5279313920
+      },
+      {
+        "time": 1791196094.5026383,
+        "apparent": 5280623900,
+        "allocated": 5281468416
+      },
+      {
+        "time": 1791196095.5056393,
+        "apparent": 5280623900,
+        "allocated": 5281468416
+      },
+      {
+        "time": 1791196096.5087414,
+        "apparent": 5288808993,
+        "allocated": 5289652224
+      },
+      {
+        "time": 1791196097.51271,
+        "apparent": 5301574446,
+        "allocated": 5302423552
+      },
+      {
+        "time": 1791196098.518885,
+        "apparent": 5301574446,
+        "allocated": 5302423552
+      },
+      {
+        "time": 1791196099.5227244,
+        "apparent": 5305714217,
+        "allocated": 5306560512
+      },
+      {
+        "time": 1791196100.5267012,
+        "apparent": 5322593623,
+        "allocated": 5323444224
+      },
+      {
+        "time": 1791196101.5306103,
+        "apparent": 5322593623,
+        "allocated": 5323444224
+      },
+      {
+        "time": 1791196102.5336707,
+        "apparent": 5322593623,
+        "allocated": 5323444224
+      },
+      {
+        "time": 1791196103.5366657,
+        "apparent": 5343789635,
+        "allocated": 5344641024
+      },
+      {
+        "time": 1791196104.5419307,
+        "apparent": 5343789635,
+        "allocated": 5344641024
+      },
+      {
+        "time": 1791196105.5479066,
+        "apparent": 5343789635,
+        "allocated": 5344641024
+      },
+      {
+        "time": 1791196106.5537817,
+        "apparent": 5352002575,
+        "allocated": 5352853504
+      },
+      {
+        "time": 1791196107.5598485,
+        "apparent": 5365010004,
+        "allocated": 5365858304
+      },
+      {
+        "time": 1791196108.563637,
+        "apparent": 5365010004,
+        "allocated": 5365858304
+      },
+      {
+        "time": 1791196109.5667446,
+        "apparent": 5365010004,
+        "allocated": 5365858304
+      },
+      {
+        "time": 1791196110.5706754,
+        "apparent": 5389863844,
+        "allocated": 5390712832
+      },
+      {
+        "time": 1791196111.57372,
+        "apparent": 5389863844,
+        "allocated": 5390712832
+      },
+      {
+        "time": 1791196112.5777457,
+        "apparent": 5389863844,
+        "allocated": 5390712832
+      },
+      {
+        "time": 1791196113.5817842,
+        "apparent": 5398070900,
+        "allocated": 5398921216
+      },
+      {
+        "time": 1791196114.585683,
+        "apparent": 5410961575,
+        "allocated": 5411811328
+      },
+      {
+        "time": 1791196115.5897021,
+        "apparent": 5410961575,
+        "allocated": 5411811328
+      },
+      {
+        "time": 1791196116.595995,
+        "apparent": 5410961575,
+        "allocated": 5411811328
+      },
+      {
+        "time": 1791196117.6019151,
+        "apparent": 5432801273,
+        "allocated": 5433651200
+      },
+      {
+        "time": 1791196118.605645,
+        "apparent": 5432801273,
+        "allocated": 5433651200
+      },
+      {
+        "time": 1791196119.6088712,
+        "apparent": 5432801273,
+        "allocated": 5433651200
+      },
+      {
+        "time": 1791196120.6126738,
+        "apparent": 5447710908,
+        "allocated": 5448564736
+      },
+      {
+        "time": 1791196121.6166568,
+        "apparent": 5459087048,
+        "allocated": 5459939328
+      },
+      {
+        "time": 1791196122.6196964,
+        "apparent": 5459087048,
+        "allocated": 5459939328
+      },
+      {
+        "time": 1791196123.6237361,
+        "apparent": 5459087048,
+        "allocated": 5459939328
+      },
+      {
+        "time": 1791196124.6277554,
+        "apparent": 5490793199,
+        "allocated": 5491646464
+      },
+      {
+        "time": 1791196125.6339285,
+        "apparent": 5490793199,
+        "allocated": 5491646464
+      },
+      {
+        "time": 1791196126.6399705,
+        "apparent": 5490793199,
+        "allocated": 5491646464
+      },
+      {
+        "time": 1791196127.6458583,
+        "apparent": 5518545124,
+        "allocated": 5519396864
+      },
+      {
+        "time": 1791196128.6497216,
+        "apparent": 5518545124,
+        "allocated": 5519396864
+      },
+      {
+        "time": 1791196129.653655,
+        "apparent": 5518545124,
+        "allocated": 5519396864
+      },
+      {
+        "time": 1791196130.6590781,
+        "apparent": 5518545124,
+        "allocated": 5519396864
+      },
+      {
+        "time": 1791196131.6625361,
+        "apparent": 5549882472,
+        "allocated": 5550735360
+      },
+      {
+        "time": 1791196132.6656337,
+        "apparent": 5549882472,
+        "allocated": 5550735360
+      },
+      {
+        "time": 1791196133.6686997,
+        "apparent": 5549882472,
+        "allocated": 5550735360
+      },
+      {
+        "time": 1791196134.6726727,
+        "apparent": 5549882472,
+        "allocated": 5550735360
+      },
+      {
+        "time": 1791196135.6757479,
+        "apparent": 5549882472,
+        "allocated": 5550735360
+      },
+      {
+        "time": 1791196136.6796436,
+        "apparent": 5550018871,
+        "allocated": 5550874624
+      },
+      {
+        "time": 1791196137.682782,
+        "apparent": 5549904374,
+        "allocated": 5550759936
+      },
+      {
+        "time": 1791196138.6868236,
+        "apparent": 5549904374,
+        "allocated": 5550759936
+      },
+      {
+        "time": 1791196139.6907897,
+        "apparent": 5580326113,
+        "allocated": 5581189120
+      },
+      {
+        "time": 1791196140.694817,
+        "apparent": 5651466746,
+        "allocated": 5652328448
+      },
+      {
+        "time": 1791196141.6987603,
+        "apparent": 5718412062,
+        "allocated": 5719273472
+      },
+      {
+        "time": 1791196142.7028944,
+        "apparent": 5793746707,
+        "allocated": 5794607104
+      },
+      {
+        "time": 1791196143.70686,
+        "apparent": 5877457190,
+        "allocated": 5878321152
+      },
+      {
+        "time": 1791196144.710984,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196145.7147079,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196146.7187834,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196147.7227852,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196148.7268803,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196149.730905,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196150.7347567,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196151.738911,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196152.7450402,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196153.751278,
+        "apparent": 6236727818,
+        "allocated": 6237601792
+      },
+      {
+        "time": 1791196154.7554011,
+        "apparent": 5904738202,
+        "allocated": 5905612800
+      },
+      {
+        "time": 1791196155.7594776,
+        "apparent": 5586039134,
+        "allocated": 5586903040
+      },
+      {
+        "time": 1791196156.7635489,
+        "apparent": 5586039134,
+        "allocated": 5586903040
+      },
+      {
+        "time": 1791196157.76673,
+        "apparent": 5586039134,
+        "allocated": 5586903040
+      },
+      {
+        "time": 1791196158.770768,
+        "apparent": 5317619401,
+        "allocated": 5318475776
+      },
+      {
+        "time": 1791196159.7731917,
+        "apparent": 1859299974,
+        "allocated": 1859653632
+      },
+      {
+        "time": 1791196160.7751498,
+        "apparent": 1859299974,
+        "allocated": 1859653632
+      },
+      {
+        "time": 1791196161.7772048,
+        "apparent": 1859299974,
+        "allocated": 1859653632
+      }
+    ]
+  },
+  {
+    "label": "exhaustive-verify",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-manifest-l",
+      "-suite",
+      "quicksilver",
+      "-dbs",
+      "treedb",
+      "-profile",
+      "durable",
+      "-quicksilver-case",
+      "realistic",
+      "-keys",
+      "3000000",
+      "-read-workers",
+      "4",
+      "-quicksilver-reads",
+      "6000000",
+      "-quicksilver-updates",
+      "40000",
+      "-quicksilver-duration",
+      "8s",
+      "-quicksilver-read-batch",
+      "64",
+      "-quicksilver-commit",
+      "auto",
+      "-max-wall",
+      "33m0s",
+      "-seed",
+      "24",
+      "-quicksilver-mixture",
+      "primary",
+      "-quicksilver-working-set",
+      "uniform",
+      "-quicksilver-miss-percent",
+      "90",
+      "-quicksilver-verify-dir",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-defaults-manifest-l-copy"
+    ],
+    "started": 1791196162.7824643,
+    "finished": 1791196312.9348388,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3191025,
+    "disk_samples": []
+  }
+]

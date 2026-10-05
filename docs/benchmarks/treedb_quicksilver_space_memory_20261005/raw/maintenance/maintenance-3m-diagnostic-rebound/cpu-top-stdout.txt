@@ -1,0 +1,49 @@
+File: diagnostic-treemap
+Build ID: 1824c2c728a09772772afddbbc4664faa18d90a4
+Type: cpu
+Time: 2026-10-04 20:23:21 HST
+Duration: 60s, Total samples = 59.69s (99.48%)
+Showing nodes accounting for 53.78s, 90.10% of 59.69s total
+Dropped 308 nodes (cum <= 0.30s)
+Showing top 40 nodes out of 88
+      flat  flat%   sum%        cum   cum%
+    17.71s 29.67% 29.67%     36.07s 60.43%  github.com/snissn/compress/zstd.(*sequenceDecs).decodeSync
+     9.67s 16.20% 45.87%      9.67s 16.20%  runtime.memmove
+     3.97s  6.65% 52.52%      3.97s  6.65%  github.com/snissn/compress/zstd.(*bitReader).get32BitsFast (inline)
+     3.51s  5.88% 58.40%      3.51s  5.88%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     3.20s  5.36% 63.76%      3.20s  5.36%  github.com/snissn/compress/zstd.buildDtable_asm
+     2.19s  3.67% 67.43%      2.26s  3.79%  github.com/snissn/compress/zstd.(*bitReader).fillFast (inline)
+     1.62s  2.71% 70.15%      2.65s  4.44%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueView
+     1.36s  2.28% 72.42%      4.91s  8.23%  github.com/snissn/compress/zstd.(*fseDecoder).readNCount
+     1.04s  1.74% 74.17%      1.04s  1.74%  hash/crc32.ieeeCLMUL
+        1s  1.68% 75.84%         1s  1.68%  github.com/snissn/compress/zstd.decSymbol.addBits (inline)
+     0.98s  1.64% 77.48%      2.97s  4.98%  github.com/snissn/compress/zstd.(*bitReader).getBits (inline)
+     0.90s  1.51% 78.99%      0.90s  1.51%  hash/crc32.simpleUpdate (inline)
+     0.64s  1.07% 80.06%      1.46s  2.45%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo
+     0.62s  1.04% 81.10%      0.97s  1.63%  github.com/snissn/compress/zstd.(*fseDecoder).transform
+     0.57s  0.95% 82.06%     50.85s 85.19%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo
+     0.55s  0.92% 82.98%      0.55s  0.92%  github.com/snissn/compress/zstd.decSymbol.baselineInt (inline)
+     0.55s  0.92% 83.90%      0.74s  1.24%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryLayoutAt
+     0.41s  0.69% 84.59%      0.41s  0.69%  github.com/snissn/compress/zstd.(*bitReader).fill (inline)
+     0.33s  0.55% 85.14%      3.48s  5.83%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func1
+     0.32s  0.54% 85.68%      0.32s  0.54%  github.com/snissn/compress/zstd.(*decSymbol).setExt (inline)
+     0.27s  0.45% 86.13%      6.08s 10.19%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func2
+     0.26s  0.44% 86.56%      6.45s 10.81%  github.com/snissn/compress/zstd.(*blockDec).prepareSequences
+     0.24s   0.4% 86.97%      1.76s  2.95%  github.com/snissn/compress/zstd.decSymbol.final (inline)
+     0.21s  0.35% 87.32%      0.82s  1.37%  github.com/snissn/gomap/TreeDB/internal/valuelog.decodeCompactLeafLogPayloadTo
+     0.20s  0.34% 87.65%      0.91s  1.52%  github.com/snissn/compress/zstd.(*sequenceDecs).next
+     0.18s   0.3% 87.95%      1.09s  1.83%  hash/crc32.slicingUpdate
+     0.15s  0.25% 88.21%     52.14s 87.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeTo
+     0.13s  0.22% 88.42%      0.45s  0.75%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).store
+     0.11s  0.18% 88.61%     43.85s 73.46%  github.com/snissn/compress/zstd.(*Decoder).DecodeAll
+     0.11s  0.18% 88.79%      5.21s  8.73%  github.com/snissn/go-crc32-asm.updateIEEEFast
+     0.10s  0.17% 88.96%     52.51s 87.97%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeTo
+     0.10s  0.17% 89.13%      0.39s  0.65%  runtime.mapaccess2_fast32
+     0.09s  0.15% 89.28%      0.77s  1.29%  hash/crc32.ChecksumIEEE
+     0.08s  0.13% 89.41%      2.21s  3.70%  hash/crc32.archUpdateIEEE
+     0.07s  0.12% 89.53%     42.75s 71.62%  github.com/snissn/compress/zstd.(*frameDec).runDecoder
+     0.07s  0.12% 89.65%      3.99s  6.68%  github.com/snissn/gomap/TreeDB/internal/crc.ChecksumParts
+     0.07s  0.12% 89.76%      0.53s  0.89%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheStore
+     0.07s  0.12% 89.88%      0.60s  1.01%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo.func3 (inline)
+     0.07s  0.12% 90.00%     59.25s 99.26%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+     0.06s   0.1% 90.10%      3.26s  5.46%  github.com/snissn/compress/zstd.(*fseDecoder).buildDtable

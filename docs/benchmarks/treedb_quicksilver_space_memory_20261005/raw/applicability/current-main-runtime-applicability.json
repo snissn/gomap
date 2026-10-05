@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-10-05T09:53:40.355317+00:00",
+  "landed_runtime_head": "723e5625f4b46945886d0696c0122db2e2c928cf",
+  "current_main_head": "2eeb40a2982d369cd5346d7648b660bf3de596d6",
+  "changed_paths": [
+    "TreeDB/mvcc/native_prune_bench_test.go",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "scripts/mvcc_native_prune.py"
+  ],
+  "excluded_paths": {
+    "TreeDB/mvcc/native_prune_bench_test.go": "unrelated MVCC benchmark test",
+    "cmd/benchprof/README.md": "documentation only",
+    "cmd/unified_bench/README.md": "documentation only",
+    "scripts/mvcc_native_prune.py": "unrelated MVCC benchmark script"
+  },
+  "scoped_project_equal": true,
+  "scoped_project_before_sha256": "384438189fd0dda60fd6580435f15c6a32eaeff2dab9a641eb5baa962e8ea085",
+  "scoped_project_after_sha256": "384438189fd0dda60fd6580435f15c6a32eaeff2dab9a641eb5baa962e8ea085",
+  "paths": 5762,
+  "historical_whole_tree_receipts_unchanged": true,
+  "claim": "R2 maintenance runtime and Quicksilver runtime/harness remain applicable after the unrelated MVCC benchmark/documentation landing. Historical source heads are not relabeled current."
+}

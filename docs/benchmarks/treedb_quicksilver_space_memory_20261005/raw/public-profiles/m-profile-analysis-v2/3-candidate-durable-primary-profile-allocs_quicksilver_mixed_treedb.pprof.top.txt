@@ -1,0 +1,28 @@
+File: unified-bench-candidate
+Build ID: 3ce61646204e04a4711660f2fbb2f4edd6427fdf
+Type: alloc_space
+Time: 2026-10-04 22:31:10 HST
+Showing nodes accounting for 428.06MB, 98.30% of 435.49MB total
+Dropped 33 nodes (cum <= 2.18MB)
+Showing top 20 nodes out of 38
+      flat  flat%   sum%        cum   cum%
+  235.01MB 53.96% 53.96%   235.01MB 53.96%  github.com/snissn/gomap/TreeDB/internal/valuelog.growRealloc (inline)
+   65.51MB 15.04% 69.01%    65.51MB 15.04%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+   64.51MB 14.81% 83.82%   372.57MB 85.55%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+   53.53MB 12.29% 96.11%    53.53MB 12.29%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+    4.16MB  0.95% 97.07%     4.16MB  0.95%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+    2.85MB  0.65% 97.72%     2.85MB  0.65%  github.com/snissn/compress/zstd.(*blockDec).reset
+    2.50MB  0.57% 98.30%   428.59MB 98.42%  main.quicksilverReadPhase.func1
+         0     0% 98.30%     2.85MB  0.65%  github.com/snissn/compress/zstd.(*Decoder).DecodeAll
+         0     0% 98.30%     2.85MB  0.65%  github.com/snissn/compress/zstd.(*frameDec).runDecoder
+         0     0% 98.30%    53.53MB 12.29%  github.com/snissn/gomap/TreeDB.(*DB).AcquireSnapshot
+         0     0% 98.30%    53.53MB 12.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).AcquireBackendSnapshotFastPath
+         0     0% 98.30%    53.53MB 12.29%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0% 98.30%    53.53MB 12.29%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld
+         0     0% 98.30%   372.57MB 85.55%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get
+         0     0% 98.30%   242.54MB 55.69%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend
+         0     0% 98.30%   242.54MB 55.69%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadAppend
+         0     0% 98.30%   242.54MB 55.69%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeAppend (inline)
+         0     0% 98.30%   242.54MB 55.69%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapAppend
+         0     0% 98.30%     4.16MB  0.95%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).takeDecodeScratch
+         0     0% 98.30%   242.54MB 55.69%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend

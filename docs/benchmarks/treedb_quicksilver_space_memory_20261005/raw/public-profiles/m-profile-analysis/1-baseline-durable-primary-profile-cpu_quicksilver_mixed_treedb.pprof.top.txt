@@ -1,0 +1,54 @@
+# internal/trace/tracev2
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/byteorder
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/coverage/rtcov
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/godebugs
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/goarch
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/unsafeheader
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# math/bits
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/profilerecord
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/goos
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/goexperiment
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# cmp
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/asan
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/itoa
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# unicode/utf8
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/msan
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# encoding
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# log/internal
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# unicode
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# container/list
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# vendor/golang.org/x/crypto/cryptobyte/asn1
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# unicode/utf16
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# crypto/internal/fips140/alias
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# vendor/golang.org/x/crypto/internal/alias
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/nettrace
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# internal/cpu
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# sync/atomic
+compile: version "go1.25.0" does not match go tool version "go1.26.3"
+# crypto/internal/boring/sig
+compile: version "go1.25.0" does not match go tool version "go1.26.3"

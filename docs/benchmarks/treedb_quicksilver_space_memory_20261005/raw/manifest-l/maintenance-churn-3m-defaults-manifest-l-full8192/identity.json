@@ -1,0 +1,24 @@
+{
+  "database": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-defaults-manifest-l-copy",
+  "packet": "/mnt/fast4tb/quicksilver-space-memory-20261005/churn-3m-defaults-manifest-l-input",
+  "source": "manifest-l",
+  "method_sha256": "6cbc939d7a616c00f214e71e449bbede2150c5a5d82ffba1e044da32ac157b5d",
+  "treemap_sha256": "5a7c89056e95f52948285fde41573a38ff49c2e1508771c6d7971114e6c899d6",
+  "environment": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "GOWORK": "off",
+    "GOFLAGS": "",
+    "CGO_ENABLED": "1",
+    "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+    "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+    "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE": "0",
+    "GOMAXPROCS": "12",
+    "GOGC": "100",
+    "GODEBUG": "",
+    "GOMEMLIMIT": "2GiB",
+    "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES": "1073741824",
+    "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs"
+  }
+}

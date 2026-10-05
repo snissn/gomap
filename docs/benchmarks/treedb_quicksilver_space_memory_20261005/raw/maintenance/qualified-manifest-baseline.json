@@ -1,0 +1,118 @@
+{
+  "provisional": false,
+  "sources": {
+    "baseline": {
+      "head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+      "binary": "unified-bench-baseline",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "linkage": "dynamic"
+    }
+  },
+  "libraries": {
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/librocksdb.so.6.11": {
+      "sha256": "dcd497d9c4a635f8dfe0edff3e3690acb81fd85ac4fbdb1af756a0c3e9a63a2f",
+      "bytes": 6461040
+    },
+    "/lib/x86_64-linux-gnu/libc.so.6": {
+      "sha256": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793",
+      "bytes": 2220400
+    },
+    "/lib/x86_64-linux-gnu/libpthread.so.0": {
+      "sha256": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78",
+      "bytes": 21448
+    },
+    "/lib/x86_64-linux-gnu/librt.so.1": {
+      "sha256": "5f20d34fb3bb4d84b4edeb6ca11fa5b48c705207253741619acab7cc758185fb",
+      "bytes": 14664
+    },
+    "/lib/x86_64-linux-gnu/libsnappy.so.1": {
+      "sha256": "0b6e39db37cdefb38b1b874a72d60d13159665fe0f02d64cd72f41e11b03a48a",
+      "bytes": 35184
+    },
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2": {
+      "sha256": "f3c7dc509e8da8f780666a7c74c92b98af95aecd26d3ef0f3e36470c7490e400",
+      "bytes": 162808
+    },
+    "/lib/x86_64-linux-gnu/libz.so.1": {
+      "sha256": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "bytes": 108936
+    },
+    "/lib/x86_64-linux-gnu/libbz2.so.1.0": {
+      "sha256": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9",
+      "bytes": 74848
+    },
+    "/lib/x86_64-linux-gnu/liblz4.so.1": {
+      "sha256": "65f47a3dc2cec5f938379b7b625f0621657bf1254551895d22462c6a204cbad8",
+      "bytes": 125152
+    },
+    "/lib/x86_64-linux-gnu/libzstd.so.1": {
+      "sha256": "5df4f4df42d76270bb6981fabc7c1fdccd8ad28a23d84d67f73203fb3f537667",
+      "bytes": 841808
+    },
+    "/lib/x86_64-linux-gnu/libdl.so.2": {
+      "sha256": "3eaaa4aefd9c28f3867c96a427c3cbec9191cb61c4c9d0a2cb4a765d66064499",
+      "bytes": 14432
+    },
+    "/lib/x86_64-linux-gnu/libstdc++.so.6": {
+      "sha256": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128",
+      "bytes": 2260296
+    },
+    "/lib/x86_64-linux-gnu/libm.so.6": {
+      "sha256": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6",
+      "bytes": 940560
+    },
+    "/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "sha256": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a",
+      "bytes": 125488
+    },
+    "/lib64/ld-linux-x86-64.so.2": {
+      "sha256": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01",
+      "bytes": 240936
+    }
+  },
+  "build_env": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "GOWORK": "off",
+    "GOFLAGS": "",
+    "GOENV": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/mnt/fast4tb/go-build-cache",
+    "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+    "CGO_ENABLED": "1",
+    "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+    "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+    "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu"
+  },
+  "receipts": {
+    "source": {
+      "path": "receipts-baseline/source.json",
+      "sha256": "fa007c693750dcf28092b07e34ba42f979add0945ea9826a34c5071f09020e3c"
+    },
+    "build": {
+      "path": "receipts-baseline/build.json",
+      "sha256": "49ed495568476d34cb010e22bb04f1e8b4c3418a4f9ad77f816f618f59f88e02"
+    },
+    "native": {
+      "path": "receipts-baseline/native.json",
+      "sha256": "ac15327ddd975f93b38f86410d676c14c7dd5c2da4645abf407ee448d9d5e515"
+    },
+    "runner": {
+      "path": "receipts-baseline/runner.json",
+      "sha256": "cf71679e44f0b7e251ca29b2c3279b74165476a5b6cdc1417bc1b592d6684771"
+    },
+    "qualification": {
+      "path": "baseline-landed-source-equality.json",
+      "sha256": "9baacdee6683e6f6fb68aaf69d8ee25f034ea7bdf6e1827543de024c6ec80478"
+    }
+  },
+  "landed_source_equality": {
+    "built_source_head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+    "landed_merge": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+    "built_tree": "47ef0a393f7107ce5255786169b83dd562160c77",
+    "landed_tree": "47ef0a393f7107ce5255786169b83dd562160c77",
+    "entire_git_tree_equal": true,
+    "ci_pr": 5007,
+    "method_review": "measurement-plan.md; independent6.1Sol source/method audit; small rehearsal oracles; ownership/pin tests pass"
+  }
+}

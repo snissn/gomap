@@ -1,0 +1,1 @@
+{"result": "PASS", "records": 864, "distinct_caches": 147, "representation_records": {"inline": 411, "slice": 453}, "aggregation": "none; repeated captures are not additive"}

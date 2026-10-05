@@ -1,0 +1,51 @@
+{
+  "diagnostic_only": true,
+  "commands": [
+    {
+      "command": [
+        "cp",
+        "-a",
+        "--reflink=auto",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/replay-3m-inplace",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/replay-3m-postfailure-vacuumoff"
+      ],
+      "started": 1791194509.737086,
+      "finished": 1791194510.6563985,
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/rebind-owned-copy-restore-r2",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/replay-3m-postfailure-vacuumoff"
+      ],
+      "started": 1791194510.6567974,
+      "finished": 1791194511.5741694,
+      "rc": 0,
+      "stdout": "COPIED_SNAPSHOT_REBOUND\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-replay-diagnostic-v2/inplace.py",
+        "seal",
+        "--owned-root",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005",
+        "--manifest",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/replay-3m-no-vacuum/seal.json",
+        "--db",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/replay-3m-postfailure-vacuumoff",
+        "--backup",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/replay-3m-vacuumoff-backup"
+      ],
+      "started": 1791194513.3606722,
+      "finished": 1791194517.837536,
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "method_sha256": "7aa46682a751594a2f149cb23737bfa04f18fe1081f1f9c96391d60a95a110ad"
+}

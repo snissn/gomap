@@ -1,0 +1,32 @@
+Traceback (most recent call last):
+  File "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-replay-diagnostic-v2/inplace.py", line 168, in <module>
+    if __name__ == '__main__': main()
+  File "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-replay-diagnostic-v2/inplace.py", line 163, in main
+    identity_guard(manifest['original'], current, formats, pins)
+  File "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-replay-diagnostic-v2/inplace.py", line 30, in identity_guard
+    assert (before['dev'], before['ino']) == (after['dev'], after['ino']), ('resource identity changed', rel)
+AssertionError: ('resource identity changed', 'maindb/index.db')
+Command exited with non-zero status 1
+	Command being timed: "python3 /mnt/fast4tb/quicksilver-space-memory-20261005/5004-replay-diagnostic-v2/inplace.py run --owned-root /mnt/fast4tb/quicksilver-space-memory-20261005 --manifest /mnt/fast4tb/quicksilver-space-memory-20261005/replay-3m/seal.json --out /mnt/fast4tb/quicksilver-space-memory-20261005/replay-3m/1-baseline/guard -- /mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-replay-baseline -suite quicksilver -dbs treedb -profile durable -quicksilver-case realistic -keys 3000000 -read-workers 4 -quicksilver-reads 6000000 -quicksilver-updates 40000 -quicksilver-duration 8s -quicksilver-read-batch 64 -quicksilver-commit auto -max-wall 30m -seed 24 -quicksilver-mixture primary -quicksilver-working-set uniform -quicksilver-miss-percent 90 -keep"
+	User time (seconds): 86.34
+	System time (seconds): 2.50
+	Percent of CPU this job got: 176%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:50.25
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3000024
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 150
+	Minor (reclaiming a frame) page faults: 343230
+	Voluntary context switches: 23132
+	Involuntary context switches: 27219
+	Swaps: 0
+	File system inputs: 297552
+	File system outputs: 160488
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

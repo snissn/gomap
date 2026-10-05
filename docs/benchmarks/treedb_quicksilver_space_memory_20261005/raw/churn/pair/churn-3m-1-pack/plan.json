@@ -1,0 +1,25 @@
+{
+  "output": "churn-3m-1-pack",
+  "repeats": 1,
+  "cells": [
+    {
+      "label": "treedb-churn-pack",
+      "source": "churn-v3",
+      "engine": "treedb",
+      "profile": "durable",
+      "keys": 3000000,
+      "reads": 6000000,
+      "updates": 40000,
+      "workers": 4,
+      "case": "realistic",
+      "seed": 24,
+      "duration": "8s",
+      "duration_ns": 8000000000,
+      "profiled": false,
+      "keep": true,
+      "churn_rounds": 6,
+      "churn_pause": "30s",
+      "churn_pause_ns": 30000000000
+    }
+  ]
+}

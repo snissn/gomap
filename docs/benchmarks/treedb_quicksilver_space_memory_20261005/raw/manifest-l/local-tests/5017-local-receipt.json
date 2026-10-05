@@ -1,0 +1,62 @@
+{
+  "head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+  "base": "2eeb40a2982d369cd5346d7648b660bf3de596d6",
+  "test_first_head": "f15dac3ec224a9014508dcb73dda1f72cf39fcfb",
+  "pr": "https://github.com/snissn/gomap/pull/5018",
+  "worktree": "/private/tmp/gomap-qs-5017-manifest",
+  "go_version": "go version go1.26.0 darwin/arm64",
+  "status": "",
+  "source_sha256": {
+    "TreeDB/db/leaf_generation_gc.go": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+    "TreeDB/db/leaf_generation_gc_test.go": "744413c1dbe47e6304f991d9e4e72f60e6abd7390aad3a018c787bf2319f79df",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "e8b4bdd28b2b34d925de05a584d15cd2cd87af90593a9c42237837317738aa82"
+  },
+  "artifacts": {
+    "5017-local-red.txt": "786946ecfc6af71a89791f2e70e29c489ba1d2b9131baaccf5f4050ead0865c5",
+    "5017-local-real-gc-red.txt": "100c0fd26fc30509cdeda9106a55bb1441db24ba181fab9954d5220e5eef9e42",
+    "5017-red-leaf-generation-gc.go": "e822b656eaef1a64bbfcce5284aa2212304f01255b4b6f167bc6adda7ee08bb2",
+    "5017-red-overlay.json": "6cc6d14b1a8d903a151f1fed8041db644487d17434b500427303542f9f40d581",
+    "5017-local-green.txt": "9b49e027859a241576dd293597b5fcdf68a3bd8f0ef9fec7592064f870640e2d",
+    "5017-local-gc-pack.txt": "2c74b7fc79c303a03d4b4c32bf39b4c4ec30008f936649e0f85607ca9d44efb6",
+    "5017-local-maintenance-green.txt": "f3e8c47bf4997c5918108e25906f7e71fd717ac5fe5ef106963930479a5bb70c",
+    "5017-local-maintenance-green-complete-checkout.txt": "886cd96629c4729c5d518c96d5a2e5cbe917a0e15c7b84b9f981ab992a0d32be",
+    "5017-local-race.txt": "bce713104453f9f36c5adccab5e0c0a00ea00967807fb57413f8e7062f01c312"
+  },
+  "results": {
+    "initial_test_first": {
+      "rc": 1,
+      "package_seconds": 0.89
+    },
+    "retained_initial_red_rerun": {
+      "rc": 1
+    },
+    "normal_gc_overlay_red": {
+      "rc": 1,
+      "package_seconds": 0.838
+    },
+    "focused_green": {
+      "rc": 0,
+      "package_seconds": 0.739
+    },
+    "gc_pack_green": {
+      "rc": 0,
+      "package_seconds": 3.183
+    },
+    "maintenance_sparse_fixture_failure": {
+      "rc": 1,
+      "package_seconds": 10.574,
+      "reason": "existing scripts fixture absent from sparse checkout"
+    },
+    "maintenance_complete_checkout_green": {
+      "rc": 0,
+      "package_seconds": 10.139
+    },
+    "focused_race_green": {
+      "rc": 0,
+      "package_seconds": 2.489
+    }
+  },
+  "native_validation": "coordinator owned; pending",
+  "matched_restored_copy_full": "coordinator owned; pending",
+  "hosted_codex_review": "not requested"
+}

@@ -1,0 +1,443 @@
+{
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "rows": [
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-baseline-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189732.6191344,
+      "finished": 1791189732.6699493,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-baseline-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "f2bb9702af48206a11ce1cc306cc921f6d736a4fdca3201afe08a7c7aeb7c116",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "778c60448bbff3a7e9e93f20f5f4afd736e54c8280d156d70d6a620907753553"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-baseline-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189732.7526112,
+      "finished": 1791189732.8006504,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-baseline-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "2cda767647045886b50aa60f0788a343e97570ccc4717bf9ce88ea53e8b713b5",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "f06fdaeade352b9ff3ab98d83bb1cbf9b50f0d0804e481635f9bcc4291364c3b"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-baseline-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189732.8817818,
+      "finished": 1791189732.9312937,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-baseline-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "cd97b4f9fadc1a0dc460d22ac823e53fe9a7b0d9e96b1b0ec0cf6ddf74c42266",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "aa9c5787ca6eb03082f16e8d1a7e8d29f965b763cb13ba398d1cdb47430571fb"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-baseline-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189733.0146604,
+      "finished": 1791189733.0645463,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-baseline-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "7886b120ec9e7cff4282fcb28e552ed84423b203cab69ced0d78dbe4d71eaefb",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "4d74a08b835f3f3256bc58e2dca3bd6bd89d865daa561553b92e6070a4a1e159"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-candidate-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189733.1950848,
+      "finished": 1791189733.244767,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-candidate-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "ae08dc2a8a50dc7fe912c410e88622c27d588410ff51d3ca161a9b7f587d8d4e",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "c7413c7a1e763c0394e7db62d88add63578c029f2f6c91976efa1acd4e6ad7a0"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-candidate-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189733.3268173,
+      "finished": 1791189733.374457,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-candidate-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "3d9fa58e382c337bd438bb67754c9af7529da0ae9def572b6255d2f6a3eacd64",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "28966997964d670d4032b6e9c410f8776fd5e1c421e47367180e212bbe88a2eb"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-candidate-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189733.4563313,
+      "finished": 1791189733.5065346,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-candidate-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "f5d39e0063b26e21e8f0ec0115d6f074eec79caf613ad22338dd65d8a0d455fa",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "55b8e20d2d5f68340f616466d138cf65e5d99336c9b6e0be4bfd5603b0ceefc4"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/1-candidate-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189733.5889485,
+      "finished": 1791189733.6372862,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/1-candidate-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "669e9e63cff6399566f636d6cbbcc61ef0a72f4fb3132a7fc825afb1cfe838c2",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "8b0e19469b66dde1d833606774701a869d09a673b54cecb88c03090bc0c570dc"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-baseline-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189733.7648454,
+      "finished": 1791189733.8154857,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-baseline-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "31de4a03e8ef309c4207292a7c6ee8450041764f8eba03fee1fa2ca929466703",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "da0aacafd1d437449073acd7c4062118dcb9c98f842275b89ab217892f349eab"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-baseline-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189733.8975735,
+      "finished": 1791189733.9461422,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-baseline-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "6efb8f2f0e3cd6b54535349c24baa754fd3e704bef04717fd61b98991b0a60b1",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "e7588cd9c4e2cf82b241ff6510fc3594ecb1d04c3385562ba0476e58415a4d85"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-baseline-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189734.0274894,
+      "finished": 1791189734.0772312,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-baseline-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "68c6f9cd59dca4fb58262dbf2e3e23788c40aec6230ddea2fa45bc6b672e4163",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "31be2939dd04bd168ddd302af5b564bc7dde41519a30337dde897ebd4450bdde"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-baseline-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189734.1586637,
+      "finished": 1791189734.2077415,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-baseline-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "16a80081df78f316237f5470cef4e807c607b3e18697c4d7f55625e191cb2dd6",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "65fcb15f2ad1631c2c48199b962cb60d41217ef9190256989f32ffcaf7d2c461"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-candidate-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189734.3307323,
+      "finished": 1791189734.3779817,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-candidate-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "2d3a2e8e7e6de509c014056a05ab3a68b477a815e8305946e719a266e6b583d6",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "80ff5000fed32e3c53d70694286db82ea703fea76c005d9f17afbb1f3e3c1f44"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-candidate-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189734.4600165,
+      "finished": 1791189734.5080912,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-candidate-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "f70368ec1e73efcc0edf7886d5c006c0cbd3cca38781b16e1e57a33495edf71d",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "ec319fda6556435ef3d418eecec30b84cb43cb6512f8d797bd25979e672e1fd0"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-candidate-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189734.590136,
+      "finished": 1791189734.6399908,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-candidate-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "8a81b93f62f224abfbbfb58090aba50c7ac8de069bc0c8e0d9c413d6587e6905",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "1254102b2cef801eadc2c22ed4c3d4bd479376fd95ba98f4f8d26565fc520c96"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/2-candidate-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189734.7220497,
+      "finished": 1791189734.7695265,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/2-candidate-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "14622ad33ddcc27cd1549f11a0ef72cb6412a17def8f83df84a0e57b629a724c",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "b87f0fbcc10b298a1a25ac77b2b1ca113510973c870a50eccb86517f68657408"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-baseline-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189734.8924615,
+      "finished": 1791189734.9399664,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-baseline-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "ed86729fa9853155bb3722e69c3ad8825f84687db53930d7a9991b89f3f2a6bd",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "639c9aecd8c13f9554ab444d9e40cd2bef29886990e360e9dfb0ee6033487cc6"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-baseline-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189735.020681,
+      "finished": 1791189735.0697532,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-baseline-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "088e1fb2e276e47d504fdb7b70da2a85e950e8476ec2789b2dcd8b9eeaf1ab30",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "4d50d47f4bc7928a395dd2561b8cceaa624b6e191569b4659d3aa157c5a23dee"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-baseline-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189735.1502411,
+      "finished": 1791189735.1992218,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-baseline-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "a9693ba820f78991cb09e15de3d9656cbbae74d3c3ffbe3f4874f07341b5374c",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "f48007e955430545c187c78386097129524b4cf8a1ef7c93cda3e7f1291c6267"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-baseline-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189735.2802353,
+      "finished": 1791189735.3283997,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-baseline-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "9de68c6b52054121566953e00e587cff6b760cbaedaddbaee6c101c97353c5c4",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "profile_sha256": "4a6472b517b64ff7505eb98f9e824a1fc6603765db04b5bf846e7b61fef3b610"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-candidate-durable-primary-profile/cpu_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189735.4561088,
+      "finished": 1791189735.506417,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-candidate-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "f7187f3140754639a3b8c607550a5a4107db067909d33500298eee6c2acc27a3",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "bac462ef9254d3f8e270272e440b08efd9ad8d058472b4e06274ccb9b05c1480"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "-sample_index=alloc_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-candidate-durable-primary-profile/allocs_quicksilver_mixed_treedb.pprof"
+      ],
+      "started": 1791189735.5886889,
+      "finished": 1791189735.6344943,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-candidate-durable-primary-profile-allocs_quicksilver_mixed_treedb.pprof.top.txt",
+      "output_sha256": "6f99491dbd99cfe63edc72d2487cb11c87e3114038ed3907b012aea3bdbe28ab",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "527dfe8891437800698a8c486f3b0ab373802a1c82351455dbe4f28b94ef2519"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-candidate-durable-primary-profile/mutex.pprof"
+      ],
+      "started": 1791189735.7159789,
+      "finished": 1791189735.7638097,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-candidate-durable-primary-profile-mutex.pprof.top.txt",
+      "output_sha256": "81d75660c2150b6641e34219cfe519e07a4b12476babddc8b94dd783f345135d",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "e8e39e43453562c2251d3900a0da5473753d516bd3a8d6f3bd3259ebab66c3a5"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=20",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-profile-paired/3-candidate-durable-primary-profile/block.pprof"
+      ],
+      "started": 1791189735.8461688,
+      "finished": 1791189735.8933277,
+      "rc": 0,
+      "output": "m-profile-analysis-v2/3-candidate-durable-primary-profile-block.pprof.top.txt",
+      "output_sha256": "39720993bc20c7972c27989f1e5b6f25d88571f9187e697802d4622f939e7ff1",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "profile_sha256": "1c4b68d510eed198747ebd5dc20ddf948b65d030a87e1b1d5046c711281e8c0e"
+    }
+  ]
+}

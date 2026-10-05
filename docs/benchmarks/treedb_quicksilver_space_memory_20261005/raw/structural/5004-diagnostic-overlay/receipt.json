@@ -1,0 +1,31 @@
+{
+  "refs": {
+    "baseline": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+    "candidate": "90219d64ced3539accff5d0e50d9b5fa6424ed20"
+  },
+  "frozen_baseline_tree": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+  "instrumentation_lines": 61,
+  "source_hashes": {
+    "baseline/grouped_frame_cache.go": {
+      "original_sha256": "f453ef5c72b6c2f2bf973e6a4d08fda1fdd85fcc2e876b029aa5a12c47004d5d",
+      "overlay_sha256": "17b7e2beb46bf04b4485861311f4b1371c970a2e3c9477f3e8a666e0652e8472"
+    },
+    "baseline/main.go": {
+      "original_sha256": "c1c8c10bce974bedf7282d0b0db94b316fd502a2874a8053dd30c48be13d4d62",
+      "overlay_sha256": "d38e5e327576b5f2591b835bfe15712a79f60f9685c5cdb0865c13710c97315b"
+    },
+    "candidate/grouped_frame_cache.go": {
+      "original_sha256": "af924aaf5a27fe41ec8192ec96b4ce7eea2af755cc69bee733f96ae22ba0506d",
+      "overlay_sha256": "a8e6cf0405701946fbc9119980a7ef959068535f92ec2026b36fa7453c28c014"
+    },
+    "candidate/main.go": {
+      "original_sha256": "c1c8c10bce974bedf7282d0b0db94b316fd502a2874a8053dd30c48be13d4d62",
+      "overlay_sha256": "d38e5e327576b5f2591b835bfe15712a79f60f9685c5cdb0865c13710c97315b"
+    }
+  },
+  "self_check": "PASS exact-once anchors; duplicate patch rejected; baseline/candidate histogram arithmetic; hard-link retention",
+  "generator_sha256": "359b4d490a326ffdd08a1005a239329f714a22c68c5542ec4a30b8f5cf4490dc",
+  "go_syntax_validation": "PASS gofmt -e -d parsed all four generated overlay source files; no Go build/test executed",
+  "syntax_format_diff_sha256": "750d6d7cc25dc2886819d4d2e77763a0bdd41863ed7054109c5e4196a21d714b",
+  "jsonl_validator_self_check": "PASS baseline/candidate synthetic records; wrong structural byte totals rejected"
+}

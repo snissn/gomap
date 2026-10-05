@@ -1,0 +1,309 @@
+{
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "rows": [
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_2830144411.pprof"
+      ],
+      "started": 1791190172.618211,
+      "finished": 1791190172.6702802,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-hits-base.top.txt",
+      "output_sha256": "e8b0c77cee3c89fa1da2ae6cdd88d6e747273ae41e97d5fbaa4c605425e71500",
+      "profile_sha256": "9fc2ba4d37c5b2ea350c3008822c1983d3e3f63210a7b624318c8d1c896f684a",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_354377343.pprof"
+      ],
+      "started": 1791190172.7531528,
+      "finished": 1791190172.8075147,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-hits-after.top.txt",
+      "output_sha256": "4418a1461648b19c30b15f06d49f03d0e9e18e6d21935132ae1f7f73a686dfe4",
+      "profile_sha256": "d34e2835d464a1a009d8c17da1bc90bcee6f4c5cabf089462eef127b055cbacf",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_2063020319.pprof"
+      ],
+      "started": 1791190172.888681,
+      "finished": 1791190172.9404159,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-misses-base.top.txt",
+      "output_sha256": "4418a1461648b19c30b15f06d49f03d0e9e18e6d21935132ae1f7f73a686dfe4",
+      "profile_sha256": "e560e652e681f21b0b5d89e9e1eaad58cc7c1502f60d0840e039894caa0a1440",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_4168126585.pprof"
+      ],
+      "started": 1791190173.02251,
+      "finished": 1791190173.0744338,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-misses-after.top.txt",
+      "output_sha256": "6d6cf3f0789feaa51eec2fbfc4de35b809df59f87705c036effa0339d8d38376",
+      "profile_sha256": "4fdb3a118c440cf1973983748454471ecb51fc02cba9c9fbf3cc72cb9a7d9562",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_234798887.pprof"
+      ],
+      "started": 1791190173.1560328,
+      "finished": 1791190173.2087398,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-mixed-base.top.txt",
+      "output_sha256": "6d6cf3f0789feaa51eec2fbfc4de35b809df59f87705c036effa0339d8d38376",
+      "profile_sha256": "98f6e8863fd17773e05ef9977d931a537cb6c7aeec6c790008236c870db9cebe",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_439601822.pprof"
+      ],
+      "started": 1791190173.291007,
+      "finished": 1791190173.344313,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-mixed-after.top.txt",
+      "output_sha256": "10058db11e14fd228621d0ba5f82ed821adb67fdcebe5f7474d26a86443051da",
+      "profile_sha256": "ec8c9494253f52bd227f1a25cb9ec11c2c869045ea7fc7a53e014dfe61ab9452",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_3100667790.pprof"
+      ],
+      "started": 1791190173.4263017,
+      "finished": 1791190173.4813123,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-concurrent-base.top.txt",
+      "output_sha256": "9d964e9b071930177ecb54b304e7d4acab5444322529394a6ff8abe46a016f7d",
+      "profile_sha256": "c63c0b50bc7c35ed08e65a06f1a50db36b022a4531a01fbf88eeb537cc9dbca3",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1649372314.pprof"
+      ],
+      "started": 1791190173.5614953,
+      "finished": 1791190173.6165416,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-baseline-durable-primary-diagnostic-concurrent-after.top.txt",
+      "output_sha256": "85adaea52d50cf2302269c72292b975882e57d9d414a6dd974915b92f6f1932b",
+      "profile_sha256": "537e73c846e2ec9c12394dd66633a9eac5ac7335602ade6aab7aaa1387f60e11",
+      "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_757678803.pprof"
+      ],
+      "started": 1791190173.697743,
+      "finished": 1791190173.748612,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-hits-base.top.txt",
+      "output_sha256": "7e44dbb79279341bb66f76397cfe4d21a8ab70a68d6084f0ea7cc6c8d342fe79",
+      "profile_sha256": "bcfb1a3d13adf69a6d303e0e3c7976b4c1b4080b142a5c397f523d859de99138",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_3825107869.pprof"
+      ],
+      "started": 1791190173.829425,
+      "finished": 1791190173.8839595,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-hits-after.top.txt",
+      "output_sha256": "9ff1633cb37c529116b54cdf97d07b1bcee8fa4b5505a54c81a1495d05c5122b",
+      "profile_sha256": "011b6ec73d5d8ad98b772ba764414ae6d4696cf33ce6c6889b73c38c606e4893",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_753693128.pprof"
+      ],
+      "started": 1791190173.965195,
+      "finished": 1791190174.0164165,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-misses-base.top.txt",
+      "output_sha256": "9ff1633cb37c529116b54cdf97d07b1bcee8fa4b5505a54c81a1495d05c5122b",
+      "profile_sha256": "23c0f236ef76ec671e79a4e3e16f3bf411c791f06b1561916a0cdb81550b324e",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1651225813.pprof"
+      ],
+      "started": 1791190174.0980282,
+      "finished": 1791190174.1490693,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-misses-after.top.txt",
+      "output_sha256": "f281acdc6c618a6328cd84068a1b4444b8e434a46c80168fad31817542ff9965",
+      "profile_sha256": "bdd3ab9f3c5018f83f218e9f0610cb184cd3f06f5bee34f243d1e00042b78bb6",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_725167310.pprof"
+      ],
+      "started": 1791190174.2304332,
+      "finished": 1791190174.2821987,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-mixed-base.top.txt",
+      "output_sha256": "f281acdc6c618a6328cd84068a1b4444b8e434a46c80168fad31817542ff9965",
+      "profile_sha256": "a63980760d0f94922320ee9a90f481e8062244606bbc7319286e8900788d43be",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_3441094222.pprof"
+      ],
+      "started": 1791190174.3637223,
+      "finished": 1791190174.4181767,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-mixed-after.top.txt",
+      "output_sha256": "1b8132ee7998749369948020a658b142ec2f94f7ad3e3853a37b53f54053748a",
+      "profile_sha256": "45d4efbfa6e79a06871d9ea9a291a725045d30733f636535f1a15b608a5d252c",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_1652890728.pprof"
+      ],
+      "started": 1791190174.5001228,
+      "finished": 1791190174.5541284,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-concurrent-base.top.txt",
+      "output_sha256": "1b8132ee7998749369948020a658b142ec2f94f7ad3e3853a37b53f54053748a",
+      "profile_sha256": "fb49a7842b3d0d2837ed25dcd291721dfdf81f4200b94f061ec435e4fb2b3758",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    },
+    {
+      "command": [
+        "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+        "tool",
+        "pprof",
+        "-top",
+        "-nodecount=30",
+        "-sample_index=inuse_space",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1513164787.pprof"
+      ],
+      "started": 1791190174.6351078,
+      "finished": 1791190174.6921475,
+      "rc": 0,
+      "output": "m-diagnostic-analysis/1-candidate-durable-primary-diagnostic-concurrent-after.top.txt",
+      "output_sha256": "e8ec2a89d5acd1731b7087886df09884f9cc3cd9fefedac4d44e731a64132ced",
+      "profile_sha256": "a378880d1e609c0f750dffa597b21432838cbf9155980930adfe9c2510ea565c",
+      "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54"
+    }
+  ]
+}

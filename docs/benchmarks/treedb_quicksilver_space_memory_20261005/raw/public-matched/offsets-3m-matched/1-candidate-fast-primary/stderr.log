@@ -1,0 +1,115 @@
+Unified Benchmark Runner
+========================
+Profile:     fast (Cross-DB no-sync throughput preset. TreeDB uses production no_wal_fast with verified reads: ordinary ACKs are volatile until sealing; explicit Sync, Checkpoint, and clean Close remain durable. Other engines retain their native no-sync flags.)
+Quicksilver: case=realistic generation=generic-v1 mixture=primary keys=3000000 commit=ordinary seed=24 working_set=uniform miss_percent=90
+             keys=namespace/hostname/opaque approximately 1/3 each; variable lengths; bijective scrambled interior identity values=80% 32..256 B; 18% 257..2048 B; 2% 2049..32768 B (seeded); equally weighted logarithmic size bands within buckets contents=50% structured; 50% opaque (seeded independent of length) load_batch=1000
+             readers=4 aggregate_reads=6000000 snapshot_reads=64 updates=40000 duration=8s GOMAXPROCS=12
+DBs:         treedb
+Phases:      quicksilver_hits,quicksilver_misses,quicksilver_mixed,quicksilver_concurrent
+
+TreeDB options (resolved):
+  profile_resolved=no_wal_fast
+  durability=wal_off_relaxed
+  read_integrity=verify
+  benchmark_unsafe=false
+  vlog_current_writable_mmap=false
+  maintenance_mode=normal
+  index_optimizations=false
+  leaf_prefix_compression=true
+  index_columnar_leaves=true
+  index_packed_valueptr=true
+  index_internal_base_delta=false
+  index_outer_leaves_in_vlog=true
+  outer_leaf_read_cache_entries=default/env (effective=8192)
+  outer_leaf_read_cache_write_admission=adaptive
+  cached.domain_ingress_workers=0
+  cached.domain_ingress_queue_size=0
+  flush_admission_policy=auto
+  flush_admission_admitted=true
+  flush_admission_reason=auto_admitted_hardware_aware
+  flush_admission_configured_concurrency=0
+  flush_admission_effective_concurrency=6
+  flush_admission_concurrency_cap_reason=default_physical_cores
+  flush_admission_concurrency_defaulted=true
+  runtime_gomaxprocs=12
+  flush_admission_flush_apply_span_native=true
+  flush_admission_flush_backlog_coalescing=true
+  hardware_physical_cores=6
+  flush_apply_concurrency=6
+  flush_apply_min_entries_configured=1
+  flush_apply_min_spans_configured=1
+  flush_apply_min_bytes_configured=1
+  flush_apply_span_native=true
+  flush_span_run_target_planning=false
+  flush_backlog_coalescing=true
+  flush_backlog_coalescing_max_memtables=default (effective=64)
+  flush_backlog_coalescing_max_bytes=default (effective=536870912)
+  flush_backlog_coalescing_max_ops=default (effective=2097152)
+  flush_backlog_coalescing_min_age_ms=0
+  flush_backlog_coalescing_single_op_ratio=default (effective=0.500000)
+  flush_backlog_coalescing_max_ops_per_span=default (effective=4.000000)
+  flush_backlog_coalescing_min_old_leaf_bytes_per_op=0.000000
+  journal_lanes_configured=0
+  journal_lanes_effective_default=3
+  journal_lanes_defaulted=true
+  journal_lanes_hot=1
+  journal_lanes_warm=1
+  journal_lanes_cold=1
+  vlog.force_pointers=false
+  vlog.pointer_threshold=default (effective=512B)
+  vlog.compression=auto
+  vlog.block_codec=snappy
+  vlog.auto_policy=balanced
+  vlog.compression_autotune=medium
+  vlog.dict_class_mode=single
+  vlog.generation_policy=hot_warm_cold
+  vlog.generation_hot_segment_bytes=0
+  vlog.generation_warm_segment_bytes=0
+  vlog.generation_cold_segment_bytes=0
+  vlog.rewrite_budget_bytes_per_sec=0
+  vlog.rewrite_budget_records_per_sec=0
+  vlog.rewrite_trigger_stale_ratio_ppm=0
+  vlog.rewrite_trigger_total_bytes=0
+  vlog.rewrite_trigger_churn_per_sec=0
+  vlog.rewrite_min_segment_age_ms=default (effective=30000)
+  vlog.block_target_bytes=default (effective=4096B)
+  vlog.incompressible_hold_bytes=default (effective=67108864B)
+  vlog.incompressible_probe_bytes=default (effective=8388608B)
+  notes:
+    - disable_wal takes precedence over relaxed_sync (durability=wal_off_relaxed)
+    - flush_admission_policy=auto admitted: auto_admitted_hardware_aware
+    - index_internal_base_delta disabled: leaf-log child pages use explicit LogRecordRef entries
+    - index_optimizations enables leaf prefix compression + columnar leaves + packed value pointers + internal base-delta
+    - index_packed_valueptr uses a packed 12B leaf ValuePtr encoding (u32 offset cap; cached mode rotates value-log segments automatically)
+    - leaf_prefix_compression + index_columnar_leaves: enabling combined columnar+prefix leaf encoding for new pages
+    - leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)
+    - maintenance_mode=normal defaults vlog.generation_policy=hot_warm_cold
+    - vlog.compression=auto selects the actual per-frame codec at runtime; vlog.block_codec is the forced block-mode/default block codec, not proof that auto used that codec. Use treedb.cache.vlog_auto.* and treedb.cache.vlog_write_mode.* stats for actual selection.
+
+2026/10/04 21:20:40 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=47240 stored=798 ratio=0.017
+2026/10/04 21:20:40 treedb: value-log dict published class=single_value dict_id=3681171347263375175 k=4 payload_ratio=0.004 total_ratio=0.019
+2026/10/04 21:21:31 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=67750 stored=746 ratio=0.011
+2026/10/04 21:21:31 treedb: value-log dict published class=single_value dict_id=3698053175265858333 k=32 payload_ratio=0.001 total_ratio=0.007
+	Command being timed: "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-candidate -suite quicksilver -dbs treedb -profile fast -quicksilver-case realistic -keys 3000000 -read-workers 4 -quicksilver-reads 6000000 -quicksilver-updates 40000 -quicksilver-duration 8s -quicksilver-read-batch 64 -quicksilver-commit auto -max-wall 30m -seed 24 -quicksilver-mixture primary -quicksilver-working-set uniform -quicksilver-miss-percent 90"
+	User time (seconds): 181.71
+	System time (seconds): 4.45
+	Percent of CPU this job got: 193%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:36.13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3223008
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 551
+	Minor (reclaiming a frame) page faults: 911395
+	Voluntary context switches: 129099
+	Involuntary context switches: 58962
+	Swaps: 0
+	File system inputs: 504
+	File system outputs: 5182504
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -1,0 +1,8 @@
+{
+  "original": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/replay-3m-inplace",
+  "failed_post_census_sha256": "3a709c6c17b23fb5929652af05642f7d24e834cc6cd347e614bcc0c026a868fa",
+  "current_matches_failed_census": true,
+  "restore_helper_sha256": "ae237f6af2abc82fa9857a33e93c9c8ee64a2d7a5f350a15a1525574d5dc77c3",
+  "restore_source": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+  "restore_landed_source": "723e5625f4b46945886d0696c0122db2e2c928cf"
+}

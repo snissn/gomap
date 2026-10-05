@@ -1,0 +1,1163 @@
+{
+  ".": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273624,
+    "nlink": 4,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "dictdb": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273784,
+    "nlink": 6,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "dictdb/LOCK": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273791,
+    "nlink": 1,
+    "size": 12,
+    "blocks": 8,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88"
+  },
+  "dictdb/column_assets": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273790,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "dictdb/format.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273780,
+    "nlink": 1,
+    "size": 335,
+    "blocks": 8,
+    "sha256": "5b192cdf97d65fae25d17982e50c452333e8271ee56eb789a61ca4bee485b640"
+  },
+  "dictdb/index.db": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273797,
+    "nlink": 1,
+    "size": 524288,
+    "blocks": 1024,
+    "sha256": "739255bf504c3fdcdeca4d57edad44f95ab3dbcdb61f693a758f96ca228e427e"
+  },
+  "dictdb/leaf_vlog": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273788,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "dictdb/value_vlog": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273786,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "dictdb/value_vlog/value-l0-000001.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273787,
+    "nlink": 1,
+    "size": 65584,
+    "blocks": 136,
+    "sha256": "70c9691c7fcd87e84a6a983c30bce0ae1ef351164f211bf614199596e997867c"
+  },
+  "dictdb/vlog_ref_counts.meta": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273794,
+    "nlink": 1,
+    "size": 40,
+    "blocks": 8,
+    "sha256": "a6fe9ed7295af93fdb938faf95a5dd6b23702a5b4ae964950b4896db3357ba67"
+  },
+  "dictdb/wal": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273785,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273626,
+    "nlink": 6,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb/LOCK": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273779,
+    "nlink": 1,
+    "size": 12,
+    "blocks": 8,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88"
+  },
+  "maindb/column_assets": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273778,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb/format.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273956,
+    "nlink": 1,
+    "size": 433,
+    "blocks": 8,
+    "sha256": "d53dbfccb0421ea839ea6c83c737ae7d061ceeff0101e2cfcfcd09ef0ae51306"
+  },
+  "maindb/index.db": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273792,
+    "nlink": 1,
+    "size": 39321600,
+    "blocks": 76800,
+    "sha256": "8a65a318bd732a0ade7b7256014a75f0b18d4ce903ac8a31183340c262d8848f"
+  },
+  "maindb/leaf_vlog": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273639,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273645,
+    "nlink": 1,
+    "size": 253,
+    "blocks": 8,
+    "sha256": "d00bed249660acde6a02d3452f8e09c26e2049b46156d4994b17e9ce19d8c104"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273648,
+    "nlink": 1,
+    "size": 301,
+    "blocks": 8,
+    "sha256": "dc545ff36f0ac4ab5c90351cdffca6461e8b06dd436926e73b2626253510dac6"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000003.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273656,
+    "nlink": 1,
+    "size": 1531,
+    "blocks": 8,
+    "sha256": "66a32618e9e988410120b5c14285981d3ce243a6ef9466b84c98e077d8f75740"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000004.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273680,
+    "nlink": 1,
+    "size": 2767,
+    "blocks": 8,
+    "sha256": "fc4990b9720654232c61ec32fda508bd6e2fdd22b58faac0df1d7d4635eb19cb"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000005.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273699,
+    "nlink": 1,
+    "size": 4003,
+    "blocks": 8,
+    "sha256": "5db57b51fe1cbb341f9d961dc593f7e21f9926c4fdc4580b4af2589bbed2b626"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000006.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273724,
+    "nlink": 1,
+    "size": 6475,
+    "blocks": 16,
+    "sha256": "4c65f1f76c61a61cbf4f98899e4977bb62805b8f0f7c062ef153ff3489564cdb"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000007.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273748,
+    "nlink": 1,
+    "size": 7711,
+    "blocks": 16,
+    "sha256": "38991e2ab128c450c3ea884418aa9907f003fda5336363d4fbcd66ada5fad2fe"
+  },
+  "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273766,
+    "nlink": 1,
+    "size": 9771,
+    "blocks": 24,
+    "sha256": "df0aa8d624df6951f5be1ff447b7b1ce68e4135968a78d96225ebea316d27e21"
+  },
+  "maindb/leaf_vlog/manifest.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273767,
+    "nlink": 1,
+    "size": 9771,
+    "blocks": 24,
+    "sha256": "df0aa8d624df6951f5be1ff447b7b1ce68e4135968a78d96225ebea316d27e21"
+  },
+  "maindb/leaf_vlog/value-l255-000001.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273647,
+    "nlink": 1,
+    "size": 33554911,
+    "blocks": 65552,
+    "sha256": "24c2a613b810163f51079892f9f9609f39c7b8115422a4c2e338fdc158b3cdd0"
+  },
+  "maindb/leaf_vlog/value-l255-000001.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273649,
+    "nlink": 1,
+    "size": 4768,
+    "blocks": 16,
+    "sha256": "aca58753f02f186ada95a2664e877e29b7ee661b027bf13ec1eb753a3c530cba"
+  },
+  "maindb/leaf_vlog/value-l255-000002.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273646,
+    "nlink": 1,
+    "size": 33557821,
+    "blocks": 65552,
+    "sha256": "f743cb08f0a4069f933f0b2163e6f4c508dc3216f19f774074453b5c2c2f26bf"
+  },
+  "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273658,
+    "nlink": 1,
+    "size": 6320,
+    "blocks": 16,
+    "sha256": "b3ce949cd96d26032e945c06562e12b70792d223952b6b5b2b569e86ea51e284"
+  },
+  "maindb/leaf_vlog/value-l255-000003.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273651,
+    "nlink": 1,
+    "size": 33556734,
+    "blocks": 65544,
+    "sha256": "80d7ead28edbe814fb0fa10121998054e0fa8db8b2486501bd031e613ed9bb42"
+  },
+  "maindb/leaf_vlog/value-l255-000003.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273659,
+    "nlink": 1,
+    "size": 6336,
+    "blocks": 16,
+    "sha256": "d136be2097518bf1df46295a81ab4ed89b82d00307c34400675d1256c9e83525"
+  },
+  "maindb/leaf_vlog/value-l255-000004.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273652,
+    "nlink": 1,
+    "size": 33555041,
+    "blocks": 65552,
+    "sha256": "2fb9486af676bbd7d907ec217555acbe5667c5b102b74363b813b87d582918d2"
+  },
+  "maindb/leaf_vlog/value-l255-000004.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273661,
+    "nlink": 1,
+    "size": 6616,
+    "blocks": 16,
+    "sha256": "21536998c1bfb436f3ded50dfbeee66764e9a5668b5c0f895e08cbe0c5f066e7"
+  },
+  "maindb/leaf_vlog/value-l255-000005.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273653,
+    "nlink": 1,
+    "size": 33556284,
+    "blocks": 65544,
+    "sha256": "599abb2ea2cdb9ea2e31127751bd15f6dc81f5eaff18bf19e474690f46a83e47"
+  },
+  "maindb/leaf_vlog/value-l255-000005.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273662,
+    "nlink": 1,
+    "size": 6456,
+    "blocks": 16,
+    "sha256": "c3f9ff281a7d265f3703ed03aa1baa24fb83151cd322a8bdccbcbad4df9d7c82"
+  },
+  "maindb/leaf_vlog/value-l255-000006.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273654,
+    "nlink": 1,
+    "size": 33560254,
+    "blocks": 65560,
+    "sha256": "f895fee6b9554b4e6888f100fc81517224a97a421baedb38a7cd12aef45dc19f"
+  },
+  "maindb/leaf_vlog/value-l255-000006.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273663,
+    "nlink": 1,
+    "size": 6272,
+    "blocks": 16,
+    "sha256": "afb6ff3c7bd4d76c7369f8407a0c8dc0e1de6291cdc5595c86fc80786f190a8f"
+  },
+  "maindb/leaf_vlog/value-l255-000007.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273655,
+    "nlink": 1,
+    "size": 33557716,
+    "blocks": 65552,
+    "sha256": "67ef9287a4fbd0795f07c63d3fe88514ada5024c81cb6fe512d328e5cfe0c4b9"
+  },
+  "maindb/leaf_vlog/value-l255-000007.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273657,
+    "nlink": 1,
+    "size": 47264,
+    "blocks": 96,
+    "sha256": "c28f573af48b394241568f7090f2abed8ab0f731b89c4fc428cd5a3d9da5dbcf"
+  },
+  "maindb/leaf_vlog/value-l255-000008.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273666,
+    "nlink": 1,
+    "size": 33555137,
+    "blocks": 65544,
+    "sha256": "2fd9650f57c60bdea7f217a38cb5436d4dbe3761df69fdb9c8272d9f6c46a900"
+  },
+  "maindb/leaf_vlog/value-l255-000008.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273683,
+    "nlink": 1,
+    "size": 62952,
+    "blocks": 128,
+    "sha256": "029f085ebd03af1006e630089d7341f95f6bf3a430b49b5845cb435f0ead1f7f"
+  },
+  "maindb/leaf_vlog/value-l255-000009.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273677,
+    "nlink": 1,
+    "size": 33555495,
+    "blocks": 65552,
+    "sha256": "cca7d00777c1ebde5995d3850dbcba751ed4251d0ad4208115651c4fc7d900a1"
+  },
+  "maindb/leaf_vlog/value-l255-000009.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273685,
+    "nlink": 1,
+    "size": 61536,
+    "blocks": 128,
+    "sha256": "ccc326da572b0c3c3fc79d7f87f42430eeb7261f5cfd4e5a0c63e493ba710ceb"
+  },
+  "maindb/leaf_vlog/value-l255-000010.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273678,
+    "nlink": 1,
+    "size": 33555492,
+    "blocks": 65552,
+    "sha256": "73b2677092825e494bad9d5c1d0d546e15379569ae6f90b3d269b9fb8d46b560"
+  },
+  "maindb/leaf_vlog/value-l255-000010.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273687,
+    "nlink": 1,
+    "size": 61840,
+    "blocks": 128,
+    "sha256": "db183b142086637c7d74e9231f18a06486a1119e28577d4bc3c5524433d439d7"
+  },
+  "maindb/leaf_vlog/value-l255-000011.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273676,
+    "nlink": 1,
+    "size": 33556888,
+    "blocks": 65544,
+    "sha256": "5b3ef7014ac5824efd978ee3c6fb36709487f4f26479c5c20177cedd84b0c289"
+  },
+  "maindb/leaf_vlog/value-l255-000011.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273688,
+    "nlink": 1,
+    "size": 61408,
+    "blocks": 120,
+    "sha256": "51fc41963fa8a7e7b6f5e730c31ed93cdd7486aadecf40f0a6b8388b93aa4aef"
+  },
+  "maindb/leaf_vlog/value-l255-000012.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273675,
+    "nlink": 1,
+    "size": 33555928,
+    "blocks": 65552,
+    "sha256": "1608d02821f091a952c8386565c13036cdce11cfe2d0d145df2f88bd92188dd8"
+  },
+  "maindb/leaf_vlog/value-l255-000012.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273689,
+    "nlink": 1,
+    "size": 60472,
+    "blocks": 120,
+    "sha256": "6d92f44079cb2413896bd9f61c71d844b7ce04752407f9ca3a5da3df8da55f82"
+  },
+  "maindb/leaf_vlog/value-l255-000013.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273679,
+    "nlink": 1,
+    "size": 33554499,
+    "blocks": 65544,
+    "sha256": "bdde70b75e3ac974f6a3598132fe25a6fb85eb5a7802ebdbb7e39e32b0888281"
+  },
+  "maindb/leaf_vlog/value-l255-000013.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273681,
+    "nlink": 1,
+    "size": 83056,
+    "blocks": 168,
+    "sha256": "51fb6965574f09df7da0b4dc63af83b2f5f6f2cc1d46923a10ead8a656878fc7"
+  },
+  "maindb/leaf_vlog/value-l255-000014.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273690,
+    "nlink": 1,
+    "size": 33556099,
+    "blocks": 65552,
+    "sha256": "1767a4202b9464c4331cc897b341eb7ad790c787a35d95be2f286fe5d1ca066b"
+  },
+  "maindb/leaf_vlog/value-l255-000014.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273701,
+    "nlink": 1,
+    "size": 89928,
+    "blocks": 176,
+    "sha256": "c813b709328a798fb1f3e442d84bbc1a64de2a32dff5559c14ee3238995cee4f"
+  },
+  "maindb/leaf_vlog/value-l255-000015.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273691,
+    "nlink": 1,
+    "size": 33555700,
+    "blocks": 65544,
+    "sha256": "0cbcf75d5845bc4113e3dd605a763f25bff87b30a72e58cf62770bfdc0a4485b"
+  },
+  "maindb/leaf_vlog/value-l255-000015.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273702,
+    "nlink": 1,
+    "size": 89008,
+    "blocks": 176,
+    "sha256": "78ca33313e2948a527cabf9be2592c74ae463eccfdc8681cf501e12843a9a789"
+  },
+  "maindb/leaf_vlog/value-l255-000016.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273692,
+    "nlink": 1,
+    "size": 33556204,
+    "blocks": 65544,
+    "sha256": "a1f184f6336059bf6ffd3b98963a07fcb75dc6abf875eb88de1b4afb9ad0f1e7"
+  },
+  "maindb/leaf_vlog/value-l255-000016.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273708,
+    "nlink": 1,
+    "size": 87824,
+    "blocks": 176,
+    "sha256": "2d0278a5cde062a01173330c14fea3dd3ca86f14727ab10decdf9e3c611cd7ea"
+  },
+  "maindb/leaf_vlog/value-l255-000017.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273693,
+    "nlink": 1,
+    "size": 33554764,
+    "blocks": 65544,
+    "sha256": "afa30c34e9ebec29faa2456f21cb34e9fc556429d1804c1fa59b7ba3fc674f57"
+  },
+  "maindb/leaf_vlog/value-l255-000017.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273709,
+    "nlink": 1,
+    "size": 87664,
+    "blocks": 176,
+    "sha256": "c5e3ba0a66cb634349a6408fe5f4a31fc625e04de5ddf9b413779421d7981cf2"
+  },
+  "maindb/leaf_vlog/value-l255-000018.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273697,
+    "nlink": 1,
+    "size": 33554639,
+    "blocks": 65544,
+    "sha256": "c970efdfe654d0cf3dae745b2cb0d91eafe61ad8810861ebc5fbdb5e684c56b9"
+  },
+  "maindb/leaf_vlog/value-l255-000018.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273710,
+    "nlink": 1,
+    "size": 84632,
+    "blocks": 168,
+    "sha256": "594a5cc9aad0694cdc4b25527570d6347a6160959dac80de7afa1e81b8be4d6e"
+  },
+  "maindb/leaf_vlog/value-l255-000019.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273698,
+    "nlink": 1,
+    "size": 33555046,
+    "blocks": 65544,
+    "sha256": "f0ecb9a0b8289199bf9c41da78330a065469558d06749ada31d8c8bdf7d60b1e"
+  },
+  "maindb/leaf_vlog/value-l255-000019.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273700,
+    "nlink": 1,
+    "size": 98680,
+    "blocks": 200,
+    "sha256": "2cab447741952067feaf253fe9aa3400532b6b059c9063532e7e8c9061910d2b"
+  },
+  "maindb/leaf_vlog/value-l255-000020.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273713,
+    "nlink": 1,
+    "size": 33557063,
+    "blocks": 65544,
+    "sha256": "9ba18eb767f24b35b2bc253eac5829346e4c46438ca35f7305d96274f3150c83"
+  },
+  "maindb/leaf_vlog/value-l255-000020.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273729,
+    "nlink": 1,
+    "size": 110632,
+    "blocks": 224,
+    "sha256": "eddd7b95117720ec526f338a83f0f4970fc0bcb9b22a60a0b789733949051401"
+  },
+  "maindb/leaf_vlog/value-l255-000021.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273711,
+    "nlink": 1,
+    "size": 33557029,
+    "blocks": 65544,
+    "sha256": "2b9dbdc5bfa7b0900b20cce3a21c75da8cc16e8e68750b0d733cddf522580f30"
+  },
+  "maindb/leaf_vlog/value-l255-000021.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273730,
+    "nlink": 1,
+    "size": 111776,
+    "blocks": 224,
+    "sha256": "da53b6b2487f07e865fb7b58bc6922efb64191284a3badf3464db43ab8abd8af"
+  },
+  "maindb/leaf_vlog/value-l255-000022.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273715,
+    "nlink": 1,
+    "size": 33554590,
+    "blocks": 65544,
+    "sha256": "66025882332303887fdcbc7799a4c8b362039987672f924c54b9f65ed7c2cdd6"
+  },
+  "maindb/leaf_vlog/value-l255-000022.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273731,
+    "nlink": 1,
+    "size": 110296,
+    "blocks": 216,
+    "sha256": "872f7c073754eaba4664d41a501d96169bb343d5a4b99f632c1428fb937919ba"
+  },
+  "maindb/leaf_vlog/value-l255-000023.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273714,
+    "nlink": 1,
+    "size": 33555289,
+    "blocks": 65544,
+    "sha256": "7908c46a4028055144e29cc018e15ac7d4b44d38ec519ace98187c5c35f75d87"
+  },
+  "maindb/leaf_vlog/value-l255-000023.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273733,
+    "nlink": 1,
+    "size": 110312,
+    "blocks": 216,
+    "sha256": "04be445439355b4f3de052cb0f0c32863bebb4ae262ff836f868a88bb793f457"
+  },
+  "maindb/leaf_vlog/value-l255-000024.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273716,
+    "nlink": 1,
+    "size": 33554555,
+    "blocks": 65544,
+    "sha256": "3a500d66e0950db822036af828ed6c24d710e5c557dfe59eccc861974ab23910"
+  },
+  "maindb/leaf_vlog/value-l255-000024.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273734,
+    "nlink": 1,
+    "size": 114240,
+    "blocks": 224,
+    "sha256": "c8449faf7322f9a254cb20f24b44a65dae47f39b34e060621188de211fcc7109"
+  },
+  "maindb/leaf_vlog/value-l255-000025.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273717,
+    "nlink": 1,
+    "size": 33555342,
+    "blocks": 65544,
+    "sha256": "11414af203520dc702a219cc85fd456ddbd501d1d8d98684c06e9fd85fccce38"
+  },
+  "maindb/leaf_vlog/value-l255-000025.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273735,
+    "nlink": 1,
+    "size": 113184,
+    "blocks": 224,
+    "sha256": "c3701f2a4688428eadaa261fad03a4e6d0b2bcae1599cab982e6159dd0e8b871"
+  },
+  "maindb/leaf_vlog/value-l255-000026.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273718,
+    "nlink": 1,
+    "size": 33557061,
+    "blocks": 65544,
+    "sha256": "e893ce14691bf7a866ab8a5012b76d075ca5ebe9b96b366540ebaf83d201a122"
+  },
+  "maindb/leaf_vlog/value-l255-000026.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273736,
+    "nlink": 1,
+    "size": 29680,
+    "blocks": 64,
+    "sha256": "9f606c77896952f5d29d7903549274eaa46b1c6872183b6756dfd0b6055da491"
+  },
+  "maindb/leaf_vlog/value-l255-000027.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273719,
+    "nlink": 1,
+    "size": 33555823,
+    "blocks": 65544,
+    "sha256": "28fb36ad37d73ebc8ef111d548f10f3d78ebce070c3a11725c496ac87036bff4"
+  },
+  "maindb/leaf_vlog/value-l255-000027.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273737,
+    "nlink": 1,
+    "size": 27696,
+    "blocks": 56,
+    "sha256": "9d8734793f716b374547cb259abc60c57aeb17c75c798a138781df42bd6cb6a9"
+  },
+  "maindb/leaf_vlog/value-l255-000028.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273720,
+    "nlink": 1,
+    "size": 33554801,
+    "blocks": 65544,
+    "sha256": "33193851c348aae1e7171bd32726a155195ff57857df807f40e4617505e61499"
+  },
+  "maindb/leaf_vlog/value-l255-000028.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273738,
+    "nlink": 1,
+    "size": 20152,
+    "blocks": 40,
+    "sha256": "d7f635a9c569ac87095d2430ed932b72aad460effbc1dcf66b9515fb4bc72a0c"
+  },
+  "maindb/leaf_vlog/value-l255-000029.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273723,
+    "nlink": 1,
+    "size": 33554466,
+    "blocks": 65544,
+    "sha256": "862ff903f2810c835d21a657486e956be86bf32eb519ae8b9b8297dd471d355a"
+  },
+  "maindb/leaf_vlog/value-l255-000029.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273739,
+    "nlink": 1,
+    "size": 24440,
+    "blocks": 48,
+    "sha256": "e1e32e19fd49ebfece29a0e77c990c410062c21b531d7628b74054b07d9bbe24"
+  },
+  "maindb/leaf_vlog/value-l255-000030.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273721,
+    "nlink": 1,
+    "size": 33556826,
+    "blocks": 65544,
+    "sha256": "dc3c0bb1fae99aac9b29bbe7e552792ccc685eba287a19caae6503e7e09a90ca"
+  },
+  "maindb/leaf_vlog/value-l255-000030.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273740,
+    "nlink": 1,
+    "size": 23064,
+    "blocks": 48,
+    "sha256": "6907c2625c382bc034269c2cc63a9433e9dbbe604b2d8b3b89eaa8b3dfb92c20"
+  },
+  "maindb/leaf_vlog/value-l255-000031.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273722,
+    "nlink": 1,
+    "size": 33555414,
+    "blocks": 65544,
+    "sha256": "9c5d1acabcd502ad1bd94b17defaf621d104286fe0eaba403262f148bff5effd"
+  },
+  "maindb/leaf_vlog/value-l255-000031.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273727,
+    "nlink": 1,
+    "size": 118928,
+    "blocks": 240,
+    "sha256": "34e297742da7f8f4ba045d4fe4028a76b17ce617030d56d1c6f58cf9536ea80f"
+  },
+  "maindb/leaf_vlog/value-l255-000032.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273742,
+    "nlink": 1,
+    "size": 29368538,
+    "blocks": 57368,
+    "sha256": "e862c47601df18b9ad0496463aa951b6cbbcf7944131cb613e3e706cb6fc2f51"
+  },
+  "maindb/leaf_vlog/value-l255-000032.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273750,
+    "nlink": 1,
+    "size": 96040,
+    "blocks": 192,
+    "sha256": "78c3d4073863acd4063622f92fbe5fabd5e5ab472a05c891807fd2d02fb01ac2"
+  },
+  "maindb/leaf_vlog/value-l255-000033.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273741,
+    "nlink": 1,
+    "size": 28871385,
+    "blocks": 56392,
+    "sha256": "4c8756e83fd56c057ee68e6744ee959ba094768ce0c63780bd0d23321d84f784"
+  },
+  "maindb/leaf_vlog/value-l255-000033.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273751,
+    "nlink": 1,
+    "size": 95232,
+    "blocks": 192,
+    "sha256": "d904a0056994403ce69550cf38d086172fb053fe53c149b7933426405c021af4"
+  },
+  "maindb/leaf_vlog/value-l255-000034.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273743,
+    "nlink": 1,
+    "size": 27571636,
+    "blocks": 53856,
+    "sha256": "bb65dc89b34a7ba4ddbb715fcac5d49c6fdecb38c2b12c0b22a6c9a184bfe662"
+  },
+  "maindb/leaf_vlog/value-l255-000034.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273752,
+    "nlink": 1,
+    "size": 90424,
+    "blocks": 184,
+    "sha256": "7b6d162ae839e2a62db0a102a539e50f3dedb8ae15f1c356bc4ac753c7336346"
+  },
+  "maindb/leaf_vlog/value-l255-000035.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273744,
+    "nlink": 1,
+    "size": 26242925,
+    "blocks": 51256,
+    "sha256": "285e8cff2d58c49b0a7b4cd9ce00e7db6e88bbeda47455597f155f0b7dcf39c3"
+  },
+  "maindb/leaf_vlog/value-l255-000035.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273753,
+    "nlink": 1,
+    "size": 85936,
+    "blocks": 168,
+    "sha256": "333ee856caadc210995cb0e09cb073f1395f607e2b9c169526ef9c0086c3a63e"
+  },
+  "maindb/leaf_vlog/value-l255-000036.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273745,
+    "nlink": 1,
+    "size": 24981805,
+    "blocks": 48800,
+    "sha256": "a386ecfe1ec5c68ec4199e323c3e8affbfca3fef1eaa107cbf66fe4a237fd8ee"
+  },
+  "maindb/leaf_vlog/value-l255-000036.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273754,
+    "nlink": 1,
+    "size": 82760,
+    "blocks": 168,
+    "sha256": "a3cf8f6f3863da0f6c833d340baea5e709445c4faac28b69b2a420a7315d27c9"
+  },
+  "maindb/leaf_vlog/value-l255-000037.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273746,
+    "nlink": 1,
+    "size": 23936166,
+    "blocks": 46752,
+    "sha256": "66ca1615c9073f84ee3263634ef30275dcda9a017b6e5845c0b1524d317203e7"
+  },
+  "maindb/leaf_vlog/value-l255-000037.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273749,
+    "nlink": 1,
+    "size": 79040,
+    "blocks": 160,
+    "sha256": "a36343ec672c359dd786278abbc0745861ae56208d817b3c5af1080b12aee82d"
+  },
+  "maindb/leaf_vlog/value-l255-000038.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273756,
+    "nlink": 1,
+    "size": 33554793,
+    "blocks": 65544,
+    "sha256": "12785556fd3606dcc1eac3925a2f094d9545d431f51ebb5e12801139d4cf5aa2"
+  },
+  "maindb/leaf_vlog/value-l255-000038.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273768,
+    "nlink": 1,
+    "size": 168872,
+    "blocks": 336,
+    "sha256": "a8d1e19ec560848a657aa0fbbb8eb16593e4d60434b99e5c1f8cef8e9bcb6af7"
+  },
+  "maindb/leaf_vlog/value-l255-000039.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273757,
+    "nlink": 1,
+    "size": 33556162,
+    "blocks": 65544,
+    "sha256": "dd248d34f52f5e14f1248b60190da8e8a23794634aa025f3ef0e19577f71cf4d"
+  },
+  "maindb/leaf_vlog/value-l255-000039.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273769,
+    "nlink": 1,
+    "size": 168856,
+    "blocks": 336,
+    "sha256": "993243857caecaf7aaedb86d3e5216225e21d6e20014eb03558ae1f2623ffb31"
+  },
+  "maindb/leaf_vlog/value-l255-000040.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273758,
+    "nlink": 1,
+    "size": 33554750,
+    "blocks": 65544,
+    "sha256": "87e5bc1b98279f3d59000da6ce1d2343059840be2e368021b47dd6fe40ad0bf7"
+  },
+  "maindb/leaf_vlog/value-l255-000040.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273770,
+    "nlink": 1,
+    "size": 173216,
+    "blocks": 344,
+    "sha256": "972359ad2c0feffa81faf53778559bd98f7c00dc4c539a8ccb2d0dbb7b5ba756"
+  },
+  "maindb/leaf_vlog/value-l255-000041.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273759,
+    "nlink": 1,
+    "size": 33554556,
+    "blocks": 65544,
+    "sha256": "253d4f307d282f66fd3ca28e63201dbbc569ef765487432a9fb323d24d4c20b7"
+  },
+  "maindb/leaf_vlog/value-l255-000041.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273771,
+    "nlink": 1,
+    "size": 179568,
+    "blocks": 352,
+    "sha256": "f8d97fb854fd1fef90986a012c12b83e275efc6797010ba6b811f844abdd8443"
+  },
+  "maindb/leaf_vlog/value-l255-000042.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273760,
+    "nlink": 1,
+    "size": 33555733,
+    "blocks": 65544,
+    "sha256": "2c70ad7168cff471f756268bb90695f1468da1acf4fbdbd52f9f6adbc5e102ae"
+  },
+  "maindb/leaf_vlog/value-l255-000042.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273772,
+    "nlink": 1,
+    "size": 178144,
+    "blocks": 352,
+    "sha256": "79993f2e00cb92d7105d857dd009f8317d7992229588f6ca3e1b45311ab2974e"
+  },
+  "maindb/leaf_vlog/value-l255-000043.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273761,
+    "nlink": 1,
+    "size": 33554714,
+    "blocks": 65544,
+    "sha256": "954ad0d72792b4df50fce4ac3954b6caf4003d9cc2a14270899ca7fb6a10e5ff"
+  },
+  "maindb/leaf_vlog/value-l255-000043.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273773,
+    "nlink": 1,
+    "size": 169880,
+    "blocks": 336,
+    "sha256": "5c736df483ffd268c161bfcdbfb8c4c4b1c635f0e37b20604fb8285869b483df"
+  },
+  "maindb/leaf_vlog/value-l255-000044.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273762,
+    "nlink": 1,
+    "size": 33556527,
+    "blocks": 65544,
+    "sha256": "9036bd5fd143db15a25bcddf3fa11c8924972afa4edca075d5a9522b7eaa186f"
+  },
+  "maindb/leaf_vlog/value-l255-000044.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273774,
+    "nlink": 1,
+    "size": 151832,
+    "blocks": 304,
+    "sha256": "53733790fb2a3fdb007dce0656c20131ded7e3217a1d27b677ef3abcb2de5a9e"
+  },
+  "maindb/leaf_vlog/value-l255-000045.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273763,
+    "nlink": 1,
+    "size": 33554573,
+    "blocks": 65544,
+    "sha256": "8d7fafed65223b01f75f8262ba6d7f8b3022dd0142f01a0cb31d66a97c93c002"
+  },
+  "maindb/leaf_vlog/value-l255-000045.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273775,
+    "nlink": 1,
+    "size": 145776,
+    "blocks": 288,
+    "sha256": "70b1b3ac7a023beb59861bbe792185d01a729afec0a35635972e033cc6c3ab65"
+  },
+  "maindb/leaf_vlog/value-l255-000046.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273764,
+    "nlink": 1,
+    "size": 33555201,
+    "blocks": 65544,
+    "sha256": "a966f329812a0dbb433c91fb16856581f4ef610a1626331b90d03341822c5aa4"
+  },
+  "maindb/leaf_vlog/value-l255-000046.log.lenidx": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273777,
+    "nlink": 1,
+    "size": 145128,
+    "blocks": 288,
+    "sha256": "d5f4bfc606ff16b1bf6b51f786d43163c0c3033855ebb6305142cb602a0447cf"
+  },
+  "maindb/leaf_vlog/value-l255-000047.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273765,
+    "nlink": 1,
+    "size": 19751830,
+    "blocks": 38584,
+    "sha256": "ec0fdcbb503a37e4bb0c32651ce9283667e7659e945a72c5cd0ff9d3f0e68602"
+  },
+  "maindb/value_vlog": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273633,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb/value_vlog/value-l0-000001.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273634,
+    "nlink": 1,
+    "size": 268430345,
+    "blocks": 524288,
+    "sha256": "b351cce6a59326a18cbeccc03a252a45025f9a5b243b0feaca59f2b3605dc0b5"
+  },
+  "maindb/value_vlog/value-l0-000002.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273637,
+    "nlink": 1,
+    "size": 82363098,
+    "blocks": 160880,
+    "sha256": "b08903ea496c37a98b1f927df3481286970e1c659e2455519c9a08b364b9e815"
+  },
+  "maindb/value_vlog/value-l1-000001.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273635,
+    "nlink": 1,
+    "size": 268424643,
+    "blocks": 524280,
+    "sha256": "616dbe426525c1dd436b8ae1cd0f04afa75aec8470e3333045e9ade0adbccc41"
+  },
+  "maindb/value_vlog/value-l1-000002.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273638,
+    "nlink": 1,
+    "size": 80559671,
+    "blocks": 157344,
+    "sha256": "a5bfd127a84e25da230569328563814696bee62e108efdb657950b4c142e5af1"
+  },
+  "maindb/value_vlog/value-l2-000001.log": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273636,
+    "nlink": 1,
+    "size": 352223934,
+    "blocks": 687952,
+    "sha256": "fe199e117b157827bbee833731cc21d33b3c3215abad91fb1afe9e75d6dc5493"
+  },
+  "maindb/vlog_health.json": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273958,
+    "nlink": 1,
+    "size": 8025,
+    "blocks": 16,
+    "sha256": "4d74095c97841d3aa2607fb71d862b872dbd9d1c327eed1d87560d238e055638"
+  },
+  "maindb/vlog_ref_counts.meta": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273959,
+    "nlink": 1,
+    "size": 88,
+    "blocks": 8,
+    "sha256": "89738f7ac2911a95c2c2b9ef08393fba73b3bf7b62006dfe020ee3243989375e"
+  },
+  "maindb/wal": {
+    "kind": "dir",
+    "dev": 66305,
+    "ino": 108273627,
+    "nlink": 2,
+    "size": 4096,
+    "blocks": 8,
+    "sha256": null
+  },
+  "maindb/wal/command-wal-journal-owner.lock": {
+    "kind": "file",
+    "dev": 66305,
+    "ino": 108273630,
+    "nlink": 1,
+    "size": 12,
+    "blocks": 8,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88"
+  }
+}

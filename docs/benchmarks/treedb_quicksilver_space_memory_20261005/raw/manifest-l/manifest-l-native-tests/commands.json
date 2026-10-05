@@ -1,0 +1,65 @@
+[
+  {
+    "name": "red",
+    "command": [
+      "go",
+      "test",
+      "-p",
+      "1",
+      "-overlay",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/manifest-l-native-tests/red-overlay.json",
+      "-run",
+      "^TestLeafGenerationGC_(PrunePreservesPublishedManifest|DeletesFullyDeadGeneration|RetriesDeletedGenerationFileAfterReopen)$",
+      "./TreeDB/db",
+      "-count=1"
+    ],
+    "expected_rc": 1,
+    "rc": 1,
+    "started": 1791194940.4277787,
+    "finished": 1791194962.6689785,
+    "output_sha256": "1f9dbfe5fe2efb6dabd4f0d6cfc35cc6936317230a173d9e7ddf218421dfbe13",
+    "source_head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+    "manifest_sha256": "f9d69ac2a0c34c30714d599747d773ee838864f8362d9507df46496747e0f99d"
+  },
+  {
+    "name": "green",
+    "command": [
+      "go",
+      "test",
+      "-p",
+      "1",
+      "-run",
+      "^(TestLeafGeneration(GC|Pack)|TestCompactStorage|TestStableResourceManifest|TestValueLogGC|TestDurableRootSnapshotRebind)",
+      "./TreeDB/db",
+      "-count=1"
+    ],
+    "expected_rc": 0,
+    "rc": 0,
+    "started": 1791194962.6692088,
+    "finished": 1791195015.2011638,
+    "output_sha256": "106d091371ac5e6edafbeab191bbd74bd1435da93c4c11ca51df7fbbf5e30cea",
+    "source_head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+    "manifest_sha256": "f9d69ac2a0c34c30714d599747d773ee838864f8362d9507df46496747e0f99d"
+  },
+  {
+    "name": "race",
+    "command": [
+      "go",
+      "test",
+      "-p",
+      "1",
+      "-race",
+      "-run",
+      "^TestLeafGenerationGC_(PrunePreservesPublishedManifest|DeletesFullyDeadGeneration|RetriesDeletedGenerationFileAfterReopen|ProtectedRootIDsKeepDetachedRootLive|RecoverableRootsKeepOldGenerationLive|SnapshotPinsKeepDetachedGenerationLive)",
+      "./TreeDB/db",
+      "-count=1"
+    ],
+    "expected_rc": 0,
+    "rc": 0,
+    "started": 1791195015.201419,
+    "finished": 1791195072.582054,
+    "output_sha256": "33fceea0b4e0fea253d85eedc403d08a6987325479277deba28f170699542cf6",
+    "source_head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+    "manifest_sha256": "f9d69ac2a0c34c30714d599747d773ee838864f8362d9507df46496747e0f99d"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "diagnostic_only": true,
+  "change": "existing background index-vacuum interval only; exact public cached wrapper/binaries/read loops retained",
+  "original_failed_db_preserved": true,
+  "substrate": "new owned clone of post-failure state, existing R2 explicit-restore rebind before seal",
+  "order": [
+    "1-baseline",
+    "1-candidate",
+    "2-candidate",
+    "2-baseline",
+    "3-baseline",
+    "3-candidate"
+  ],
+  "public_acceptance": "HELD; this diagnostic does not erase default results",
+  "guard": "unchanged strict original resource byte/inode guard; stop on first violation; no additional exceptions",
+  "caller_parent_sha256": "0c999017c68467dcad6e611b6c9ead0894b2b1a4fee4f312ef72e43a21c8d014",
+  "caller_sha256": "069f143cd155ecfc2fa5cb4f21ba2273d79cc2e80c8acfb2594b7561b60f5057",
+  "guard_method_sha256": "85a03cc1fcba22fd49f7ee8d5c65964177e2f5e48c2ef37a5b4e76c7a340bd8f",
+  "validation": "all three replacements exactly once; Python AST syntax; existing guard eight adversarial checks previously pass"
+}

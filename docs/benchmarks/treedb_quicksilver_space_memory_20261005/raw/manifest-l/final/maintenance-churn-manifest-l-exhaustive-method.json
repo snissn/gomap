@@ -1,0 +1,16 @@
+{
+  "method": "maintenance-churn-manifest-l-exhaustive.py",
+  "sha256": "cb07739da6a4f21c42bb584d503553beece611088b037aad7697541696590de4",
+  "parent": "maintenance-churn-manifest-l-full.py",
+  "parent_sha256": "6cbc939d7a616c00f214e71e449bbede2150c5a5d82ffba1e044da32ac157b5d",
+  "only_change": "one supported exhaustive pass instead of full",
+  "input": "churn-3m-defaults-manifest-l-input",
+  "starting_state": "same explicit restored copy after successful Full and complete public oracle",
+  "batch_size": 8192,
+  "leaf_pack_max_passes": 64,
+  "pgroup_timeout_seconds": 1800,
+  "max_passes": 1,
+  "pre_and_post_all_values_misses": true,
+  "no_retries": true,
+  "no_byte_minimum_or_matched_speedup_claim": true
+}

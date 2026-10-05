@@ -1,0 +1,155 @@
+{
+  "headers": {
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/advanced_options.h": "22468c219849dc1f17d1f4b59911e27579c4fa53e8f9195e578b2adc9b1e55d4",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/c.h": "78a9b2f2f059fd9586cb4917963add9b9a5283e950540dd9b102c9f5206ac395",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/cache.h": "7d3edcb27ea94febb187a9c34ebddddeb10cc8fa4680d3005ae4c71eb1f4c3a9",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/cleanable.h": "52495cb12b1aa97c52aac2f51fd700531ee337bb00c2bd0094a2cf1a587c5c27",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/compaction_filter.h": "17d6eb00608377da6abeb3342cd72272e8762d1015898276826ab32773d89b7f",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/compaction_job_stats.h": "857e84afd325a5596644211f0a3ae4333d9f5ec9ac20a3adb8392eb42f8d3234",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/comparator.h": "0a6ede1d6dbd45444ec086d005426df63c82b636473e0ef8f28b3a3dbb5c50a4",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/concurrent_task_limiter.h": "6ec61dbdde9b85b2d214bcfdd1383b63a2e9615c448f624fc658aa53f69f9f8a",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/convenience.h": "97c64bce6b29c7920f316dbbb38cc2ffd59861126e73ee40f44cef9229120873",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/db.h": "614a4c52cc07c9d80c2c2b878fed6cdd16d3b9743ede7724659deaee246d4310",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/db_bench_tool.h": "8d27b2c141f2a632faa78f203dd8f34304dd509e82acce7483a1a47e6e0e9ed0",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/db_dump_tool.h": "c59dfa62b2b8fc54964ac8aab11297dd32660f2dc1e82317f0c4c40ec73ebbc8",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/db_stress_tool.h": "dbd8e143a2232ad3a225dce1a2d7b50240257ff89dad69e70198e311e0f0ab84",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/env.h": "bc1d46fd7cbbbba48903021e0deb52b2e8e717045d9a4d4e62c65c842f918dc7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/env_encryption.h": "c2f96f8916c81cf918d93e3f259c2c1c946d39f65a43998941565fa2054c329c",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/experimental.h": "9c5d95d271e494d2513f8d98bca26e1ce334f2384e35780df412d1f17c529840",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/file_checksum.h": "b8c69db795fdcac83c89afb26869d88e6bfc0787046a5bd67b70ac4dea6fe7fc",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/file_system.h": "34883064831f3f14a0813261cd711748addb5c7e732e7a639409f39ff601b58b",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/filter_policy.h": "9b6c0e8228517c1c98a8b54a6647a8967e8cc9232d260be1e0d36dd51d9fd407",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/flush_block_policy.h": "a7fd7c89b31765670338996134167d351a910a8b0ca86ee10b196797ec284c0e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/io_status.h": "48aa28e61d6949e9f316b407079028bf7c4b83b3c9f3eafc1e6fcaf8cc80785c",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/iostats_context.h": "0ce578e79862c8fc2bc78caebf5cb82eee1d98b43b568c628646c2aee862d1d6",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/iterator.h": "ba39f3431b4403449235b5898400cb933b12262afdc4675d4157df1bc7cbf1d5",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/ldb_tool.h": "84c0cd402ee9a53f0bb61fc004f911af5513c37d8936a92f7005702d3926be03",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/listener.h": "b1e5f97256b9d666fffdcdf1c5b3454a3b4030eb6d378b4867618789c16cac13",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/memory_allocator.h": "6468ce949c0df94b50bd5b749be3c44168073bcbb0e1074ae23b73fe8e5bd192",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/memtablerep.h": "5fe7eb992635a17acb96fd18b36d3d1c6c2cd4d6f901de55e8b0925a8cbeb7ac",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/merge_operator.h": "1839b865dd3d936c89a0dace31206eee95bc99e95734faf3a49c239c4d780b86",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/metadata.h": "f4357ed2a099ee6f3c718c9476ff2464c4144107e9a64dc4f8781e2cc589272b",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/options.h": "c57293e10dc7bfc864f074915524ecb2c834dcd15b5d72db177a7f1614e14e4e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/perf_context.h": "7ff765034a322ff38e80367008dddbfc7b728072724e8bb7666a13d9696a687b",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/perf_level.h": "88d7752ec3de0356b612e64265b6975fd59934b0c587449af9b167642ca062b8",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/persistent_cache.h": "5fd4cb6c4c46905c7014c2dd95f0f07a0cee71e54e18cc90abde9f0e4c0886d6",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/rate_limiter.h": "069b38c62c99901eae3e14855abf8913368bf3bd692484dad7981c61ccf80974",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/rocksdb_namespace.h": "79fd1acd86af4e53b3fd4674bc58f430e784db1a515d8826bdd5d52c71c007f7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/slice.h": "877e378b39c48e47af619a954e25be5e88dce3f8505419ec9a34081fc7470a7f",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/slice_transform.h": "bfd3b5d26aa15ea68c8c246f52f1088541ce715d04ac7aa0d56e1c047c56e2d7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/snapshot.h": "d67835ec1c6aa0666234eb6d7a2e69b040cb5a657985ce8af4b17b45cc0538e7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/sst_dump_tool.h": "351e4da599d0f3e515d2eeb6ada99716d27da1daee7c8c517787edc2825ba434",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/sst_file_manager.h": "33e7fc7b69de2c0352597a2ddde1631ad98c3c88d21a8e579e3c80acfd7a4432",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/sst_file_reader.h": "3cb4b7021f339ee5c797963c2f67ac043e15e437640cd66707bbfbb84c34f414",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/sst_file_writer.h": "3c3d0cc2fcb71a8c2d5106c33f58510af3407cdba7ee9d995ebca4ded4e33f39",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/statistics.h": "6c0eee6acc78c8c09d5ee69db716b328a2bfaa50b57b9886c9c7e045e68cba55",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/stats_history.h": "33dd48136d123717d394a48e391d4ced8ca241f91d13ea664917e49669af420b",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/status.h": "6480a212aeb1e1ea757496f2548711d2f17905c7f9682e75d66a716542afbc25",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/table.h": "2b722a091b8743df6d6b2beb68073d39bed732d8432e6e0968150ac98cc5c559",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/table_properties.h": "e13e40faf5df61a0ee26bf1eb5c643a00a8777989349e47523c9a8c9ddcf43ac",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/thread_status.h": "b431ccf1c643ea751fd1de2e960ecb5eea79d49570929212dcbbf03d24fcac97",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/threadpool.h": "26d8cadfab1e2a6558e518445dc3320d5b1396b48b08391c24dd7f939acf1ce0",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/trace_reader_writer.h": "8f43d1caa34b18032234d0cc1ba599d560c6d94f28f69ba2424423cb7c7c14bf",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/transaction_log.h": "2f20cd0f7e25bba4ddf897f05d47e2c2a867fff57f3cca0e9d23a0d04f342cb8",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/types.h": "90c372b78672d1d15fbdf96b420c7714407a2764d65f28ea2d484c34f5a0275e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/universal_compaction.h": "6cbbbae5429673fe888a361f18e204021ced269337e77f66794df3a16eb5840e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/backupable_db.h": "24a95d04293d6dc82df60a2f47982c42fb7ac2d208d19eee7b9c80f6d74413e7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/checkpoint.h": "bd1bb71fcae11cd891ff71e71cfdf6594101ca5b1bae6f3e42b2c52ac986b2ca",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/convenience.h": "c5092ef12f61e4a8719d25fbdfa6cd11fb7d01ef701c66331376499cf1a698fd",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/db_ttl.h": "f6996efab2960c097ad6c73dc33d8d57590e6f0e81a7d317d5648ac1de2822d7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/debug.h": "961c606a452e696000cac8a69a5f0dbce9749a5e9dd049e7f590498b709966ea",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/env_librados.h": "b3e160d97bd4519b3fc33279dcfa9a1e6d7aa8d0976a2439d3eeb5f3b34efd19",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/env_mirror.h": "13d5d9ffc995b522f294f8fecf3c520a561e2e404b7260cc18eb8dda3bd77ea0",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/info_log_finder.h": "8782ea18fab80cfc65cfbb05db79a72a206c3d3a3a9ae3e191797353f0c95b2a",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/ldb_cmd.h": "f20e494751e73aad22c0f671576a07ca14376377cc8b7614a881ffa200e37e14",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/ldb_cmd_execute_result.h": "aa2d299096887ef9c49ca17fbe63edd358c2de846656354462e8babf385e307d",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/leveldb_options.h": "e397a1eca8f716249cb33838ee4197dc6df1b9ad0a4579525eef3cb50bb1f6b0",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/lua/rocks_lua_custom_library.h": "b0eb80e7e6ed1999547dcce2b59db93006a874a751bf84a1d93e803e50fe7421",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/lua/rocks_lua_util.h": "bb9d4a7677c30f6998380bba602bb20f875692221fc6b36550dce78abc960a3e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/memory_util.h": "062f3a4c6e3db7aa2759ffcc0f4ced00d86f950184b72ddca6a4e17f30f10d10",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/object_registry.h": "b2d8e45bb82d5ab470048cb4f5fe8cd7395b1afbc784d88f59324ade38a74b11",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/optimistic_transaction_db.h": "b55fbac235ce513c0036dbba6d08d61fec56377ca621cb369ec38a1a929204ee",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/option_change_migration.h": "64f81e6b583560ddd4fba1abb2508a92cac0a947e55df0fd5950c0905a4eca7e",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/options_util.h": "3c20e22dbcfe5543d2f1164e383596b81bdd8562c52e02b5bcfbb59dba088f9a",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/sim_cache.h": "e4dc68ee66ceaf97cefd2c1f7547f99c308fd05752dbd75efefeff0f254cf5a5",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/stackable_db.h": "5ca141e0c33b6eb6409c39d1f31388019bf2788f49a433915d7eb098561d246d",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/table_properties_collectors.h": "11d5f6e70efe13627a31427c0233f037d7c7d34b718d0d5fed5ce98c67a18b31",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/transaction.h": "131577fac8557943b09902af597363737d49a01b86c3d6c7b9a106fc5bb865d0",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/transaction_db.h": "f7e10d5d8c3240ddc99a981f114d56cb05b5de63d5aee88254e5c5d5464db84b",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/transaction_db_mutex.h": "2c1fe071788b49513b30b395bb6c0ad2cc3a7beaf72fb4d61c168c45090b86ca",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/utility_db.h": "df1ca2cb0826af05ebe7404486d5a79d7f09600c44dcc23c6e5c5fa9cff1d4d2",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/utilities/write_batch_with_index.h": "0c38ed0eb3f8e7da10ca7a9dbfc38bd8198c14a4395b8ed93110dd4f674ad881",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/version.h": "b15b68688045123bfd2073229c37951b45da13558d13738938ee953a5ba7b8e7",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/wal_filter.h": "7ea14258f1f598c72f75556d3ef99e521c2c390dd2a64efe75ae5d9429e86a6d",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/write_batch.h": "9d4039bb50bd317e02003ab716bb98710310425554e3bac64fe7f4be3bfee40d",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/write_batch_base.h": "f8e30e08a5124c35f78294d87b6abe2184f4a3465730f23f776d10af5e5c9557",
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include/rocksdb/write_buffer_manager.h": "66caab5b6e0fc860c52f24beb4cf4dacbd129ba9d8703ba8d5f86760d6d173bf"
+  },
+  "ldd": "\tlinux-vdso.so.1 (0x00007fff00703000)\n\tlibrocksdb.so.6.11 => /mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/librocksdb.so.6.11 (0x00007e5194000000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007e5193c00000)\n\tlibpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007e519467b000)\n\tlibrt.so.1 => /lib/x86_64-linux-gnu/librt.so.1 (0x00007e5194676000)\n\tlibsnappy.so.1 => /lib/x86_64-linux-gnu/libsnappy.so.1 (0x00007e519466a000)\n\tlibgflags.so.2.2 => /mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2 (0x00007e5194641000)\n\tlibz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007e5193fe4000)\n\tlibbz2.so.1.0 => /lib/x86_64-linux-gnu/libbz2.so.1.0 (0x00007e5193fd1000)\n\tliblz4.so.1 => /lib/x86_64-linux-gnu/liblz4.so.1 (0x00007e5193fb1000)\n\tlibzstd.so.1 => /lib/x86_64-linux-gnu/libzstd.so.1 (0x00007e5193ee2000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007e519463a000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007e5193800000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007e5193b19000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007e5193ec2000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007e51946ac000)\n",
+  "libraries": {
+    "/lib/x86_64-linux-gnu/libbz2.so.1.0": {
+      "bytes": 74848,
+      "sha256": "54d16979912ab62282350dd2dc5dceb5b73b13e27bb02792087aff752d16f6e9"
+    },
+    "/lib/x86_64-linux-gnu/libc.so.6": {
+      "bytes": 2220400,
+      "sha256": "b2cf6c33b74d2f22543b7a469a75b538911e690f769d0b238843a49465b83793"
+    },
+    "/lib/x86_64-linux-gnu/libdl.so.2": {
+      "bytes": 14432,
+      "sha256": "3eaaa4aefd9c28f3867c96a427c3cbec9191cb61c4c9d0a2cb4a765d66064499"
+    },
+    "/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "bytes": 125488,
+      "sha256": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a"
+    },
+    "/lib/x86_64-linux-gnu/liblz4.so.1": {
+      "bytes": 125152,
+      "sha256": "65f47a3dc2cec5f938379b7b625f0621657bf1254551895d22462c6a204cbad8"
+    },
+    "/lib/x86_64-linux-gnu/libm.so.6": {
+      "bytes": 940560,
+      "sha256": "3dd5511ae94785c9f921429b0f2b2f7aabb461b6f0e6de6dfdbef15f24bdfee6"
+    },
+    "/lib/x86_64-linux-gnu/libpthread.so.0": {
+      "bytes": 21448,
+      "sha256": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78"
+    },
+    "/lib/x86_64-linux-gnu/librt.so.1": {
+      "bytes": 14664,
+      "sha256": "5f20d34fb3bb4d84b4edeb6ca11fa5b48c705207253741619acab7cc758185fb"
+    },
+    "/lib/x86_64-linux-gnu/libsnappy.so.1": {
+      "bytes": 35184,
+      "sha256": "0b6e39db37cdefb38b1b874a72d60d13159665fe0f02d64cd72f41e11b03a48a"
+    },
+    "/lib/x86_64-linux-gnu/libstdc++.so.6": {
+      "bytes": 2260296,
+      "sha256": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128"
+    },
+    "/lib/x86_64-linux-gnu/libz.so.1": {
+      "bytes": 108936,
+      "sha256": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370"
+    },
+    "/lib/x86_64-linux-gnu/libzstd.so.1": {
+      "bytes": 841808,
+      "sha256": "5df4f4df42d76270bb6981fabc7c1fdccd8ad28a23d84d67f73203fb3f537667"
+    },
+    "/lib64/ld-linux-x86-64.so.2": {
+      "bytes": 240936,
+      "sha256": "41daf7836f7fce21a40ca63a00c5caf21b05a35a76ccc075d86f1716212cdf01"
+    },
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/librocksdb.so.6.11": {
+      "bytes": 6461040,
+      "sha256": "dcd497d9c4a635f8dfe0edff3e3690acb81fd85ac4fbdb1af756a0c3e9a63a2f"
+    },
+    "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2": {
+      "bytes": 162808,
+      "sha256": "f3c7dc509e8da8f780666a7c74c92b98af95aecd26d3ef0f3e36470c7490e400"
+    }
+  },
+  "versions": {
+    "LMDB": "0.9.19 bundled bmatsuo/lmdb-go v1.8.0",
+    "RocksDB": "6.11.4 Ubuntu 6.11.4-3"
+  }
+}

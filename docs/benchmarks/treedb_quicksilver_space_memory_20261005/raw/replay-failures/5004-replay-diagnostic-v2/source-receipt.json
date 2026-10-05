@@ -1,0 +1,44 @@
+{
+  "baseline": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+  "candidate": "90219d64ced3539accff5d0e50d9b5fa6424ed20",
+  "all_inspected_production_sources_identical": true,
+  "source_sha256": {
+    "TreeDB/internal/rootpublication/resource_identity_unix.go": "fe262e188105f1eccb7004152c1d115084f6fd1a8e2707e46ee64f0940aa494d",
+    "TreeDB/internal/rootpublication/resource_token.go": "4ba704c69d9ddcc7cb32985f9b56df3e39bbae2f551bb2f1ffc3a55c3b742243",
+    "TreeDB/internal/rootpublication/resource_inventory.go": "5e324594a137f7622130ace448d0227f124c2186552dcce43b5d6c7f1f6b4ae1",
+    "TreeDB/db/stable_resource.go": "b3e781111d25d63c1fe2d20229e1949eab6a2c2f719b70680a8b649786039ded",
+    "TreeDB/internal/dictdb/resource_capture.go": "2333c6e26ee63e1d6f09169bbc0bfa46f68c9578f43cc1c71367a0274fe20c95",
+    "TreeDB/internal/templatedb/resource_capture.go": "afb12a8825b30717285e9c44426b016ac5a4caa7f6e8c223e4fa33b88cd5246a",
+    "TreeDB/db/db.go": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+    "TreeDB/db/format_config.go": "ffd7310820a6b4ec82aef893edf22b873d60293334ba9424897673440810a09b",
+    "TreeDB/db/vlog_gc_incremental.go": "42fff00679e31e8a9021eb4d232087965712eec219b230283b3433c1c813acca",
+    "TreeDB/internal/atomicfile/atomicfile.go": "04291df3e0fdd62e0390b60bd25b7fa163e97268c68f9105cd208899f6d2cd45",
+    "TreeDB/public.go": "49dc6bb7e48fb1466fe4e35716cd85ea071fa0298093c7ecceb27ae45047f2f4",
+    "TreeDB/caching/db.go": "1cd808f8fd010646a51b3dfc9f9dc3f79100f56e052e84abd142aa055c6a3d12",
+    "TreeDB/internal/lockfile/lockfile.go": "919498e84d06241848b3d5b66cd6e18598a63753b35a2817afd86790e32e8963",
+    "TreeDB/db/index_swap.go": "fad827b3c635171f6fd886e061c0aeff5c3ccba1dbd4185a8382bc501dff7fb8",
+    "TreeDB/db/leaf_generation_pack.go": "9624eba9aaf40be68c87dd02620fd74165688087c43bcaca1a7e402df5082275",
+    "TreeDB/pager/pager.go": "d9dc2ee6e349b79b22a6bfe35067bf68fe4e58ed2bd8bf5f8685976c6df9cdab"
+  },
+  "format_exception_allowlist": [
+    "maindb/format.json",
+    "dictdb/format.json",
+    "templatedb/format.json"
+  ],
+  "policy": "Only existing regular format files at seal; identity replacement permitted, existence/membership/logical bytes not exempt. Every original directory and all other original files retain dev+ino. Hold original resource handles across child lifetime and reject unlinked pins.",
+  "exception_justification": [
+    "ordinary writable Open always atomically replaces format.json",
+    "canonical stable resource reachability inventory has no format document dependency",
+    "snapshot stable index capture forces exact pager index.db handle/path",
+    "dict/template stable captures bind only index and pointed value-log files in generic workload",
+    "format document path is used by open policy and required-feature gates, never generic root resource registration"
+  ],
+  "scope": "Exact frozen H/M generic Quicksilver fixture; not a global auxiliary-file waiver",
+  "retirement_risks": [
+    "Open/Close may unlink covered original WAL",
+    "Open may clean staging/swap artifacts",
+    "Close command-WAL checkpoint may change index bytes",
+    "any such original object retirement/replacement other than format files rejects v2"
+  ],
+  "validation": "Python-only synthetic guard/reset checks PASS; no Go/native runs"
+}
