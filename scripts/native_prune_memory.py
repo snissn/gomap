@@ -9,6 +9,10 @@ This separate contract does not qualify the native-prune benchmark schema.
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 CONTRACT = 'gomap-native-memory-v1'
+BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH')
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def require(condition, message):
     if not condition:
@@ -91,6 +95,13 @@ def validate_packet(out, root=None):
     labels=receipt.get('labels');require(isinstance(labels,dict) and all(isinstance(labels.get(k),str) and labels[k] for k in ('heap','rss','hwm','retirement_bytes','allocations','reader','output','control')),'missing measurement scope labels')
     require(receipt['contract']==CONTRACT and receipt['source_digest']==digest(source) and receipt['source_stable'] is True,'invalid source receipt')
     if root is not None:same_source(source,bindings(root))
+    capture=pathlib.Path(receipt['capture_out']);require(capture.is_absolute(),'capture directory')
+    for file,key in [('native-memory.test','binary_sha256'),('build-command.json','build_command_sha256'),('build.log','build_log_sha256')]:
+        require(sha(out/file)==receipt[key],'missing/drifted build artifact '+file)
+    build=json.loads((out/'build-command.json').read_text());go=receipt['go'];env=receipt['build_env']
+    require(build['go']==go and type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['version']) is str and go['version'].startswith('go version ') and type(go['sha256']) is str and len(go['sha256'])==64 and all(c in '0123456789abcdef' for c in go['sha256']),'Go identity')
+    require(build['env']==env and all(k in env for k in BUILD_KEYS) and all(env[k]==v for k,v in {'CGO_ENABLED':'1','GOFLAGS':'-p=2','GOWORK':'off','GOTOOLCHAIN':'local','GOROOT':None}.items()),'controlled build environment')
+    require(build['cwd']==receipt['source_root'] and build['argv']==[go['path'],'test','-c']+(['-race'] if receipt['race'] else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(capture/'native-memory.test'),'./TreeDB/mvcc'],'build invocation')
     require(receipt.get('errors') == [],'receipt errors')
     cases=receipt['cases'];require(isinstance(cases,list) and cases,'missing cases')
     n=receipt['n']
@@ -103,6 +114,11 @@ def validate_packet(out, root=None):
         raw=out/c['raw'];require(raw.is_file() and hashlib.sha256(raw.read_bytes()).hexdigest()==c['raw_sha256'],'missing/drifted raw log')
         result=out/c['result'];require(result.is_file() and hashlib.sha256(result.read_bytes()).hexdigest()==c['result_sha256'],'missing/drifted result')
         require(c['exit_code']==0 and c['source_digest_before']==c['source_digest_after']==receipt['source_digest'],'failed/drifted process')
+        require(type(c['command']) is str and pathlib.Path(c['command']).name==c['command'] and sha(out/c['command'])==c['command_sha256'],'missing/drifted case command')
+        require(c['binary_before_sha256']==c['binary_after_sha256']==receipt['binary_sha256'],'case binary stability')
+        command=json.loads((out/c['command']).read_text())
+        require(command['cwd']==build['cwd'] and command['argv']==[str(capture/'native-memory.test'),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v'],'case invocation')
+        require(command['env']==dict(env,MVCC_MEMORY_RESULT=str(capture/c['result']),MVCC_MEMORY_N=str(c['n']),MVCC_MEMORY_MODE=c['mode'],MVCC_MEMORY_PINNED=str(int(c['pinned']))),'case environment')
         validate_case(json.loads(result.read_text()),c['n'],c['mode'],c['pinned'])
     require(len({c['result'] for c in cases})==len(cases),'case overwritten')
     return receipt
@@ -140,13 +156,14 @@ def self_test(out):
     # Parser fixtures copy the complete real packet; measurements stay untouched.
     with tempfile.TemporaryDirectory(prefix='native-memory-validator-') as tmp:
         tmp=pathlib.Path(tmp)
-        for name in {'source-bindings.json'} | {c[k] for c in r['cases'] for k in ('raw','result')}:
+        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors'):
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env'):
             original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
             shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
+            shutil.copyfile(out/witness_case['command'],tmp/witness_case['command']);shutil.copyfile(out/'build-command.json',tmp/'build-command.json')
             test_receipt=json.loads(json.dumps(r));case=test_receipt['cases'][witness_index]
             if fault=='missing':(tmp/case['result']).unlink()
             elif fault=='malformed':
@@ -161,6 +178,19 @@ def self_test(out):
             elif fault=='invalid-pinned':case['pinned']=1
             elif fault=='invalid-mode':case['mode']=None
             elif fault=='receipt-errors':test_receipt['errors']=['rejected']
+            elif fault=='binary-drift':test_receipt['binary_sha256']='0'*64
+            elif fault=='build-command-drift':test_receipt['build_command_sha256']='0'*64
+            elif fault=='build-log-drift':test_receipt['build_log_sha256']='0'*64
+            elif fault=='case-command-drift':case['command_sha256']='0'*64
+            elif fault=='binary-stability':case['binary_after_sha256']='0'*64
+            elif fault=='build-argv':
+                altered=json.loads((tmp/'build-command.json').read_text());altered['argv'].append('-invalid')
+                (tmp/'build-command.json').write_text(json.dumps(altered));test_receipt['build_command_sha256']=sha(tmp/'build-command.json')
+            elif fault in ('case-argv','case-env'):
+                altered=json.loads((tmp/case['command']).read_text())
+                if fault=='case-argv':altered['argv'].append('-invalid')
+                else:altered['env']['MVCC_MEMORY_PINNED']='0' if case['pinned'] else '1'
+                (tmp/case['command']).write_text(json.dumps(altered));case['command_sha256']=sha(tmp/case['command'])
             else:
                 # Truthful fixture checksums force refusal at the custody check.
                 mutated=json.loads(original);cut=next(s for s in mutated['cuts'] if s['name']=='partial_private_output');target=cut['State']
@@ -179,32 +209,40 @@ def run(args):
     root=args.root.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
     before=bindings(root);source_digest=digest(before)
     (out/'source-bindings.json').write_text(json.dumps(before,indent=2)+'\n')
-    env=dict(os.environ);env.pop('GOROOT',None);env.update(GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='-p=2')
+    env={k:v for k,v in os.environ.items() if not k.startswith('MVCC_MEMORY_')};env.pop('GOROOT',None);env.update(CGO_ENABLED='1',GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='-p=2')
+    go_path=pathlib.Path(shutil.which(args.go,path=env.get('PATH')) or args.go).resolve();require(go_path.is_file(),'Go executable')
+    env['PATH']=str(go_path.parent)+os.pathsep+env.get('PATH','')
+    version=subprocess.run([str(go_path),'version'],cwd=root,env=env,capture_output=True,text=True,check=True).stdout.strip()
+    go={'path':str(go_path),'version':version,'sha256':sha(go_path)};build_env={k:env.get(k) for k in BUILD_KEYS}
     binary=out/'native-memory.test'
-    build=[args.go,'test','-c']+(['-race'] if args.race else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(binary),'./TreeDB/mvcc']
-    (out/'build-command.json').write_text(json.dumps({'cwd':str(root),'argv':build},indent=2)+'\n')
+    build=[str(go_path),'test','-c']+(['-race'] if args.race else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(binary),'./TreeDB/mvcc']
+    (out/'build-command.json').write_text(json.dumps({'cwd':str(root),'argv':build,'go':go,'env':build_env},indent=2)+'\n')
     p=subprocess.run(build,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180)
-    (out/'build.log').write_bytes(p.stdout);require(p.returncode==0,'harness build failed');same_source(before,bindings(root))
+    (out/'build.log').write_bytes(p.stdout);require(p.returncode==0,'harness build failed');same_source(before,bindings(root));binary_sha=sha(binary)
     cases=[];errors=[]
     matrix=[(args.n,'prune',True),(2*args.n,'prune',True),(args.n,'cancel',True),(args.n,'control',True)] if args.smoke else [(n,mode,pin) for n in (args.n,2*args.n) for mode in ('prune','control','cancel') for pin in (False,True)]
     for n,mode,pin in matrix:
-        if before!=bindings(root):
-            errors.append(f'source drift before {mode}-{n}-pinned{int(pin)}');break
+        try:stable=before==bindings(root) and sha(binary)==binary_sha and sha(go_path)==go['sha256']
+        except OSError:stable=False
+        if not stable:
+            errors.append(f'source/executable drift before {mode}-{n}-pinned{int(pin)}');break
         name=f'{mode}-{n}-pinned{int(pin)}';result=out/(name+'.json');raw=out/(name+'.log')
         case_env=dict(env);case_env.update(MVCC_MEMORY_RESULT=str(result),MVCC_MEMORY_N=str(n),MVCC_MEMORY_MODE=mode,MVCC_MEMORY_PINNED=str(int(pin)))
         cmd=[str(binary),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v']
-        (out/(name+'-command.json')).write_text(json.dumps({'cwd':str(root),'argv':cmd,'case_env':{k:v for k,v in case_env.items() if k.startswith('MVCC_MEMORY_')}},indent=2)+'\n')
+        command=out/(name+'-command.json');command.write_text(json.dumps({'cwd':str(root),'argv':cmd,'env':dict(build_env,**{k:v for k,v in case_env.items() if k.startswith('MVCC_MEMORY_')})},indent=2)+'\n')
         start=time.monotonic();p=subprocess.run(cmd,cwd=root,env=case_env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=150);raw.write_bytes(p.stdout)
         after=bindings(root)
         if before!=after:(out/'drifted-source-bindings.json').write_text(json.dumps(after,indent=2)+'\n')
-        cases.append({'n':n,'mode':mode,'pinned':pin,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
+        try:stable=before==after and sha(binary)==binary_sha and sha(go_path)==go['sha256']
+        except OSError:stable=False
+        cases.append({'command':command.name,'command_sha256':sha(command),'binary_before_sha256':binary_sha,'binary_after_sha256':sha(binary) if binary.is_file() else None,'n':n,'mode':mode,'pinned':pin,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
         try:
-            same_source(before,after);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
+            require(stable,'source/executable drift after '+name);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
             validate_case(json.loads(result.read_text()),n,mode,pin)
         except (ValueError,KeyError,TypeError,OSError) as e:
             errors.append(str(e));break
         print(name+' PASS',flush=True)
-    receipt={'contract':CONTRACT,'source_root':str(root),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
+    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':sha(out/'build-command.json'),'build_log_sha256':sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');validate_packet(out,root);self_test(out)
     summary=[]
     for c in cases:

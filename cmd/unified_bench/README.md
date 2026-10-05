@@ -1175,8 +1175,10 @@ python3 scripts/native_prune_memory.py --out "$OUT" --self-test
 
 Output must be a new directory. `--smoke --n 64 --race` runs four diagnostic
 cases: pinned prune at N/2N plus pinned cancellation and no-prune control.
-Linux `/proc` supplies RSS; the driver retains source hashes, commands, raw
-logs, results and the tagged binary. The validator rejects missing actual
+Linux `/proc` supplies RSS; validation binds source, resolved Go executable/
+version, tagged binary, build command/environment, each case invocation, raw
+logs and results. Inherited memory controls are cleared; CGO=1, GOWORK=off,
+GOTOOLCHAIN=local and GOFLAGS=-p=2 are recorded. The validator rejects missing actual
 partial-output/retirement witnesses, inconsistent native counters, source
 changes, checksum drift and incomplete or duplicate smoke/full matrices. Self-tests mutate copies of real successful
 packets and never count as lifecycle measurements.

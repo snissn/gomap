@@ -496,7 +496,8 @@ missing; `validate --qualify` refuses that verdict.
 `scripts/native_prune_memory.py` produces standalone fresh-process memory
 lifecycle packets; see [the commands and measurement limits](../unified_bench/README.md#native-prune-memory-lifecycle-harness).
 Its forced-GC heap cuts, sampled Linux RSS and allocation scopes include
-process/fixture/observer work. Native ownership counters prove actual partial
+process/fixture/observer work. Retained executable, build/case command and environment bindings are validated.
+Native ownership counters prove actual partial
 output and custody, but do not measure exclusive cursor/tree heap. The packets
 are not benchprof inputs and cannot satisfy the native runtime's exclusive
 retained/peak measurement gate.
