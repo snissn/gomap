@@ -1,0 +1,56 @@
+{
+  "status": "ACCEPT_SCOPED_FINAL_EVIDENCE",
+  "landed_product_sha": "17712b9cfcef2b90516419a34ccf3d464984d473",
+  "measured_product_sha": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+  "final_coverage_required": 43,
+  "current_verified_coverage": 43,
+  "current_assembler_sha256": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3",
+  "scope": "Evidence validation and publication metadata repairs, plus one existing naming-test inventory entry. No production, benchmark harness, workload, captured receipt or numeric result changes. Native 43 cells are predeclared: 13 fixed qualified reuse and 30 fresh.",
+  "reuse": [
+    "review-E-first25-numeric.md:25records/402hashes unchanged, numeric table applicability",
+    "review-E-final-claims.md plus bounded new-prose review",
+    "review-E-frozen-documentation-applicability.json: initial publication validation; current repaired tooling covered by review-E-review-repairs.md and E-review-repair-applicability.json",
+    "O1/O2/O3 current-head product CI/Codex/native/performance acceptance"
+  ],
+  "tradeoffs": [
+    "O2 read amplification benefit accepted with primary value-vlog about20% growth and explicit checkpoint/allocation costs.",
+    "Full-snapshot off static hits\u22126.85%,misses\u22129.71%, miss GoB/read9.396\u219215.426 retained; O2-only offB/read decreases16.317\u219215.426. Previous causal diagnostics do not prove general static parity or noise.",
+    "10M after-only durable publicCP160.492s overlapping composition166.218s and outer-leaf storage10.837GB are material remaining limits.",
+    "Scaling is one observation per config, reader-window throughput with unequal writer overlap; no optimal-reader or linear-scale guarantee."
+  ],
+  "outstanding": [
+    "current E exact-head requiredCI/Codex/all paginated findings dispositions",
+    "merge and authorized final cleanup/graph closure"
+  ],
+  "final_result_sha256": "e713c41156b9db472f856022fda44d17e7016ac3e9dd70c927626b0ea52b287c",
+  "raw_hash_count": 492,
+  "native_campaign": "Sole session3229 exited0 VALIDATED_ALL;30fresh completed rc0/validatedtrue/nonSKIP; native working DB inventory retains only censored baseline.",
+  "accepted_at": "2026-10-05T01:44:31.492860+00:00",
+  "independent_final_review": {
+    "path": "evidence/review-E-final43-numeric.md",
+    "sha256": "15e786e7e3eb343ec5133c9998900dd398e346085e796f04720a510619f2fa4c",
+    "disposition": "ACCEPT_FINAL_EVIDENCE"
+  },
+  "final_findings_sha256": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+  "report_sha256": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
+  "acceptance_scope": "Complete numeric/provenance evidence and explicitly investigated optimization tradeoffs accepted; this artifact does not assert that unpublished E-head CI/Codex/merge has passed.",
+  "initial_publication_format_applicability": {
+    "path": "REPORT.md",
+    "change": "Remove one generated trailing space after empty Missing or failed cells summary; original generated REPORT retained in final-assembly-complete. Numeric fields, prose, RESULTS, assembler, plan and FINAL_FINDINGS unchanged.",
+    "examined_generated_sha256": "8bf41f5f51992c75a745dde4a5a34e5fb6752cd7aa89f7b1fecbbd7b43fbb29c",
+    "published_sha256": "d46c9db9c9a37f5b096c8846ae4be819d67f58e441d3c39c92d0251d2b140d1a",
+    "publication_head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681"
+  },
+  "initial_publication_validation": {
+    "head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681",
+    "assembler_sha256": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
+    "results_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c"
+  },
+  "review_repair_applicability": {
+    "path": "evidence/E-review-repair-applicability.json",
+    "sha256": "2157287d18d079898bfbcf2afbb75b8bcbca8b47a8da56565b0df5e9223849b7",
+    "raw_inventory_review_path": "evidence/review-E-raw-inventory.md",
+    "prior_six_finding_review_sha256": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
+  },
+  "updated_at": "2026-10-05T02:33:22.249239+00:00"
+}
