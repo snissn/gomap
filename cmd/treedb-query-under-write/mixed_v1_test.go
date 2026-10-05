@@ -211,6 +211,73 @@ func TestMixedSinglePrefixCanonicalRecallV1(t *testing.T) {
 		t.Fatal("deleted ID accepted after ACK floor")
 	}
 }
+
+func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
+	in, r := mixedTestPlanV1(t)
+	exportedBefore := hashJSON(in.exported)
+	q := r.Admission.Queries[0]
+	response := windowTestResponse(&r.Admission)
+	// Move one existing tail into the top10. The response omits that ID, so
+	// its complete contents remain canonical before and after the replacement;
+	// those indistinguishable populations nevertheless have different truths.
+	w := r.Writes[0]
+	request := *w.Replace
+	request.Vector = append([]float32(nil), q.Request.Query...)
+	w.Replace = &request
+	state, err := mixedPopulation(&in, []mixedWrite{w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(state.vectors))
+	for id := range state.vectors {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	r.Prefixes = r.Prefixes[:2]
+	for qi, query := range r.Admission.Queries {
+		truth, err := recallTop10(context.Background(), query.scorer, ids, state.vectors)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Prefixes[1].Truth[qi] = truth
+		for i := range r.Prefixes[1].Changed[qi] {
+			changed := &r.Prefixes[1].Changed[qi][i]
+			if changed.ID == string(request.ID) {
+				score, err := query.scorer.ScoreV1(request.Vector)
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed.ScoreBits = math.Float32bits(score)
+			}
+		}
+	}
+	if pacedSameTruth(r.Prefixes[0].Truth[0], r.Prefixes[1].Truth[0]) {
+		t.Fatal("fixture failed to change full canonical top10")
+	}
+	for _, tc := range []struct {
+		name         string
+		lower, upper int
+		want         float64
+	}{{"baseline-only", 0, 0, 1}, {"changed-only", 1, 1, .9}, {"ambiguous-minimum", 0, 1, .9}} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := mixedValidatePrefix(&q, response, &in, &r, tc.lower, tc.upper)
+			if err != nil || value != tc.want {
+				t.Fatalf("recall=%v want%v for compatible prefixes%d..%d: %v", value, tc.want, tc.lower, tc.upper, err)
+			}
+		})
+	}
+	baseline := pacedRecallCopy(r.Admission, "baseline-integrity")
+	if err := recallPlan(context.Background(), &in, &baseline); err != nil {
+		t.Fatal("unchanged exported baseline rejected:", err)
+	}
+	changed := pacedRecallCopy(r.Admission, "changed-baseline-refusal")
+	if err := recallPlan(context.Background(), state, &changed); err == nil {
+		t.Fatal("ordinary admission accepted a changed exported corpus top10")
+	}
+	if hashJSON(in.exported) != exportedBefore {
+		t.Fatal("dynamic oracle setup mutated immutable exported truth")
+	}
+}
 func TestMixedUnknownStopsAndRetainsUnissuedV1(t *testing.T) {
 	in, r := mixedTestPlanV1(t)
 	r.Admission.RPCTimeout = 100 * time.Millisecond
