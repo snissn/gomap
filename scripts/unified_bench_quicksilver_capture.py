@@ -352,7 +352,9 @@ def main():
     env.update(manifest['build_env'])
     assert env['GOWORK'] == 'off'
     assert env.get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '') in ('', '0', '1'), 'maintenance manifest env must be unset, 0 or 1'
-    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='2GiB',
+    # Apply identical controls to fresh, online/churn and retained final-read
+    # cells: no benchmark-imposed Go heap limit; retain normal GC and mapping cap.
+    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='off',
                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
     (root/'working-dbs').mkdir(exist_ok=True)
     assert plan.get('repeats', 1) >= 1 and plan['cells']

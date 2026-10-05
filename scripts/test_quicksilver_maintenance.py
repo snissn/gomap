@@ -22,6 +22,32 @@ def report(mode='exhaustive'):
                 fully_compacted=True, policy_fully_compacted=True, byte_minimized=mode == 'exhaustive')
 
 
+def settle_report(mode='exhaustive'):
+    initial = report(mode)
+    initial['remaining_debt']['leaf_gc_generations'] = 9
+    initial['remaining_debt']['leaf_gc_bytes'] = 9774643
+    initial.update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
+    basis = dict(CommitSeq=25, RootPageID=100, SystemRootPageID=200, AppliedCommandLSN=36,
+                 MaxEntryRevision=36, LeafGenerationStateVersion=4)
+    result = dict(basis, CommitSeq=26)
+
+    def root(token, durable, visible):
+        return dict(CommitSeq=token['CommitSeq'], UserRootPageID=token['RootPageID'],
+                    SystemRootPageID=token['SystemRootPageID'], AppliedCommandLSN=token['AppliedCommandLSN'],
+                    MaxEntryRevision=token['MaxEntryRevision'], Durable=durable, Visible=visible)
+    audit = report(mode)
+    audit['dry_run'] = True
+    audit['phases'] = [dict(name='index-vacuum', status='not_required', wall_time_nanos=0)]
+    return dict(schema=1, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT, status='completed',
+                reports=[initial, audit], initial_status='succeeded', audit_status='succeeded', cleanup_status='succeeded',
+                leaf_gc=dict(status='succeeded', stats=dict(GenerationsTotal=9, GenerationsWritable=0, GenerationsLive=0,
+                    GenerationsRetiring=0, GenerationsEligible=9, GenerationsDeleted=9, FilesDeleted=9,
+                    BytesEligible=9774643, BytesDeleted=9774643)), refresh=dict(basis=basis, result=result, status='succeeded',
+                    checkpoint_status='succeeded', summary_before_status='succeeded', summary_after_status='succeeded',
+                    next_lsn_before=37, next_lsn_after=37, roots_before=[root(basis, True, True)],
+                    roots_after=[root(basis, True, False), root(result, True, True)]))
+
+
 class MaintenanceTests(unittest.TestCase):
     def test_physical_copy_and_fingerprint(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -73,7 +99,7 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertEqual(before, sorted(str(p) for p in base.rglob('*')))
                 self.assertEqual(frozen, m.fingerprint(fixture))
 
-    def make_campaign(self, root, candidate=8.0):
+    def make_campaign(self, root, candidate=8.0, endpoint=None):
         root = root.resolve()
         out = root/'out'; out.mkdir()
         manifest = dict(sources={name: dict(head=letter*40, binary=name, binary_sha256=letter*64)
@@ -94,6 +120,8 @@ class MaintenanceTests(unittest.TestCase):
             m.save(directory/'fixture-receipt.json', dict(closed=True, verified=True, fixture_sha256='f'*64))
             cell = dict(label=label, source=source, fixture='/closed/fixture', mode='exhaustive', batch_size=8192,
                         fixture_receipt=dict(path='/receipt', sha256=m.unified.sha256(directory/'fixture-receipt.json')))
+            if endpoint is not None:
+                cell['endpoint'] = endpoint
             plan['cells'].append(cell)
             started = 1000000000000+offset*1000000000; finished = started+int(elapsed*1e9)
             rows = [dict(pid=5, process_start_ticks=1, started_unix_nano=started+200000000,
@@ -103,13 +131,15 @@ class MaintenanceTests(unittest.TestCase):
             summary = dict(complete=True, cancelled=False, errors=[], interval_ms=200, samples=1)
             m.save(directory/'rss_samples.jsonl.summary.json', summary)
             (directory/'stderr.log').write_text('Maximum resident set size (kbytes): 12\n')
-            m.save(directory/'stdout.json', report())
+            m.save(directory/'stdout.json', settle_report() if endpoint == m.COMMAND_WAL_SETTLE_ENDPOINT else report())
             (directory/'ldd.stdout.txt').write_text('static linkage\n'); (directory/'ldd.stderr.txt').touch()
             (directory/'restore.ldd.stdout.txt').write_text('static linkage\n'); (directory/'restore.ldd.stderr.txt').touch()
             (directory/'restore.stderr.log').touch()
             m.save(directory/'restore.stdout.json', dict(rebound=True, stores=['maindb'], operation='RebindDurableRootSnapshotLayoutWithContextV1'))
             run = dict(schema=1, cell=cell, source=manifest['sources'][source], fixture=dict(sha256='f'*64, files=4, bytes=7128),
-                       command=m.compact_command('/bin/'+source, directory/'db', cell), env=dict(GOWORK='off'),
+                       command=m.compact_command('/bin/'+source, directory/'db', cell),
+                       env=dict(GOWORK='off', GOMEMLIMIT='off', GOGC='100',
+                                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824'),
                        harness=dict(collector='h'*64, unified_collector='u'*64, rss_observer='s'*64),
                        native_resolution=dict(libraries={}), started_ns=started, finished_ns=finished,
                        elapsed_seconds=elapsed, rc=0, rss_sampling=summary, validated=True)
@@ -139,7 +169,8 @@ class MaintenanceTests(unittest.TestCase):
             before = m.fingerprint(fixture)
             m.save(root/'fixture-receipt.json', dict(closed=True, verified=True, fixture_sha256=before['sha256']))
             (root/'bin').mkdir(); binary = root/'bin'/'treemap'; binary.write_bytes(b'\x7fELF')
-            manifest = dict(build_env=dict(GOWORK='off'), sources=dict(A=dict(head='a'*40, binary='treemap', binary_sha256=m.unified.sha256(binary))), libraries={}, receipts={})
+            manifest = dict(build_env=dict(GOWORK='off', GOMEMLIMIT='2GiB', GOGC='25',
+                                         TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='77'), sources=dict(A=dict(head='a'*40, binary='treemap', binary_sha256=m.unified.sha256(binary))), libraries={}, receipts={})
             for role in ('source', 'build', 'native', 'runner'):
                 m.save(root/(role+'.json'), {'reviewed': role})
                 manifest['receipts'][role] = dict(path=role+'.json', sha256=m.unified.sha256(root/(role+'.json')))
@@ -151,13 +182,18 @@ class MaintenanceTests(unittest.TestCase):
             def failure(command, executable, sample_path, **kwargs):
                 self.assertEqual(command[0:2], ['/usr/bin/time', '-v'])
                 self.assertEqual(executable, binary); self.assertEqual(kwargs['interval_ms'], 200)
+                # Ambient and manifest heap pressure must not reach the owned
+                # offline command. Keep normal GC and the mapping-domain setting.
+                self.assertEqual({k: kwargs['env'][k] for k in controls}, controls)
                 kwargs['stdout'].write('failed raw compact output\n'); kwargs['stderr'].write('preserved native diagnostic\n')
                 sample_path.write_text('preserved sample\n')
                 summary = dict(complete=False, cancelled=True, errors=[])
                 m.save(str(sample_path)+'.summary.json', summary)
                 return types.SimpleNamespace(returncode=-15), summary
 
-            with mock.patch.object(m, 'restore_snapshot'), mock.patch.object(m.unified, 'validate_native'), mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
+            controls = dict(GOMEMLIMIT='off', GOGC='100', GOMAXPROCS='12',
+                            TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824')
+            with mock.patch.dict(m.os.environ, GOMEMLIMIT='512MiB', GOGC='50'), mock.patch.object(m, 'restore_snapshot'), mock.patch.object(m.unified, 'validate_native'), mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
                 with self.assertRaisesRegex(ValueError, 'compact exit: -15'):
                     m.capture(root/'manifest.json', root/'plan.json')
             directory = root/'capture'/'failed'
@@ -165,6 +201,7 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual((directory/'stdout.json').read_text(), 'failed raw compact output\n')
             run = json.loads((directory/'run.json').read_bytes())
             self.assertIn('error', run); self.assertEqual(run['rc'], -15)
+            self.assertEqual({k: run['env'][k] for k in controls}, controls)
             self.assertTrue(run['rss_sampling']['cancelled'])
             self.assertEqual(m.unified.sha256(directory/'stderr.log'), run['artifacts']['stderr.log'])
 
@@ -189,6 +226,169 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertAlmostEqual(result['E'], .02)
                 self.assertEqual(len(result['pair_effects']), 3)
 
+    def test_settle_qualifies_final_completion_and_preserves_initial_report(self):
+        raw = settle_report()
+        raw['reports'][0]['before'][0]['bytes'] += 4096
+        raw['reports'][0]['before'][-1]['bytes'] += 4096
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        original = copy.deepcopy(raw)
+        measurement = m.validate_measurement(raw, cell)
+        self.assertEqual(raw, original)
+        self.assertTrue(m.policy_complete(measurement))
+        self.assertFalse(raw['reports'][0]['policy_fully_compacted'])
+        self.assertEqual(measurement['before'], raw['reports'][0]['before'])
+        self.assertEqual(measurement['after'], raw['reports'][1]['after'])
+        self.assertEqual(len(measurement['phases']), 2)
+        self.assertEqual(measurement['audit_phases'], raw['reports'][1]['phases'])
+        self.assertEqual(m.compact_command('/bin/A', '/db', cell)[-1], '-command-wal-settle')
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            self.assertTrue(m.analyze(root/'bundle.json')['material'])
+
+    def test_settle_noop_and_planned_audit_remain_distinct(self):
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        raw = settle_report()
+        raw['refresh']['result'] = copy.deepcopy(raw['refresh']['basis'])
+        raw['refresh']['roots_after'] = copy.deepcopy(raw['refresh']['roots_before'])
+        measurement = m.validate_measurement(raw, cell)
+        self.assertTrue(m.policy_complete(measurement))
+        # A legitimate unfinished audit remains diagnostic and is not promoted
+        # into either completed policy debt or actually executed phases.
+        raw['reports'][1]['remaining_debt']['index_vacuum_required'] = True
+        raw['reports'][1].update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
+        raw['reports'][1]['phases'][0].update(status='planned', required=True)
+        measurement = m.validate_measurement(raw, cell)
+        self.assertFalse(m.policy_complete(measurement))
+        self.assertEqual(measurement['audit_phases'][0]['status'], 'planned')
+        self.assertNotIn('planned', [p.get('status') for p in measurement['phases']])
+
+    def test_settle_failed_audit_resealed_calibration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            path = paths['C2']; raw = settle_report(); raw['audit_status'] = 'failed'
+            m.save(path.parent/'stdout.json', raw)
+            self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+            noise_path = root/'noise.json'; noise = json.loads(noise_path.read_bytes())
+            noise['hashes'][1] = m.unified.sha256(path); m.save(noise_path, noise)
+            self.change(root/'bundle.json', lambda r: r.update(calibration_sha256=m.unified.sha256(noise_path)))
+            with self.assertRaisesRegex(ValueError, 'incomplete settle operation'):
+                m.analyze(root/'bundle.json')
+            with self.assertRaises(ValueError):
+                m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', root/'invalid-noise.json')
+            self.assertFalse((root/'invalid-noise.json').exists())
+
+    def test_settle_command_cannot_drop_endpoint_flag(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            self.change(paths['B1'], lambda r: r['command'].pop())
+            self.seal_pairs(root)
+            with self.assertRaisesRegex(ValueError, 'CLI flag drift'):
+                m.analyze(root/'bundle.json')
+
+    def test_settle_malformed_bindings_fail_closed(self):
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        mutations = [lambda r: r.update(schema=True), lambda r: r.update(refresh=None), lambda r: r.update(leaf_gc=None), lambda r: r.update(status='failed'),
+                     lambda r: r.update(error='cleanup failed'), lambda r: r['reports'].pop(),
+                     lambda r: r['refresh'].update(checkpoint_status='failed'),
+                     lambda r: r['refresh']['result'].update(CommitSeq=27),
+                     lambda r: r['refresh']['result'].update(RootPageID=101),
+                     lambda r: r['refresh']['result'].update(SystemRootPageID=201),
+                     lambda r: r['refresh']['result'].update(AppliedCommandLSN=1),
+                     lambda r: r['refresh']['result'].update(MaxEntryRevision=301),
+                     lambda r: r['reports'][1].update(dry_run=False),
+                     lambda r: r['reports'][1]['phases'][0].update(status='succeeded'),
+                     lambda r: r['reports'][1]['phases'][0].update(name='checkpoint'),
+                     lambda r: r['reports'][1]['phases'][0].pop('status'),
+                     lambda r: r['reports'][0]['phases'][0].update(status='planned'),
+                     lambda r: r.update(initial_status='not_started'),
+                     lambda r: r.update(audit_status='failed'),
+                     lambda r: r.update(cleanup_status='failed'),
+                     lambda r: r['refresh'].update(status='not_started'),
+                     lambda r: r['refresh'].update(summary_after_status='failed'),
+                     lambda r: r['refresh'].update(next_lsn_after=38),
+                     lambda r: r['refresh'].update(next_lsn_before=36, next_lsn_after=36),
+                     lambda r: r['leaf_gc'].update(status='failed'),
+                     lambda r: r['leaf_gc']['stats'].update(BytesDeleted=-1),
+                     lambda r: r['leaf_gc']['stats'].update(GenerationsDeleted=10),
+                     lambda r: r['leaf_gc']['stats'].update(FilesDeleted=True),
+                     lambda r: r['refresh']['basis'].update(CommitSeq=True),
+                     lambda r: r['refresh']['roots_before'][0].update(UserRootPageID=101),
+                     lambda r: r['refresh']['roots_after'][1].update(Durable=False)]
+        for mutation in mutations:
+            raw = settle_report(); mutation(raw)
+            with self.assertRaises(ValueError):
+                m.validate_measurement(raw, cell)
+        with self.assertRaises(ValueError):
+            m.validate_measurement(settle_report(), dict(mode='exhaustive'))
+        with self.assertRaises(ValueError):
+            m.validate_measurement(report(), cell)
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            path = paths['B1']; raw = settle_report()
+            raw['refresh']['result']['SystemRootPageID'] = 201
+            raw['refresh']['roots_after'][1]['SystemRootPageID'] = 201
+            m.save(path.parent/'stdout.json', raw)
+            self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+            self.seal_pairs(root)
+            with self.assertRaisesRegex(ValueError, 'refresh changed root/RID authority'):
+                m.analyze(root/'bundle.json')
+
+    def test_settle_initial_dispositions_block_calibration_and_qualification(self):
+        for status in ('deferred', 'unsupported'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+                for label in ('C2', 'B1'):
+                    path = paths[label]; raw = settle_report()
+                    raw['reports'][0]['phases'][0]['status'] = status
+                    m.save(path.parent/'stdout.json', raw)
+                    self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+                output = root/'rejected-noise.json'
+                with self.assertRaisesRegex(ValueError, 'incomplete calibration run'):
+                    m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', output)
+                self.assertFalse(output.exists())
+                # Restore calibration, retaining the rejected initial phase in B1.
+                m.save(paths['C2'].parent/'stdout.json', settle_report())
+                self.change(paths['C2'], lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(paths['C2'].parent/'stdout.json')}))
+                self.seal_pairs(root)
+                result = m.analyze(root/'bundle.json')
+                self.assertFalse(result['complete_runs']); self.assertFalse(result['material'])
+
+    def test_endpoint_identity_is_derived_from_raw_and_cannot_mix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root)
+            self.change(paths['B1'], lambda r: r.update(endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT))
+            self.seal_pairs(root)
+            # Forged metadata cannot promote a legacy command to a settle.
+            run, _ = m.load_run(paths['B1'])
+            self.assertEqual(run['endpoint'], m.SINGLE_COMPACT_ENDPOINT)
+            self.assertTrue(m.analyze(root/'bundle.json')['material'])
+            path = paths['B1']; raw = settle_report(); m.save(path.parent/'stdout.json', raw)
+            self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+            self.seal_pairs(root)
+            with self.assertRaisesRegex(ValueError, 'unexpected endpoint receipt'):
+                m.analyze(root/'bundle.json')
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            path = paths['B1']; parent = path.parent.parent
+            plan = json.loads((parent/'plan.json').read_bytes())
+            cell = next(c for c in plan['cells'] if c['label'] == 'B1'); del cell['endpoint']
+            m.save(parent/'plan.json', plan)
+            for run_path in paths.values():
+                self.change(run_path, lambda r: r.update(plan_sha256=m.unified.sha256(parent/'plan.json')))
+            self.change(path, lambda r: r.update(cell=cell, command=m.compact_command('/bin/B', path.parent/'db', cell)))
+            m.save(path.parent/'stdout.json', report())
+            self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+            # The single-compact packet is independently valid, but mismatches
+            # the settle calibration contract even after every hash reseal.
+            m.load_run(path)
+            noise_path = root/'noise.json'; noise = json.loads(noise_path.read_bytes())
+            noise['hashes'] = [m.unified.sha256(paths[k]) for k in ('C1', 'C2', 'C3')]; m.save(noise_path, noise)
+            bundle_path = root/'bundle.json'; bundle = json.loads(bundle_path.read_bytes())
+            bundle['calibration_sha256'] = m.unified.sha256(noise_path); m.save(bundle_path, bundle)
+            self.seal_pairs(root)
+            with self.assertRaisesRegex(ValueError, 'matched workload/environment/harness drift'):
+                m.analyze(bundle_path)
+
     def test_raw_hash_and_calibration_drift_rejected(self):
         for label, filename in [('B1', 'stdout.json'), ('B3', 'rss_samples.jsonl'), ('C2', 'run.json')]:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
@@ -204,7 +404,7 @@ class MaintenanceTests(unittest.TestCase):
             'flags': lambda r: r['command'].append('-rewrite-batch-size=256'),
             'harness': lambda r: r['harness'].update(collector='different'),
             'sample': lambda r: r['memory']['sampled_peak'].update(file_bytes=999),
-            'env': lambda r: r['env'].update(GOMEMLIMIT='1GiB'),
+            'env': lambda r: r['env'].update(GOMEMLIMIT='2GiB'),
             'order': lambda r: r.update(started_ns=1000000000000+100*1000000000),
             'failed': lambda r: r.update(validated=False),
         }

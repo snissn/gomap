@@ -205,6 +205,8 @@ class CaptureRehearsal(unittest.TestCase):
 
     def test_process_capture_rejects_wrong_contract_and_native_identity_keeps_raw(self):
         real_run = subprocess.run
+        controls = dict(GOMEMLIMIT='off', GOGC='100', GOMAXPROCS='12',
+                        TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824')
 
         def timed_run(command, **kwargs):
             if command[0] == '/usr/bin/ldd':
@@ -218,6 +220,7 @@ class CaptureRehearsal(unittest.TestCase):
                     library.write_bytes(b'changed after manifest preflight')
                 kwargs['stdout'].write(f'linux-vdso.so.1 (0x1234)\nlibc.so.6 => {resolved} (0x2345)\n{loader} (0x3456)\n')
                 return subprocess.CompletedProcess(command, 0)
+            self.assertEqual({k: kwargs['env'][k] for k in controls}, controls)
             self.assertEqual(command[:3], ['/usr/bin/time', '-v', str(root/'bin'/'fake-bench')])
             # Controlled ELF/ldd fixture avoids a native build. Execute its output
             # producer in a fresh real Python process; no claim of native timing.
@@ -245,7 +248,8 @@ class CaptureRehearsal(unittest.TestCase):
             other.write_bytes(b'unapproved runtime')
             receipt = root/'receipt.json'
             receipt.write_text('{"scope":"fake-process rehearsal only"}')
-            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root)}, libraries={},
+            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root), 'GOMEMLIMIT': '2GiB',
+                                       'GOGC': '25', 'TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES': '77'}, libraries={},
                             sources={'fake': dict(head='0'*40, binary='fake-bench', binary_sha256=capture.sha256(binary))},
                             receipts={role: dict(path='receipt.json', sha256=capture.sha256(receipt)) for role in ('source', 'build', 'native', 'runner')})
             manifest_path, plan_path = root/'manifest.json', root/'plan.json'
@@ -276,6 +280,7 @@ class CaptureRehearsal(unittest.TestCase):
                 (root/'payload.json').write_text(json.dumps([packet]))
                 plan_path.write_text(json.dumps(dict(output=scenario, cells=[cell])))
                 clean_loader = {k: '' for k in os.environ if k.startswith('LD_')}
+                clean_loader.update(GOMEMLIMIT='512MiB', GOGC='50')
                 clean_loader['LD_PRELOAD'] = '/injected.so' if scenario == 'ambient-preload' else ''
                 with mock.patch.dict(os.environ, clean_loader), mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run), mock.patch.object(capture, 'run_with_rss', sampled_run):
                     if accepted:
@@ -286,6 +291,7 @@ class CaptureRehearsal(unittest.TestCase):
                 directory = root/scenario/'1-fake'
                 metadata = json.loads((directory/'run.json').read_text())
                 self.assertEqual(metadata.get('validated', False), accepted)
+                self.assertEqual({k: metadata['env'][k] for k in controls}, controls)
                 self.assertEqual(metadata['plan_sha256'], hashlib.sha256(plan_path.read_bytes()).hexdigest())
                 if accepted or scenario in ('commits','sampling-error') or scenario in ratio_scenarios:
                     self.assertEqual(metadata['rc'], 0)

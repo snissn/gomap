@@ -3,7 +3,7 @@
 
 Use the same reviewed manifest as unified_bench_quicksilver_capture.py. A plan
 has a new root-relative output directory and cells {label, source, fixture,
-fixture_receipt, mode, batch_size}. Fixture receipts attest a closed, verified
+fixture_receipt, mode, batch_size, optional endpoint}. Fixture receipts attest a closed, verified
 fixture and its content fingerprint; their contents remain reviewer authority.
 This command copies every fixture independently, never hardlinks or reopens the
 original. Failures and timed-out copies remain available for diagnosis.
@@ -24,6 +24,9 @@ import traceback
 
 import owned_process_rss
 import unified_bench_quicksilver_capture as unified
+
+SINGLE_COMPACT_ENDPOINT = 'single-compact-v1'
+COMMAND_WAL_SETTLE_ENDPOINT = 'compact-command-wal-settle-v1'
 
 
 def require(condition, message):
@@ -85,12 +88,17 @@ def restore_snapshot(root, manifest, database, directory, env, metadata):
 def compact_command(binary, database, cell):
     require(cell['mode'] in ('full', 'exhaustive'), 'unsupported maintenance mode')
     integer(cell['batch_size'], 'batch_size', 1)
-    return [str(binary), 'compact', str(database), '-rw', '-json', '-mode', cell['mode'],
+    endpoint = cell.get('endpoint', SINGLE_COMPACT_ENDPOINT)
+    require(endpoint in (SINGLE_COMPACT_ENDPOINT, COMMAND_WAL_SETTLE_ENDPOINT), 'unsupported maintenance endpoint')
+    command = [str(binary), 'compact', str(database), '-rw', '-json', '-mode', cell['mode'],
             '-sync-each-phase', '-leaf-pack-max-passes', '64', '-rewrite-batch-size', str(cell['batch_size'])]
+    if endpoint == COMMAND_WAL_SETTLE_ENDPOINT:
+        command.append('-command-wal-settle')
+    return command
 
 
-def validate_report(report, cell):
-    require(report['mode'] == cell['mode'] and report['dry_run'] is False, 'wrong mode/dry-run')
+def validate_report(report, cell, dry_run=False):
+    require(report['mode'] == cell['mode'] and report['dry_run'] is dry_run, 'wrong mode/dry-run')
     for flag in ('fully_compacted', 'policy_fully_compacted', 'byte_minimized'):
         require(type(report[flag]) is bool, 'missing completion flag: '+flag)
     require(report['fully_compacted'] == report['policy_fully_compacted'], 'legacy policy flag drift')
@@ -116,7 +124,14 @@ def validate_report(report, cell):
         integer(phase['wall_time_nanos'], 'phase duration')
         # Legacy successful phases have no status. Preserve deferrals/unsupported
         # work instead of silently treating every phase as completed.
-        require(phase.get('status', '') in ('', 'not_required', 'succeeded', 'deferred', 'unsupported'), 'nonterminal/failed phase')
+        allowed = ('not_required', 'planned', 'deferred', 'unsupported') if dry_run else ('', 'not_required', 'succeeded', 'deferred', 'unsupported')
+        require(phase.get('status', '') in allowed, 'nonterminal/failed or promoted audit phase')
+    if dry_run:
+        # The dedicated backend plan currently emits only its index policy
+        # disposition, with no applying phase transcript. Fail closed if an
+        # applied report is relabeled as a plan.
+        require([phase['name'] for phase in phases] == ['index-vacuum'], 'wrong dedicated audit phases')
+        require(report['before'] == report['after'], 'dry-run census changed')
     require(isinstance(report['remaining_debt'], dict), 'missing remaining debt')
     debt = report['remaining_debt']
     debts = ('value_log_rewrite_segments', 'value_log_rewrite_bytes', 'value_log_gc_segments', 'value_log_gc_bytes',
@@ -126,6 +141,74 @@ def validate_report(report, cell):
     require(type(debt['index_vacuum_required']) is bool, 'index debt flag')
     require(report['fully_compacted'] == (not any(debt[k] for k in debts) and not debt['index_vacuum_required']), 'debt/completion drift')
     return report
+
+
+def validate_measurement(raw, cell):
+    # Endpoint identity is derived from bound raw stdout and the exact command,
+    # never accepted from editable run metadata. Keep both backend reports raw.
+    endpoint = cell.get('endpoint', SINGLE_COMPACT_ENDPOINT)
+    if endpoint == SINGLE_COMPACT_ENDPOINT:
+        require('endpoint' not in raw, 'unexpected endpoint receipt')
+        return dict(validate_report(raw, cell), endpoint=endpoint)
+    require(endpoint == COMMAND_WAL_SETTLE_ENDPOINT and type(raw.get('schema')) is int and raw['schema'] == 1 and
+            raw.get('endpoint') == endpoint and raw.get('status') == 'completed' and 'error' not in raw,
+            'invalid command-WAL settle receipt')
+    require(isinstance(raw.get('reports'), list) and len(raw['reports']) == 2, 'expected applied report and dry-run audit')
+    initial = validate_report(raw['reports'][0], cell)
+    final = validate_report(raw['reports'][1], cell, dry_run=True)
+    require(all(raw.get(name) == 'succeeded' for name in ('initial_status', 'audit_status', 'cleanup_status')),
+            'incomplete settle operation')
+    refresh = raw.get('refresh')
+    require(isinstance(refresh, dict), 'missing checkpoint refresh receipt')
+    require(all(refresh.get(name) == 'succeeded' for name in
+                ('status', 'checkpoint_status', 'summary_before_status', 'summary_after_status')),
+            'incomplete checkpoint refresh/capture')
+    gc = raw.get('leaf_gc')
+    require(isinstance(gc, dict), 'missing leaf GC receipt')
+    require(gc['status'] == 'succeeded', 'incomplete leaf GC')
+    fields = {'GenerationsTotal', 'GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
+              'GenerationsEligible', 'GenerationsDeleted', 'FilesDeleted', 'BytesEligible', 'BytesDeleted'}
+    require(isinstance(gc['stats'], dict) and set(gc['stats']) == fields, 'invalid leaf GC counters')
+    stats = gc['stats']
+    for name in fields:
+        integer(stats[name], 'leaf GC '+name)
+    require(sum(stats[name] for name in ('GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
+            'GenerationsEligible')) <= stats['GenerationsTotal'] and
+            stats['GenerationsDeleted'] <= stats['GenerationsTotal'], 'leaf GC generation accounting')
+    token_fields = ('CommitSeq', 'RootPageID', 'SystemRootPageID', 'AppliedCommandLSN', 'MaxEntryRevision',
+                    'LeafGenerationStateVersion')
+    for token in (refresh['basis'], refresh['result']):
+        require(isinstance(token, dict) and set(token) == set(token_fields), 'invalid refresh state token')
+        for name in token_fields:
+            require(integer(token[name], 'state token '+name) <= 2**64-1, 'state token overflow')
+    basis, result = refresh['basis'], refresh['result']
+    require(result['CommitSeq'] in (basis['CommitSeq'], basis['CommitSeq']+1) and result['CommitSeq'] <= 2**64-1 and
+            all(result[name] == basis[name] for name in token_fields[1:5]), 'refresh changed root/RID authority')
+    require(0 < integer(refresh['next_lsn_before'], 'next LSN') <= 2**64-1 and
+            type(refresh['next_lsn_after']) is int and refresh['next_lsn_after'] == refresh['next_lsn_before'] and
+            refresh['next_lsn_before'] > basis['AppliedCommandLSN'], 'refresh changed WAL frontier')
+    root_fields = {'CommitSeq', 'UserRootPageID', 'SystemRootPageID', 'AppliedCommandLSN', 'MaxEntryRevision', 'Durable', 'Visible'}
+    for label, token in (('roots_before', basis), ('roots_after', result)):
+        roots = refresh[label]
+        require(isinstance(roots, list) and roots, 'missing recoverable root summary')
+        for root in roots:
+            require(isinstance(root, dict) and set(root) == root_fields, 'invalid recoverable root summary')
+            for name in root_fields-{'Durable', 'Visible'}:
+                require(integer(root[name], 'recoverable root '+name) <= 2**64-1, 'root scalar overflow')
+            require(type(root['Durable']) is bool and type(root['Visible']) is bool, 'invalid root disposition')
+        visible = [r for r in roots if r['Visible']]
+        require(len(visible) == 1 and
+                all(visible[0][root_name] == token[token_name] for root_name, token_name in
+                    [('CommitSeq', 'CommitSeq'), ('UserRootPageID', 'RootPageID'), ('SystemRootPageID', 'SystemRootPageID'),
+                     ('AppliedCommandLSN', 'AppliedCommandLSN'), ('MaxEntryRevision', 'MaxEntryRevision')]),
+                'root summary/token drift')
+        if label == 'roots_after':
+            require(visible[0]['Durable'], 'refreshed root not durable')
+    # The audit's phases are plans, never executed work. Preserve them in a
+    # separate view while execution eligibility uses the applied initial phases.
+    # Deferred/unsupported dispositions in either view remain nonqualifying.
+    return dict(final, endpoint=endpoint, before=initial['before'], phases=initial['phases'],
+                audit_phases=final['phases'], initial_report=initial, final_audit=final)
 
 
 class Deadline:
@@ -190,7 +273,7 @@ def capture(manifest_path, plan_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith('TREEDB_')}
     env.update(manifest['build_env'])
     require(env['GOWORK'] == 'off', 'workspace drift')
-    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='2GiB',
+    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='off',
                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
     (root/'working-dbs').mkdir(exist_ok=True)
     for cell, fixture in zip(plan['cells'], fixtures):
@@ -240,7 +323,8 @@ def capture(manifest_path, plan_path):
             metadata.update(finished_ns=time.time_ns(), elapsed_seconds=(time.monotonic_ns()-started)/1e9,
                             rc=result.returncode, rss_sampling=sampling, load_after=os.getloadavg())
             require(result.returncode == 0, 'compact exit: '+str(result.returncode))
-            validate_report(json.loads((directory/'stdout.json').read_bytes()), cell)
+            measurement = validate_measurement(json.loads((directory/'stdout.json').read_bytes()), cell)
+            metadata['endpoint'] = measurement['endpoint']
             metadata['memory'] = rss_metrics(directory, sampling, metadata['started_ns'], metadata['finished_ns'])
             metadata['validated'] = True
         except BaseException:
@@ -285,7 +369,8 @@ def load_run(path):
     attest = json.loads((path.parent/'fixture-receipt.json').read_bytes())
     require(attest['closed'] is True and attest['verified'] is True and attest['fixture_sha256'] == run['fixture']['sha256'], 'fixture binding drift')
     require(run['artifacts']['fixture-receipt.json'] == run['cell']['fixture_receipt']['sha256'], 'fixture receipt drift')
-    report = validate_report(json.loads((path.parent/'stdout.json').read_bytes()), run['cell'])
+    report = validate_measurement(json.loads((path.parent/'stdout.json').read_bytes()), run['cell'])
+    run['endpoint'] = report['endpoint']
     require(json.loads((path.parent/'rss_samples.jsonl.summary.json').read_bytes()) == run['rss_sampling'], 'RSS summary drift')
     require(rss_metrics(path.parent, run['rss_sampling'], run['started_ns'], run['finished_ns']) == run['memory'], 'RSS metric drift')
     require(run['started_ns'] < run['finished_ns'] <= time.time_ns(), 'run time ordering')
@@ -296,7 +381,7 @@ def load_run(path):
 def contract(run):
     # Product identity may vary A/B. All other workload/observer/runner controls
     # must match, including explicit timeout. Fixture contents identify workload.
-    return dict(fixture=run['fixture'], mode=run['cell']['mode'], batch_size=run['cell']['batch_size'],
+    return dict(fixture=run['fixture'], mode=run['cell']['mode'], batch_size=run['cell']['batch_size'], endpoint=run['endpoint'],
                 timeout_seconds=run['cell'].get('timeout_seconds', 1800), harness=run['harness'], env=run['env'],
                 loader=run['native_resolution']['libraries'], interval=run['rss_sampling']['interval_ms'],
                 restore=run['snapshot_restore']['source'], restore_loader=run['snapshot_restore']['native'],
@@ -305,7 +390,7 @@ def contract(run):
 
 def policy_complete(report):
     return report['policy_fully_compacted'] and all(phase.get('status', '') not in ('deferred', 'unsupported')
-                                                   for phase in report['phases'])
+                                                   for phase in report['phases']+report.get('audit_phases', []))
 
 
 def metric(run, name):
@@ -365,10 +450,10 @@ def analyze(bundle_path):
     completion = [[{k: report[k] for k in ('fully_compacted', 'policy_fully_compacted', 'byte_minimized')} for _, report in pair] for pair in loaded]
     equal_completion = all(a == b for a, b in completion)
     complete_phase_dispositions = all(phase.get('status', '') not in ('deferred', 'unsupported')
-                                     for pair in loaded for _, report in pair for phase in report['phases'])
+                                     for pair in loaded for _, report in pair for phase in report['phases']+report.get('audit_phases', []))
     complete_runs = all(policy_complete(report) for pair in loaded for _, report in pair)
     material = all(v > 0 for v in effects) and statistics.median(effects) > 2*noise['E'] and equal_completion and complete_runs
-    return dict(metric=noise['metric'], E=noise['E'], threshold=2*noise['E'], pair_effects=effects,
+    return dict(metric=noise['metric'], endpoint=noise['contract']['endpoint'], E=noise['E'], threshold=2*noise['E'], pair_effects=effects,
                 median_effect=statistics.median(effects), all_favourable=all(v > 0 for v in effects),
                 equal_completion=equal_completion, complete_runs=complete_runs,
                 complete_phase_dispositions=complete_phase_dispositions, completion=completion, material=material,
