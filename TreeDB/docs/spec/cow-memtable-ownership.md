@@ -15,6 +15,9 @@ charge, then forks that private header, copies accepted keys/values into owned
 immutable strings and applies the batch. `Remove` physically deletes a key;
 a normal entry carrying `FlagTombstone` preserves a logical deletion and its
 revision. Pointer/revision/flags metadata is stored verbatim.
+Replacing an existing key reuses its already owned immutable string; only its
+new value is copied. Get/successor/cursor records share immutable strings and
+create no intermediate payload copy.
 
 Preparation forks again to create a separate read header. Only private headers
 call `Map.Copy`: this operation changes the source isolation ID and shallowly

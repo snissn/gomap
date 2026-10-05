@@ -209,7 +209,11 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			}
 		}
 		if !e.Remove {
-			if !add(&c.Payload, cowAllocation(uint64(len(e.Key)))) || !add(&c.Payload, cowAllocation(uint64(len(e.Value)))) {
+			keyCharge := uint64(0)
+			if !replacement {
+				keyCharge = cowAllocation(uint64(len(e.Key)))
+			}
+			if !add(&c.Payload, keyCharge) || !add(&c.Payload, cowAllocation(uint64(len(e.Value)))) {
 				return c, ErrCOWCapacity
 			}
 		}
@@ -333,7 +337,22 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 			p.private.Delete(bytesToStringNoCopy(e.Key))
 			continue
 		}
-		p.private.Set(string(e.Key), cowValue{value: string(e.Value), ptr: e.Ptr, flags: e.Flags, revision: e.Revision})
+		// Reuse an already owned immutable key on replacement. The value is
+		// copied exactly once; no key arena or caller-buffer borrowing occurs.
+		pivot := bytesToStringNoCopy(e.Key)
+		ownedKey := ""
+		exists := false
+		p.private.Ascend(pivot, func(key string, _ cowValue) bool {
+			if key == pivot {
+				ownedKey = key
+				exists = true
+			}
+			return false
+		})
+		if !exists {
+			ownedKey = string(e.Key)
+		}
+		p.private.Set(ownedKey, cowValue{value: string(e.Value), ptr: e.Ptr, flags: e.Flags, revision: e.Revision})
 	}
 	p.root = &COWRoot{tree: p.private.Copy(), generation: g}
 	w.pending = p
@@ -555,8 +574,11 @@ func (r *COWRoot) Release() COWRetirement {
 func (r *COWRoot) Len() int    { return r.tree.Len() }
 func (r *COWRoot) Height() int { return r.tree.Height() }
 func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
-	v, ok := r.tree.Get(bytesToStringNoCopy(key))
-	return COWRecord{Key: string(key), Value: v.value, Ptr: v.ptr, Flags: v.flags, Revision: v.revision}, ok
+	record, ok := r.SeekGE(key, nil)
+	if !ok || record.Key != bytesToStringNoCopy(key) {
+		return COWRecord{}, false
+	}
+	return record, true
 }
 
 // SeekGE uses the already owned cut/source reference. It allocates no cursor or

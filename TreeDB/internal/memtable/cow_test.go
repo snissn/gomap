@@ -703,6 +703,14 @@ func TestCOWSuccessorAndChargedCursorAdapter(t *testing.T) {
 	}); a != 0 {
 		t.Fatalf("SeekGE allocations %g", a)
 	}
+	if a := testing.AllocsPerRun(100, func() {
+		r, ok := root.Get(start)
+		if !ok || r.Key != "00000010" {
+			panic("bad point lookup")
+		}
+	}); a != 0 {
+		t.Fatalf("Get allocations %g", a)
+	}
 	if _, ok := root.SeekGE(end, end); ok {
 		t.Fatal("empty domain matched")
 	}
