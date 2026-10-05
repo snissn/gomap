@@ -764,11 +764,20 @@ indefinite write capacity. See [the split insert contract](vector-partition-spli
 ### Mixed colocated qualification diagnostics
 
 Optional version1 `ColocatedAudit` on existing fixed-peer diagnostics is bounded
-to six original outcomes and final known IDs (524288 encoded plan bytes). Its
+to six original outcomes and final known IDs, with an optional complete current
+source-vector `Population` expectation (524288 encoded plan bytes). A population-only
+initial attachment requires empty outcome/final ledgers, zero highest new commit
+and a positive applied floor; partial ledgers cannot downgrade. Its
 current-FSM/ACTIVE/root/applied/physical-WAL/summary fences and prepared-owner
 source/live proof are mandatory; stale or torn evidence is refused. Ordinary
-serving/diagnostics and mutation formats are unchanged. This is not full-population
-authority or a distributed quiescence mechanism. All four RF4 voters must remain
+serving/ordinary diagnostics and mutation formats are unchanged. The optional
+population observation hashes every current primary/overlay ID and raw FP32
+vector against independently retained full-oracle rows/count/digest; it proves
+source vectors only, not full-document or reverse live-graph equality or a
+distributed quiescence mechanism. All four RF4 voters must remain
 live through audit acquisition; root owns stop/join/catchup and clean shutdown
 verification. The mixed-window README and schema specify retained attempts,
 causal prefixes, original retries, observation limits and failure consumption.
+The [runtime specification](fixed-peer-tcp-runtime-v1.md) defines the supported
+bounded projection, exact encoding, mandatory limits, source-record accounting,
+and untimed admitted-scan cost. Qualification remains owned by #4250.

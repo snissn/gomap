@@ -490,3 +490,22 @@ traffic. These files are not benchprof inputs and do not change its parsers or
 `benchprof_results.json` contract. Tooling smoke and valid packets cannot qualify
 the runtime while actual sync, fence and owned retained/peak measurements remain
 missing; `validate --qualify` refuses that verdict.
+
+## Current source-population audit microbenchmarks
+
+These standalone Go benchmarks time admitted source-vector proof work and
+matched pre-existing iterator, JSON/vector and six-outcome audit-plan helpers:
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^Benchmark(VectorSourcePopulationProofV1|PopulationShared.*GuardV1|BufferedRootRunsIteratorBuildManyRuns)$' -benchmem
+GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPopulationLegacyColocatedPlanGuardV1$' -benchmem
+```
+
+The proof uses 512x128 and 10000x128 current rows and reports inspected entries,
+asset bytes and source-entry/projection bytes per operation. The legacy audit
+plan guard uses the frozen six-write/four-ID ledger and times validation or
+decoding, excluding authenticated transport, quorum and current-FSM fences.
+Retain raw Go benchmark output and compare identical helper bytes in balanced
+fresh processes. These package microbenchmarks are diagnostic artifacts, not
+benchprof inputs or evidence of service throughput, recall or cluster capacity;
+the unified-bench profile format and parser contract are unchanged.

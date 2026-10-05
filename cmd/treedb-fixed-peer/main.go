@@ -65,7 +65,7 @@ func runArgs(ctx context.Context, args []string, output io.Writer) error {
 	datasetPath := flags.String("dataset", "", "frozen system-export-dataset directory for dataset initialize/qualify; empty preserves three-row fixture")
 	requestID := flags.String("request-id", "", "stable ASCII fixture identity for initialize/qualify")
 	operationTimeout := flags.Duration("operation-timeout", 2*time.Minute, "initialize/qualify deadline, 1s..10m")
-	auditPath := flags.String("colocated-audit-plan", "", "bounded six-outcome JSON attachment for diagnostics only; all voters must remain live")
+	auditPath := flags.String("colocated-audit-plan", "", "bounded six-outcome and/or source-population JSON attachment for diagnostics only; all voters must remain live")
 	interval := flags.Duration("diagnostics-interval", 0, "emit diagnostics while serving; zero disables, minimum 1s")
 	if err := flags.Parse(args); err != nil {
 		return err

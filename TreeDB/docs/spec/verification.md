@@ -97,6 +97,39 @@ forces real read-at scratch reuse across base/replacement generations and checks
 deletion. Descriptor/primary-ID setup is still part-sized; these are not whole
 public-request constant-allocation claims.
 
+Complete current source-vector diagnostics: `TestColocatedAuditPopulationOnlyDecodeV1`
+is a capability-absence semantic red against the predecessor decoder.
+`TestFixedPeerColocatedAuditCurrentAuthorityV1` exercises initial and final
+population attachments through authenticated diagnostics on all four real Raft
+voters, retains legacy six-witness compatibility, and refuses actual extra,
+missing and same-count stale vectors outside the witness IDs. Its concurrent
+follower-apply test refuses changed-state receipts without an FSM/admission lock
+cycle. `TestVectorSourcePopulationCurrentProjectionV1` covers current inserts,
+deletes, replacements, fixed-D column projection, signed zero, exact inspection
+exhaustion, bounds/overflow and cancellation; `TestVectorSourcePopulationRetainedJSONV1`
+covers inline retained JSON and invalid/missing/nonfinite/zero-cosine vectors,
+including exact source-record and total-byte bounds.
+`TestVectorSourcePopulationDirectoryV2` requires real pointer-backed current
+primary entries and exact descriptor-plus-vector bytes, with one-byte and
+physical-work refusal controls. `TestVectorSourcePopulationJSONPointerRefusesV1`
+refuses non-column JSON pointers before value-log payload decoding.
+`TestVectorSourcePopulationEmptyV1` proves an empty typed collection without
+requiring an unused manifest or asset.
+`TestVectorPopulationPhysicalIteratorCancellationV1` cancels skipped tombstone
+work before a visible callback exists. `TestPeerPopulationAuditPreMarshalBoundV1`
+checks conservative encoded accounting and oversized/partial-plan refusal.
+Existing `TestBufferedRootRunsIterator*`, `TestTypedColumnPoint*` and
+`TestVectorFromJSONFieldMissingAndInvalid` remain affected helper controls.
+`BenchmarkPopulationLegacyColocatedPlanGuardV1/{validate,decode}` uses the
+retained six-original-outcome/four-ID plan with no population attachment; it
+guards only existing admission/decoding work, while the real-Raft legacy audit
+control above covers authenticated current-FSM behavior.
+
+`BenchmarkVectorSourcePopulationProofV1/{512x128,10000x128}` reports scan time,
+B/op, allocs/op, charged source/asset bytes and physical inspection units.
+This is explicitly untimed diagnostic overhead, not serving speedup or capacity
+qualification; #4250 owns actual all-voter resource/lifecycle acceptance.
+
 `TestTypedGraphPublicFoldControlRootPolicy` uses the public command-WAL durable
 opening helper with native leaf generation enabled. Default, fast, and compressed
 control policies cover fold followed by an ordinary typed replacement, exact
