@@ -1,0 +1,66 @@
+{
+  "status": "RETAINED_SCOPE_LIMITATION",
+  "before_source": {
+    "actual_builder_head": "c6c9aa07d255862feb1f72e5f6d6ebdf8b3b530c",
+    "landed_head": "6137db44b66e0323daba05ae891db44a8055c0fd",
+    "git_tree": "1f8dff578207339ea9fbd1743ffb38ae4766406a",
+    "binary_sha256": "6505c9531850f9a0de8c252b258f5895a9fb5433104df6ac05b2e3e06cc95d4b",
+    "collector_sha256": "45a9c645e8e5be10af82324d9c74a8a13c9663c8a92831ab2c7062bbcf429b69",
+    "original_receipts_provisional": {
+      "source": true,
+      "build": true
+    },
+    "binding_explanation": "Actual builder head stays c6; full Git tree plus every frozen project input match landed main. Build and source receipts retain their original history; this is a binding, not a rebuild.",
+    "build_go_version": "go version go1.26.3 linux/amd64",
+    "native_versions": {
+      "LMDB": "0.9.19 bundled bmatsuo/lmdb-go v1.8.0",
+      "RocksDB": "6.11.4 Ubuntu 6.11.4-3"
+    },
+    "runner_shared": true,
+    "runner_exception": "INFRASTRUCTURE_UNAVAILABLE: runner: dedicated runner unavailable; shared Linux runner with recorded load and persistent Go caches/durable NVMe artifacts."
+  },
+  "after_source": "17712b9cfcef2b90516419a34ccf3d464984d473",
+  "notes": [
+    "Full-snapshot off control is a singleton; no noise attribution or pure-patch causality.",
+    "New compressed-frame cap excludes explicit off; prior O1 receiver diagnostic/guard review retained.",
+    "O2-only off miss allocations decrease; wider Stats maintenance events differ from A2 baseline."
+  ],
+  "records": [
+    {
+      "label": "A2 baseline",
+      "raw": "baseline-controls-local/1-treedb-durable-generic-compression-off/stdout.json",
+      "sha256": "3c0be35c32762b5210eb911081cef0cedec2b8adb2bd3272f22ce9e31c931ed6",
+      "miss_ops_per_sec": 2409337.8959404104,
+      "miss_process_bytes_per_op": 9.39584,
+      "selected_wider_stats_deltas": {
+        "treedb.cache.vlog_generation.gc.runs": 0.0,
+        "treedb.cache.vlog_generation.rewrite.plan.total_ms": 0.0,
+        "treedb.cache.vlog_generation.rewrite.plan_runs": 0.0
+      }
+    },
+    {
+      "label": "O1 composed paired reference",
+      "raw": "o1-o1-composed-off_guard/1-treedb-durable-generic-compression-off/stdout.json",
+      "sha256": "48d36f19c0099755f6e5e8a3c9c49649d3f45b8c73a158832fd12fbad9178364",
+      "miss_ops_per_sec": 2222519.533599164,
+      "miss_process_bytes_per_op": 16.316694666666667,
+      "selected_wider_stats_deltas": {
+        "treedb.cache.vlog_generation.gc.runs": 1.0,
+        "treedb.cache.vlog_generation.rewrite.plan.total_ms": 682.345,
+        "treedb.cache.vlog_generation.rewrite.plan_runs": 1.0
+      }
+    },
+    {
+      "label": "O2 final",
+      "raw": "o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/stdout.json",
+      "sha256": "b59df20319a9d45dbffd0a6f31a93634b581b5f78763df25dfc5512c651ae549",
+      "miss_ops_per_sec": 2175451.889570916,
+      "miss_process_bytes_per_op": 15.426354666666667,
+      "selected_wider_stats_deltas": {
+        "treedb.cache.vlog_generation.gc.runs": 1.0,
+        "treedb.cache.vlog_generation.rewrite.plan.total_ms": 659.183,
+        "treedb.cache.vlog_generation.rewrite.plan_runs": 1.0
+      }
+    }
+  ]
+}

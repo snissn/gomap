@@ -1,8 +1,11 @@
-# Generic Quicksilver final evidence construction
+# Generic Quicksilver benchmark evidence
 
-This directory contains provisional report machinery for #4983 under #4978.
-The historical random4k report remains separate. No optimization is accepted by
-this construction commit, and no final performance measurements are invented.
+This directory publishes the generic Quicksilver sprint for #4983 under #4978.
+[FINAL_FINDINGS.md](FINAL_FINDINGS.md) explains the current-engine results,
+before/after optimization comparison, durability contracts and remaining costs.
+[REPORT.md](REPORT.md) retains primary seed ranges, p99 and Go allocations;
+[RESULTS.json](RESULTS.json) retains all 43 required source-qualified observations.
+The historical random4k report remains separate.
 
 `assemble.py` uses the landed #4979/#4981 capture validator and the accepted
 full baseline packet. It verifies actual raw hashes, receipt/build/native/loader
@@ -73,3 +76,37 @@ Final capture receipts must use the existing wrapper's directory/file schema and
 the same runtime environment and native library inventory as the baseline.
 The coordinator supplies authority that `--landed-final` is landed main; the
 assembler checks Git object equality without contacting GitHub or the runner.
+
+## Run and profile the workload
+
+Build the existing harness with `make unified-bench benchprof`. On the retained
+Linux runner, the primary TreeDB durable cell used the command below. Use the
+same native-library environment and frozen manifest for a matched reproduction;
+local runs on other hosts are new observations.
+
+```sh
+GOMAXPROCS=12 GOGC=100 GOMEMLIMIT=2GiB \
+TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES=1073741824 \
+./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+  -quicksilver-case realistic -keys 3000000 -read-workers 4 \
+  -quicksilver-reads 6000000 -quicksilver-updates 40000 \
+  -quicksilver-duration 8s -quicksilver-read-batch 64 \
+  -quicksilver-commit ordinary -max-wall 30m -seed 24 \
+  -quicksilver-mixture primary -quicksilver-working-set uniform \
+  -quicksilver-miss-percent 90
+```
+
+For attribution, add `-profile-dir "$OUT"` after setting
+`OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`, then run
+`./bin/benchprof -profiles-dir "$OUT"`. Profiled runs remain diagnostic; collect
+unprofiled cells separately for timing comparisons. Select `-profile fast` for
+volatile ordinary ACK, `-dbs lmdb` or `-dbs rocksdb` for the declared native
+adapters, and the predeclared held-out flags in `plans.json` for scaling.
+
+To rebuild the complete publication, pass the 13 retained `o2-o1-o2-*` capture
+directories and `final-remaining30` as separate `--bundle` arguments, plus
+`--landed-final 17712b9cfcef2b90516419a34ccf3d464984d473 --finalize`.
+The full raw campaign remains in the local/native retained evidence roots
+described in `FINAL_FINDINGS.md`; compact results alone cannot revalidate raw
+file hashes. Use the existing frozen
+`scripts/unified_bench_quicksilver_capture.py` producer for new serial campaigns.

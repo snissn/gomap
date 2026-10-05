@@ -1,0 +1,750 @@
+{
+  "status": "DIAGNOSTIC_ONLY_EXCLUDED_FROM_TIMINGS",
+  "runs": [
+    {
+      "group": "o2-o1-paired-baseline-profile-3m",
+      "profile": "durable",
+      "hit_cpu_sample_seconds": 86.83,
+      "flat_decode_seconds": 48.79,
+      "flat_crc_seconds_top_entries": 11.63,
+      "memmove_seconds": 7.2,
+      "read_count": 6000000,
+      "cpu_top_entries": [
+        {
+          "flat": "44.97s",
+          "flat_pct": 51.79,
+          "cum": "50.43s",
+          "cum_pct": 58.08,
+          "function": "github.com/golang/snappy.decode"
+        },
+        {
+          "flat": "11.57s",
+          "flat_pct": 13.32,
+          "cum": "11.57s",
+          "cum_pct": 13.32,
+          "function": "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512"
+        },
+        {
+          "flat": "7.20s",
+          "flat_pct": 8.29,
+          "cum": "7.20s",
+          "cum_pct": 8.29,
+          "function": "runtime.memmove"
+        },
+        {
+          "flat": "3.82s",
+          "flat_pct": 4.4,
+          "cum": "4.68s",
+          "cum_pct": 5.39,
+          "function": "github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock"
+        },
+        {
+          "flat": "1.23s",
+          "flat_pct": 1.42,
+          "cum": "1.55s",
+          "cum_pct": 1.79,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal"
+        },
+        {
+          "flat": "1.11s",
+          "flat_pct": 1.28,
+          "cum": "1.11s",
+          "cum_pct": 1.28,
+          "function": "encoding/binary.littleEndian.Uint32 (inline)"
+        },
+        {
+          "flat": "1.09s",
+          "flat_pct": 1.26,
+          "cum": "1.09s",
+          "cum_pct": 1.26,
+          "function": "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)"
+        },
+        {
+          "flat": "1s",
+          "flat_pct": 1.15,
+          "cum": "85.57s",
+          "cum_pct": 98.55,
+          "function": "main.quicksilverReadPhase.func1"
+        },
+        {
+          "flat": "0.98s",
+          "flat_pct": 1.13,
+          "cum": "0.98s",
+          "cum_pct": 1.13,
+          "function": "cmpbody"
+        },
+        {
+          "flat": "0.96s",
+          "flat_pct": 1.11,
+          "cum": "1.06s",
+          "cum_pct": 1.22,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState"
+        },
+        {
+          "flat": "0.83s",
+          "flat_pct": 0.96,
+          "cum": "1.52s",
+          "cum_pct": 1.75,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID"
+        },
+        {
+          "flat": "0.43s",
+          "flat_pct": 0.5,
+          "cum": "0.57s",
+          "cum_pct": 0.66,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo"
+        },
+        {
+          "flat": "0.35s",
+          "flat_pct": 0.4,
+          "cum": "8.54s",
+          "cum_pct": 9.84,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo"
+        },
+        {
+          "flat": "0.35s",
+          "flat_pct": 0.4,
+          "cum": "19.82s",
+          "cum_pct": 22.83,
+          "function": "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView"
+        },
+        {
+          "flat": "0.30s",
+          "flat_pct": 0.35,
+          "cum": "62.80s",
+          "cum_pct": 72.33,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapAppend"
+        },
+        {
+          "flat": "0.20s",
+          "flat_pct": 0.23,
+          "cum": "9.35s",
+          "cum_pct": 10.77,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeTo"
+        },
+        {
+          "flat": "0.16s",
+          "flat_pct": 0.18,
+          "cum": "0.48s",
+          "cum_pct": 0.55,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf"
+        },
+        {
+          "flat": "0.16s",
+          "flat_pct": 0.18,
+          "cum": "83.36s",
+          "cum_pct": 96,
+          "function": "main.quicksilverGet"
+        },
+        {
+          "flat": "0.10s",
+          "flat_pct": 0.12,
+          "cum": "1.26s",
+          "cum_pct": 1.45,
+          "function": "runtime.mallocgcSmallNoscan"
+        },
+        {
+          "flat": "0.09s",
+          "flat_pct": 0.1,
+          "cum": "0.85s",
+          "cum_pct": 0.98,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).storeReadMiss"
+        },
+        {
+          "flat": "0.07s",
+          "flat_pct": 0.081,
+          "cum": "55.25s",
+          "cum_pct": 63.63,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.decodeBlockPayload"
+        },
+        {
+          "flat": "0.07s",
+          "flat_pct": 0.081,
+          "cum": "55.56s",
+          "cum_pct": 63.99,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.decodeFramePayloadTo"
+        },
+        {
+          "flat": "0.07s",
+          "flat_pct": 0.081,
+          "cum": "1.55s",
+          "cum_pct": 1.79,
+          "function": "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto"
+        },
+        {
+          "flat": "0.06s",
+          "flat_pct": 0.069,
+          "cum": "12.44s",
+          "cum_pct": 14.33,
+          "function": "github.com/snissn/go-crc32-asm.updateIEEEFast"
+        },
+        {
+          "flat": "0.06s",
+          "flat_pct": 0.069,
+          "cum": "0.46s",
+          "cum_pct": 0.53,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadTo"
+        }
+      ]
+    },
+    {
+      "group": "o2-o1-paired-baseline-profile-3m",
+      "profile": "fast",
+      "hit_cpu_sample_seconds": 88.24,
+      "flat_decode_seconds": 49.480000000000004,
+      "flat_crc_seconds_top_entries": 11.75,
+      "memmove_seconds": 7.24,
+      "read_count": 6000000,
+      "cpu_top_entries": [
+        {
+          "flat": "44.84s",
+          "flat_pct": 50.82,
+          "cum": "50s",
+          "cum_pct": 56.66,
+          "function": "github.com/golang/snappy.decode"
+        },
+        {
+          "flat": "11.55s",
+          "flat_pct": 13.09,
+          "cum": "11.55s",
+          "cum_pct": 13.09,
+          "function": "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512"
+        },
+        {
+          "flat": "7.24s",
+          "flat_pct": 8.2,
+          "cum": "7.24s",
+          "cum_pct": 8.2,
+          "function": "runtime.memmove"
+        },
+        {
+          "flat": "4.64s",
+          "flat_pct": 5.26,
+          "cum": "5.45s",
+          "cum_pct": 6.18,
+          "function": "github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock"
+        },
+        {
+          "flat": "1.35s",
+          "flat_pct": 1.53,
+          "cum": "1.35s",
+          "cum_pct": 1.53,
+          "function": "encoding/binary.littleEndian.Uint32 (inline)"
+        },
+        {
+          "flat": "1.08s",
+          "flat_pct": 1.22,
+          "cum": "1.08s",
+          "cum_pct": 1.22,
+          "function": "cmpbody"
+        },
+        {
+          "flat": "1.07s",
+          "flat_pct": 1.21,
+          "cum": "1.48s",
+          "cum_pct": 1.68,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal"
+        },
+        {
+          "flat": "1.02s",
+          "flat_pct": 1.16,
+          "cum": "1.08s",
+          "cum_pct": 1.22,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState"
+        },
+        {
+          "flat": "0.96s",
+          "flat_pct": 1.09,
+          "cum": "1.17s",
+          "cum_pct": 1.33,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo"
+        },
+        {
+          "flat": "0.95s",
+          "flat_pct": 1.08,
+          "cum": "0.95s",
+          "cum_pct": 1.08,
+          "function": "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)"
+        },
+        {
+          "flat": "0.89s",
+          "flat_pct": 1.01,
+          "cum": "1.51s",
+          "cum_pct": 1.71,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID"
+        },
+        {
+          "flat": "0.75s",
+          "flat_pct": 0.85,
+          "cum": "85.82s",
+          "cum_pct": 97.26,
+          "function": "main.quicksilverReadPhase.func1"
+        },
+        {
+          "flat": "0.35s",
+          "flat_pct": 0.4,
+          "cum": "10.67s",
+          "cum_pct": 12.09,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo"
+        },
+        {
+          "flat": "0.33s",
+          "flat_pct": 0.37,
+          "cum": "21.11s",
+          "cum_pct": 23.92,
+          "function": "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView"
+        },
+        {
+          "flat": "0.29s",
+          "flat_pct": 0.33,
+          "cum": "1.24s",
+          "cum_pct": 1.41,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).searchLeafColumnarPrefixV2BlockWithMeta"
+        },
+        {
+          "flat": "0.26s",
+          "flat_pct": 0.29,
+          "cum": "61.96s",
+          "cum_pct": 70.22,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapAppend"
+        },
+        {
+          "flat": "0.17s",
+          "flat_pct": 0.19,
+          "cum": "0.58s",
+          "cum_pct": 0.66,
+          "function": "github.com/snissn/gomap/TreeDB/node.compareLeafPrefixVirtualKey"
+        },
+        {
+          "flat": "0.17s",
+          "flat_pct": 0.19,
+          "cum": "83.85s",
+          "cum_pct": 95.02,
+          "function": "main.quicksilverGet"
+        },
+        {
+          "flat": "0.16s",
+          "flat_pct": 0.18,
+          "cum": "11.42s",
+          "cum_pct": 12.94,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeTo"
+        },
+        {
+          "flat": "0.13s",
+          "flat_pct": 0.15,
+          "cum": "0.54s",
+          "cum_pct": 0.61,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.decodeCompactLeafLogPayloadTo"
+        },
+        {
+          "flat": "0.13s",
+          "flat_pct": 0.15,
+          "cum": "0.45s",
+          "cum_pct": 0.51,
+          "function": "github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad"
+        },
+        {
+          "flat": "0.10s",
+          "flat_pct": 0.11,
+          "cum": "1.03s",
+          "cum_pct": 1.17,
+          "function": "hash/crc32.archUpdateIEEE"
+        },
+        {
+          "flat": "0.10s",
+          "flat_pct": 0.11,
+          "cum": "0.54s",
+          "cum_pct": 0.61,
+          "function": "hash/crc32.slicingUpdate"
+        },
+        {
+          "flat": "0.09s",
+          "flat_pct": 0.1,
+          "cum": "1.12s",
+          "cum_pct": 1.27,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).groupedFrameCacheReadTo"
+        },
+        {
+          "flat": "0.09s",
+          "flat_pct": 0.1,
+          "cum": "55.58s",
+          "cum_pct": 62.99,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.decodeBlockPayload"
+        }
+      ]
+    },
+    {
+      "group": "o2-o1-composed-profile-3m",
+      "profile": "durable",
+      "hit_cpu_sample_seconds": 25.64,
+      "flat_decode_seconds": 4.9799999999999995,
+      "flat_crc_seconds_top_entries": 3.44,
+      "memmove_seconds": 1.58,
+      "read_count": 6000000,
+      "cpu_top_entries": [
+        {
+          "flat": "3.80s",
+          "flat_pct": 14.82,
+          "cum": "4.66s",
+          "cum_pct": 18.17,
+          "function": "github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock"
+        },
+        {
+          "flat": "2.65s",
+          "flat_pct": 10.34,
+          "cum": "2.65s",
+          "cum_pct": 10.34,
+          "function": "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512"
+        },
+        {
+          "flat": "1.58s",
+          "flat_pct": 6.16,
+          "cum": "1.58s",
+          "cum_pct": 6.16,
+          "function": "runtime.memmove"
+        },
+        {
+          "flat": "1.18s",
+          "flat_pct": 4.6,
+          "cum": "1.26s",
+          "cum_pct": 4.91,
+          "function": "github.com/golang/snappy.decode"
+        },
+        {
+          "flat": "1.17s",
+          "flat_pct": 4.56,
+          "cum": "1.17s",
+          "cum_pct": 4.56,
+          "function": "encoding/binary.littleEndian.Uint32 (inline)"
+        },
+        {
+          "flat": "1.09s",
+          "flat_pct": 4.25,
+          "cum": "1.41s",
+          "cum_pct": 5.5,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal"
+        },
+        {
+          "flat": "0.94s",
+          "flat_pct": 3.67,
+          "cum": "0.94s",
+          "cum_pct": 3.67,
+          "function": "cmpbody"
+        },
+        {
+          "flat": "0.86s",
+          "flat_pct": 3.35,
+          "cum": "0.88s",
+          "cum_pct": 3.43,
+          "function": "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)"
+        },
+        {
+          "flat": "0.85s",
+          "flat_pct": 3.32,
+          "cum": "24.34s",
+          "cum_pct": 94.93,
+          "function": "main.quicksilverReadPhase.func1"
+        },
+        {
+          "flat": "0.70s",
+          "flat_pct": 2.73,
+          "cum": "1.49s",
+          "cum_pct": 5.81,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID"
+        },
+        {
+          "flat": "0.44s",
+          "flat_pct": 1.72,
+          "cum": "0.44s",
+          "cum_pct": 1.72,
+          "function": "hash/crc32.ieeeCLMUL"
+        },
+        {
+          "flat": "0.43s",
+          "flat_pct": 1.68,
+          "cum": "0.52s",
+          "cum_pct": 2.03,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo"
+        },
+        {
+          "flat": "0.36s",
+          "flat_pct": 1.4,
+          "cum": "0.48s",
+          "cum_pct": 1.87,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState"
+        },
+        {
+          "flat": "0.35s",
+          "flat_pct": 1.37,
+          "cum": "0.35s",
+          "cum_pct": 1.37,
+          "function": "hash/crc32.simpleUpdate (inline)"
+        },
+        {
+          "flat": "0.34s",
+          "flat_pct": 1.33,
+          "cum": "18.11s",
+          "cum_pct": 70.63,
+          "function": "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView"
+        },
+        {
+          "flat": "0.33s",
+          "flat_pct": 1.29,
+          "cum": "8.73s",
+          "cum_pct": 34.05,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo"
+        },
+        {
+          "flat": "0.29s",
+          "flat_pct": 1.13,
+          "cum": "0.29s",
+          "cum_pct": 1.13,
+          "function": "sync/atomic.(*Bool).Load (inline)"
+        },
+        {
+          "flat": "0.26s",
+          "flat_pct": 1.01,
+          "cum": "0.27s",
+          "cum_pct": 1.05,
+          "function": "github.com/snissn/gomap/TreeDB/pager.(*Pager).Get"
+        },
+        {
+          "flat": "0.25s",
+          "flat_pct": 0.98,
+          "cum": "0.58s",
+          "cum_pct": 2.26,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf"
+        },
+        {
+          "flat": "0.23s",
+          "flat_pct": 0.9,
+          "cum": "0.23s",
+          "cum_pct": 0.9,
+          "function": "github.com/snissn/gomap/TreeDB/tree.outerLeafRecentRingContains (inline)"
+        },
+        {
+          "flat": "0.22s",
+          "flat_pct": 0.86,
+          "cum": "0.37s",
+          "cum_pct": 1.44,
+          "function": "main.quicksilverGenericKey"
+        },
+        {
+          "flat": "0.20s",
+          "flat_pct": 0.78,
+          "cum": "0.44s",
+          "cum_pct": 1.72,
+          "function": "github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad"
+        },
+        {
+          "flat": "0.20s",
+          "flat_pct": 0.78,
+          "cum": "22.30s",
+          "cum_pct": 86.97,
+          "function": "main.quicksilverGet"
+        },
+        {
+          "flat": "0.19s",
+          "flat_pct": 0.74,
+          "cum": "0.19s",
+          "cum_pct": 0.74,
+          "function": "github.com/snissn/gomap/TreeDB/node.getUint16At (inline)"
+        },
+        {
+          "flat": "0.19s",
+          "flat_pct": 0.74,
+          "cum": "0.19s",
+          "cum_pct": 0.74,
+          "function": "sync/atomic.(*Uint64).CompareAndSwap (inline)"
+        }
+      ]
+    },
+    {
+      "group": "o2-o1-composed-profile-3m",
+      "profile": "fast",
+      "hit_cpu_sample_seconds": 26.83,
+      "flat_decode_seconds": 5.140000000000001,
+      "flat_crc_seconds_top_entries": 2.72,
+      "memmove_seconds": 1.89,
+      "read_count": 6000000,
+      "cpu_top_entries": [
+        {
+          "flat": "3.89s",
+          "flat_pct": 14.5,
+          "cum": "4.71s",
+          "cum_pct": 17.55,
+          "function": "github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock"
+        },
+        {
+          "flat": "2.31s",
+          "flat_pct": 8.61,
+          "cum": "2.31s",
+          "cum_pct": 8.61,
+          "function": "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512"
+        },
+        {
+          "flat": "1.89s",
+          "flat_pct": 7.04,
+          "cum": "1.89s",
+          "cum_pct": 7.04,
+          "function": "runtime.memmove"
+        },
+        {
+          "flat": "1.27s",
+          "flat_pct": 4.73,
+          "cum": "1.27s",
+          "cum_pct": 4.73,
+          "function": "cmpbody"
+        },
+        {
+          "flat": "1.25s",
+          "flat_pct": 4.66,
+          "cum": "1.29s",
+          "cum_pct": 4.81,
+          "function": "github.com/golang/snappy.decode"
+        },
+        {
+          "flat": "1.16s",
+          "flat_pct": 4.32,
+          "cum": "1.16s",
+          "cum_pct": 4.32,
+          "function": "encoding/binary.littleEndian.Uint32 (inline)"
+        },
+        {
+          "flat": "1.02s",
+          "flat_pct": 3.8,
+          "cum": "1.51s",
+          "cum_pct": 5.63,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal"
+        },
+        {
+          "flat": "0.80s",
+          "flat_pct": 2.98,
+          "cum": "0.80s",
+          "cum_pct": 2.98,
+          "function": "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)"
+        },
+        {
+          "flat": "0.80s",
+          "flat_pct": 2.98,
+          "cum": "25.58s",
+          "cum_pct": 95.34,
+          "function": "main.quicksilverReadPhase.func1"
+        },
+        {
+          "flat": "0.77s",
+          "flat_pct": 2.87,
+          "cum": "1.08s",
+          "cum_pct": 4.03,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo"
+        },
+        {
+          "flat": "0.54s",
+          "flat_pct": 2.01,
+          "cum": "1.20s",
+          "cum_pct": 4.47,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID"
+        },
+        {
+          "flat": "0.47s",
+          "flat_pct": 1.75,
+          "cum": "9.46s",
+          "cum_pct": 35.26,
+          "function": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo"
+        },
+        {
+          "flat": "0.41s",
+          "flat_pct": 1.53,
+          "cum": "0.41s",
+          "cum_pct": 1.53,
+          "function": "hash/crc32.ieeeCLMUL"
+        },
+        {
+          "flat": "0.39s",
+          "flat_pct": 1.45,
+          "cum": "19.54s",
+          "cum_pct": 72.83,
+          "function": "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView"
+        },
+        {
+          "flat": "0.38s",
+          "flat_pct": 1.42,
+          "cum": "1.30s",
+          "cum_pct": 4.85,
+          "function": "github.com/snissn/gomap/TreeDB/node.(*Node).searchLeafColumnarPrefixV2BlockWithMeta"
+        },
+        {
+          "flat": "0.29s",
+          "flat_pct": 1.08,
+          "cum": "0.29s",
+          "cum_pct": 1.08,
+          "function": "time.runtimeNow"
+        },
+        {
+          "flat": "0.27s",
+          "flat_pct": 1.01,
+          "cum": "0.44s",
+          "cum_pct": 1.64,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState"
+        },
+        {
+          "flat": "0.27s",
+          "flat_pct": 1.01,
+          "cum": "0.27s",
+          "cum_pct": 1.01,
+          "function": "github.com/snissn/gomap/TreeDB/tree.outerLeafRecentRingContains (inline)"
+        },
+        {
+          "flat": "0.25s",
+          "flat_pct": 0.93,
+          "cum": "23.37s",
+          "cum_pct": 87.1,
+          "function": "main.quicksilverGet"
+        },
+        {
+          "flat": "0.25s",
+          "flat_pct": 0.93,
+          "cum": "0.25s",
+          "cum_pct": 0.93,
+          "function": "runtime.memclrNoHeapPointers"
+        },
+        {
+          "flat": "0.24s",
+          "flat_pct": 0.89,
+          "cum": "0.46s",
+          "cum_pct": 1.71,
+          "function": "main.quicksilverGenericKey"
+        },
+        {
+          "flat": "0.23s",
+          "flat_pct": 0.86,
+          "cum": "0.23s",
+          "cum_pct": 0.86,
+          "function": "runtime.nextFreeFast (inline)"
+        },
+        {
+          "flat": "0.22s",
+          "flat_pct": 0.82,
+          "cum": "0.24s",
+          "cum_pct": 0.89,
+          "function": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getToWithState"
+        },
+        {
+          "flat": "0.22s",
+          "flat_pct": 0.82,
+          "cum": "0.71s",
+          "cum_pct": 2.65,
+          "function": "github.com/snissn/gomap/TreeDB/node.compareLeafPrefixVirtualKey"
+        },
+        {
+          "flat": "0.22s",
+          "flat_pct": 0.82,
+          "cum": "0.50s",
+          "cum_pct": 1.86,
+          "function": "github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad"
+        }
+      ]
+    }
+  ],
+  "native_attestation_sha256": "8bfeb7e2720acd9db8c859e4a3341ac510dedcbeb2e716c5b57c53589338fe55"
+}

@@ -1,0 +1,654 @@
+{
+  "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+  "baseline_head": "63794357c03898da03a37c5412770fdf197f2ce0",
+  "status": "PASS",
+  "stages": [
+    {
+      "path": "o2-o1-composed-preflight/analyzer-build-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "provisional": true,
+        "command": [
+          "go",
+          "build",
+          "-p",
+          "1",
+          "-buildvcs=false",
+          "-o",
+          "/mnt/fast4tb/quicksilver-authoritative-20261003/bin/benchprof-o2-o1-composed",
+          "./cmd/benchprof"
+        ],
+        "started": 1791153971.7449687,
+        "finished": 1791153971.9171567,
+        "rc": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "path": "o2-o1-composed-preflight/native-build-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "provisional": true,
+        "command": [
+          "go",
+          "build",
+          "-p",
+          "1",
+          "-buildvcs=false",
+          "-tags",
+          "lmdb rocksdb",
+          "-o",
+          "/mnt/fast4tb/quicksilver-authoritative-20261003/bin/unified-bench-o2-o1-composed",
+          "./cmd/unified_bench"
+        ],
+        "started": 1791153948.6163497,
+        "finished": 1791153971.7447462,
+        "rc": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-post-meta-poison-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationPublicationFailureClassPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154068.6781127,
+        "finished": 1791154069.509741,
+        "stdout_sha256": "08e8d60143aa99dfa62c01cad1ca2d2492ac52db25e08d353eb41ffb771c5a28",
+        "named_outcomes": [
+          "TestPowerLossCertificationPublicationFailureClassPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-post-meta-poison-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-post-meta-poison-stable-image/after-meta-write/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-retryable-pre-meta-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationPublicationFailureClassPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154066.0970724,
+        "finished": 1791154066.8998427,
+        "stdout_sha256": "8155618d9c47abf1cf3d4302693cbbc5e8d41b8d72ea34558f58817b30fc2aa9",
+        "named_outcomes": [
+          "TestPowerLossCertificationPublicationFailureClassPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-retryable-pre-meta-failure-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-retryable-pre-meta-failure-stable-image/before-meta-write/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/composed-owned-read-public-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB/caching",
+          "./TreeDB",
+          "./kvstore/adapters/treedb",
+          "-run",
+          "Test(SnapshotGet|CachedSnapshot|SnapshotExact|AcquireSnapshot|AdapterAcquireReadSnapshot|ReadSnapshotsSeeQueuedWrites|ProfileFast_ReadSnapshots|PublicCommandWALDeleteRangeSnapshotIsolation|CachingDB_CommandWALRangeSpan|OwnedGetValueLogMmapCacheRouteAfterReopen)",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791153984.99681,
+        "finished": 1791154023.8503149,
+        "stdout_sha256": "bf08ae435ca2c7467adcf4b4a8db13360bd2df636ea67fe53a0b12b17de5e010",
+        "named_outcomes": [
+          "TestAcquireSnapshotDebugAccounting",
+          "TestAcquireSnapshot_AllocsBoundedAfterWarmPath",
+          "TestAcquireSnapshot_BackendFallbackPinsSystemRootPageID",
+          "TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable",
+          "TestAcquireSnapshot_BackendFastPathAllocsAreBounded",
+          "TestAcquireSnapshot_CachedPathAllocsAreBounded",
+          "TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites",
+          "TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossAcquisitions",
+          "TestAcquireSnapshot_CapturesPublishedRootDomainVersion",
+          "TestAcquireSnapshot_CapturesRootDomainStateAcrossLaterPublishes",
+          "TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints",
+          "TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup",
+          "TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites",
+          "TestAcquireSnapshot_IncludesCachedWrites",
+          "TestAcquireSnapshot_IncludesCachedWrites_ValuePointers",
+          "TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot",
+          "TestAcquireSnapshot_NotifyErrorOnRotateFailure",
+          "TestAcquireSnapshot_PinsGroupedWarmPublishAcrossMixedSystemAndNonSystemRoots",
+          "TestAcquireSnapshot_PinsGroupedWarmPublishAcrossNonSystemRoots",
+          "TestAcquireSnapshot_PinsInstalledPublishedRootSet",
+          "TestAcquireSnapshot_PinsInstalledPublishedRootSetIncludingSystem",
+          "TestAdapterAcquireReadSnapshot_IncludesCachedWrites",
+          "TestCachedSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators",
+          "TestCachedSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition",
+          "TestCachedSnapshotIteratorCreationRejectsStaleGeneration",
+          "TestCachedSnapshotIteratorCreationSerializesCloseAndRelease",
+          "TestCachedSnapshotIteratorCreationSerializesCloseAndRelease/forward",
+          "TestCachedSnapshotIteratorCreationSerializesCloseAndRelease/reverse",
+          "TestCachedSnapshotIteratorDoubleCloseCannotMutateDetachedOwner",
+          "TestCachedSnapshotReadCallbackCanCloseOwner",
+          "TestCachingDB_CommandWALRangeSpanBlocksLaterWriteSyncBypass",
+          "TestCachingDB_CommandWALRangeSpanBounds",
+          "TestCachingDB_CommandWALRangeSpanCheckpointCombinesFlushUnits",
+          "TestCachingDB_CommandWALRangeSpanFiltersPublishedRoot",
+          "TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers",
+          "TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers/newer_point_waits_behind_older_span_from_another_lane",
+          "TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers/span_waits_for_older_point_from_another_lane",
+          "TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot",
+          "TestCachingDB_CommandWALRangeSpanPreservesPublishedRootMiss",
+          "TestCachingDB_CommandWALRangeSpanSurvivesDisjointOrdinaryDeleteRange",
+          "TestCachingDB_CommandWALRangeSpanVisibilitySnapshotsAndCheckpoint",
+          "TestOwnedGetValueLogMmapCacheRouteAfterReopen",
+          "TestOwnedGetValueLogMmapCacheRouteAfterReopen/read_only_false",
+          "TestOwnedGetValueLogMmapCacheRouteAfterReopen/read_only_true",
+          "TestProfileFast_ReadSnapshotsSeeQueuedWritesBeforeCheckpoint_AccessMatrix",
+          "TestProfileFast_ReadSnapshotsSeeQueuedWritesBeforeCheckpoint_AccessMatrix/per_worker_snapshot_get",
+          "TestProfileFast_ReadSnapshotsSeeQueuedWritesBeforeCheckpoint_AccessMatrix/per_worker_snapshot_getappend",
+          "TestProfileFast_ReadSnapshotsSeeQueuedWritesBeforeCheckpoint_AccessMatrix/shared_snapshot_get",
+          "TestPublicCommandWALDeleteRangeSnapshotIsolation",
+          "TestReadSnapshotsSeeQueuedWritesAfterCheckpoint_Control",
+          "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix",
+          "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix/command_wal_durable",
+          "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix/command_wal_relaxed",
+          "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix/no_wal_fast",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/false/eligible",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/false/global_upgrade",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/false/missing_point_roots",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/false/missing_queue_IDs",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/false/range_spans",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/true/eligible",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/true/global_upgrade",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/true/missing_point_roots",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/true/missing_queue_IDs",
+          "TestSnapshotExactVersionSourcesFallbackAndPrecedence/true/range_spans",
+          "TestSnapshotGetAppend_BackendLookupMissWithoutPublishedRootsReturnsNotFound",
+          "TestSnapshotGetAppend_BackendPublishedMissSkipsEntryProbe",
+          "TestSnapshotGetAppend_NilReceiverMissReturnsNotFound",
+          "TestSnapshotGetAppend_PublishedAppendHitReturnsWithoutFallback",
+          "TestSnapshotGetAppend_PublishedLookupWithoutAppendSupport",
+          "TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput",
+          "TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst",
+          "TestSnapshotGetAppend_PublishedMissFallsBackToBackend",
+          "TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot",
+          "TestSnapshotGetManyViewClosedSnapshotBoundary",
+          "TestSnapshotGet_BackendPublishedMissSkipsEntryProbe",
+          "TestSnapshotGet_NilReceiverReturnsClosed",
+          "TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe",
+          "TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe/0",
+          "TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe/128",
+          "TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe/8192",
+          "TestSnapshotGet_PublishedEmptyInlineValueReturnsNonNilEmpty",
+          "TestSnapshotGet_QueuedPointerValueRemainsCallerOwned"
+        ],
+        "selectors": {},
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-ordinary-write-batch-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationOrdinaryWriteAndBatchPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154055.795548,
+        "finished": 1791154056.5966218,
+        "stdout_sha256": "fc81bf576a3f9feb26cbdd3e8f36b117cdc5780fe9e39d790a9c979144aeb413",
+        "named_outcomes": [
+          "TestPowerLossCertificationOrdinaryWriteAndBatchPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-ack-ordinary-write-batch-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-ack-ordinary-write-batch-stable-image/after-meta-sync/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/focused-root-closure-gc-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB/db",
+          "-run",
+          "^(TestOuterLeafOrdinaryAdditiveProducerInventory|TestBuildValueLogRefDeltaProducerInventoryErrors|TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree|TestOuterLeafFirstPublicationFromEmptyDependencyBaseDoesNotScanCandidateTree|TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse|TestOuterLeafLogicalReplacementUsesExactTrackerProjection|TestRootPublicationBuildGroupAbortDiscardsStagedRoot|TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister|TestOuterLeafPointerCommitFailsClosedForUnreportedSegmentWithoutRefreshScan|TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath|TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures|TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration|TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses|TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen|TestValueLogGC_IncrementalParityWithFullScan|TestDurableRootPublicationIOReleasesRootSerializationLocks)$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154025.6227465,
+        "finished": 1791154054.0097113,
+        "stdout_sha256": "2f7bcec5131f12b804d5125eba78f9db346417a01e0c6c936dfe974133962e17",
+        "named_outcomes": [
+          "TestBuildValueLogRefDeltaProducerInventoryErrors",
+          "TestDurableRootPublicationIOReleasesRootSerializationLocks",
+          "TestDurableRootPublicationIOReleasesRootSerializationLocks/optimistic",
+          "TestDurableRootPublicationIOReleasesRootSerializationLocks/serialized",
+          "TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath",
+          "TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures",
+          "TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration",
+          "TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen",
+          "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses",
+          "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=false",
+          "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=true",
+          "TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister",
+          "TestOuterLeafFirstPublicationFromEmptyDependencyBaseDoesNotScanCandidateTree",
+          "TestOuterLeafLogicalReplacementUsesExactTrackerProjection",
+          "TestOuterLeafOrdinaryAdditiveProducerInventory",
+          "TestOuterLeafOrdinaryAdditiveProducerInventory/build-group",
+          "TestOuterLeafOrdinaryAdditiveProducerInventory/optimistic",
+          "TestOuterLeafOrdinaryAdditiveProducerInventory/serialized",
+          "TestOuterLeafPointerCommitFailsClosedForUnreportedSegmentWithoutRefreshScan",
+          "TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse",
+          "TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree",
+          "TestRootPublicationBuildGroupAbortDiscardsStagedRoot",
+          "TestValueLogGC_IncrementalParityWithFullScan"
+        ],
+        "selectors": {},
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-maintenance-unlink-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationMaintenanceUnlinkPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154063.588067,
+        "finished": 1791154064.3274298,
+        "stdout_sha256": "581f5b24cb9460a47e2c98fa3e18e3eb8481ca2fa5cdc026f1838a2affc61a44",
+        "named_outcomes": [
+          "TestPowerLossCertificationMaintenanceUnlinkPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-maintenance-unlink-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-maintenance-unlink-stable-image/before-deletion-directory-sync/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/composed-focused-public-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^(TestPublicCompressedFrames_OrdinaryGroupingReopen|TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity)$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791153975.8786647,
+        "finished": 1791153983.255587,
+        "stdout_sha256": "4df11fb9862e3740d126193521d352855e71688c2461e4c61d17118331e2a57c",
+        "named_outcomes": [
+          "TestPublicCompressedFrames_OrdinaryGroupingReopen",
+          "TestPublicCompressedFrames_OrdinaryGroupingReopen/command_wal_durable",
+          "TestPublicCompressedFrames_OrdinaryGroupingReopen/no_wal_fast",
+          "TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity"
+        ],
+        "selectors": {},
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-all-explicit-sync-forms-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationAllExplicitSyncFormsPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154058.3576665,
+        "finished": 1791154059.2162423,
+        "stdout_sha256": "5e23e5788ef6e83263dd7d4a49d265ee7b2c935eb8a67314df8f3d67dc1ee2ac",
+        "named_outcomes": [
+          "TestPowerLossCertificationAllExplicitSyncFormsPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-ack-all-explicit-sync-forms-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-ack-all-explicit-sync-forms-stable-image/after-meta-sync/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-native-checks/cert-clean-close-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationCleanClosePublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154061.0028205,
+        "finished": 1791154061.8159652,
+        "stdout_sha256": "48882a892db0b03db666163a38998148c3ec96f9645f655c445a03ce494fcfaa",
+        "named_outcomes": [
+          "TestPowerLossCertificationCleanClosePublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-ack-clean-close-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-ack-clean-close-stable-image/after-meta-sync/000"
+        },
+        "collector_sha256": "e6204a14d5db2acf188e0c26c243a4807fb303a5d74add0db13bd48970b523a0",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-resource-checks/resources-command_wal_durable-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationAuthoritativeResourcesPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154074.9283164,
+        "finished": 1791154078.3565526,
+        "stdout_sha256": "cca4ff983afb3f669182ba148c0fe1ec0524728ea02740f102de7df678e8c142",
+        "named_outcomes": [
+          "TestPowerLossCertificationAuthoritativeResourcesPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "command_wal_durable",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-authoritative-resources-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-authoritative-resources-stable-image/after-meta-sync/000"
+        },
+        "collector_sha256": "7fb65a5db7d4efe321a887cf443514e735a8ca38a642d8b87881b720e8817d32",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    },
+    {
+      "path": "o2-o1-composed-resource-checks/resources-no_wal_fast-run.json",
+      "receipt": {
+        "head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "candidate_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationAuthoritativeResourcesPublicReopen$",
+          "-count=1",
+          "-timeout=5m"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-authoritative-20261003/source-o2-o1-composed",
+        "expected_rc": 0,
+        "rc": 0,
+        "started": 1791154071.3552227,
+        "finished": 1791154073.1460936,
+        "stdout_sha256": "919eaeac96d3a026dd7d8c4801fe10de242c4b6daf5bacfd493087fb9e4ea723",
+        "named_outcomes": [
+          "TestPowerLossCertificationAuthoritativeResourcesPublicReopen"
+        ],
+        "selectors": {
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_SEED": "3674",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-authoritative-resources-stable-image",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-authoritative-resources-stable-image/after-meta-sync/000"
+        },
+        "collector_sha256": "7fb65a5db7d4efe321a887cf443514e735a8ca38a642d8b87881b720e8817d32",
+        "environment": {
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOWORK": "off",
+          "GOMAXPROCS": "4",
+          "GOMEMLIMIT": "2GiB",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache"
+        }
+      }
+    }
+  ],
+  "raw_sha256": {
+    "o2-o1-composed-preflight/analyzer-build.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "o2-o1-composed-preflight/native-build.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "o2-o1-composed-preflight/analyzer-build-run.json": "ede1046c86c13ea3d105cb13f8ccb7e380421f523b380a37d4b05d862f7ab358",
+    "o2-o1-composed-preflight/native-build-run.json": "05732a7e09174a5368f909ebc5814f33d94390862f81852c3fb46f0a47b4064d",
+    "o2-o1-composed-native-checks/cert-maintenance-unlink.txt": "581f5b24cb9460a47e2c98fa3e18e3eb8481ca2fa5cdc026f1838a2affc61a44",
+    "o2-o1-composed-native-checks/cert-post-meta-poison-run.json": "c6ce3f14e184862233299e5792cd301a0dfca4cc34c38cd79ba131f7f5a6dfee",
+    "o2-o1-composed-native-checks/cert-all-explicit-sync-forms.txt": "5e23e5788ef6e83263dd7d4a49d265ee7b2c935eb8a67314df8f3d67dc1ee2ac",
+    "o2-o1-composed-native-checks/composed-owned-read-public.txt": "bf08ae435ca2c7467adcf4b4a8db13360bd2df636ea67fe53a0b12b17de5e010",
+    "o2-o1-composed-native-checks/cert-retryable-pre-meta-run.json": "b5e1ef02cf9f81581f4f21695cfa708a712fcab7b3f133867e052a83f818cbfe",
+    "o2-o1-composed-native-checks/cert-ordinary-write-batch.txt": "fc81bf576a3f9feb26cbdd3e8f36b117cdc5780fe9e39d790a9c979144aeb413",
+    "o2-o1-composed-native-checks/composed-owned-read-public-run.json": "6ac85d76c685f2e5cbc36a2ef8864db645819b2c8fb837bdd8b19548a45aaed3",
+    "o2-o1-composed-native-checks/cert-ordinary-write-batch-run.json": "fd7187531e6a7504f7ec3f7072c015b2f8aec0c450802cfbd1a19fe89f63ec05",
+    "o2-o1-composed-native-checks/focused-root-closure-gc-run.json": "f67fa007eeb424e65888853158a6658e91c392b84ee44e50960ce696da09e159",
+    "o2-o1-composed-native-checks/cert-maintenance-unlink-run.json": "a8865e18e7517b162d57550b2c7adb152c62e8b69e9d4ad05a433dd4ef4d0876",
+    "o2-o1-composed-native-checks/composed-focused-public.txt": "4df11fb9862e3740d126193521d352855e71688c2461e4c61d17118331e2a57c",
+    "o2-o1-composed-native-checks/focused-root-closure-gc.txt": "2f7bcec5131f12b804d5125eba78f9db346417a01e0c6c936dfe974133962e17",
+    "o2-o1-composed-native-checks/cert-clean-close.txt": "48882a892db0b03db666163a38998148c3ec96f9645f655c445a03ce494fcfaa",
+    "o2-o1-composed-native-checks/cert-post-meta-poison.txt": "08e8d60143aa99dfa62c01cad1ca2d2492ac52db25e08d353eb41ffb771c5a28",
+    "o2-o1-composed-native-checks/composed-focused-public-run.json": "db50e2c6cf78bbd8c3a29fb58ab38e91a984ca533ea072965ee842448bd912ec",
+    "o2-o1-composed-native-checks/cert-all-explicit-sync-forms-run.json": "f32534fef80b7ec1f005493bcce987919386601fce860bc5d81a6274936c41a1",
+    "o2-o1-composed-native-checks/cert-retryable-pre-meta.txt": "8155618d9c47abf1cf3d4302693cbbc5e8d41b8d72ea34558f58817b30fc2aa9",
+    "o2-o1-composed-native-checks/cert-clean-close-run.json": "42c16645c73585f95e536042e733947070253b1e9f2e01586c5f894c611eac6f",
+    "o2-o1-composed-resource-checks/resources-command_wal_durable-run.json": "c3e4e0cfb5e7877d56e43e799b7de564f926ea0d5514f97da74410ae9c572417",
+    "o2-o1-composed-resource-checks/resources-no_wal_fast.txt": "919eaeac96d3a026dd7d8c4801fe10de242c4b6daf5bacfd493087fb9e4ea723",
+    "o2-o1-composed-resource-checks/resources-command_wal_durable.txt": "cca4ff983afb3f669182ba148c0fe1ec0524728ea02740f102de7df678e8c142",
+    "o2-o1-composed-resource-checks/resources-no_wal_fast-run.json": "85564aef00c61a860e702d5e7e75123b867647a2cd99a45259d378041aaad68e",
+    "receipts-o2-o1-composed/source.json": "bc0d7c0116555ef93169893432855011b54e941a60494c11ba2a979190ce97c0",
+    "receipts-o2-o1-composed/native.json": "026dc31e02795dda82bcdab47ffef4234e8198217c5435bfa19aa1825bcb4d07",
+    "receipts-o2-o1-composed/runner.json": "a4fd0dc7432da8158faffe29f5238b1de46e42d143402ba68461ff3e3ceeb30d",
+    "receipts-o2-o1-composed/go-list-inputs.jsonstream": "b81c8b0ace432cb385d869d41d0d1f2672c64c88f7d1c5c6811adef9f72dc49f",
+    "receipts-o2-o1-composed/build.json": "a28c5e75638206c3ebd87b2634de1a3bbb9591529b92d796af8e40b73dd0991f",
+    "o2-o1-composed-source-inputs.json": "6b088853d3fa0c589bcc250f32c586d83b7318fdf981f2d92831b7756a23c0ef",
+    "provisional-manifest-o2-o1-composed.json": "38f815d7cb6ccb3baa534071c4b5df2d78677d15cf14a1df360a08d88c105f33"
+  },
+  "scope": "Current O2+O1 frozen source/build/native inventory; affected grouping/rewrite+ownedread/public/root/six exact noWAL certs+both resource profiles. Original512groupingRED/race retains identity; new13 performance/profile qualification/actual landed source/currentCI/Codex remain gates."
+}
