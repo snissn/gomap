@@ -1,13 +1,13 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Inert Trial24 native-prefix transport constructor. No automatic execution/retry.
 --prepare writes a local packet and proposed ROOT-ONLY commands.
 --capture-file validates a root-retained capture; never promotes oracle authority.
 """
-import argparse, ast, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
+import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
 if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="1f95ebd3d3c5eccb61c06eeb0cbaf0f38e0e903a14a456033a28f18c164f93e6"
+HELPER_SHA="594d2009f491aaf5657efbbc5d11b845ff6876bdeadc890cbc449d91828e5c5f"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
 COLLECTOR_SHA="32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
@@ -19,7 +19,7 @@ SOURCE="__ROOT_FROZEN_SOURCE_ROOT__"
 INVENTORY="__ROOT_FROZEN_INVENTORY_PATH__"
 INVENTORY_SHA="__ROOT_FROZEN_INVENTORY_SHA__"
 INVENTORY_ROWS="__ROOT_FROZEN_INVENTORY_ROWS__"
-RESOLVER_SHA='143a0a0bcaac25014793aa03a09878a08ce12b6cd924e1ae0112a62b4974daf0'
+RESOLVER_SHA='a795d5ad162dbf5c4ee4c9c33750ce1cf49b702d223171ea1241d0699a147130'
 HEAD="__ROOT_FROZEN_HEAD__";TREE="__ROOT_FROZEN_TREE__"
 INPUT="/tmp/gomap-4997-4998-rf4trial24mixedchangingc1-inputs-root-v1"
 ARCHIVE=INPUT+".tar.gz"
@@ -129,6 +129,7 @@ def source_at_absolute(p,b,h):
 REMOTE_PREPARE=r'''
 x=json.load(sys.stdin);need(x["RootAcceptedFinalSourceAndInputs"] is True,"explicit root source/input admission")
 need(os.getuid()==os.getgid()==1000 and not ROOT.exists() and not ROOT.is_symlink(),"fresh exclusive root/UID")
+isolate_paths([ROOT],[SOURCE,RUNNER,TEMPLATE])
 no_go_voters()
 for n,h in RUNNER_PINS.items():
  p=RUNNER if n.startswith("gomap-") else TEMPLATE+"/"+n
@@ -201,7 +202,7 @@ print(json.dumps(out))
 '''
 def remote_program(body,input_sha):
     constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
-    return "\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+body
+    return "\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+inspect.getsource(isolate_paths)+"\n"+body
 def inventory_identity(inv):
     need(type(INVENTORY_ROWS) is int and INVENTORY_ROWS>0 and inv["head"]==HEAD and inv["tree"]==TREE and isinstance(inv["rows"],list) and len(inv["rows"])==INVENTORY_ROWS and inv["overlays"]=={},"exact source inventory")
 def transport_argv(program):return SSH+[shlex.join(["python3","-B","-c",program])]
@@ -220,7 +221,9 @@ def prepare(opts):
     initial=read(opts.initial_oracle,1<<20);need(sha(initial)==opts.initial_oracle_sha256,"root supplied initial oracle digest")
     identity=strict(initial);need(identity["Rows"]==10005 and re.fullmatch("[0-9a-f]{64}",identity["SHA256"]) is not None,"actual initial full identity")
     need(opts.root_accepted_final_source_and_inputs,"explicit root acceptance, never default True")
-    out=pathlib.Path(opts.out);need(out.is_absolute() and not out.exists() and not out.is_symlink(),"exclusive local artifact root");out.mkdir(mode=0o700)
+    out=pathlib.Path(opts.out);need(out.is_absolute() and not out.exists() and not out.is_symlink(),"exclusive local artifact root")
+    isolate_paths([out],[SOURCE,pathlib.Path(__file__).resolve().parent,INPUT,ARCHIVE,INVENTORY,opts.initial_oracle])
+    out.mkdir(mode=0o700)
     payload=dict(resolver=base64.b64encode(resolver).decode(),RootAcceptedFinalSourceAndInputs=True,source_inventory=base64.b64encode(inventory).decode(),archive=base64.b64encode(archive).decode(),archive_sha256=opts.archive_sha256,helper=base64.b64encode(helper).decode(),collector=base64.b64encode(collector).decode(),initial_oracle=base64.b64encode(initial).decode(),initial_oracle_sha256=opts.initial_oracle_sha256)
     (out/"prepare-stdin.json").write_text(json.dumps(payload)+"\n")
     commands={}

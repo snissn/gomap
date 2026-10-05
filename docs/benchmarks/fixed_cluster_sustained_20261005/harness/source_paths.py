@@ -5,3 +5,18 @@ def source_path(path):
  value=str(path)
  if value in SOURCE_PATHS:return str(Path(__file__).resolve().parent/SOURCE_PATHS[value])
  return value
+
+def isolate_paths(outputs, protected):
+ """Reject resolved overlap before owned writes; preserve exclusive leaf checks."""
+ from pathlib import Path
+ def resolved(value):
+  p=Path(value)
+  if not p.is_absolute() or '..' in p.parts or p.is_symlink():
+   raise ValueError('absolute non-symlink path without dot-dot required')
+  return p.resolve(strict=False)
+ targets=[resolved(p) for p in outputs]
+ roots=[resolved(p) for p in protected]
+ for i,target in enumerate(targets):
+  for root in roots+targets[:i]:
+   if target==root or target.is_relative_to(root) or root.is_relative_to(target):
+    raise ValueError('output overlaps protected path')

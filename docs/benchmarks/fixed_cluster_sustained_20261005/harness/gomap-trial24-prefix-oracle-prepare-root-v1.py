@@ -1,4 +1,4 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Inert local constructor for an offline test-only oracle overlay.
 Does not invoke Go/Git/subprocess/network. Root supplies frozen final pins and
 runs the proposed command separately. Native output is pending root acceptance.
@@ -88,7 +88,8 @@ def prepare(pin_path,out):
  assert all(c.digest_valid(a[k]) for k in ('source_inventory_sha256','input_inventory_sha256','initial_oracle_sha256'))
  root=pathlib.Path(a['source_root']);inputs=pathlib.Path(a['input_root']);out=pathlib.Path(out)
  assert all(p.is_absolute() for p in (root,inputs,out)) and root.is_dir() and inputs.is_dir()
- assert not out.exists() and not out.is_symlink() and not out.is_relative_to(root)
+ assert not out.exists() and not out.is_symlink()
+ isolate_paths([out],[root.resolve(),inputs,pathlib.Path(__file__).resolve().parent,pin_path,a['source_inventory'],a['initial_oracle']])
  inventory_raw=read(a['source_inventory']);assert sha(inventory_raw)==a['source_inventory_sha256']
  source=c.strict_json(inventory_raw);assert set(source)=={'head','tree','rows','overlays'}
  assert source['head']==a['source_head'] and source['tree']==a['source_tree'] and source['overlays']=={}

@@ -1,3 +1,4 @@
+from source_paths import isolate_paths
 """Explicit final-pin source instantiation ONLY. Never admits or runs a campaign.
 Uses a frozen, reviewed provisional packet and root's exact final source evidence;
 writes only a fresh declared source-output directory using exclusive creation.
@@ -5,7 +6,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='ea9ce72f8fa3c7a5225231390df59c9e309e024682511d334a5b93d284d42b4f'
+PACKET_SHA='4178679a114cd58b0992496082ecbc02199adfc3c1e3a1e79dad36739990c0a5'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -55,7 +56,8 @@ def declaration(d,m):
    elf=image['ELFs'][name];need(digest(elf['sha256']) and type(elf['bytes']) is int and elf['bytes']>0 and elf['sha256']==build['ELFs'][name]['sha256'] and elf['bytes']==build['ELFs'][name]['bytes'],'actual packaged ELF/build equality')
  review=pins['source_prereview'];need(review.get('decision',review.get('outcome'))=='ACCEPT','final independent product source acceptance')
  need(review.get('candidate_head',review.get('source_head',review.get('head')))==d['source_head'] and review.get('candidate_tree',review.get('source_tree',review.get('tree')))==d['source_tree'],'source prereview actual identity')
- return {'__ROOT_FROZEN_HEAD__':d['source_head'],'__ROOT_FROZEN_TREE__':d['source_tree'],'__ROOT_FROZEN_SOURCE_ROOT__':d['source_root'],'__ROOT_FROZEN_INVENTORY_PATH__':d['source_inventory']['path'],'__ROOT_FROZEN_INVENTORY_SHA__':d['source_inventory']['sha256'],'"__ROOT_FROZEN_INVENTORY_ROWS__"':str(len(inv['rows']))}
+ isolate_paths([d['output_root']],[d['source_root'],ROOT]+[d[k]['path'] for k in ('source_inventory','build','images','source_prereview')])
+ return {'__ROOT_FROZEN_SERVER_SHA__':build['ELFs']['treedb-fixed-peer']['sha256'],'__ROOT_FROZEN_BUILD_SHA__':d['build']['sha256'],'__ROOT_FROZEN_HEAD__':d['source_head'],'__ROOT_FROZEN_TREE__':d['source_tree'],'__ROOT_FROZEN_SOURCE_ROOT__':d['source_root'],'__ROOT_FROZEN_INVENTORY_PATH__':d['source_inventory']['path'],'__ROOT_FROZEN_INVENTORY_SHA__':d['source_inventory']['sha256'],'"__ROOT_FROZEN_INVENTORY_ROWS__"':str(len(inv['rows']))}
 def main():
  need(__debug__,'ordinary Python required')
  q=argparse.ArgumentParser();q.add_argument('--declaration',required=True);q.add_argument('--declaration-sha256',required=True);a=q.parse_args()
@@ -77,6 +79,7 @@ def main():
   need('__ROOT_FROZEN_' not in s,'all final runtime placeholders bound')
   ast.parse(s);b=s.encode();prepared[role]=b
   emitted[role]={'path':str(out/Path(row['output']['path']).name),'sha256':sha(b),'template_sha256':row['output']['sha256']}
+ isolate_paths([out],[d['source_root'],ROOT,a.declaration]+[d[k]['path'] for k in ('source_inventory','build','images','source_prereview')])
  # Validation and complete source preparation happen before any output creation.
  out.mkdir(mode=0o700)
  for role,b in prepared.items():

@@ -1,4 +1,4 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Validate the fresh raw bootstrap and freeze recall inputs; never starts voters."""
 import base64,hashlib,importlib.util,json,pathlib,shlex,shutil,struct,subprocess,tarfile,time
 P=pathlib.Path('/tmp');RUN='rf4trial24mixedchangingc1'
@@ -30,9 +30,35 @@ def byte_list(raw):
  out=[]
  for n in lens:out.append(raw[pos:pos+n]);assert len(out[-1])==n;pos+=n
  assert pos==len(raw);return out
+
+def bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,buildraw):
+ plan=json.loads(planraw);frozen=json.loads(frozenraw);manifest=json.loads(manifestraw);proof=json.loads(proofraw);build=json.loads(buildraw)
+ assert proof['state']=='FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED'
+ assert proof['runtime_source_head']==frozen['source_head']==build['head']=='__ROOT_FROZEN_HEAD__'
+ assert proof['runtime_source_tree']==frozen['source_tree']==build['tree']=='__ROOT_FROZEN_TREE__'
+ assert proof['build_source_head']=='__ROOT_FROZEN_HEAD__'
+ assert sha(buildraw)==proof['build_receipt_sha256']==frozen['build_receipt_sha256']=='__ROOT_FROZEN_BUILD_SHA__'
+ assert build['state']=='VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME' and build['source_verified_before_after'] is True
+ assert build['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
+ assert sha(frozenraw)==proof['plan_preparation_sha256'] and sha(manifestraw)==proof['manifest_sha256']==frozen['manifest_sha256']
+ assert proof['pins_sha256']==frozen['pins_sha256']
+ server=build['ELFs']['treedb-fixed-peer']['sha256']
+ assert server==plan['binary_sha256']==frozen['plan']['binary_sha256']==manifest['binary_sha256']==proof['daemon_sha256']=='__ROOT_FROZEN_SERVER_SHA__'
+ assert plan['nodes']==frozen['plan']['nodes']
+ qualification=proof['qualification_source_sha256']
+ assert isinstance(qualification,str) and len(qualification)==64 and qualification!='0'*64 and all(c in '0123456789abcdef' for c in qualification)
+ return server,qualification
+
 def main():
- assert __debug__ and not O.exists() and not R.exists();R.mkdir()
- final=load(L/'result.json');assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and len(final['stopped'])==4 and not final['errors']
+ assert __debug__ and not O.exists() and not R.exists()
+ planroot=P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1'
+ frozenraw=(planroot/'plan-preparation.json').read_bytes();frozen=json.loads(frozenraw)
+ proofraw=(L/'precollection-proof.json').read_bytes();planraw=(B/'plan.json').read_bytes()
+ isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt']])
+ server,qualification=bootstrap_provenance(planraw,frozenraw,(planroot/'manifest.json').read_bytes(),proofraw,pathlib.Path(frozen['build_receipt']).read_bytes())
+ final=load(L/'result.json');assert final['precollection_proof_sha256']==sha(proofraw)
+ assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and len(final['stopped'])==4 and not final['errors']
+ R.mkdir()
  assert load(B/'result.json')['status']=='PASS'
  receipts=sorted(B.glob('[0-9][0-9]-*.json'));assert len(receipts)==44
  for p in receipts:
@@ -62,7 +88,7 @@ def main():
  for x in boot['Readiness']:
   assert x['Ready'] and x['Live'] and not x['Draining'] and x['VectorPhase']=='active' and len(x['Groups'])==1
   g=x['Groups'][0];assert g['GroupID']=='group-a' and g['Ready'] and g['LocalAppliedIndex']>=g['RequiredAppliedIndex']>=prefix
- planraw=(B/'plan.json').read_bytes();plan=json.loads(planraw);frozen=load(P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1/plan-preparation.json');assert plan['nodes']==frozen['plan']['nodes'] and plan['binary_sha256']=='74f77485ace57056f6bd8244b467dd5fe136322ba1c2244010ebf6ae0af06042'
+ plan=json.loads(planraw)
  launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert sha(launcher.read_bytes())=='21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616'
  spec=importlib.util.spec_from_file_location('fixed_cluster',launcher);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
  actual=m.plan(load(P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1/manifest.json'),RUN,m.admit_dataset(str(dataset)))
@@ -80,7 +106,7 @@ def main():
   voters.append(dict(node=node,container_id=created))
  for host in ['192.168.0.111','192.168.0.185']:
   raw=remote(host,'writer-inventory-'+host,['docker','ps','--filter','label=treedb.fixed-cluster.run='+RUN,'--format','{{.ID}} {{.Names}}']);assert not raw.strip();(O/('writer-inventory-'+host.rsplit('.',1)[1]+'.txt')).write_text(raw)
- prov=dict(Version=1,Phase='pre',CampaignID=RUN,BootstrapRequestID=RUN,ConfigSHA256=sha(configraw),BootstrapSHA256=sha(bootraw),ManifestSHA256=d['ManifestSHA256'],RuntimeSourceHead='__ROOT_FROZEN_HEAD__',ServerBinarySHA256=plan['binary_sha256'],QualificationSourceSHA256='750dde6bc3866287e3201e62be9b88dc6f5e0d7b2a947d16da0e5efba074e769',InitializationReceiptSHA256=sha((B/'19-initialize.json').read_bytes()),CleanReopenReceiptSHA256=sha((B/'result.json').read_bytes()),ProbeSHA256='',ProbeBinarySHA256='',ProbeRunID='',Roots={n['node']:n['root'] for n in plan['nodes']},Hosts={n['node']:n['host'] for n in plan['nodes']},RootAccepted=True,InitializationSucceeded=True,CleanReopenSucceeded=True,ExclusiveWriterStopped=True)
+ prov=dict(Version=1,Phase='pre',CampaignID=RUN,BootstrapRequestID=RUN,ConfigSHA256=sha(configraw),BootstrapSHA256=sha(bootraw),ManifestSHA256=d['ManifestSHA256'],RuntimeSourceHead='__ROOT_FROZEN_HEAD__',ServerBinarySHA256=server,QualificationSourceSHA256=qualification,InitializationReceiptSHA256=sha((B/'19-initialize.json').read_bytes()),CleanReopenReceiptSHA256=sha((B/'result.json').read_bytes()),ProbeSHA256='',ProbeBinarySHA256='',ProbeRunID='',Roots={n['node']:n['root'] for n in plan['nodes']},Hosts={n['node']:n['host'] for n in plan['nodes']},RootAccepted=True,InitializationSucceeded=True,CleanReopenSucceeded=True,ExclusiveWriterStopped=True)
  (O/'provenance.json').write_text(json.dumps(prov,indent=2)+'\n')
  proof=dict(status='PASS_ROOT_FULL_BOOTSTRAP_CHAIN',raw_receipts=44,chunks=79,rows=10000,prepared_rows=10003,pre_live_rows=10004,qualification_prefix=prefix,initialize_sha256=prov['InitializationReceiptSHA256'],clean_reopen_summary_sha256=prov['CleanReopenReceiptSHA256'],voters=voters,scope='actual fresh campaign; bootstrap closed; no subsequent mutations issued')
  (O/'root-chain-proof.json').write_text(json.dumps(proof,indent=2)+'\n')

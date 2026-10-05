@@ -88,7 +88,7 @@ head,tree='1'*40,'2'*40
 objects={'source_inventory':{'head':head,'tree':tree,'rows':[{'path':'synthetic.go','mode':'100644','git_blob':'3'*40}],'overlays':{}},'build':{'head':head,'tree':tree,'source_inventory_sha256':None,'state':'VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME','source_verified_before_after':True,'ELFs':{'treedb-fixed-peer':{'sha256':'4'*64,'bytes':100},'treedb-query-under-write':{'sha256':'5'*64,'bytes':200}}},'images':{'head':head,'tree':tree,'source_inventory_sha256':None},'source_prereview':{'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree}}
 def fixture(name,obj):
  path=fixtures/(name+'.json');raw=json.dumps(obj).encode();path.write_bytes(raw);return {'path':str(path),'sha256':sha(raw)}
-d={'Version':1,'campaign':m['campaign'],'workload':m['workload'],'source_head':head,'source_tree':tree,'source_root':'/synthetic-final-source-not-runtime','RootAcceptedFinalSourcePins':True,'output_root':'/tmp/synthetic-trial24-output-not-created'}
+d={'Version':1,'campaign':m['campaign'],'workload':m['workload'],'source_head':head,'source_tree':tree,'source_root':str(fixtures/'trial24-protected-product'),'RootAcceptedFinalSourcePins':True,'output_root':'/tmp/synthetic-trial24-output-not-created'}
 d['source_inventory']=fixture('source_inventory',objects['source_inventory'])
 for k in ('build','images'):objects[k]['source_inventory_sha256']=d['source_inventory']['sha256']
 d['build']=fixture('build',objects['build'])
@@ -332,5 +332,138 @@ for name,row in archive_receipts.items():
  bad(name+'_archive_permission_rejects_payload_digest_mismatch',lambda raw=raw:permission.archive_check(c,{'input_inventory_sha256':sha(inventory_raw)},corrupt,raw))
  bad(name+'_archive_native_rejects_inventory_raw_digest_mismatch',lambda raw=raw:nr.input_archive(raw,json.dumps(corrupt).encode()))
 (fixtures/'archive-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ARCHIVE_INTEGRATION_ONLY','producers':archive_receipts,'legacy_archive_sha256':sha(legacy_raw),'runtime_started':False,'network_calls':0},indent=2)+'\n')
+
+
+# Actual accepted-byte provenance joins, using the fully bound freezer function.
+freezer=load(portable_sources['pre_input_freezer'],'trial24_provenance_checks')
+server=objects['build']['ELFs']['treedb-fixed-peer']['sha256']
+assert server!='74f77485ace57056f6bd8244b467dd5fe136322ba1c2244010ebf6ae0af06042'
+plan={'nodes':[{'node':'synthetic-only'}],'binary_sha256':server}
+manifest={'binary_sha256':server}
+def encoded(obj):return json.dumps(obj).encode()
+frozen={'source_head':head,'source_tree':tree,'build_receipt_sha256':d['build']['sha256'],'manifest_sha256':sha(encoded(manifest)),'pins_sha256':'a'*64,'plan':copy.deepcopy(plan)}
+proof={'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':head,'runtime_source_tree':tree,'build_source_head':head,'build_receipt_sha256':d['build']['sha256'],'plan_preparation_sha256':sha(encoded(frozen)),'manifest_sha256':sha(encoded(manifest)),'pins_sha256':frozen['pins_sha256'],'daemon_sha256':server,'qualification_source_sha256':'b'*64}
+base=[encoded(plan),encoded(frozen),encoded(manifest),encoded(proof),Path(d['build']['path']).read_bytes()]
+assert freezer.bootstrap_provenance(*base)==(server,'b'*64)
+checks.append('actual_freezer_nonhistorical_accepted_ELF_all_raw_proof_joins')
+changed=copy.deepcopy(proof);changed['qualification_source_sha256']='c'*64
+assert freezer.bootstrap_provenance(*base[:3],encoded(changed),base[4])==(server,'c'*64)
+checks.append('actual_freezer_qualification_source_actual_proof_hash_propagates')
+for label,index,key,value in [('historical_server',0,'binary_sha256','74f77485ace57056f6bd8244b467dd5fe136322ba1c2244010ebf6ae0af06042'),('current_plan',0,'nodes',[]),('frozen_plan',1,'plan',{'nodes':[],'binary_sha256':server}),('manifest',2,'binary_sha256','d'*64),('head',3,'runtime_source_head','d'*40),('tree',3,'runtime_source_tree','d'*40),('build_head',3,'build_source_head','d'*40),('build_digest',3,'build_receipt_sha256','d'*64),('plan_preparation_digest',3,'plan_preparation_sha256','d'*64),('manifest_digest',3,'manifest_sha256','d'*64),('pins_digest',3,'pins_sha256','d'*64),('daemon_digest',3,'daemon_sha256','d'*64),('qualification_zero',3,'qualification_source_sha256','0'*64),('qualification_shape',3,'qualification_source_sha256','bad'),('build_inventory',4,'source_inventory_sha256','d'*64)]:
+ rows=list(base);obj=json.loads(rows[index]);obj[key]=value;rows[index]=encoded(obj)
+ bad('actual_freezer_rejects_'+label,lambda rows=rows:freezer.bootstrap_provenance(*rows))
+# Re-pin changed frozen bytes in proof to reach the independent identity/ELF joins.
+for label,key,value in [('source_head','source_head','d'*40),('source_tree','source_tree','d'*40),('server','plan',{'nodes':plan['nodes'],'binary_sha256':'d'*64})]:
+ f=copy.deepcopy(frozen);f[key]=value;q=copy.deepcopy(proof);q['plan_preparation_sha256']=sha(encoded(f))
+ bad('actual_freezer_frozen_repin_rejects_'+label,lambda f=f,q=q:freezer.bootstrap_provenance(base[0],encoded(f),base[2],encoded(q),base[4]))
+plan_source=Path(portable_sources['bootstrap_plan']).read_text()
+assert server in plan_source and d['build']['sha256'] in plan_source
+checks.append('actual_generated_bootstrap_plan_and_freezer_same_accepted_build_ELF_macros')
+
+# Execute the actual writer guard statements with their real first write.
+# No context/bootstrap/transport/Go body executes. Every denied case preserves
+# protected byte inventories and leaves the proposed leaf absent.
+from source_paths import isolate_paths
+protected=Path(d['source_root']);protected.mkdir();(protected/'sentinel').write_bytes(b'protected frozen bytes\n')
+inputs=fixtures/'trial24-protected-inputs';inputs.mkdir();(inputs/'sentinel').write_bytes(b'frozen inputs\n')
+alias=fixtures/'trial24-source-parent-alias';alias.symlink_to(protected,target_is_directory=True)
+native_source_link=fixtures/'trial24-intentional-source-link';native_source_link.symlink_to(protected,target_is_directory=True)
+bootstrap=load(portable_sources['bootstrap_plan'],'trial24_writer_plan_checks')
+def snapshot():
+ return {str(p):p.read_bytes() for root in (protected,inputs,out,R) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+def guard_statement(source,function,predicate=None):
+ tree=ast.parse(source);fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==function)
+ rows=[n for n in ast.walk(fn) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='isolate_paths']
+ if predicate:rows=[n for n in rows if predicate(ast.unparse(n))]
+ assert rows,(function,'actual guard missing');return max(rows,key=lambda n:n.lineno)
+sites={}
+for role,function,predicate in [('bootstrap_plan','main',None),('bootstrap_preflight','main',None),('bootstrap_lifecycle','main',None),('pre_input_freezer','main',None),('oracle_helper','prepare',None),('native_runner','prepare',None),('growth_constructor','main',lambda s:'[out]' in s),('post_constructor','main',lambda s:'[out]' in s and 'protected' in s)]:
+ source=Path(portable_sources[role]).read_text();sites[role]=guard_statement(source,function,predicate)
+# Remote guard is extracted from the actual fully assembled program.
+remote_program=nr.remote_program(nr.REMOTE_PREPARE,'a'*64)
+remote_ast=ast.parse(remote_program)
+sites['native_remote']=next(n for n in remote_ast.body if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='isolate_paths')
+sites['post_sealer']=guard_statement(post_source,'main')
+artifact=fixtures/'trial24-isolated-artifacts';artifact.mkdir()
+pin_fixture=fixture('writer-owned-pin',{'synthetic_only':True})
+context={'source_worktree':str(protected),'dataset':str(inputs),'build':pin_fixture['path'],'images':pin_fixture['path'],'source_acceptance':pin_fixture['path'],'credential_provenance':pin_fixture['path'],'configs':{}}
+writer_receipts=[]
+writes={}
+for site in sites:
+ if site=='native_remote':source=remote_program;tree=ast.parse(source)
+ elif site=='post_sealer':source=post_source;tree=ast.parse(source)
+ else:source=Path(portable_sources[site]).read_text();tree=ast.parse(source)
+ receiver={'bootstrap_plan':'root','bootstrap_preflight':'p','bootstrap_lifecycle':'ROOT','pre_input_freezer':'O','oracle_helper':'out','native_runner':'out','growth_constructor':'out','post_constructor':'out','native_remote':'ROOT','post_sealer':'OUT'}[site]
+ method='write_text' if site=='post_constructor' else 'mkdir'
+ found=[n for n in ast.walk(tree) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id==receiver and n.value.func.attr==method]
+ assert found,(site,'actual first write missing')
+ writes[site]=max(found,key=lambda n:n.lineno) if site=='post_constructor' else min(found,key=lambda n:n.lineno)
+ assert sites[site].lineno<writes[site].lineno,(site,'guard must precede actual writer')
+
+for site,node in sites.items():
+ for kind in ('equal','descendant','reverse','dotdot','symlink_parent','input_pollution','packet_descendant','positive_sibling','positive_prefix_sibling'):
+  if kind=='equal':target=protected
+  elif kind=='descendant':target=protected/('trial24-'+site)
+  elif kind=='reverse':target=protected.parent
+  elif kind=='dotdot':target=fixtures/'trial24-outside'/'..'/protected.name/('trial24-'+site)
+  elif kind=='symlink_parent':target=alias/('trial24-'+site)
+  elif kind=='input_pollution':target=inputs/('trial24-'+site)
+  elif kind=='packet_descendant':target=out/('trial24-'+site)
+  else:target=fixtures/(protected.name+'-sibling-'+site if kind=='positive_prefix_sibling' else 'trial24-sibling-'+site)
+  # Native remote protects SOURCE and retained runner/template sources. Frozen
+  # inputs are only created under its new root, so no external input root exists.
+  if site=='native_remote' and kind in ('input_pollution','packet_descendant'):continue
+  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
+  # Prefix accepts its intentional source symlink as a read root.
+  if site=='oracle_helper':
+   ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path'])
+  if site=='growth_constructor':ns['a']=ns['args']
+  if site=='post_sealer':ns['ARCHIVE']=fixtures/('trial24-archive-'+site+'.tar.gz')
+  before=snapshot();denied=False
+  try:
+   ns['text']='owned synthetic source fixture\n'
+   exec(compile(ast.Module(body=[node,writes[site]],type_ignores=[]),'actual-'+site+'-prewrite-guard-and-write','exec'),ns)
+  except ValueError:denied=True
+  positive=kind.startswith('positive')
+  assert denied!=positive,(site,kind)
+  assert snapshot()==before,(site,kind,'protected bytes changed')
+  if not positive:
+   assert target.exists() if kind in ('equal','reverse') else not target.exists(),(site,kind,'output polluted')
+  else:
+   assert target.exists(),(site,'actual writer failed to create positive output')
+  writer_receipts.append({'writer':site,'case':kind,'rejected_before_write':denied,'protected_bytes_unchanged':True})
+  checks.append('actual_writer_'+site+'_'+kind+'_no_protected_mutation')
+# The lifecycle copies the one hash-verified byte string; later provenance
+# uses that same raw string, rather than re-reading a possibly changed file.
+life=ast.parse(Path(portable_sources['bootstrap_lifecycle']).read_text())
+main=next(n for n in life.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+copy_node=next(n for n in ast.walk(main) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='write_bytes' and isinstance(n.value.args[0],ast.Name) and n.value.args[0].id=='proofraw')
+copyroot=fixtures/'trial24-actual-lifecycle-proof-copy';copyroot.mkdir()
+exec(compile(ast.Module(body=[copy_node],type_ignores=[]),'actual-lifecycle-pinned-proof-copy','exec'),{'ROOT':copyroot,'proofraw':base[3]})
+assert (copyroot/'precollection-proof.json').read_bytes()==base[3]
+result_node=next(n for n in ast.walk(main) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='result' for t in n.targets))
+proof_hash=next(value for key,value in zip(result_node.value.keys,result_node.value.values) if isinstance(key,ast.Constant) and key.value=='precollection_proof_sha256')
+assert eval(compile(ast.Expression(body=proof_hash),'actual-lifecycle-retained-proof-hash','eval'),{'hashlib':hashlib,'proofraw':base[3]})==sha(base[3])
+checks.append('actual_lifecycle_copy_and_result_hash_same_verified_precollection_bytes')
+# Instantiation is also run as an actual command for resolved overlap cases.
+for kind,target in [('source_descendant',protected/'trial24-instantiation'),('packet_descendant',R/'trial24-isolation-test-output'),('symlink_parent',alias/'trial24-instantiation'),('input_pin_descendant',Path(d['build']['path'])/'trial24-instantiation')]:
+ declaration_obj=copy.deepcopy(d);declaration_obj['output_root']=str(target);pin=fixture('isolation-declaration-'+kind,declaration_obj)
+ before=snapshot();proc=subprocess.run([sys.executable,'-B',str(R/'instantiate.py'),'--declaration',pin['path'],'--declaration-sha256',pin['sha256']],capture_output=True,text=True,timeout=15)
+ for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n')]: (fixtures/('isolation-instantiate-'+kind+'.'+suffix)).write_text(value)
+ assert proc.returncode!=0 and not target.exists() and snapshot()==before,proc.stderr
+ checks.append('actual_instantiate_command_'+kind+'_exit_nonzero_no_mutation')
+# Actual finalized-manifest writer rejects frozen input pollution before reading
+# or validating a pending manifest, and therefore before writing any output.
+pending=fixture('finalize-isolation-pending',{'synthetic_only':True})
+finalpins=fixture('finalize-isolation-pins',{'pending_manifest_sha256':pending['sha256'],'additional_local_pins':{},'receipts':{}})
+finaltarget=Path(c.LOCAL_INPUT_ROOT)/'trial24-rejected-finalized-manifest.json'
+proc=subprocess.run([sys.executable,'-B',portable_sources['post_constructor'],'--pins',finalpins['path'],'--output',str(finaltarget),'--finalize-pending',pending['path']],capture_output=True,text=True,timeout=15)
+for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n')]: (fixtures/('isolation-finalize-input-pollution.'+suffix)).write_text(value)
+assert proc.returncode!=0 and 'output overlaps protected path' in proc.stderr and not finaltarget.exists()
+checks.append('actual_finalize_manifest_command_frozen_input_pollution_exit_nonzero_no_mutation')
+# Reject a dangling symlink leaf before writes.
+dangling=fixtures/'trial24-dangling-output';dangling.symlink_to(fixtures/'trial24-absent-target')
+bad('actual_shared_guard_dangling_output_leaf',lambda:isolate_paths([dangling],[protected]))
+(fixtures/'provenance-isolation-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_JOIN_AND_WRITER_GUARD_CHECKS_ONLY','nonhistorical_server_sha256':server,'qualification_sha256_values':['b'*64,'c'*64],'writers':writer_receipts,'runtime_started':False,'network_calls':0,'proof_limits':['No full bootstrap, native Go, SSH, runtime or remote filesystem qualification.','Guards execute on owned local fixtures; no concurrent symlink race guarantee.']},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

@@ -1,4 +1,4 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Inert Trial24 bootstrap constructor. Root supplies final accepted pins; no network here."""
 import argparse,hashlib,importlib.util,json,pathlib,re,subprocess,ssl
 CAMPAIGN='rf4trial24mixedchangingc1'
@@ -10,6 +10,9 @@ def read(path,digest=None):
  raw=p.read_bytes();assert digest is None or hashlib.sha256(raw).hexdigest()==digest
  return raw
 
+def protected_inputs(a,pinfile):
+ return [a['source_worktree'],pathlib.Path(__file__).resolve().parent,pinfile,a['dataset'],a['build'],a['images'],a['source_acceptance'],a['credential_provenance']]+[v['path'] for v in a['configs'].values()]
+
 def context(pinfile):
  assert __debug__
  a=json.loads(read(pinfile));assert a['RootAcceptedFinalSourceAndInputs'] is True
@@ -17,7 +20,9 @@ def context(pinfile):
  for k in ('build','images','source_acceptance'):assert re.fullmatch('[0-9a-f]{64}',a[k+'_sha256'])
  build=json.loads(read(a['build'],a['build_sha256']));images=json.loads(read(a['images'],a['images_sha256']));accept=json.loads(read(a['source_acceptance'],a['source_acceptance_sha256']))
  assert build['state']=='VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME' and build['source_verified_before_after'] is True
- assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME'
+ assert a['build_sha256']=='__ROOT_FROZEN_BUILD_SHA__' and build['ELFs']['treedb-fixed-peer']['sha256']=='__ROOT_FROZEN_SERVER_SHA__'
+ assert a['head']=='__ROOT_FROZEN_HEAD__' and a['tree']=='__ROOT_FROZEN_TREE__'
+ assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME' and images['build_proof_sha256']==a['build_sha256']
  assert all(x['head']==a['head'] and x['tree']==a['tree'] for x in (build,images))
  assert images['source_inventory_sha256']==build['source_inventory_sha256']
  assert accept['outcome']=='ACCEPT' and accept['candidate_head']==a['head'] and accept['candidate_tree']==a['tree']
@@ -74,9 +79,10 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--pins',required=True);p.add_argument('--out',required=True);args=p.parse_args()
  a,m,manifest,dataset,configs=context(args.pins)
  root=pathlib.Path(args.out);assert root.is_absolute() and root.name.startswith(PREFIX+'-bootstrap-plan-root-v') and not root.exists()
+ isolate_paths([root],protected_inputs(a,args.pins))
  root.mkdir();(root/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  planned={'provisional':True,'workflow':['inspect4','serve4','initialize','stop4','start4','qualify'],'image':manifest['image'],'binary_sha256':manifest['binary_sha256'],'nodes':[{k:n[k] for k in ('host','image','node','root','name')} for n in m.plan(manifest,CAMPAIGN,dataset)],'driver_node':'node-c','planned_source_rows':10003,'planned_total_documents':10004,'dataset':dataset,'operation_timeout_seconds':600}
  (root/'plan.json').write_text(json.dumps(planned,indent=2)+'\n')
- receipt={'config_sha256':configs,'manifest_sha256':hashlib.sha256(read(root/'manifest.json')).hexdigest(),'source_head':a['head'],'source_tree':a['tree'],'image_receipt':a['images'],'plan':planned,'state':'PREPARATION_ONLY_NOT_BOOTSTRAP_ACCEPTANCE','pins_sha256':hashlib.sha256(read(args.pins)).hexdigest(),'launcher_sha256':LAUNCHER_SHA}
+ receipt={'build_receipt':a['build'],'build_receipt_sha256':a['build_sha256'],'config_sha256':configs,'manifest_sha256':hashlib.sha256(read(root/'manifest.json')).hexdigest(),'source_head':a['head'],'source_tree':a['tree'],'image_receipt':a['images'],'plan':planned,'state':'PREPARATION_ONLY_NOT_BOOTSTRAP_ACCEPTANCE','pins_sha256':hashlib.sha256(read(args.pins)).hexdigest(),'launcher_sha256':LAUNCHER_SHA}
  (root/'plan-preparation.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt))
 if __name__=='__main__':main()

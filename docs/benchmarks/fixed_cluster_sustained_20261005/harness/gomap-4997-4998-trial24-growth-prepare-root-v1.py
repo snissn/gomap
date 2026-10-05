@@ -1,4 +1,4 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Inert source-only derivation. Root reviews/pins generated sources before any run."""
 import argparse, ast, hashlib, json, pathlib, re
 TEMPLATES = {'admission': '/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py', 'query': '/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py', 'lifecycle': '/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py', 'exact-validate': '/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py', 'artifact-verify': '/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py'}
@@ -48,6 +48,7 @@ def main():
     validate_path_bindings(texts,pins['reviewed_path_bindings'])
     assert isinstance(pins['artifact_root'],str) and pathlib.Path(pins['artifact_root']).is_absolute()
     no_historical_paths(pins['artifact_root'])
+    isolate_paths([pins['artifact_root']],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent])
     old_source_hashes={TEMPLATE_SHA256[k] for k in ('query','lifecycle','exact-validate')}
     required=set()
     for text in texts.values():
@@ -111,7 +112,9 @@ def main():
         assert 'rf4trial14mixedc1' not in text and 'landed[\'pr\']==4995' not in text
         no_historical_paths(text)
         ast.parse(text,str(destinations[role]));sources[role]=text;generated_hashes[role]=sha(text.encode())
-    assert not out.exists();out.mkdir()
+    assert not out.exists() and not out.is_symlink()
+    isolate_paths([out],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,a.pins,pins['artifact_root']]+list(pins['reviewed_path_bindings'].values()))
+    out.mkdir()
     for role,text in sources.items(): destinations[role].write_text(text)
     receipt=dict(state='PREPARED_UNEXECUTED_REQUIRES_INDEPENDENT_SOURCE_REVIEW_AND_ACTUAL_ADMISSION',campaign=CAMPAIGN,source_head=pins['source_head'],source_tree=pins['source_tree'],pins_sha256=sha(pathlib.Path(a.pins).read_bytes()),sources={str(destinations[k]):v for k,v in generated_hashes.items()},templates=TEMPLATE_SHA256,workload=dict(operations=70,mutation_attempts=2,searches=68,fresh_ids=1,post_rows=10005),limits=['Source AST checks only; not executed or accepted runtime evidence','Root must verify each supplied literal/path binding against retained actual raw provenance','Derived growth-landed receipt remains separate from collector final landed receipt; both raw provenance must be retained','No automatic replay, store deletion or lifecycle change'])
     (out/'preparation.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt))

@@ -1,9 +1,9 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """One fresh canonical-score C1 bootstrap; close only its recorded voter CIDs, never retry writes."""
 import hashlib,json,pathlib,re,shlex,subprocess,time
 CAMPAIGN='rf4trial24mixedchangingc1'
 IMAGES=None
-PLAN_SHA='8b8349bbc04f9bb5d6e19fca3c754e1887ea5774a94da35ea61f6b721beb3747'
+PLAN_SHA='464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454'
 
 def owned(x,node,cid):
  assert x['Id']==cid and x['Name']=='/treedb-4250-'+CAMPAIGN+'-'+node
@@ -33,16 +33,19 @@ def main():
  spec=importlib.util.spec_from_file_location('trial24_plan',module);pm=importlib.util.module_from_spec(spec);spec.loader.exec_module(pm)
  a,m,expected,dataset,configs=pm.context(args.pins);IMAGES=expected['image'];check()
  ROOT=pathlib.Path(args.out);OUTPUT=pathlib.Path(a['artifact_volume'])/'bootstrap-root-v1'
- assert ROOT.is_absolute() and ROOT.name.startswith(pm.PREFIX+'-bootstrap-lifecycle-root-v') and not ROOT.exists() and not OUTPUT.exists();ROOT.mkdir()
+ assert ROOT.is_absolute() and ROOT.name.startswith(pm.PREFIX+'-bootstrap-lifecycle-root-v') and not ROOT.exists() and not OUTPUT.exists()
+ isolate_paths([ROOT,OUTPUT],pm.protected_inputs(a,args.pins)+[args.plan,args.preflight])
  launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert hashlib.sha256(launcher.read_bytes()).hexdigest()=='21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616'
- pre=pathlib.Path(args.preflight)/'proof.json';proof=json.loads(pm.read(pre,args.preflight_sha256));assert proof['state']=='FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED'
+ pre=pathlib.Path(args.preflight)/'proof.json';proofraw=pm.read(pre,args.preflight_sha256);proof=json.loads(proofraw);assert proof['state']=='FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED'
  manifest=pathlib.Path(args.plan)/'manifest.json';assert hashlib.sha256(manifest.read_bytes()).hexdigest()==proof['manifest_sha256']
  plan=pathlib.Path(args.plan)/'plan-preparation.json';assert hashlib.sha256(plan.read_bytes()).hexdigest()==proof['plan_preparation_sha256']
  assert json.loads(manifest.read_bytes())==expected and proof['runtime_source_head']==a['head'] and proof['runtime_source_tree']==a['tree']
  assert proof['pins_sha256']==hashlib.sha256(pm.read(args.pins)).hexdigest()
  frozen=json.loads(plan.read_bytes())
  for name,h in frozen['config_sha256'].items():assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()==h
- (ROOT/'precollection-proof.json').write_bytes(pre.read_bytes());(ROOT/'source.py').write_bytes(pathlib.Path(__file__).read_bytes())
+ assert proof['build_receipt_sha256']==a['build_sha256'] and proof['daemon_sha256']==expected['binary_sha256']
+ ROOT.mkdir()
+ (ROOT/'precollection-proof.json').write_bytes(proofraw);(ROOT/'source.py').write_bytes(pathlib.Path(__file__).read_bytes())
  argv=['python3',str(launcher),'--manifest',str(manifest),'--dataset',a['dataset'],'--run-id',CAMPAIGN,'--operation-timeout-seconds','600','--output',str(OUTPUT),'--execute']
  start=time.time();code=None;stopped=[];errors=[];qualification_valid=False
  def remote(label,host,args,timeout=90):
@@ -78,7 +81,7 @@ def main():
     assert not x['State']['Running'] and not x['State']['OOMKilled'] and x['State']['ExitCode']==0
     stopped.append({'node':node,'host':host,'container_id':cid,'stopped_clean':True});print('STOPPED',node,flush=True)
    except Exception as e:errors.append({'node':node,'error':repr(e)})
-  result={'state':'PASS_FRESH_BOOTSTRAP_CLOSED' if code==0 and qualification_valid and len(stopped)==4 and not errors else 'FAIL_RETAIN_NO_WORKLOAD_RETRY','launcher_exit':code,'all44receipts_verified':qualification_valid,'stopped':stopped,'errors':errors,'stores_retained':True,'no_workload_retry':True}
+  result={'precollection_proof_sha256':hashlib.sha256(proofraw).hexdigest(),'state':'PASS_FRESH_BOOTSTRAP_CLOSED' if code==0 and qualification_valid and len(stopped)==4 and not errors else 'FAIL_RETAIN_NO_WORKLOAD_RETRY','launcher_exit':code,'all44receipts_verified':qualification_valid,'stopped':stopped,'errors':errors,'stores_retained':True,'no_workload_retry':True}
   (ROOT/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(result['state'],flush=True)
  assert result['state']=='PASS_FRESH_BOOTSTRAP_CLOSED',result
 if __name__=='__main__':main()

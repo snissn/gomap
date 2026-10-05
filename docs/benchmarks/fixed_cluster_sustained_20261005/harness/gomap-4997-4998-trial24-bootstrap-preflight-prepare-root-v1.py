@@ -1,8 +1,8 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='8b8349bbc04f9bb5d6e19fca3c754e1887ea5774a94da35ea61f6b721beb3747'
+PLAN_SHA='464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()
@@ -24,7 +24,9 @@ def main():
  volume=pathlib.Path(a['artifact_volume']);assert volume.is_absolute() and volume.name==pm.PREFIX
  v=os.statvfs(volume);assert v.f_bavail*v.f_frsize>=2*1024**3
  assert not (volume/'bootstrap-root-v1').exists() and not (volume/'mixed-window-root-v1').exists()
- p=pathlib.Path(args.out);assert p.is_absolute() and p.name.startswith(pm.PREFIX+'-bootstrap-precollection-root-v') and not p.exists();p.mkdir()
+ p=pathlib.Path(args.out);assert p.is_absolute() and p.name.startswith(pm.PREFIX+'-bootstrap-precollection-root-v') and not p.exists()
+ isolate_paths([p,volume/'bootstrap-root-v1'],pm.protected_inputs(a,args.pins)+[planroot])
+ p.mkdir()
  remote=r'''
 import json,pathlib,subprocess,sys,time,os
 host=sys.argv[1];image=sys.argv[2];earliest=float(sys.argv[3]);latest=float(sys.argv[4]);assert earliest<=time.time()<latest-86400;root='/home/mikers/gomap-4250-twohost-rf4trial24mixedchangingc1'

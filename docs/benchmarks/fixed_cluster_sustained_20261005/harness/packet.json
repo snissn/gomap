@@ -123,7 +123,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py",
-        "sha256": "8b8349bbc04f9bb5d6e19fca3c754e1887ea5774a94da35ea61f6b721beb3747"
+        "sha256": "464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -136,7 +136,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-preflight-prepare-root-v1.py",
-        "sha256": "871b674e12b18f59fe46972b16abe55e5e02f8c40d80f984c13f98f86b5d01eb"
+        "sha256": "f3aea1a3bf64a44ad4a672163afd52330cea7e3bed6360172cbd017f0e28f369"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -149,7 +149,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "06b9b1dfb0e304760d4ff9cdbdba077b93f172c0a38800090a4ddfcc9d26b163"
+        "sha256": "7c84cf51f58894339a635bb6e73fc8ae9b3eb8bdc06f37eac2c8f78cdc4dce0b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -162,7 +162,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "572daee58e572d1755eeb70f4f1804d73ae8cccfb2caa1bb679b3af62bedfcd1"
+        "sha256": "b59bfed10f3bf33e7e1c354b63d4c3081f7e2ab243bfc923148264a07fdd059b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -176,7 +176,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "b62fc9b04b391aa4b16679b3f7c2e9fc45a35cd38dc02081f98a4a6dbd163da8"
+        "sha256": "b0cab0ee7d01dee22106ae3e61a3c8e9b2b77c6b389984a98287641025da38ad"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -190,7 +190,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "d47d49e84835f493b234e24e565f890eb7e291e94abc4da538ed0083f44cfc2e"
+        "sha256": "0b5894795d5f5d8c03c69059804307071aefcabaab0dae188d3be2ea533e507c"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -204,7 +204,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "1f95ebd3d3c5eccb61c06eeb0cbaf0f38e0e903a14a456033a28f18c164f93e6"
+        "sha256": "594d2009f491aaf5657efbbc5d11b845ff6876bdeadc890cbc449d91828e5c5f"
       },
       "changes": [
         [
@@ -232,7 +232,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "7bd7a28b516d9623fb16ca5a33b1bf848e4ddf141e876407029bb4ed048c5279"
+        "sha256": "679b05dc368425269c20f840616790d37bedb8c566b27fedf31c0c138d36727e"
       },
       "changes": [
         [
@@ -406,7 +406,7 @@
   },
   "source_path_resolver": {
     "path": "source_paths.py",
-    "sha256": "143a0a0bcaac25014793aa03a09878a08ce12b6cd924e1ae0112a62b4974daf0"
+    "sha256": "a795d5ad162dbf5c4ee4c9c33750ce1cf49b702d223171ea1241d0699a147130"
   },
   "repair_disposition": {
     "H1": "shared final frozen inventory row count, propagated remote/prepare/capture",

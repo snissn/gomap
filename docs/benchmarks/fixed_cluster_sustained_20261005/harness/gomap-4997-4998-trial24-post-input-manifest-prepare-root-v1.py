@@ -1,4 +1,4 @@
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Inert local-only derivation: seal fresh inputs, native Go oracle, finalize inactive manifest."""
 import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
@@ -16,9 +16,13 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--pins', required=True); ap.add_argument('--output', required=True); ap.add_argument('--finalize-pending')
     a = ap.parse_args(); c = collector(); pins = c.strict_json(pathlib.Path(a.pins).read_bytes()); out = pathlib.Path(a.output)
     assert not out.exists() and not out.is_symlink()
+    protected=['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,a.pins]
+    if a.finalize_pending:protected += [c.LOCAL_INPUT_ROOT,a.finalize_pending]+list(pins['additional_local_pins'])+list(pins['receipts'].values())
+    isolate_paths([out],protected)
     if a.finalize_pending:
         raw = pathlib.Path(a.finalize_pending).read_bytes(); assert sha(raw) == pins['pending_manifest_sha256']
         m = c.strict_json(raw); assert all(m[k] is False for k in c.FLAGS)
+        isolate_paths([out],protected+list(m['local_pins'])+list(m['receipts'].values()))
         assert m['collector_sha256'] == COLLECTOR_SHA256
         assert set(pins['receipts']) == set(c.RECEIPTS) - set(m['receipts'])
         assert not set(m['local_pins']) & set(pins['additional_local_pins'])
@@ -35,6 +39,9 @@ def main():
     constants = pins['constants']
     required = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
     assert set(constants) == required, 'exact required sealer constants'
+    protected += [constants[k] for k in ('PRE','PROBE','PROOF','LIFECYCLE','BOOT_REVIEW','LANDED','BUILD','SOURCE_REVIEW','SOURCE_INV','ARTIFACT_REVIEW_PATH')]
+    isolate_paths([out],protected)
+    isolate_paths([constants[k] for k in ('OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF')],protected)
     assert constants['OUT'] == c.LOCAL_INPUT_ROOT and constants['HEAD'] == pins['source_head'] and constants['TREE'] == pins['source_tree']
     assert type(pins['pre_input_count']) is int and pins['pre_input_count'] > 0
     assert type(pins['source_pr']) is int and pins['source_pr']>0 and type(pins['predecessor_pr']) is int and pins['predecessor_pr']>0
@@ -64,6 +71,10 @@ def main():
     text = text.replace('PREPARED_LOCAL_INPUTS_INACTIVE_MANIFEST','SEALED_INPUTS_PENDING_NATIVE_PREFIX_ORACLE_AND_FINALIZATION')
     assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',text), 'unreplaced historical artifact path'
     assert 'rf4trial14mixedc1' not in text
+    guard=ast.unparse(next(n for n in ast.parse(pathlib.Path(__file__).with_name('source_paths.py').read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='isolate_paths'))
+    marker='    OUT.mkdir()';assert marker in text
+    text=text.replace(marker, "    isolate_paths([OUT,ARCHIVE,MANIFEST,PROMOTION_PROOF],["+repr('__ROOT_FROZEN_SOURCE_ROOT__')+",Path("+repr(str(pathlib.Path(__file__).resolve().parent))+"),PRE,PROBE,PROOF,LIFECYCLE,BOOT_REVIEW,LANDED,BUILD,SOURCE_REVIEW,SOURCE_INV,ARTIFACT_REVIEW_PATH])\n"+marker,1)
+    text=guard+'\n'+text
     ast.parse(text, str(out)); out.write_text(text)
     print(json.dumps(dict(state='UNEXECUTED_SEALER_REQUIRES_INDEPENDENT_SOURCE_REVIEW', source=str(out), sha256=sha(out.read_bytes()), template_sha256=TEMPLATE_SHA256, collector_sha256=COLLECTOR_SHA256)))
 if __name__ == '__main__': main()

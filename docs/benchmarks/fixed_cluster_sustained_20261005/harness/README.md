@@ -41,7 +41,7 @@ permission and native-oracle archive validators. The directory-prefixed form
 and mismatched payload digests are rejected; transport and campaign paths are
 not executed by this fixture.
 
-All 152 prior controls remain; negative checks cover each packaged host's
+All 160 prior controls remain; negative checks cover each packaged host's
 identity, source, ELF hash/positive bytes, packaging state, unchanged parent and
 unmounted stores, and all three native frozen-inventory count joins. No network,
 Go build, native oracle execution, Docker, campaign, or workload replay occurs.
@@ -110,3 +110,20 @@ inputs, native oracle, permission and admission; one-shot actual collection;
 all initial/final populations, all 58 witnesses, resource/closure and durable
 artifact retention. This source packet proves no sustained capacity result and
 closes no parent issue.
+
+Accepted server provenance is derived from the declaration's actual hash-pinned
+build receipt. Bootstrap plan context requires that same final build hash and
+ELF; the freezer joins actual bootstrap plan, frozen plan-preparation, manifest,
+build bytes and the copied accepted precollection proof before creating output.
+Qualification-source SHA-256 comes from that proof, whose actual source blob was
+verified by preflight. Lifecycle retains the copied proof hash. These joins do
+not establish new source acceptance or replace root's independent review.
+
+One shared resolved-path guard rejects equal, descendant and reverse-overlapping
+outputs against product/packet sources and relevant frozen inputs before writes.
+It rejects dot-dot paths and symlink leaves and resolves existing parent aliases.
+Native source symlinks remain intentional read access; remote preparation repeats
+the source/output separation on the remote filesystem before mkdir. Pure tests
+execute only the actual guards and source/provenance joins on owned fixtures.
+Single-writer ownership remains required; no adversarial symlink-race guarantee
+or actual remote filesystem acceptance is claimed.
