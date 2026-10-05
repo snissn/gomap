@@ -9,6 +9,7 @@ This separate contract does not qualify the native-prune benchmark schema.
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 CONTRACT = 'gomap-native-memory-v2'
+MEASUREMENT_LABELS = {'heap': 'aggregate forced-GC Go runtime, instrumentation included', 'rss': 'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta', 'hwm': 'whole-process VmHWM includes fixture', 'retirement_bytes': 'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP', 'allocations': 'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline', 'reader': 'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader', 'output': 'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count', 'control': 'same source shape, no discard floor; retains input history'}
 MAINTENANCE_RSS_CUTS = frozenset(('prepared', 'partial_private_output', 'accepted_relaxed', 'cancel_requested', 'cancel_drained', 'finish', 'cursor_close', 'db_owned_cleanup'))
 BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH','GOGC','GOMEMLIMIT','GODEBUG')
 
@@ -43,15 +44,26 @@ def validate_state(a):
     require(p.get('FlatRetiredCap')==0 and z.get('FlatRetiredCap')==0 and 0 <= z.get('Window',-1) <= 32 and 0 <= a.get('InputCount',-1)<=32,'sample descriptor failure')
     require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
     require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
+    require(p['FlatRetiredLen']<=p['FlatRetiredCap'] and z['FlatRetiredLen']<=z['FlatRetiredCap'],'flat retirement length exceeds capacity')
+    private_empty=all(p[k]==0 for k in ('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')) and all(z[k]==0 for k in ('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes'))
+    require(p['Build'] or private_empty,'private counts without build custody')
+    require(a['Native'] or (not a['Accepted'] and not a['EOF'] and all(a[k]==0 for k in ('Phase','InputCount','Chunk')) and not p['Build'] and private_empty),'counts without native custody')
+    return p,z
+
+def validate_state_bounds(a, x):
+    p,z=validate_state(a)
+    require(z['Frames']<=x['MaxFrames'] and max(z['Window'],a['InputCount'])<=x['MaxWindow'] and p['RetirementCells']<=x['MaxRetirementCells'],'state exceeds reported maximum')
+    if not a['EOF'] and not a['Accepted']:
+        require(p['RetirementCells']<=x['MaxSourceRetirementCells'],'source retirement state exceeds reported maximum')
     return p,z
 
 def validate_case(x, n, mode, pinned):
     require(isinstance(x, dict), 'result must be object')
-    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','RSSPeriodicPeak','RSSPeriodicSamples','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','RetirementPeak','SourceRetirementPeak','cuts')
+    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','RSSPeriodicPeak','RSSPeriodicSamples','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak','cuts')
     require(all(k in x for k in required), 'missing result field')
     require((x['schema'],x['n'],x['mode'],x['pinned']) == (CONTRACT,n,mode,pinned), 'case identity mismatch')
     for k in required:
-        if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak','RSSPeriodicPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
+        if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak','RSSPeriodicPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
             require(type(x[k]) is int and x[k] >= 0, 'invalid numeric field '+k)
     for k in ('pinned','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel'):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
@@ -81,12 +93,10 @@ def validate_case(x, n, mode, pinned):
         require(s['TotalAlloc']>=previous_alloc and s['Mallocs']>=previous_malloc,'allocation counter regression')
         previous_alloc,previous_malloc=s['TotalAlloc'],s['Mallocs']
         a=s.get('State');require(isinstance(a,dict),'missing custody sample')
-        p,z=validate_state(a)
+        p,z=validate_state_bounds(a,x)
         require(s['OutputPages']==z['ObservedOutputPages'] and s['OutputBufferBytes']==z['ObservedOutputBufferBytes'],'contradictory output sample')
         require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
         require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
-        require(z['Frames']<=x['MaxFrames'] and max(z['Window'],a['InputCount'])<=x['MaxWindow'] and p['RetirementCells']<=x['MaxRetirementCells'],'sample exceeds reported maximum')
-        if not a['EOF'] and not a['Accepted']:require(p['RetirementCells']<=x['MaxSourceRetirementCells'],'source retirement sample exceeds reported maximum')
         if s['name']=='partial_private_output':
             require(a['Native'] and p['Build'] and not a['EOF'] and not a['Accepted'] and p['AllocatedPages']>0 and p['RetirementCells']>0 and z['ObservedOutputPages']==1 and z['ObservedOutputBufferBytes']>0,'missing actual allocated-page/source-retirement/partial-output witness')
         if s['name']=='accepted_relaxed':require(a.get('Native') and a.get('Accepted') and p.get('Build'),'missing real DB custody')
@@ -102,17 +112,19 @@ def validate_case(x, n, mode, pinned):
     observed_rss=max([periodic['RSS']]+[s['RSS'] for s in cuts if s['name'] in MAINTENANCE_RSS_CUTS])
     require(x['SampledMaintenanceRSSPeak']==observed_rss,'unwitnessed sampled maintenance RSS maximum')
     require(x['MaxSourceRetirementCells']<=x['MaxRetirementCells'],'source peak exceeds overall peak')
-    for field, maximum, source_only in (('RetirementPeak','MaxRetirementCells',False),('SourceRetirementPeak','MaxSourceRetirementCells',True)):
+    for field, maximum in (('RetirementPeak','MaxRetirementCells'),('SourceRetirementPeak','MaxSourceRetirementCells'),('WindowPeak','MaxWindow'),('FramePeak','MaxFrames')):
         w=x[field];require(isinstance(w,dict) and type(w.get('Call')) is int,'missing/malformed peak witness')
-        a=w.get('State');p,z=validate_state(a)
-        require(p['RetirementCells']==x[maximum],'unwitnessed retirement maximum')
-        if not a['EOF'] and not a['Accepted']:require(p['RetirementCells']<=x['MaxSourceRetirementCells'],'source retirement peak exceeds reported maximum')
+        a=w.get('State');p,z=validate_state_bounds(a,x)
+        observed=max(a['InputCount'],z['Window']) if field=='WindowPeak' else z['Frames'] if field=='FramePeak' else p['RetirementCells']
+        require(observed==x[maximum],'unwitnessed maximum '+maximum)
         if x[maximum]==0:
-            require(w['Call']==0 and all(v is False if type(v) is bool else v==0 for owner in (a,p,z) for k,v in owner.items() if k not in ('Private','Native') or type(v) is bool),'nonzero empty peak witness')
+            require(w['Call']==0 and not a['Native'],'nonzero empty peak witness')
         else:
-            require(1<=w['Call']<=x['Calls'] and a['Native'] and p['Build'],'invalid observed peak call/custody')
-            require(not source_only or (not a['EOF'] and not a['Accepted']),'source peak after EOF/acceptance')
-        require(z['Frames']<=x['MaxFrames'] and max(z['Window'],a['InputCount'])<=x['MaxWindow'],'peak descriptor exceeds reported maximum')
+            require(1<=w['Call']<=x['Calls'] and a['Native'],'invalid observed peak call/custody')
+            # InputCount can precede private build creation; other positive
+            # observations belong to a real private owner.
+            require(field=='WindowPeak' or p['Build'],'peak without private build custody')
+            require(field!='SourceRetirementPeak' or (not a['EOF'] and not a['Accepted']),'source peak after EOF/acceptance')
     require(cuts[-1]['name']=='directory_cleanup','final DB Close/cleanup allocations excluded')
     return x
 
@@ -128,7 +140,7 @@ def validate_packet(out, root=None):
     source=json.loads((out/'source-bindings.json').read_text())
     require(type(receipt.get('source_count')) is int and receipt['source_count']==len(source) and len(source)>0,'missing source manifest')
     require(type(receipt.get('smoke')) is bool and type(receipt.get('race')) is bool and type(receipt.get('n')) is int and receipt['n']>=64,'invalid run metadata')
-    labels=receipt.get('labels');require(isinstance(labels,dict) and all(isinstance(labels.get(k),str) and labels[k] for k in ('heap','rss','hwm','retirement_bytes','allocations','reader','output','control')),'missing measurement scope labels')
+    require(receipt.get('labels')==MEASUREMENT_LABELS,'noncanonical measurement scope labels')
     require(receipt['contract']==CONTRACT and receipt['source_digest']==digest(source) and receipt['source_stable'] is True,'invalid source receipt')
     if root is not None:same_source(source,bindings(root))
     capture=pathlib.Path(receipt['capture_out']);require(capture.is_absolute(),'capture directory')
@@ -270,10 +282,119 @@ def self_test(out):
                 content=(json.dumps(mutated)+'\n').encode();(tmp/case['result']).write_bytes(content)
                 case['result_sha256']=hashlib.sha256(content).hexdigest()
             (tmp/'receipt.json').write_text(json.dumps(test_receipt))
+            # Refresh the derived summary for changed result fixtures so an
+            # unrelated old-summary mismatch cannot hide a case validator gap.
+            result=tmp/case['result']
+            if result.is_file() and result.read_bytes()!=original:
+                try:derived=summarize(test_receipt,[json.loads((tmp/c['result']).read_text()) for c in test_receipt['cases']])
+                except (KeyError,TypeError,json.JSONDecodeError):pass
+                else:(tmp/'summary.json').write_text(json.dumps(derived))
             try:validate_packet(tmp)
             except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError):pass
             else:raise ValueError('invalid packet accepted: '+fault)
+    measurement_self_test(out,r,witness_case)
     print('failclosed genuine allocator/retirement/native-output consistency and malformed/missing/bounds/schema/source-drift checks PASS')
+
+def measurement_self_test(out, receipt, witness_case):
+    """Coupled parser fixtures; never lifecycle measurements or retained owners."""
+    original=json.loads((out/witness_case['result']).read_text())
+    require(original['MaxWindow']>0 and original['MaxFrames']>0,'self-test needs real positive descriptor witnesses')
+    zero={'Native':False,'Accepted':False,'EOF':False,'Phase':0,'InputCount':0,'Chunk':0,
+          'Private':{'Build':False,'AllocatedPages':0,'Dependencies':0,'FlatRetiredLen':0,'FlatRetiredCap':0,'RetirementCells':0,
+                     'Native':{'Window':0,'Frames':0,'FlatRetiredLen':0,'FlatRetiredCap':0,'DecodedLeafBytes':0,'ObservedOutputPages':0,'ObservedOutputBufferBytes':0}}}
+    peaks=('RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak')
+    def clone(x):return json.loads(json.dumps(x))
+    def put(x,path,value):
+        for key in path[:-1]:x=x[key]
+        x[path[-1]]=value
+    def states(x):return [s['State'] for s in x['cuts']]+[x[k]['State'] for k in peaks]
+    # Make room for an inflation inside the hard cap; all retained scalar
+    # observations change consistently. This is a valid parser fixture only.
+    window_fixture=clone(original)
+    if window_fixture['MaxWindow']==32:
+        window_fixture['MaxWindow']=31
+        for a in states(window_fixture):
+            a['InputCount']=min(a['InputCount'],31)
+            a['Private']['Native']['Window']=min(a['Private']['Native']['Window'],31)
+    frame_fixture=clone(original)
+    if frame_fixture['MaxFrames']==64:
+        frame_fixture['MaxFrames']=63
+        for a in states(frame_fixture):a['Private']['Native']['Frames']=min(a['Private']['Native']['Frames'],63)
+    prep=clone(original);a=clone(zero);a.update(Native=True,Phase=1,InputCount=prep['MaxWindow'])
+    prep['WindowPeak']={'Call':1,'State':a}
+    empty_frame=clone(original);empty_frame['MaxFrames']=0;empty_frame['FramePeak']={'Call':0,'State':clone(zero)}
+    for a in states(empty_frame):a['Private']['Native']['Frames']=0
+    empty_window=clone(original);empty_window['MaxWindow']=0;empty_window['WindowPeak']={'Call':0,'State':clone(zero)}
+    for a in states(empty_window):a['InputCount']=0;a['Private']['Native']['Window']=0
+    fixtures=[('window inflation base',window_fixture),('frame inflation base',frame_fixture),('InputCount before private build',prep),('zero frame peak',empty_frame),('zero window peak',empty_window)]
+    negatives=[]
+    def add(name,base,path,value):
+        x=clone(base);put(x,path,value);negatives.append((name,x))
+    add('window inflated within cap',window_fixture,('MaxWindow',),window_fixture['MaxWindow']+1)
+    add('frame inflated within cap',frame_fixture,('MaxFrames',),frame_fixture['MaxFrames']+1)
+    for field,maximum in (('WindowPeak','MaxWindow'),('FramePeak','MaxFrames')):
+        for label,value in [('bool',True),('float',1.0),('string','1'),('negative',-1),('zero',0),('after calls',original['Calls']+1)]:
+            add(field+' call '+label,original,(field,'Call'),value)
+        x=clone(original);del x[field];negatives.append((field+' missing',x))
+        add(field+' null',original,(field,),None)
+        add(field+' malformed state',original,(field,'State'),None)
+        add(maximum+' bool',original,(maximum,),True)
+        add(maximum+' deflated',original,(maximum,),original[maximum]-1)
+        add(field+' no native custody',original,(field,'State','Native'),False)
+    add('private frame without build',original,('FramePeak','State','Private','Build'),False)
+    x=clone(original);a=x['WindowPeak']['State'];a['Private']['Build']=False;a['Private']['Native']['Window']=x['MaxWindow']
+    negatives.append(('window private counts without build',x))
+    add('zero frame invented call',empty_frame,('FramePeak','Call'),1)
+    add('zero window invented call',empty_window,('WindowPeak','Call'),1)
+    add('zero frame invented owner',empty_frame,('FramePeak','State','Native'),True)
+    add('zero window invented owner',empty_window,('WindowPeak','State','Native'),True)
+    add('descriptor witness retirement exceeds max',original,('WindowPeak','State','Private','RetirementCells'),original['MaxRetirementCells']+1)
+    x=clone(original);a=x['FramePeak']['State'];a['EOF']=False;a['Accepted']=False
+    x['MaxRetirementCells']=x['MaxSourceRetirementCells']+1
+    x['RetirementPeak']['State']['Private']['RetirementCells']=x['MaxRetirementCells'];x['RetirementPeak']['State']['EOF']=True
+    a['Private']['RetirementCells']=x['MaxRetirementCells'];negatives.append(('descriptor witness source exceeds max',x))
+    add('retirement witness frame exceeds max',frame_fixture,('RetirementPeak','State','Private','Native','Frames'),frame_fixture['MaxFrames']+1)
+    add('frame witness window exceeds max',window_fixture,('FramePeak','State','InputCount'),window_fixture['MaxWindow']+1)
+    for owner in ('Private','Native'):
+        path=('WindowPeak','State','Private')+(('Native',) if owner=='Native' else ())+('FlatRetiredLen',)
+        add(owner+' flat len without cap',original,path,1)
+    add('terminal top-level count',original,('cuts',len(original['cuts'])-1,'State','InputCount'),1)
+    add('terminal EOF',original,('cuts',len(original['cuts'])-1,'State','EOF'),True)
+    with tempfile.TemporaryDirectory(prefix='native-memory-measurement-contract-') as tmp:
+        tmp=pathlib.Path(tmp)
+        for p in out.iterdir():
+            if p.is_file():shutil.copyfile(p,tmp/p.name)
+        def write(x):
+            r=clone(receipt);p=tmp/witness_case['result'];p.write_text(json.dumps(x)+'\n')
+            c=next(c for c in r['cases'] if c['result']==p.name);c['result_sha256']=sha(p)
+            (tmp/'receipt.json').write_text(json.dumps(r))
+            results=[json.loads((tmp/c['result']).read_text()) for c in r['cases']]
+            (tmp/'summary.json').write_text(json.dumps(summarize(r,results)))
+        for name,x in fixtures:
+            write(x);validate_packet(tmp)
+        for name,x in negatives:
+            write(x)
+            # Prove the case validator refuses before summary comparison.
+            try:validate_case(x,witness_case['n'],witness_case['mode'],witness_case['pinned'])
+            except (ValueError,KeyError,TypeError):pass
+            else:raise ValueError('measurement case fixture accepted: '+name)
+            try:validate_packet(tmp)
+            except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError):pass
+            else:raise ValueError('checksum/summary-refreshed fixture accepted: '+name)
+        write(original)
+        for key in MEASUREMENT_LABELS:
+            r=clone(receipt);r['labels'][key]='exclusive owner heap'
+            results=[json.loads((tmp/c['result']).read_text()) for c in r['cases']]
+            (tmp/'receipt.json').write_text(json.dumps(r));(tmp/'summary.json').write_text(json.dumps(summarize(r,results)))
+            try:validate_packet(tmp)
+            except ValueError as e:require(str(e)=='noncanonical measurement scope labels','scope refusal at wrong boundary')
+            else:raise ValueError('coupled scope rewrite accepted: '+key)
+        for labels in (None,[],{},dict(MEASUREMENT_LABELS,extra='extra'),dict(MEASUREMENT_LABELS,heap=True)):
+            r=clone(receipt);r['labels']=labels;(tmp/'receipt.json').write_text(json.dumps(r))
+            try:validate_packet(tmp)
+            except ValueError as e:require(str(e)=='noncanonical measurement scope labels','malformed scope refusal at wrong boundary')
+            else:raise ValueError('malformed scope labels accepted')
+    print('measurement contract: '+str(len(fixtures))+' positive parser fixtures, '+str(len(negatives))+' coupled case refusals, 13 canonical-label refusals PASS')
 
 def run(args):
     root=args.root.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
@@ -317,7 +438,7 @@ def run(args):
         except (ValueError,KeyError,TypeError,OSError) as e:
             errors.append(str(e));break
         print(name+' PASS',flush=True)
-    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':sha(out/'build-command.json'),'build_log_sha256':sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
+    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':sha(out/'build-command.json'),'build_log_sha256':sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':dict(MEASUREMENT_LABELS)}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     results=[json.loads((out/c['result']).read_text()) for c in cases]
     (out/'summary.json').write_text(json.dumps(summarize(receipt,results),indent=2)+'\n')

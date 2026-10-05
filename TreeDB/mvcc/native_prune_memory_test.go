@@ -27,7 +27,7 @@ type nativeMemoryCut struct {
 	OutputBufferBytes                                      uint64
 }
 
-// Two scalar copies witness the observed maxima without retaining any owner.
+// Four fixed scalar copies witness retirement and descriptor maxima without retaining any owner.
 // A zero maximum keeps the zero-value witness: no call or phase is claimed.
 type nativeMemoryPeak struct {
 	Call  uint64
@@ -44,6 +44,7 @@ type nativeMemoryResult struct {
 	RSSPeriodicPeak                      nativeMemoryRSSPeak
 	RSSPeriodicSamples                   uint64
 	RetirementPeak, SourceRetirementPeak nativeMemoryPeak
+	WindowPeak, FramePeak                nativeMemoryPeak
 	CursorCloseOracle                    bool
 
 	PID                      int `json:"pid"`
@@ -260,9 +261,11 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		}
 		if window > result.MaxWindow {
 			result.MaxWindow = window
+			result.WindowPeak = nativeMemoryPeak{Call: result.Calls, State: s}
 		}
 		if s.Private.Native.Frames > result.MaxFrames {
 			result.MaxFrames = s.Private.Native.Frames
+			result.FramePeak = nativeMemoryPeak{Call: result.Calls, State: s}
 		}
 		flat := s.Private.FlatRetiredCap + s.Private.Native.FlatRetiredCap
 		if flat > result.MaxFlatRetiredCap {

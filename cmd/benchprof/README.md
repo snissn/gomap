@@ -526,13 +526,18 @@ sample count and call alignment are validated.
 Validation recomputes `summary.json` from validated results and receipt labels;
 missing, malformed or inconsistent summaries fail closed.
 
-Memory v2 retains two fixed-size scalar peak witnesses for retirement cells,
-including the observing call and custody phase. Validators bind reported maxima
-to these witnesses and reject v1 packets for current acceptance. Zero maxima
-claim no observing call or phase. These scalars do not measure owner-exclusive heap.
-Partial-output cuts require real allocated output and nonzero source retirement.
-Custody bounds and record-count scaling are evaluated separately from this
-presence witness.
+Memory v2 retains four fixed-size scalar peak witnesses for overall/source
+retirement cells, preparation window and native frames, including the observing
+call and custody phase. Every witness is checked against all reported memory
+and descriptor bounds. InputCount can witness a window before a private build
+exists; private counts require real build custody. Zero maxima claim no call or
+owner. Missing witnesses remain historical and fail current validation.
+Receipt and derived-summary scope labels must equal the canonical capture
+labels, so editing both cannot change aggregate measurements into exclusive
+owner claims. Self-tests refresh result checksums and derived summaries together
+to exercise case-level refusals. Work-record/byte maxima are budget checks;
+they are not attained-maximum memory witnesses. These fixed scalar observations
+still contribute to aggregate memory and do not measure exclusive native heap.
 
 ## Native prune foreground pilot packets
 
