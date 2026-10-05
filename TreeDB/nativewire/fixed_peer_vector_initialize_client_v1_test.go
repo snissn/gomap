@@ -269,6 +269,10 @@ func runFixedPeerVectorFixtureRealRaftV1(t *testing.T, mode string, replicas int
 		expectedRows = 603
 		for i := range configs {
 			configs[i].RequestTimeout = time.Minute
+			// The 600x128 dataset exercises more work than the small fixture.
+			// Use a one-second Raft budget to avoid elections during preparation
+			// under the race detector.
+			configs[i].RaftTimeout = time.Second
 			v := configs[i].VectorInitialization
 			v.MaxSourceRows = 640
 			v.IndexDefinition.Dimensions = 128

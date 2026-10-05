@@ -658,6 +658,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #4324 uses RowSelection only for bounded HNSW candidate admission;
 		// the partition searcher owns no typed-column publication.
 		filepath.Clean(filepath.Join(collectionsDir, "vector_partition_searcher_v1.go")): {},
+		// #4998 validates existing vector assets for a bounded current-source
+		// population audit; it owns no publication or durable data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "vector_source_population_proof_v1.go")): {},
 		// #4618 classifies an empty adjacency section against its positive
 		// offsets companion using existing codec constants; no publication.
 		filepath.Clean(filepath.Join(collectionsDir, "column_asset_reachability.go")): {},

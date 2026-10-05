@@ -5820,6 +5820,10 @@ func validateTypedColumnPointFloat32(column typedcolumn.ColumnPartColumn, rows i
 }
 
 func typedColumnPointFloat32Vector(column typedcolumn.ColumnPartColumn, row int) ([]float32, error) {
+	return typedColumnPointFloat32VectorAppend(nil, column, row)
+}
+
+func typedColumnPointFloat32VectorAppend(dst []float32, column typedcolumn.ColumnPartColumn, row int) ([]float32, error) {
 	idx := sort.Search(len(column.Blocks), func(i int) bool {
 		block := column.Blocks[i].Descriptor
 		return row < block.FirstRow || row-block.FirstRow < block.RowCount
@@ -5837,7 +5841,7 @@ func typedColumnPointFloat32Vector(column typedcolumn.ColumnPartColumn, row int)
 		return nil, fmt.Errorf("collections: point vector row=%d payload out of bounds", row)
 	}
 	start := local * rowBytes
-	return typedcolumn.DecodeRawFloat32VectorPayload(nil, block.Granule.Payload[start:start+rowBytes], 1, column.Definition.FixedWidthElements)
+	return typedcolumn.DecodeRawFloat32VectorPayload(dst[:0], block.Granule.Payload[start:start+rowBytes], 1, column.Definition.FixedWidthElements)
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValuesSelectedRows(selected []bool, rows []int) (typedColumnPartDecodedValues, typedcolumn.PartScanDiagnostics, error) {

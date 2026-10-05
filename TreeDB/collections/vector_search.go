@@ -283,6 +283,12 @@ func parseVectorFieldPath(field string) ([]string, error) {
 }
 
 func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
+	return vectorFromJSONFieldAppend(document, fieldPath, nil, 0)
+}
+
+// A prepared caller may reuse its fixed-dimensional scratch and refuse excess
+// elements before growing it. Ordinary callers retain their existing decoder.
+func vectorFromJSONFieldAppend(document []byte, fieldPath []string, dst []float32, maxDimensions int) ([]float32, bool, error) {
 	_, dataType, _, err := jsonparser.Get(document, fieldPath...)
 	if err == jsonparser.KeyPathNotFoundError || dataType == jsonparser.Null {
 		return nil, false, nil
@@ -293,7 +299,10 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 	if dataType != jsonparser.Array {
 		return nil, false, errors.New("not a numeric array")
 	}
-	out := make([]float32, 0, 64)
+	if dst == nil && maxDimensions == 0 {
+		dst = make([]float32, 0, 64)
+	}
+	out := dst[:0]
 	var parseErr error
 	_, err = jsonparser.ArrayEach(document, func(value []byte, dataType jsonparser.ValueType, _ int, err error) {
 		if parseErr != nil {
@@ -305,6 +314,10 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 		}
 		if dataType != jsonparser.Number {
 			parseErr = fmt.Errorf("element %d is not numeric", len(out))
+			return
+		}
+		if maxDimensions > 0 && len(out) >= maxDimensions {
+			parseErr = errors.New("vector exceeds declared dimensions")
 			return
 		}
 		n, err := strconv.ParseFloat(string(value), 32)

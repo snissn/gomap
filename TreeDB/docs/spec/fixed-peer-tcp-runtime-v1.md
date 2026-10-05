@@ -493,3 +493,65 @@ inside admission, followed by current-DB, applied, ACTIVE and catalog rechecks.
 Concurrent apply must complete and make a changed-state audit refuse its receipt.
 Keep every voter live until all audit receipts are independently verified, then
 retain separate clean-stop evidence. Ordinary diagnostics omit the attachment.
+
+The optional `Population` expectation extends this same operation with a complete
+**current canonical source-vector** observation. It does not enumerate or prove
+equality of the live ANN graph, and does not prove full reconstructed documents.
+A plan may attach it to the existing complete six-outcome/final-known-ID plan.
+An initial population-only plan instead has empty `Writes` and `Final`, zero
+`HighestNewCommitIndex`, and positive `RequiredAppliedIndex`. A partial ledger
+cannot select this mode. For example:
+
+```json
+{"Version":1,"RunID":"initial-population","HighestNewCommitIndex":0,"RequiredAppliedIndex":92,"Writes":[],"Final":[],"Population":{"Rows":10005,"Dimensions":128,"SHA256":"<64 lowercase hex characters>","Limits":{"MaxRows":16384,"MaxIDBytes":1024,"MaxSourceRecordBytes":1048576,"MaxTotalBytes":536870912,"MaxInspected":1048576}}}
+```
+
+`Rows` and `SHA256` come from the independently retained full canonical oracle,
+including every live anchor/insert, not the prepared graph's original `SourceRows`.
+The receipt adds observed rows, dimensions, fixed encoding `id-le32-fp32-le-v1`,
+SHA256 and accounting. Each row contributes little-endian uint32 ID length, raw
+ID bytes, then each unnormalized vector's little-endian `Float32bits`, in strictly
+increasing raw-byte ID order. Signed zero is preserved. Missing, extra, invalid,
+nonfinite, wrong-dimensional or changed vectors refuse the entire attachment.
+There is no bulk vector response, collection-sized vector array or sort.
+
+The admitted scan resolves the captured catalog definition once and iterates
+the current primary root and overlays, charging superseded entries and tombstones.
+Supported source representations are inline retained JSON and JSON noncolumn payloads
+with a declared nonnullable, fixed-D, raw uncompressed FP32 typed column. The latter
+uses the current row/scoring locator (including metadata-only preserved vectors),
+current manifest references, existing prepared projection and checksum-verified
+assets; unrelated document columns and pointer-backed primary payloads are not
+materialized. Current pointer entries supply ID/existence and the fixed 16-byte
+descriptor only. Retained JSON pointers refuse before value-log decoding because
+grouped frames and omitted length hints cannot supply the declared pre-decode
+bound. Empty supported collections require no source manifest or asset. Other representations
+refuse observation. The existing native runtime owns ACTIVE/generation, authenticated
+quorum, current-FSM DB identity and applied/root/WAL/summary fences before and after
+the source scan. The collections helper alone supplies no consensus or live-graph
+authority. Any drift, cancellation, iterator or close error returns no receipt.
+
+All limits are positive and mandatory: `MaxRows` <=65536, `MaxIDBytes` <=65536,
+`MaxSourceRecordBytes` <=1048576, `MaxTotalBytes` <=536870912 and `MaxInspected`
+<=1048576; dimensions are 1..4096. `MaxSourceRecordBytes` bounds each materialized
+source entry: inline primary bytes or a 16-byte pointer descriptor, plus fixed-D
+vector bytes for stripped column payloads. The receipt's `SourceRecordBytes`
+reports that sum, **not retained payload, value-log frame or full document size**.
+No pointer length hint is treated as a payload bound; no primary pointer is
+read or prefetched. Source entry/hash bytes are charged before vector decoding.
+`HashedBytes` reports encoded oracle input; `AssetBytes` reports loaded typed
+images (including reloads); `TotalBytes` additionally charges bounded metadata
+and locator payloads. `Inspected` charges physical primary merge work, locator
+probes, both manifest preparation passes, and scalar rows of each loaded part.
+The scan reserves work before decoder calls; it retains one decoded generation
+and one vector scratch. Before preparation, legacy manifests are limited to
+4096 records/8 MiB, typed images and declared decoded section bytes to 64 MiB,
+and each part to 65536 rows. These are refusal ceilings, not capacity, latency
+or whole-process peak-memory claims.
+
+This scan may hold shared mutation admission during an untimed diagnostic.
+Run it after draining the measured writer while all owned voters remain live.
+Each successful receipt is a local current-FSM observation at its actual applied
+position, at or above the requested floor; four receipts do not invent a cluster
+snapshot. Retain the separate stop/catchup/resource evidence. The operational
+qualification owner remains #4250.

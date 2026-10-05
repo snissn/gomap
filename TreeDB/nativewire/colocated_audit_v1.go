@@ -40,6 +40,7 @@ type ColocatedAuditPlanV1 struct {
 	RequiredAppliedIndex  uint64
 	Writes                []ColocatedAuditWriteV1
 	Final                 []ColocatedAuditStateV1
+	Population            *collections.VectorSourcePopulationExpectationV1 `json:",omitempty"`
 }
 type ColocatedAuditWitnessV1 struct {
 	AttemptSHA256 string
@@ -61,6 +62,7 @@ type ColocatedAuditReceiptV1 struct {
 	RetainedChain                                string
 	Witnesses                                    []ColocatedAuditWitnessV1
 	Final                                        []ColocatedAuditProofV1
+	Population                                   *collections.VectorSourcePopulationProofV1 `json:",omitempty"`
 }
 
 func DecodeColocatedAuditPlanV1(ctx context.Context, input io.Reader) (ColocatedAuditPlanV1, error) {
@@ -86,8 +88,14 @@ func ValidateColocatedAuditPlanV1(ctx context.Context, p ColocatedAuditPlanV1) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if p.Version != 1 || len(p.RunID) == 0 || len(p.RunID) > 64 || strings.Trim(p.RunID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6 || p.HighestNewCommitIndex == 0 || p.RequiredAppliedIndex < p.HighestNewCommitIndex {
+	populationOnly := p.Population != nil && len(p.Writes) == 0 && len(p.Final) == 0 && p.HighestNewCommitIndex == 0 && p.RequiredAppliedIndex > 0
+	if p.Version != 1 || len(p.RunID) == 0 || len(p.RunID) > 64 || strings.Trim(p.RunID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || !populationOnly && (len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6 || p.HighestNewCommitIndex == 0 || p.RequiredAppliedIndex < p.HighestNewCommitIndex) {
 		return errors.New("audit requires version1, bounded run ID, six original outcomes and final known IDs")
+	}
+	if p.Population != nil {
+		if err := collections.ValidateVectorSourcePopulationExpectationV1(*p.Population); err != nil {
+			return err
+		}
 	}
 	if _, err := preflightPeerRequestBytesV1(fixedPeerRequestV1{ColocatedAudit: &p}); err != nil {
 		return err
@@ -95,6 +103,9 @@ func ValidateColocatedAuditPlanV1(ctx context.Context, p ColocatedAuditPlanV1) e
 	raw, err := json.Marshal(p)
 	if err != nil || len(raw) > ColocatedAuditPlanMaxBytesV1 {
 		return errors.New("audit plan encoded bound")
+	}
+	if populationOnly {
+		return ctx.Err()
 	}
 	keys := make(map[string]bool, 6)
 	last := make(map[string]ColocatedAuditStateV1, 6)
@@ -282,6 +293,12 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 	raw, _ := json.Marshal(p)
 	digest := sha256.Sum256(raw)
 	out = ColocatedAuditReceiptV1{Version: 1, RunID: p.RunID, PlanSHA256: hex.EncodeToString(digest[:]), NodeID: string(r.config.NodeID), OwnerGroup: string(owner), Scope: "six retained original outcomes and known-ID canonical source/absence plus exact live membership only; no entire population proof", AppliedTerm: term, AppliedIndex: index, PhysicalState: before, CommandWALNextLSN: nextLSN}
+	if p.Population != nil {
+		out.Scope = "complete current canonical source vector population at this voter's current FSM applied position, at or above requested floor; no full-document or reverse live-graph equality"
+		if len(p.Writes) > 0 {
+			out.Scope += "; six retained original outcomes and known-ID canonical source/absence plus exact live membership"
+		}
+	}
 	// Raft apply holds the FSM lock before acquiring shared collection admission.
 	// Never acquire that lock from the prepared callback: bracket admission with
 	// identity checks instead, and retain physical/WAL checks while admitted.
@@ -295,13 +312,15 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 			return ErrFixedPeerVectorProofStaleV1
 		}
 		logical, _, err := c.VerifyVectorPartitionColocatedMutationLogicalStateV1(ctx)
-		if err != nil || len(logical) != 2 || len(logical[1]) != 56 || binary.LittleEndian.Uint64(logical[1]) != 1 {
+		if err != nil || len(logical) != 0 && (len(logical) != 2 || len(logical[1]) != 56 || binary.LittleEndian.Uint64(logical[1]) != 1) {
 			return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
-		out.RetainedCount = binary.LittleEndian.Uint64(logical[1][8:])
-		out.RetainedBytes = binary.LittleEndian.Uint64(logical[1][16:])
-		out.RetainedChain = hex.EncodeToString(logical[1][24:])
-		if out.RetainedCount != 6 {
+		if len(logical) == 2 {
+			out.RetainedCount = binary.LittleEndian.Uint64(logical[1][8:])
+			out.RetainedBytes = binary.LittleEndian.Uint64(logical[1][16:])
+			out.RetainedChain = hex.EncodeToString(logical[1][24:])
+		}
+		if len(p.Writes) > 0 && out.RetainedCount != 6 {
 			return errors.New("audit requires exactly six retained outcomes in this fresh collection checkpoint")
 		}
 		for _, w := range p.Writes {
@@ -359,8 +378,15 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 			}
 			out.Final = append(out.Final, item)
 		}
+		if p.Population != nil {
+			proof, e := admitted.ProveVectorSourcePopulationV1(ctx, vector.Manifest, *p.Population)
+			if e != nil {
+				return e
+			}
+			out.Population = &proof
+		}
 		after, err := c.VectorPartitionColocatedMutationLogicalStateV1(ctx)
-		if err != nil || len(after) != 2 || !bytes.Equal(after[0], logical[0]) || !bytes.Equal(after[1], logical[1]) {
+		if err != nil || len(after) != len(logical) || len(logical) == 2 && (!bytes.Equal(after[0], logical[0]) || !bytes.Equal(after[1], logical[1])) {
 			return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 		}
 		state, ok = db.StateToken()
