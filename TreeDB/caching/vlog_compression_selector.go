@@ -1952,9 +1952,40 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records, maxPayloadBytes int, aut
 	return db.clampLiveLeafLogFrameK(l, k)
 }
 
+// Ordinary auto/balanced compressed ingestion bounds cold point-read decode
+// work. Retained/template streams and leaf pages keep their storage policies.
+func (db *DB) valueLogBlockRawLimit(l *lane, writeMode vlogCompressionWriteMode, retained bool) int {
+	if db == nil || writeMode != vlogWriteBlock || retained || db.valueLogTemplateEnabled ||
+		normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto ||
+		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoBalanced || db.isLeafLogAppendLane(l) {
+		return 0
+	}
+	return 32 << 10
+}
+
+// Values are already template-encoded at this seam. Bound their actual frame
+// payload, allowing an oversized singleton and preserving the chosen K ceiling.
+func nextValueLogFrameEnd(records []valuelog.Record, start, k, rawLimit int) int {
+	end := start + min(max(k, 1), len(records)-start)
+	if rawLimit <= 0 {
+		return end
+	}
+	end = min(end, start+valuelog.MaxFrameK)
+	rawBytes := 0
+	for i := start; i < end; i++ {
+		if len(records[i].Value) > rawLimit-rawBytes {
+			return max(i, start+1)
+		}
+		rawBytes += len(records[i].Value)
+	}
+	return end
+}
+
 func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, codec valuelog.BlockCodec) int {
 	if records <= 1 {
-		recordLaneVlogBlockK(l, codec, 1)
+		if db.valueLogBlockRawLimit(l, vlogWriteBlock, false) == 0 {
+			recordLaneVlogBlockK(l, codec, 1)
+		}
 		return 1
 	}
 	compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
@@ -2030,7 +2061,9 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		k = valuelog.MaxFrameK
 	}
 	k = db.clampLiveLeafLogFrameK(l, k)
-	recordLaneVlogBlockK(l, codec, k)
+	if db.valueLogBlockRawLimit(l, vlogWriteBlock, false) == 0 {
+		recordLaneVlogBlockK(l, codec, k)
+	}
 	return k
 }
 
