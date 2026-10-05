@@ -699,3 +699,13 @@ The bound applies to eligible fresh cached ingestion, not every persisted frame:
 previously written files remain readable and maintenance rewrite independently
 groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
 an ingestion improvement alone is not a global post-maintenance size guarantee.
+
+Command-WAL collection side roots use the same stable outer-leaf producer as
+ordinary COW rewrite through the replay leaf-log wrapper. Installation forwards
+the DB-scoped identity registry and stable dictionary provider resolver before
+opening any leaf segment. Stable single and batch appends preserve the replay
+appender shared RID reservation and register every produced segment. Producer
+capture owns dictionary/template and raw-file frontiers; registration failure
+releases capture authority, while publication transfers or releases the set
+through the existing success, conflict, and abort paths. An absent stable provider
+continues to reject dictionary-dependent publication, including scanner fallback.
