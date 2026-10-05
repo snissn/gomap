@@ -88,6 +88,7 @@ def packet(out, root=None, receipt=None):
         need(valid_sha(r[key]) and sha(out / file) == r[key], 'build binding ' + file)
     build = json.loads((out / 'build-command.json').read_text())
     need(build['go'] == r['go'] and build['argv'][0] == r['go']['path'] and type(r['go']['version']) is str and r['go']['version'].startswith('go version ') and valid_sha(r['go']['sha256']), 'Go identity')
+    need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(out / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
     need(build['env'] == r['build_env'] and all(k in r['build_env'] for k in BUILD_KEYS), 'build environment binding')
     need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None}.items()), 'controlled build environment')
     for c in r['cases']:
@@ -96,7 +97,7 @@ def packet(out, root=None, receipt=None):
         need(c['binary_before_sha256'] == c['binary_after_sha256'] == r['binary_sha256'], 'case binary stability')
         cmd = json.loads((out / c['command']).read_text())
         need(cmd['env'] == dict(r['build_env'], MVCC_FOREGROUND_RESULT=str(out / c['result']), MVCC_FOREGROUND_N=str(c['n']), MVCC_FOREGROUND_MODE=c['mode'], MVCC_FOREGROUND_ALGORITHM=c['algorithm'], MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0'), 'case environment')
-        need(cmd['argv'][0] == str(out / 'foreground.test') and cmd['cwd'] == build['cwd'], 'case executable/cwd')
+        need(cmd['argv'] == [str(out / 'foreground.test'), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v'] and cmd['cwd'] == build['cwd'], 'case invocation/cwd')
         validate(json.loads((out / c['result']).read_text()), c['n'], c['mode'], c['algorithm'])
     return r
 
@@ -112,7 +113,7 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative result accepted')
-    probes = [lambda y: y['cases'].append(copy.deepcopy(y['cases'][0])), lambda y: y.update(errors=['rejected']), lambda y: y.update(binary_sha256='0' * 64), lambda y: y.update(build_command_sha256='0' * 64), lambda y: y.update(source_digest='0' * 64), lambda y: y['cases'][0].update(exit_code=False)]
+    probes = [lambda y: y.update(race=not y['race']), lambda y: y['cases'].append(copy.deepcopy(y['cases'][0])), lambda y: y.update(errors=['rejected']), lambda y: y.update(binary_sha256='0' * 64), lambda y: y.update(build_command_sha256='0' * 64), lambda y: y.update(source_digest='0' * 64), lambda y: y['cases'][0].update(exit_code=False)]
     for mutate in probes:
         y = copy.deepcopy(r); mutate(y)
         try:
@@ -120,7 +121,7 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative receipt accepted')
-    print('twelve in-memory negative checks PASS; retained measurements unchanged')
+    print('thirteen in-memory negative checks PASS; retained measurements unchanged')
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
