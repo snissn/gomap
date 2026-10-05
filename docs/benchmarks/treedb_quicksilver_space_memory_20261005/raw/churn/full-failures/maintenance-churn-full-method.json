@@ -1,0 +1,10 @@
+{
+  "diagnostic_only": true,
+  "existing_method": "maintenance-restore-r2-batch.py",
+  "existing_sha256": "6862ab5a6c4970582eaffdb0668ee181497f865b1bf0c4469b4c9bf29390fea8",
+  "method": "maintenance-churn-full.py",
+  "method_sha256": "e5f19cbf6bcf6eb15a002f38bb30c336a9c9124eda952431c729b86530c51c75",
+  "only_change": "one Full pass rather than Full/Exhaustive/secondExhaustive; exact existing census/oracle/compactor/timeout/protection guards retained",
+  "validation": "exact-once tuple replacement and Python syntax check; native run pending",
+  "compactor": "frozen treemap-restore-r2;eaa0019 exact whole-tree equality with landed723e5625"
+}

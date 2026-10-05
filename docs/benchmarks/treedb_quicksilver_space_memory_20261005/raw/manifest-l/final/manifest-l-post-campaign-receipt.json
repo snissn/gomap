@@ -1,0 +1,21 @@
+{
+  "created": 1791196511.2070656,
+  "head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+  "source_files": 5766,
+  "compile_inputs": 7510,
+  "headers": 84,
+  "libraries": 15,
+  "all_frozen_inputs_unchanged": true,
+  "originals": [
+    {
+      "variant": "defaults",
+      "original_unchanged_after_fixed_maintenance": true,
+      "preserved_receipt_sha256": "65cb556f145aaa7e8a42832321a1ff71f56d86bf1adc89fe334ec3d8490b81e9"
+    },
+    {
+      "variant": "pack",
+      "original_unchanged_after_fixed_maintenance": true,
+      "preserved_receipt_sha256": "5b9d29eb64268271b6eca66a1f20e160083cc5622356a3c913003352b451cf2d"
+    }
+  ]
+}

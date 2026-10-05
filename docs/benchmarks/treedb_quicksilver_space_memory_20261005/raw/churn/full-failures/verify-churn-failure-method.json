@@ -1,0 +1,35 @@
+{
+  "parent": "verify-failed-copy.py",
+  "parent_sha256": "e269e870fe48caf8296ae96518876b560f3e931c779376cfcd5441024367a0ca",
+  "method": "verify-churn-failure.py",
+  "method_sha256": "b59d5d51a0a685d56f065f99c582c07388e7f6d1ca2bc3ee51a8b67942323edd",
+  "changes": [
+    [
+      "p=r/'batch-3m-8192-input';",
+      "p=pathlib.Path(__import__('sys').argv[1]).resolve(); assert p.is_relative_to(r);"
+    ],
+    [
+      "out=r/'maintenance-baseline-3m-batch8192/readonly-after-failure'",
+      "out=r/__import__('sys').argv[2]/'readonly-after-failure'"
+    ],
+    [
+      "assert db==r/'working-dbs/maintenance-3m-batch8192-copy' and not out.exists()",
+      "assert db.parent==r/'working-dbs' and db.is_dir() and not out.exists()"
+    ],
+    [
+      "if a=='-profile-dir':next(args)",
+      "if a in ('-profile-dir','-quicksilver-churn-rounds','-quicksilver-churn-pause'):next(args)"
+    ],
+    [
+      "out.mkdir()",
+      "out.mkdir()\nfor f in sorted(db.rglob('manifest.json')):\n dest=out/'failed-manifests'/f.relative_to(db);dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(f.read_bytes())"
+    ],
+    [
+      "PASS_READONLY_ALL3M_FAILED_COPY_UNCHANGED",
+      "PASS_READONLY_ALL3M_CHURN_FAILURE_UNCHANGED"
+    ]
+  ],
+  "uses_existing_readonly_binary": true,
+  "exact_final_oracle": true,
+  "failed_database_not_opened_writable": true
+}

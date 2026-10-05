@@ -58,6 +58,15 @@ func testRebindDurableRootSnapshotBothSlots(t *testing.T, directory bool) {
 			t.Fatal(err)
 		}
 	}
+	var sourceNamespaces [2]map[string]uint64
+	for slot, resources := range database.durableRoot.slotResources {
+		sourceNamespaces[slot] = make(map[string]uint64)
+		for _, descriptor := range resources.PhysicalDescriptors() {
+			if namespace, present := descriptor.Namespace(); present {
+				sourceNamespaces[slot][descriptor.DiagnosticPath()] = namespace.ParentIdentity.Generation
+			}
+		}
+	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +180,17 @@ func testRebindDurableRootSnapshotBothSlots(t *testing.T, directory bool) {
 	if err != nil {
 		_ = index.Close()
 		t.Fatal(err)
+	}
+	for slot, resources := range reopened.durableRoot.slotResources {
+		for _, descriptor := range resources.PhysicalDescriptors() {
+			namespace, present := descriptor.Namespace()
+			want, captured := sourceNamespaces[slot][descriptor.DiagnosticPath()]
+			if present && (!captured || namespace.ParentIdentity.Generation != want) {
+				_ = reopened.Close()
+				_ = index.Close()
+				t.Fatalf("slot=%d non-dictionary namespace %q generation=%d want preserved %d", slot, descriptor.DiagnosticPath(), namespace.ParentIdentity.Generation, want)
+			}
+		}
 	}
 	for key, want := range map[string]string{"first": "first-value-log-value", "second": "second-value-log-value"} {
 		got, err := reopened.Get([]byte(key))

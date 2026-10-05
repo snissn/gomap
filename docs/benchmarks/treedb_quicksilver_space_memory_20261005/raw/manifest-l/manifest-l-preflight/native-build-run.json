@@ -1,0 +1,20 @@
+{
+  "head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+  "provisional": true,
+  "command": [
+    "go",
+    "build",
+    "-p",
+    "1",
+    "-buildvcs=false",
+    "-tags",
+    "lmdb rocksdb",
+    "-o",
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-manifest-l",
+    "./cmd/unified_bench"
+  ],
+  "started": 1791194768.4776669,
+  "finished": 1791194791.7717516,
+  "rc": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,5 @@
+{
+  "generator": "PASS frozen source exact-once/unchanged read region",
+  "physical": "PASS synthetic exact copy, metadata page delta, rejected payload mutation",
+  "go_validation": "NOT RUN per parent instruction"
+}

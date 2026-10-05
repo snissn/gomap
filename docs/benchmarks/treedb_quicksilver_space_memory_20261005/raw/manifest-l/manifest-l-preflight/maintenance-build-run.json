@@ -1,0 +1,18 @@
+{
+  "head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+  "provisional": true,
+  "command": [
+    "go",
+    "build",
+    "-p",
+    "1",
+    "-buildvcs=false",
+    "-o",
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-manifest-l",
+    "./TreeDB/cmd/treemap"
+  ],
+  "started": 1791194791.9501247,
+  "finished": 1791194792.5913324,
+  "rc": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

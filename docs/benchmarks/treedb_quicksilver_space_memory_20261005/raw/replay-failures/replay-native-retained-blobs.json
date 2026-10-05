@@ -1,0 +1,68 @@
+[
+  {
+    "path": "5004-replay-diagnostic-v2/__pycache__/inplace.cpython-310.pyc",
+    "bytes": 8055,
+    "sha256": "9183ff6290e92cc7b3b81a9fded52723555f441605c74e342f37577805f9b365",
+    "retained_native": true
+  },
+  {
+    "path": "5004-replay-diagnostic-v2/__pycache__/inplace.cpython-314.pyc",
+    "bytes": 18714,
+    "sha256": "f2ea6ab0a4916496ce6c3b5858fa4f7d2d6a0cc7094721cc9930d200e9472005",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m/1-baseline/guard/post/changed-files/maindb/index.db",
+    "bytes": 39321600,
+    "sha256": "67dafe6d3e910add0de96f33f729d567c9a82613c461c9f2d0823177dec0355a",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m/1-baseline/guard/post/changed-files/maindb/vlog_ref_counts.meta",
+    "bytes": 88,
+    "sha256": "89738f7ac2911a95c2c2b9ef08393fba73b3bf7b62006dfe020ee3243989375e",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m/1-baseline/guard/post/changed-files/maindb/LOCK",
+    "bytes": 12,
+    "sha256": "a17e86bb7430bdd24bda13edc0be241e6723b4b04e8161cf89099541a9d1bb64",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m/1-baseline/guard/post/changed-files/maindb/wal/command-wal-journal-owner.lock",
+    "bytes": 12,
+    "sha256": "a17e86bb7430bdd24bda13edc0be241e6723b4b04e8161cf89099541a9d1bb64",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m/1-baseline/guard/post/changed-files/dictdb/LOCK",
+    "bytes": 12,
+    "sha256": "a17e86bb7430bdd24bda13edc0be241e6723b4b04e8161cf89099541a9d1bb64",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m-no-vacuum/1-baseline/guard/post/changed-files/maindb/vlog_ref_counts.meta",
+    "bytes": 88,
+    "sha256": "89738f7ac2911a95c2c2b9ef08393fba73b3bf7b62006dfe020ee3243989375e",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m-no-vacuum/1-baseline/guard/post/changed-files/maindb/LOCK",
+    "bytes": 12,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m-no-vacuum/1-baseline/guard/post/changed-files/maindb/wal/command-wal-journal-owner.lock",
+    "bytes": 12,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88",
+    "retained_native": true
+  },
+  {
+    "path": "replay-3m-no-vacuum/1-baseline/guard/post/changed-files/dictdb/LOCK",
+    "bytes": 12,
+    "sha256": "d50f9d594ea126698291d4d78ef8f021113d5bb52ade0efdb42793feb9875f88",
+    "retained_native": true
+  }
+]

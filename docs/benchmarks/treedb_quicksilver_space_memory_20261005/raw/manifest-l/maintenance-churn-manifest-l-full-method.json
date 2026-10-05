@@ -1,0 +1,12 @@
+{
+  "parent": "maintenance-churn-full.py",
+  "parent_sha256": "e5f19cbf6bcf6eb15a002f38bb30c336a9c9124eda952431c729b86530c51c75",
+  "method": "maintenance-churn-manifest-l-full.py",
+  "method_sha256": "6cbc939d7a616c00f214e71e449bbede2150c5a5d82ffba1e044da32ac157b5d",
+  "only_change": "bind f5a82 frozen treemap binary instead of R2",
+  "supported_full": true,
+  "batch_size": 8192,
+  "pgroup_timeout_seconds": 1800,
+  "failed_original_preserved": true,
+  "starting_state": "fresh explicit restored copy of retained failed Full, not original unmaintained state"
+}

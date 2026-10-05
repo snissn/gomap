@@ -1,0 +1,10 @@
+{
+  "measured_head": "f5a82a6f7ac81e6a2959b730e030e6468e75444b",
+  "landed_head": "c2605b6d7421d1a5cff3cfd390958193e6f5e0b8",
+  "measured_tree": "6abef64e20d3ce5e43ecc9f1ed4a9757284bcbcd",
+  "landed_tree": "6abef64e20d3ce5e43ecc9f1ed4a9757284bcbcd",
+  "whole_tree_equal": true,
+  "proof": "git rev-parse exact heads ^{tree}",
+  "checked_utc": "2026-10-05T10:34:09.268220+00:00",
+  "measured_manifest_sha256": "f9d69ac2a0c34c30714d599747d773ee838864f8362d9507df46496747e0f99d"
+}

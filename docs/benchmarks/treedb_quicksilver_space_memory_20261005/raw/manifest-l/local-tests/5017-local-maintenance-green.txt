@@ -1,0 +1,5 @@
+--- FAIL: TestCompactStorageM0ProfileScriptUsesPortableTempRoot (0.00s)
+    compact_storage_measurement_test.go:348: open ../../scripts/compact_storage_m0_profile.sh: no such file or directory
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	10.574s
+FAIL

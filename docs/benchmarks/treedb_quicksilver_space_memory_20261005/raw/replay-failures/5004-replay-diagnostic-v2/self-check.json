@@ -1,0 +1,14 @@
+{
+  "result": "PASS",
+  "checks": [
+    "in-place byte/size reset",
+    "preserved new-file deletion",
+    "exact format replacement exception",
+    "identical-byte index replacement rejected",
+    "rejected reset does not mutate",
+    "resource deletion rejected",
+    "directory replacement rejected",
+    "sealed backup unchanged"
+  ],
+  "go_native_execution": "NONE"
+}

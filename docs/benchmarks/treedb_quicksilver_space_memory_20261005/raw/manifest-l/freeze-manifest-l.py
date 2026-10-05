@@ -1,0 +1,25 @@
+import hashlib,json,os,pathlib,subprocess,sys,time
+root=pathlib.Path('/mnt/fast4tb/quicksilver-space-memory-20261005');source=root/'source-manifest-l';identity=json.load(open(root/'manifest-l-source-inputs.json'));receipts=root/'receipts-manifest-l';receipts.mkdir(exist_ok=False)
+sys.path.insert(0,str(source/'scripts'));from treedb_memory_budget_capture import compile_inputs,digest
+base={k:v for k,v in os.environ.items() if not k.startswith(('TREEDB_','LD_'))};base.update(GOROOT='/home/mikers/.gvm/gos/go1.26.3',PATH='/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin',GOWORK='off',GOFLAGS='',GOENV='off',GOTOOLCHAIN='local',GOCACHE='/mnt/fast4tb/go-build-cache',GOMODCACHE='/mnt/fast4tb/go-mod-cache',CGO_ENABLED='1',CGO_CFLAGS='-I'+str(pathlib.Path('/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include')),CGO_LDFLAGS='-L'+str(pathlib.Path('/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib')),LD_LIBRARY_PATH=str(pathlib.Path('/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib'))+':'+str(pathlib.Path('/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu')))
+def command(argv):return subprocess.check_output(argv,cwd=source,env=base,text=True)
+def write(name,value):
+ p=receipts/(name+'.json');p.write_text(json.dumps(value,indent=2,sort_keys=True)+'\n');return dict(path=str(p.relative_to(root)),sha256=digest(p))
+assert not [f for f,h in identity['files'].items() if digest(source/f)!=h]
+listing=command(['go','list','-deps','-json','-tags','lmdb rocksdb','./cmd/unified_bench','./cmd/benchprof','./TreeDB/cmd/treemap']);(receipts/'go-list-inputs.jsonstream').write_text(listing);inputs=compile_inputs(listing,{},base['GOROOT'])
+project={str(pathlib.Path(p).relative_to(source)):h for p,h in inputs.items() if pathlib.Path(p).is_relative_to(source)};assert all(identity['files'].get(f)==h for f,h in project.items())
+sources=write('source',dict(identity,compiled_project_inputs=project,all_compile_inputs=inputs,go_list_sha256=digest(receipts/'go-list-inputs.jsonstream'),producer_script_sha256=digest(source/'scripts/unified_bench_quicksilver_capture.py'),freeze_script_sha256=digest(pathlib.Path(__file__))))
+binaries={n:dict(binary=n,binary_sha256=digest(root/'bin'/n),metadata=command(['go','version','-m',str(root/'bin'/n)])) for n in ['unified-bench-manifest-l','benchprof-manifest-l','treemap-manifest-l']}
+build=write('build',dict(head=identity['head'],provisional=True,go_version=command(['go','version']),go_env=json.loads(command(['go','env','-json'])),cc=command(['cc','--version']),builds={n:json.load(open(root/'manifest-l-preflight'/(n+'-run.json'))) for n in ['native-build','analyzer-build','maintenance-build']},binaries=binaries,environment={k:base[k] for k in ['GOROOT','PATH','GOWORK','GOFLAGS','GOENV','GOTOOLCHAIN','GOCACHE','GOMODCACHE','CGO_ENABLED','CGO_CFLAGS','CGO_LDFLAGS','LD_LIBRARY_PATH']}))
+ldd=command(['/usr/bin/ldd',str(root/'bin/unified-bench-manifest-l')]);libraries={}
+for line in ldd.splitlines():
+ for field in line.split():
+  if field.startswith('/'):
+   path=pathlib.Path(field);libraries[str(path)]=dict(sha256=digest(path),bytes=path.stat().st_size)
+headers={str(p):digest(p) for p in (pathlib.Path('/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include')).rglob('*') if p.is_file()}
+native=write('native',dict(ldd=ldd,libraries=libraries,headers=headers,versions=dict(LMDB='0.9.19 bundled bmatsuo/lmdb-go v1.8.0',RocksDB='6.11.4 Ubuntu 6.11.4-3')))
+runner=write('runner',dict(uname=command(['uname','-a']),lscpu=command(['lscpu']),meminfo=pathlib.Path('/proc/meminfo').read_text(),mount=command(['findmnt','-T',str(root)]),cpu_governors={str(p):p.read_text().strip() for p in pathlib.Path('/sys/devices/system/cpu').glob('cpu[0-9]*/cpufreq/scaling_governor')},shared_host=True,exception='INFRASTRUCTURE_UNAVAILABLE: runner: dedicated runner unavailable; shared Linux runner with recorded load and persistent Go caches/durable NVMe artifacts.',created=time.time()))
+manifest=dict(provisional=True,sources={'manifest-l':dict(head=identity['head'],binary='unified-bench-manifest-l',binary_sha256=binaries['unified-bench-manifest-l']['binary_sha256'],linkage='dynamic')},libraries=libraries,build_env={k:base[k] for k in ['GOROOT','PATH','GOWORK','GOFLAGS','GOENV','GOTOOLCHAIN','GOCACHE','GOMODCACHE','CGO_ENABLED','CGO_CFLAGS','CGO_LDFLAGS','LD_LIBRARY_PATH']},receipts=dict(source=sources,build=build,native=native,runner=runner))
+(root/'provisional-manifest-manifest-l.json').write_text(json.dumps(manifest,indent=2)+'\n')
+assert all(digest(p)==h for p,h in inputs.items());assert not [f for f,h in identity['files'].items() if digest(source/f)!=h]
+print('FROZEN_PROVISIONAL',identity['head'],'compile_inputs',len(inputs),'project',len(project),'libs',len(libraries),'headers',len(headers),flush=True)

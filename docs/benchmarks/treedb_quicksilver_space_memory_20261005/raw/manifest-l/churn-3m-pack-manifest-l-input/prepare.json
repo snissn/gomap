@@ -1,0 +1,25 @@
+[
+  {
+    "label": "copy",
+    "command": [
+      "cp",
+      "-a",
+      "--reflink=auto",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-393144076",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-pack-manifest-l-copy"
+    ],
+    "started": 1791195356.9015949,
+    "finished": 1791195364.478422,
+    "rc": 0
+  },
+  {
+    "label": "explicit-restore",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/rebind-owned-copy-restore-r2",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-pack-manifest-l-copy"
+    ],
+    "started": 1791195364.4785757,
+    "finished": 1791195365.5441403,
+    "rc": 0
+  }
+]

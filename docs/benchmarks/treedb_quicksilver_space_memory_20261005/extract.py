@@ -10,7 +10,7 @@ import re
 from statistics import median
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "9b32f9ca7c62272097a434cb395dfe30dab0e0682efefecf1dcea9fe86b3a1a7"
+INPUTS_SHA256 = "f29c35b80762df88a060de2b9adc734481dfdbb4dea6a3f184571087ab122d2a"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -516,6 +516,578 @@ def structural_evidence(records, contract, raw):
             "aggregation_scope":"eight exact StatsBefore passes; unmatched concurrent-after captures excluded; no repeated-capture sums"}
 
 
+def churn_observations(contract, raw):
+    fixed = contract["churn"]
+    prefix = "churn/pair/"
+    source = json.loads(raw[prefix + "receipts-churn-v3/source.json"])
+    compiled = source["compiled_project_inputs"]
+    require(source["head"] == fixed["source_head"] and len(compiled) == fixed["compiled_project_count"]
+            and sha(json.dumps(compiled,sort_keys=True,separators=(",",":")).encode()) == fixed["compiled_project_digest"]
+            and all(source["files"].get(k) == v for k,v in compiled.items()), "churn compiled source inventory differs")
+    require(source["producer_script_sha256"] == fixed["collector_sha256"] == sha(raw[prefix + "measurement-capture.py"])
+            and source["freeze_script_sha256"] == sha(raw[prefix + "freeze-churn-v3.py"])
+            and source["go_list_sha256"] == sha(raw[prefix + "receipts-churn-v3/go-list-inputs.jsonstream"]), "churn collection/source method differs")
+    captured = json.loads(raw[prefix + "churn-v3-source-inputs.json"])
+    require(captured["head"] == source["head"] and captured["files"] == source["files"], "churn frozen source capture differs")
+    equality_bytes = raw[prefix + "churn-landed-source-equality.json"]
+    equality = json.loads(equality_bytes)
+    require(equality["compiled_head"] == fixed["source_head"] and equality["landed_head"] == fixed["landed_head"]
+            and equality["whole_tree_equal"] is True and equality["compiled_tree"] == equality["landed_tree"]
+            and equality["git_diff_exit_code"] == 0, "churn historical landed identity differs")
+    observations, runs = {}, []
+    def files(value, boundary):
+        domains = dict.fromkeys(["dictionary", "outer_leaf", "user_value", "index", "metadata", "wal"], 0)
+        for name, size in value.items():
+            require(not Path(name).is_absolute() and ".." not in Path(name).parts
+                    and type(size) is int and size >= 0, "churn file census invalid")
+            domain = ("wal" if "/wal/" in name else "dictionary" if name.startswith("dictdb/")
+                      else "outer_leaf" if "/leaf_vlog/" in name else "user_value" if "/value_vlog/" in name
+                      else "index" if name.endswith("/index.db") else "metadata")
+            domains[domain] += size
+        return {"boundary":boundary,"file_count":len(value),"domains":domains,
+                "apparent_including_wal":sum(domains.values()),
+                "apparent_excluding_wal":sum(domains.values())-domains["wal"],"allocated_bytes":None}
+    for name, path in fixed["available_stdout"].items():
+        require(name in fixed["expected_cases"], "unknown churn case")
+        bundle = prefix + "churn-3m-1-" + name + "/"
+        manifest_bytes = raw[prefix + "qualified-manifest-churn-" + name + ".json"]
+        manifest = json.loads(manifest_bytes)
+        require(manifest["provisional"] is False and manifest["sources"] == fixed["sources"]
+                and manifest_bytes == raw[bundle + "manifest.json"]
+                and manifest["landed_source_equality"]["sha256"] == sha(equality_bytes), "churn manifest/source identity differs")
+        receipts = {}
+        for kind, receipt in manifest["receipts"].items():
+            data = raw[prefix + receipt["path"]]
+            require(sha(data) == receipt["sha256"] and data == raw[bundle + kind + "-receipt.json"], "churn receipt binding differs")
+            receipts[kind] = json.loads(data)
+        build, native, runner = receipts["build"], receipts["native"], receipts["runner"]
+        identity = fixed["sources"]["churn-v3"]
+        require(build["head"] == source["head"] and build["binaries"][identity["binary"]]["binary_sha256"] == identity["binary_sha256"]
+                and all(v["rc"] == 0 for v in build["builds"].values()) and runner["shared_host"] is True, "churn build/runner differs")
+        plan_bytes = raw[bundle + "plan.json"]
+        require(plan_bytes == raw[prefix + "churn-3m-1-" + name + "-plan.json"]
+                and sha(plan_bytes) == fixed["plan_sha256"][name], "churn plan differs")
+        plan = json.loads(plan_bytes)
+        require(plan["repeats"] == 1 and len(plan["cells"]) == 1, "churn plan dimensions differ")
+        cell = plan["cells"][0]
+        run_path = bundle + "1-" + cell["label"] + "/"
+        run = json.loads(raw[run_path + "run.json"])
+        env = dict(fixed["environment"], TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE="0" if name == "defaults" else "1")
+        command = [contract["native_root"] + "/bin/" + identity["binary"], "-suite","quicksilver","-dbs","treedb",
+                   "-profile","durable","-quicksilver-case","realistic","-keys","3000000","-read-workers","4",
+                   "-quicksilver-reads","6000000","-quicksilver-updates","40000","-quicksilver-duration","8s",
+                   "-quicksilver-read-batch","64","-quicksilver-commit","auto","-max-wall","33m0s","-seed","24",
+                   "-quicksilver-mixture","primary","-quicksilver-working-set","uniform","-quicksilver-miss-percent","90",
+                   "-quicksilver-churn-rounds","6","-quicksilver-churn-pause","30s","-keep"]
+        require(run["cell"] == cell and run["repeat"] == 1 and run["rc"] == 0 and run["validated"] is True
+                and run["source"] == identity and run["env"] == env and run["command"] == command
+                and run["manifest_sha256"] == sha(manifest_bytes) and run["plan_sha256"] == sha(plan_bytes)
+                and run["collector_sha256"] == fixed["collector_sha256"]
+                and run["finished"] > run["started"] >= build["builds"]["native-build"]["finished"], "churn command/runtime binding differs")
+        loader = run["native_resolution"]
+        libraries = {k:v["sha256"] for k,v in manifest["libraries"].items()}
+        require(loader["rc"] == 0 and loader["command"] == ["/usr/bin/ldd",command[0]] and loader["linkage"] == "dynamic"
+                and loader["loader_env"] == {"LD_LIBRARY_PATH":env["LD_LIBRARY_PATH"],"LD_PRELOAD":"","LD_AUDIT":""}
+                and loader["libraries"] == libraries
+                and all(native["libraries"][k]["sha256"] == digest for k,digest in libraries.items())
+                and all(k.encode() in raw[run_path + "ldd.stdout.txt"] for k in libraries), "churn loader/native binding differs")
+        samples = [json.loads(line) for line in raw[prefix + "churn-3m-1-" + name + "-memory.jsonl"].splitlines()]
+        process = rss_summary(samples, run, identity["binary"])
+        gnu = time_summary(raw[run_path + "stderr.log"].decode())
+        require(all(gnu[k] is not None for k in ["time_elapsed_seconds","kernel_process_rss_hwm_bytes"]), "churn GNU time/RSS missing")
+        runs.append({"case":name,"run":run,"observer":process,"gnu_time":gnu})
+        values = json.loads(raw[path])
+        require(path == run_path + "stdout.json" and len(values) == 1, "churn stdout row count differs")
+        value = values[0]
+        config, churn = value["config"], value["maintenance_churn"]
+        require(value["engine"] == "treedb" and value["gomaxprocs"] == 12 and value["profiled"] is False
+                and config["churn_rounds"] == 6 and config["churn_pause_ns"] == 30000000000
+                and config["keys"] == 3000000 and config["updates"] == 40000 and config["seed"] == 24
+                and config["working_set"] == "uniform" and config["miss_percent"] == 90
+                and churn["leaf_generation_pack_maintenance_env"] == ("0" if name == "defaults" else "1"), "churn workload/setting differs")
+        require(value["verified_keys"] == value["initial_verified_keys"] == 3000000
+                and value["verified_misses"] == 6040000 and value["initial_verified_misses"] == 6030000,
+                "churn public fixture oracle incomplete")
+        require(len(churn["rounds"]) == 6, "churn rounds incomplete")
+        rounds = []
+        for number, row in enumerate(churn["rounds"],1):
+            require(row["round"] == number and row["restored_keys"] == row["verified_keys"] == 3000000
+                    and row["verified_misses"] == 6040000 and row["mutation_targets"] == 40000
+                    and row["mutation_commit_batches"] == 160
+                    and row["mutations"] == {"updates":10000,"deletes":10000,"inserts":10000,
+                                             "overwrite_targets":10000,"overwrite_sets":40000}, "churn refresh/proof incomplete")
+            times = {k:row[k] for k in ["wall_seconds","write_seconds","checkpoint_seconds","verification_seconds","pause_seconds"]}
+            require(all(type(v) in [int,float] and math.isfinite(v) and v >= 0 for v in times.values())
+                    and times["pause_seconds"] >= 30
+                    and times["wall_seconds"] >= sum(v for k,v in times.items() if k != "wall_seconds"), "churn elapsed bracket invalid")
+            snapshots = {}
+            for point in ["before","after"]:
+                snapshot = row[point]
+                require(snapshot["process_rss_supported"] is True and all(type(snapshot[k]) is int and snapshot[k] >= 0
+                        for k in ["process_heap_alloc_bytes","process_rss_bytes"]), "churn process snapshot invalid")
+                stats = snapshot["engine_stats"]
+                selected = {k:v for k,v in stats.items() if k.startswith("treedb.cache.vlog_retained_prune.")
+                            or k.startswith("treedb.cache.vlog_generation.rewrite.") or k.startswith("treedb.cache.vlog_generation.leaf_pack.")}
+                estimate = int(stats["treedb.cache.vlog_retained_bytes_estimate"])
+                require(estimate >= 0 and int(stats["treedb.cache.vlog_generation.rewrite.bytes_out"]) >= 0,
+                        "churn byte counter invalid")
+                snapshots[point] = {"heap_alloc_bytes":snapshot["process_heap_alloc_bytes"],"rss_bytes":snapshot["process_rss_bytes"],
+                                    "retained_bytes_estimate":estimate,"maintenance_counters":selected}
+            rounds.append(dict(times,round=number,restored_keys=row["restored_keys"],verified_keys=row["verified_keys"],
+                               verified_misses=row["verified_misses"],snapshots=snapshots))
+        observations[name] = {"config":config,"rounds":rounds,
+            "pre_churn_files":files(value["final_files"],"report.final_files before churn"),
+            "post_close_files":files(churn["final_files_after_close"],"maintenance_churn.final_files_after_close"),
+            "interpretation":"full-dataset refresh stress; estimates are not file censuses; rewrite bytes_out is global value-only post-rewrite census, not copied-record bytes"}
+    require(set(observations) == set(fixed["expected_cases"]) and runs[0]["run"]["finished"] <= runs[1]["run"]["started"], "churn pair incomplete or overlapping")
+    return {"status":"VALIDATED_ALL", "scope":"ONE_DESCRIPTIVE_FULL_REFRESH_STRESS_PAIR",
+            "run_qualification":fixed["run_qualification"],"expected_cases":fixed["expected_cases"],
+            "historical_landed_equality":equality,"runs":runs,"observations":observations}
+
+
+def churn_full_failures(contract, raw, churn):
+    prefix = "churn/full-failures/"
+    read = lambda name: json.loads(raw[prefix + name])
+    method = read("maintenance-churn-full-method.json")
+    parent = raw["restore-r2/maintenance-restore-r2-batch.py"]
+    actual = raw[prefix + "maintenance-churn-full.py"]
+    require(sha(parent) == method["existing_sha256"] and sha(actual) == method["method_sha256"]
+            and parent.count(b"('full','exhaustive','exhaustive-second')") == 1
+            and actual == parent.replace(b"('full','exhaustive','exhaustive-second')", b"('full',)"),
+            "churn Full method differs from qualified maintenance method")
+    readonly_method = read("verify-churn-failure-method.json")
+    readonly_parent = raw["verify-failed-copy.py"]
+    require(sha(readonly_parent) == readonly_method["parent_sha256"], "churn readonly parent differs")
+    for old, new in readonly_method["changes"]:
+        require(readonly_parent.count(old.encode()) == 1, "churn readonly method replacement ambiguous")
+        readonly_parent = readonly_parent.replace(old.encode(), new.encode())
+    require(readonly_parent == raw[prefix + "verify-churn-failure.py"]
+            and sha(readonly_parent) == readonly_method["method_sha256"], "churn readonly method differs")
+    attempts = []
+    for case, generation in contract["churn"]["maintenance_failure_generations"].items():
+        base = "maintenance-churn-3m-" + case + "-full8192/"
+        commands = read(base + "commands.json")
+        require(len(commands) == 2 and [c["label"] for c in commands] == ["pre-maintenance-verify", "full"],
+                "churn failed attempt command inventory differs")
+        run = next(r["run"] for r in churn["runs"] if r["case"] == case)
+        original = json.loads(raw[contract["churn"]["available_stdout"][case]])[0]
+        database = original["data_dir"]
+        args = iter(run["command"])
+        verify_command = []
+        for arg in args:
+            if arg in ["-quicksilver-churn-rounds", "-quicksilver-churn-pause"]:
+                next(args)
+            elif arg != "-keep":
+                verify_command.append(arg)
+        verify_command += ["-quicksilver-verify-dir", database]
+        full_command = [contract["native_root"] + "/bin/treemap-restore-r2", "compact", database,
+                        "-rw", "-json", "-mode", "full", "-sync-each-phase", "-leaf-pack-max-passes", "64",
+                        "-rewrite-batch-size", "8192"]
+        before, full = commands
+        require(before["command"] == verify_command and before["rc"] == 0 and before["timed_out"] is False
+                and run["finished"] <= before["started"] < before["finished"] <= full["started"] < full["finished"]
+                and full["command"] == full_command and full["rc"] == 1 and full["timed_out"] is False,
+                "churn failure command/outcome differs")
+        oracle(read(base + "pre-maintenance-verify-stdout.json"), contract)
+        states = [census(read(base + name + "-census.json")) for name in ["final-before-verify", "before-maintenance"]]
+        require(states[0]["domains"] == states[1]["domains"]
+                and {k:v["apparent"] for k,v in states[0]["domains"].items()} == churn["observations"][case]["post_close_files"]["domains"],
+                "churn pre-maintenance census boundary differs")
+        stderr = raw[prefix + base + "full-stderr.txt"].decode()
+        error = "manifest.json generation_id " + str(generation) + " appears more than once"
+        require(error in stderr and raw[prefix + base + "full-stdout.json"] == b"",
+                "churn failure was promoted to completed output")
+        summary = command_summary(full, stderr)
+        require(summary["status"] == "failed" and summary["disk_sample_count"] > 0
+                and summary["time_elapsed_seconds"] is not None and summary["kernel_process_rss_hwm_bytes"] is not None,
+                "churn failure cost missing")
+        receipt = read(base + "readonly-after-failure/receipt.json")
+        expected_readonly = [contract["native_root"] + "/bin/diagnostic-readonly-oracle"] + verify_command[1:]
+        proof = read(base + "readonly-after-failure/stdout.json")
+        require(receipt["command"] == expected_readonly and receipt["rc"] == 0
+                and receipt["binary_sha256"] == contract["restore_r2"]["readonly_binary_sha256"]
+                and receipt["method_sha256"] == readonly_method["method_sha256"]
+                and receipt["unchanged"] is True and receipt["before"] == receipt["after"]
+                and receipt["proof"] == proof and proof["data_dir"] == database
+                and type(receipt["seconds"]) in [int,float] and math.isfinite(receipt["seconds"]) and receipt["seconds"] > 0,
+                "churn failure readonly proof differs")
+        oracle(proof, contract)
+        manifest = read(base + "readonly-after-failure/failed-manifests/maindb/leaf_vlog/manifest.json")
+        ids = [g["generation_id"] for g in manifest["generations"]]
+        require(len(ids) == len(set(ids)), "retained on-disk manifest unexpectedly contains duplicate generations")
+        attempts.append({"case":case,"status":"failed","duplicate_generation_error":generation,
+                         "maintenance_cost":summary,"pre_maintenance_states":states,
+                         "readonly_oracle":{"elapsed_seconds":receipt["seconds"],"unchanged":True,
+                                            "verified_keys":proof["verified_keys"],"verified_misses":proof["verified_misses"],
+                                            "binary_sha256":receipt["binary_sha256"]},
+                         "post_failure_manifest_generations":len(ids),"post_failure_manifest_unique":True,
+                         "terminal_identity_receipt":None,
+                         "source_scope":"recorded command and preserved method select previously frozen R2 treemap; failure prevented terminal identity receipt; no completed maintenance JSON"})
+    return {"status":"PRESERVED_FAILED_ATTEMPTS", "attempts":attempts,
+            "qualification":"read-only oracles establish readable fixture and unchanged census at that boundary; these failed attempts do not qualify the repaired writable runtime"}
+
+
+def replay_failures(contract, raw):
+    prefix = "replay-failures/"
+    read = lambda name: json.loads(raw[prefix + name])
+    fixed = contract["replay_failures"]
+    native_root = "/mnt/fast4tb/quicksilver-space-memory-20261005"
+    plan = read("5004-replay-diagnostic/command-plan.json")
+    source = read("5004-replay-diagnostic/receipt.json")
+    guard_source = read("5004-replay-diagnostic-v2/source-receipt.json")
+    builds = read("5004-replay-diagnostic/native-builds.json")
+    require(plan["diagnostic_only"] is True and plan["pairs"] == [["baseline","candidate"],
+            ["candidate","baseline"],["baseline","candidate"]]
+            and plan["source_public_run_sha256"] == sha(raw[
+                "public-matched/offsets-3m-matched/1-baseline-durable-primary/run.json"]),
+            "replay diagnostic plan differs")
+    require(source["baseline"] == guard_source["baseline"] == fixed["guard_source_baseline_head"]
+            and source["candidate"] == guard_source["candidate"] == fixed["candidate_head"]
+            and guard_source["all_inspected_production_sources_identical"] is True
+            and len(guard_source["source_sha256"]) == 16
+            and sorted(guard_source["format_exception_allowlist"]) ==
+                ["dictdb/format.json","maindb/format.json","templatedb/format.json"],
+            "replay source or guard scope differs")
+    require(source["overlay_suite_sha256"] == sha(raw[prefix + "5004-replay-diagnostic/suite_quicksilver.go"]),
+            "replay overlay source differs")
+    check = read("5004-replay-diagnostic-v2/self-check.json")
+    require(check["result"] == "PASS" and len(check["checks"]) == 8
+            and check["go_native_execution"] == "NONE", "replay synthetic checks differ")
+    require(len(builds) == 2, "replay build inventory differs")
+    for variant, build, head in zip(["baseline","candidate"], builds,
+                                   [fixed["actual_baseline_head"],fixed["candidate_head"]]):
+        require(build["source"]["head"] == head and build["rc"] == 0
+                and build["started"] < build["finished"]
+                and build["overlay_sha256"] == sha(raw[prefix + "5004-replay-diagnostic/" + variant + "-overlay.json"])
+                and build["suite_overlay_sha256"] == source["overlay_suite_sha256"]
+                and build["suite_original_sha256"] == source["original_suite_sha256"]
+                and build["output_sha256"] == sha(raw[prefix + "5004-replay-diagnostic/" + variant + "-build.txt"])
+                and build["command"] == ["go","build","-p","1","-buildvcs=false","-tags","lmdb rocksdb",
+                    "-overlay",native_root + "/5004-replay-diagnostic/" + variant + "-overlay.json",
+                    "-o",native_root + "/bin/unified-bench-replay-" + variant,"./cmd/unified_bench"],
+                "replay native build binding differs")
+    baseline = builds[0]
+    def validate_run(name, mode, caller, case):
+        run = read(name + "run.json")
+        require(run["diagnostic_only"] is True and run["mode"] == mode and run["variant"] == "baseline"
+                and run["source"] == baseline["source"] and run["binary_sha256"] == baseline["binary_sha256"]
+                and run["build_receipt_sha256"] == sha(raw[prefix + "5004-replay-diagnostic/native-builds.json"])
+                and run["plan_sha256"] == sha(raw[prefix + "5004-replay-diagnostic/command-plan.json"])
+                and run["caller_sha256"] == sha(raw[prefix + caller])
+                and builds[1]["finished"] < run["started"] < run["finished"]
+                and run["stdout_sha256"] == sha(raw[prefix + name + "stdout.json"])
+                and run["stderr_sha256"] == sha(raw[prefix + name + "stderr.log"]), "replay run binding differs")
+        expected_env = dict(plan["environment"], LD_PRELOAD="", LD_AUDIT="", GOMAP_QS_REPLAY_MODE=mode,
+                            GOMAP_QS_REPLAY_DB=read(case + "/seal.json")["db"],
+                            GOMAP_QS_REPLAY_JSONL=native_root + "/" + name + "effects.jsonl")
+        if case.endswith("no-vacuum"):
+            expected_env["TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"] = "1"
+        require(run["env"] == expected_env, "replay environment differs")
+        rows = read(name + "stdout.json")
+        require(len(rows) == 1, "replay stdout inventory differs")
+        row = rows[0]
+        require(row["engine"] == "treedb" and row["gomaxprocs"] == 12 and row["profiled"] is False
+                and row["initial_verified_keys"] == 3000000 and row["initial_verified_misses"] == 6030000
+                and row["verified_keys"] == row["verified_misses"] == row["updated_keys"] == 0
+                and row["config"] == read("replay-3m/create/stdout.json")[0]["config"],
+                "replay fixture or oracle differs")
+        return run, row
+    create, create_row = validate_run("replay-3m/create/", "create", "run-replay-create-original.py", "replay-3m")
+    require(create["rc"] == 0 and create_row["phases"] is None
+            and create["command"] == ["/usr/bin/time","-v",native_root + "/bin/unified-bench-replay-baseline"] + plan["args"]
+            and "a['phases']" in raw[prefix + "run-replay-create-original.py"].decode(),
+            "replay create child or original caller differs")
+    attempts = []
+    for case, caller in zip(fixed["expected_cases"], ["run-replay.py","run-replay-no-vacuum.py"]):
+        name = case + "/1-baseline/"
+        run, row = validate_run(name, "read", caller, case)
+        seal = read(case + "/seal.json")
+        before, after = read(name + "guard/before.json"), read(name + "guard/post/census.json")
+        require(before == seal["original"] and set(seal["backup"]) == set(before)
+                and sorted(seal["format_identity_exceptions"]) == fixed["guard_format_identity_allowlist"],
+                "replay seal or format identity exceptions differ")
+        for path, item in before.items():
+            require(item["kind"] in ["dir","file"] and item["nlink"] >= 1
+                    and {k:item[k] for k in ["kind","size","sha256"]}
+                    == {k:seal["backup"][path][k] for k in ["kind","size","sha256"]}
+                    and (item["dev"],item["ino"]) != (seal["backup"][path]["dev"],seal["backup"][path]["ino"]),
+                    "replay backup differs or aliases original")
+        target = fixed["rejected_identity_paths"][case]
+        require((before[target]["dev"],before[target]["ino"]) != (after[target]["dev"],after[target]["ino"])
+                and target not in seal["format_identity_exceptions"]
+                and "('resource identity changed', '" + target + "')" in raw[prefix + name + "stderr.log"].decode(),
+                "replay strict identity failure differs")
+        child = read(name + "guard/run.json")
+        require(run["rc"] == 1 and child["rc"] == 0
+                and run["guard_method_sha256"] == sha(raw[prefix + "5004-replay-diagnostic-v2/inplace.py"])
+                and run["physical_seal_sha256"] == child["manifest_sha256"] == sha(raw[prefix + case + "/seal.json"])
+                and run["guard_source_receipt_sha256"] == sha(raw[prefix + "5004-replay-diagnostic-v2/source-receipt.json"])
+                and child["binary_sha256"] == baseline["binary_sha256"]
+                and child["command"] == [native_root + "/bin/unified-bench-replay-baseline"] + plan["args"]
+                and raw[prefix + name + "stdout.json"] == raw[prefix + name + "guard/stdout.json"]
+                and run["command"] == ["/usr/bin/time","-v","python3",native_root + "/5004-replay-diagnostic-v2/inplace.py",
+                    "run","--owned-root",native_root,"--manifest",native_root + "/" + case + "/seal.json",
+                    "--out",native_root + "/" + name + "guard","--"] + child["command"],
+                "replay guard failure or child binding differs")
+        require([p["name"] for p in row["phases"]] == ["quicksilver_hits","quicksilver_misses","quicksilver_mixed"]
+                and all(p["ops"] == 6000000 for p in row["phases"]), "replay read phases differ")
+        attempts.append(dict(case=case,status="STOPPED_ON_FIRST_BASELINE",guard_rc=1,child_rc=0,
+                             rejected_identity_path=target,observed_reads=1,accepted_reads=0,
+                             sealed_objects=len(before),post_objects=len(after),
+                             **time_summary(raw[prefix + name + "stderr.log"].decode())))
+    method = read("replay-no-vacuum-method.json")
+    require(method["diagnostic_only"] is True and method["original_failed_db_preserved"] is True
+            and method["order"] == ["1-baseline","1-candidate","2-candidate","2-baseline","3-baseline","3-candidate"]
+            and method["caller_parent_sha256"] == sha(raw[prefix + "run-replay.py"])
+            and method["caller_sha256"] == sha(raw[prefix + "run-replay-no-vacuum.py"])
+            and method["guard_method_sha256"] == sha(raw[prefix + "5004-replay-diagnostic-v2/inplace.py"]),
+            "vacuum-off replay method differs")
+    prep = read("replay-3m-no-vacuum/prepare.json")
+    require(prep["diagnostic_only"] is True and len(prep["commands"]) == 3
+            and prep["method_sha256"] == sha(raw[prefix + "prepare-replay-no-vacuum.py"])
+            and all(command["rc"] == 0 and command["started"] < command["finished"] for command in prep["commands"])
+            and read("replay-3m/1-baseline/run.json")["finished"] < prep["commands"][0]["started"]
+            and prep["commands"][-1]["finished"] < read("replay-3m-no-vacuum/1-baseline/run.json")["started"],
+            "vacuum-off restore preparation differs")
+    preserved = read("replay-3m-no-vacuum/original-preserved.json")
+    require(preserved["current_matches_failed_census"] is True
+            and preserved["failed_post_census_sha256"] == sha(raw[prefix + "replay-3m/1-baseline/guard/post/census.json"])
+            and preserved["restore_helper_sha256"] == contract["restore_r2"]["binaries"]["rebind-owned-copy-restore-r2"]
+            and preserved["restore_source"] == contract["restore_r2"]["head"]
+            and preserved["restore_landed_source"] == contract["restore_r2"]["landed_head"], "failed replay original preservation differs")
+    ledger = read("replay-native-retained-blobs.json")
+    require(len(ledger) == len({entry["path"] for entry in ledger}) == 11, "replay native retained inventory differs")
+    for entry in ledger:
+        require(entry["retained_native"] is True and entry["bytes"] > 0
+                and re.fullmatch("[0-9a-f]{64}",entry["sha256"]), "invalid replay native retained blob")
+        if "/changed-files/" in entry["path"]:
+            base, path = entry["path"].split("/changed-files/")
+            item = read(base + "/census.json")[path]
+            require(entry["bytes"] == item["size"] and entry["sha256"] == item["sha256"],
+                    "native retained resource differs from post census")
+    observations = [json.loads(line) for line in raw[prefix + "replay-3m-no-vacuum-memory.jsonl"].splitlines()]
+    attempts[1]["rss"] = rss_summary(observations, read("replay-3m-no-vacuum/1-baseline/run.json"), "unified-bench-replay-baseline")
+    return {"status":"STOPPED_NO_ACCEPTED_COMPARISON","acceptance":"HELD","planned_reads_per_attempt":6,
+            "accepted_reads":0,"attempts":attempts,"source_receipt":source,"native_builds":builds,
+            "native_retained_blobs":ledger,"post_failure_original_preserved":True,
+            "create":{"child_rc":0,"initial_verified_keys":3000000,"initial_verified_misses":6030000,
+                      "caller_status":"original print iterates null phases after child success; not a validated collector completion",
+                      **time_summary(raw[prefix + "replay-3m/create/stderr.log"].decode())}}
+
+
+def manifest_l_maintenance(contract, raw):
+    prefix = "manifest-l/"
+    read = lambda name: json.loads(raw[prefix + name])
+    fixed = contract["manifest_l"]
+    manifest = read("provisional-manifest-manifest-l.json")
+    require(manifest["provisional"] is True and manifest["sources"]["manifest-l"]["head"] == fixed["source_head"],
+            "fixed manifest repair source differs")
+    for receipt in manifest["receipts"].values():
+        require(receipt["sha256"] == sha(raw[prefix + receipt["path"]]), "manifest repair receipt binding differs")
+    source, build, native = [read("receipts-manifest-l/" + name + ".json") for name in ["source","build","native"]]
+    inputs = read("manifest-l-source-inputs.json")
+    compiled = source["compiled_project_inputs"]
+    require(source["head"] == build["head"] == inputs["head"] == fixed["source_head"]
+            and source["tree"] == inputs["tree"] == fixed["tree"]
+            and source["files"] == inputs["files"] and len(source["files"]) == fixed["source_files_count"]
+            and len(compiled) == fixed["compiled_project_count"]
+            and sha(json.dumps(compiled,sort_keys=True,separators=(",",":")).encode()) == fixed["compiled_project_digest"]
+            and all(source["files"].get(name) == digest for name,digest in compiled.items())
+            and len(source["all_compile_inputs"]) == fixed["all_compile_inputs_count"]
+            and source["go_list_sha256"] == sha(raw[prefix + "receipts-manifest-l/go-list-inputs.jsonstream"])
+            and source["freeze_script_sha256"] == sha(raw[prefix + "freeze-manifest-l.py"])
+            and source["producer_script_sha256"] == sha(raw["churn/pair/measurement-capture.py"]),
+            "manifest repair source closure differs")
+    require({name:item["binary_sha256"] for name,item in build["binaries"].items()} == fixed["binaries"]
+            and native["libraries"] == manifest["libraries"] and len(native["libraries"]) == 15
+            and len(native["headers"]) == 84, "manifest repair binary/native inventory differs")
+    for name, step in build["builds"].items():
+        require(step["rc"] == 0 and step["head"] == fixed["source_head"] and step["started"] < step["finished"]
+                and step == read("manifest-l-preflight/" + name + "-run.json")
+                and step["stdout_sha256"] == sha(raw[prefix + "manifest-l-preflight/" + name + ".txt"]),
+                "manifest repair native build differs")
+    local = read("local-tests/5017-local-receipt.json")
+    require(local["head"] == fixed["source_head"]
+            and all(source["files"][name] == digest for name,digest in local["source_sha256"].items()),
+            "manifest repair local receipt source differs")
+    for name, digest in local["artifacts"].items():
+        require(digest == sha(raw[prefix + "local-tests/" + name]), "manifest repair historical local artifact differs")
+    tests = read("manifest-l-native-tests/commands.json")
+    require([test["name"] for test in tests] == ["red","green","race"], "manifest repair native test inventory differs")
+    for test in tests:
+        expected = 1 if test["name"] == "red" else 0
+        require(test["rc"] == test["expected_rc"] == expected and test["source_head"] == fixed["source_head"]
+                and test["manifest_sha256"] == sha(raw[prefix + "provisional-manifest-manifest-l.json"])
+                and test["output_sha256"] == sha(raw[prefix + "manifest-l-native-tests/" + test["name"] + ".txt"])
+                and test["started"] < test["finished"], "manifest repair native test binding differs")
+    red = raw[prefix + "manifest-l-native-tests/red.txt"].decode()
+    require("generation_id 2 appears more than once" in red and "published source manifest mutated" in red,
+            "manifest repair causal red coverage differs")
+    overlay = read("manifest-l-native-tests/red-overlay.json")
+    require(overlay["Replace"] == {source["source_path"] + "/TreeDB/db/leaf_generation_gc.go":
+            "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2/TreeDB/db/leaf_generation_gc.go"},
+            "manifest repair red overlay differs")
+    method = read("maintenance-churn-manifest-l-full-method.json")
+    parent = raw["churn/full-failures/maintenance-churn-full.py"]
+    repaired_method = raw[prefix + "maintenance-churn-manifest-l-full.py"]
+    require(method["parent_sha256"] == sha(parent) and method["method_sha256"] == sha(repaired_method)
+            and method["supported_full"] is True and method["batch_size"] == 8192
+            and method["failed_original_preserved"] is True
+            and parent.replace(b"treemap-restore-r2",b"treemap-manifest-l") == repaired_method,
+            "manifest repair Full method differs")
+    attempts = []
+    binary_root = "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/"
+    for case in fixed["cases"]:
+        packet = "churn-3m-" + case + "-manifest-l-input/"
+        base = "maintenance-churn-3m-" + case + "-manifest-l-full8192/"
+        derived, identity = read(packet + "run.json"), read(base + "identity.json")
+        original_base = "churn/pair/churn-3m-1-" + case + "/1-treedb-churn-" + case + "/"
+        original_run = json.loads(raw[original_base + "run.json"])
+        copy = derived["derived_copy"]
+        require(derived["derived_input_only"] is True and derived["source"] == identity["source"] == "manifest-l"
+                and copy["runtime_head"] == fixed["source_head"] and copy["copy"] == identity["database"]
+                and copy["restore_source"] == contract["restore_r2"]["head"]
+                and copy["restore_helper_sha256"] == contract["restore_r2"]["binaries"]["rebind-owned-copy-restore-r2"]
+                and copy["method_sha256"] == sha(raw[prefix + "run-churn-manifest-l-copy.py"])
+                and derived["candidate_manifest"]["sha256"] == sha(raw[prefix + "provisional-manifest-manifest-l.json"])
+                and derived["env"] == original_run["env"] == identity["environment"]
+                and identity["method_sha256"] == sha(repaired_method)
+                and identity["treemap_sha256"] == fixed["binaries"]["treemap-manifest-l"],
+                "manifest repair restored input identity differs")
+        ignored = ["source","command","derived_input_only","derived_copy","candidate_manifest"]
+        require({k:v for k,v in derived.items() if k not in ignored}
+                == {k:v for k,v in original_run.items() if k not in ["source","command"]}
+                and derived["command"] == [binary_root + "unified-bench-manifest-l"] + original_run["command"][1:],
+                "inherited churn metadata relabeled as new measurement")
+        original_stdout = json.loads(raw[original_base + "stdout.json"])[0]
+        derived_stdout = read(packet + "stdout.json")[0]
+        require(original_stdout["data_dir"] == copy["original"] and derived_stdout["data_dir"] == copy["copy"]
+                and {k:v for k,v in original_stdout.items() if k != "data_dir"}
+                == {k:v for k,v in derived_stdout.items() if k != "data_dir"}, "inherited churn stdout differs")
+        preserved = read(packet + "original-preserved.json")
+        require(preserved["unchanged"] is True and preserved["original"] == copy["original"]
+                and preserved["before"] == preserved["after"], "failed original changed during restored copy preparation")
+        prep = read(packet + "prepare.json")
+        require([p["label"] for p in prep] == ["copy","explicit-restore"]
+                and all(p["rc"] == 0 and p["started"] < p["finished"] for p in prep)
+                and prep[0]["command"] == ["cp","-a","--reflink=auto",copy["original"],copy["copy"]]
+                and prep[1]["command"] == [binary_root + "rebind-owned-copy-restore-r2",copy["copy"]]
+                and raw[prefix + packet + "explicit-restore-stdout.txt"] == b"COPIED_SNAPSHOT_REBOUND\n",
+                "manifest repair owned copy preparation differs")
+        commands = read(base + "commands.json")
+        require([c["label"] for c in commands] == ["pre-maintenance-verify","full","full-verify"]
+                and all(c["rc"] == 0 and c["timed_out"] is False for c in commands)
+                and all(a["finished"] <= b["started"] for a,b in zip(commands,commands[1:]))
+                and prep[1]["finished"] < commands[0]["started"]
+                and tests[-1]["finished"] < commands[0]["started"], "fixed Full command order/status differs")
+        verify_args = original_run["command"][1:]
+        for flag in ["-quicksilver-churn-rounds","-quicksilver-churn-pause"]:
+            pos = verify_args.index(flag)
+            del verify_args[pos:pos+2]
+        verify_args.remove("-keep")
+        expected_verify = [binary_root + "unified-bench-manifest-l"] + verify_args + ["-quicksilver-verify-dir",copy["copy"]]
+        for command in [commands[0],commands[2]]:
+            require(command["command"] == expected_verify, "fixed Full public oracle command differs")
+            oracle(read(base + command["label"] + "-stdout.json"), contract)
+        compact = read(base + "full-stdout.json")
+        flags = {k:compact[k] for k in fixed["flags"]}
+        require(commands[1]["command"] == [binary_root + "treemap-manifest-l","compact",copy["copy"],"-rw","-json",
+                    "-mode","full","-sync-each-phase","-leaf-pack-max-passes","64","-rewrite-batch-size","8192"]
+                and compact["mode"] == "full" and compact["dry_run"] is False and flags == fixed["flags"],
+                "fixed Full mode or completion flags differ")
+        states = {name:census(read(base + name + "-census.json")) for name in
+                  ["final-before-verify","before-maintenance","full-before-oracle","full-after"]}
+        cost = command_summary(commands[1],raw[prefix + base + "full-stderr.txt"].decode())
+        require(cost["time_elapsed_seconds"] is not None and cost["kernel_process_rss_hwm_bytes"] is not None,
+                "fixed Full cost measurement missing")
+        attempts.append(dict(case=case, **cost,flags=flags,states=states,remaining_debt=compact["remaining_debt"],
+                             phases=compact["phases"],audit=compact["audit"],restored_copy=copy,
+                             oracle_seconds={c["label"]:c["finished"]-c["started"] for c in [commands[0],commands[2]]},
+                             oracle_delta={k:states["full-after"][k]-states["full-before-oracle"][k] for k in ["apparent","allocated"]}))
+    equality = read("manifest-l-landed-source-equality.json")
+    qualified = read("qualified-manifest-manifest-l.json")
+    require(equality["measured_head"] == fixed["source_head"] and equality["landed_head"] == fixed["landed_head"]
+            and equality["measured_tree"] == equality["landed_tree"] == fixed["tree"]
+            and equality["whole_tree_equal"] is True
+            and equality["measured_manifest_sha256"] == sha(raw[prefix + "provisional-manifest-manifest-l.json"])
+            and qualified["provisional"] is False
+            and qualified["qualified"] is True
+            and qualified["landed_source_equality"] == {"path":"manifest-l-landed-source-equality.json",
+                "sha256":sha(raw[prefix + "manifest-l-landed-source-equality.json"])}
+            and {k:v for k,v in qualified.items() if k not in ["provisional","qualified","landed_source_equality"]}
+            == {k:v for k,v in manifest.items() if k != "provisional"}, "manifest repair landed qualification differs")
+    final = "final/"
+    exhaustive_method = read(final + "maintenance-churn-manifest-l-exhaustive-method.json")
+    exhaustive_source = raw[prefix + final + "maintenance-churn-manifest-l-exhaustive.py"]
+    require(exhaustive_method["sha256"] == sha(exhaustive_source)
+            and exhaustive_method["parent_sha256"] == sha(repaired_method)
+            and repaired_method.replace(b"('full',)",b"('exhaustive',)") == exhaustive_source
+            and exhaustive_method["batch_size"] == 8192 and exhaustive_method["max_passes"] == 1
+            and exhaustive_method["no_retries"] is True
+            and exhaustive_method["pre_and_post_all_values_misses"] is True
+            and exhaustive_method["no_byte_minimum_or_matched_speedup_claim"] is True,
+            "single Exhaustive method differs")
+    base = final + "maintenance-churn-3m-defaults-manifest-l-exhaustive8192/"
+    commands = read(base + "commands.json")
+    full_identity = read("maintenance-churn-3m-defaults-manifest-l-full8192/identity.json")
+    ex_identity = read(base + "identity.json")
+    require(ex_identity == dict(full_identity,method_sha256=sha(exhaustive_source))
+            and [c["label"] for c in commands] == ["pre-maintenance-verify","exhaustive","exhaustive-verify"]
+            and all(c["rc"] == 0 and c["timed_out"] is False for c in commands)
+            and all(a["finished"] <= b["started"] for a,b in zip(commands,commands[1:]))
+            and read("maintenance-churn-3m-defaults-manifest-l-full8192/commands.json")[-1]["finished"] < commands[0]["started"],
+            "single Exhaustive command order/identity differs")
+    for command in [commands[0],commands[2]]:
+        require(command["command"] == read("maintenance-churn-3m-defaults-manifest-l-full8192/commands.json")[0]["command"],
+                "single Exhaustive oracle command differs")
+        oracle(read(base + command["label"] + "-stdout.json"), contract)
+    compact = read(base + "exhaustive-stdout.json")
+    expected_command = list(attempts[0]["command"])
+    expected_command[expected_command.index("full")] = "exhaustive"
+    flags = {k:compact[k] for k in fixed["flags"]}
+    require(commands[1]["command"] == expected_command and compact["mode"] == "exhaustive"
+            and compact["dry_run"] is False and flags == fixed["flags"], "single Exhaustive mode/completion differs")
+    states = {name:census(read(base + name + "-census.json")) for name in
+              ["final-before-verify","before-maintenance","exhaustive-before-oracle","exhaustive-after"]}
+    require(states["final-before-verify"]["domains"] == attempts[0]["states"]["full-after"]["domains"],
+            "single Exhaustive does not start at preserved post-Full boundary")
+    cost = command_summary(commands[1],raw[prefix + base + "exhaustive-stderr.txt"].decode())
+    require(cost["time_elapsed_seconds"] is not None and cost["kernel_process_rss_hwm_bytes"] is not None,
+            "single Exhaustive cost missing")
+    exhaustive = dict(case="defaults", **cost,flags=flags,states=states,remaining_debt=compact["remaining_debt"],
+                      phases=compact["phases"],audit=compact["audit"],
+                      oracle_seconds={c["label"]:c["finished"]-c["started"] for c in [commands[0],commands[2]]},
+                      oracle_delta={k:states["exhaustive-after"][k]-states["exhaustive-before-oracle"][k] for k in ["apparent","allocated"]})
+    post = read(final + "manifest-l-post-campaign-receipt.json")
+    require(post["head"] == fixed["source_head"] and post["all_frozen_inputs_unchanged"] is True
+            and post["source_files"] == len(source["files"]) and post["compile_inputs"] == len(source["all_compile_inputs"])
+            and post["headers"] == len(native["headers"]) and post["libraries"] == len(native["libraries"])
+            and post["created"] > commands[-1]["finished"]
+            and [p["variant"] for p in post["originals"]] == fixed["cases"], "postcampaign input recheck differs")
+    for original in post["originals"]:
+        require(original["original_unchanged_after_fixed_maintenance"] is True
+                and original["preserved_receipt_sha256"] == sha(raw[prefix + "churn-3m-" + original["variant"] +
+                    "-manifest-l-input/original-preserved.json"]), "failed original changed after repaired campaign")
+    return {"status":"MEASURED_REPAIRED_FULL_AND_SINGLE_EXHAUSTIVE","source_head":fixed["source_head"],"binaries":fixed["binaries"],
+            "compiled_project_inputs":len(compiled),"all_compile_inputs":len(source["all_compile_inputs"]),
+            "native_tests":tests,"historical_local_tests":local,"attempts":attempts,"exhaustive":exhaustive,
+            "landed_source_equality":equality,"post_campaign_recheck":post,
+            "source_scope":"new repaired runtime only; inherited churn run/stdout are input description, not repaired-source performance measurements"}
+
+
+def current_main_applicability(contract, raw):
+    fixed = contract["current_main_applicability"]
+    value = json.loads(raw["applicability/current-main-runtime-applicability.json"])
+    require(value["landed_runtime_head"] == fixed["landed_runtime_head"]
+            and value["current_main_head"] == fixed["current_main_head"]
+            and sorted(value["excluded_paths"]) == fixed["excluded_paths"]
+            and value["changed_paths"] == fixed["excluded_paths"]
+            and value["scoped_project_equal"] is True and value["historical_whole_tree_receipts_unchanged"] is True
+            and value["scoped_project_before_sha256"] == value["scoped_project_after_sha256"] == fixed["scoped_project_sha256"]
+            and value["paths"] == fixed["scoped_project_paths"], "scoped current-main applicability differs")
+    return value
+
+
 def restored_maintenance(contract, raw):
     prefix = "restore-r2/"
     read = lambda name: json.loads(raw[prefix + name])
@@ -754,6 +1326,7 @@ def extract(contract, raw):
                                      repeats=plan["repeats"], cells=plan["cells"],
                                      plan_sha256=sha(raw["pending-plans/" + name]))
     before, after = storage[1], storage[2]
+    churn = churn_observations(contract, raw)
     return {"schema_version": 1, "publication_status": "PROVISIONAL", "pending": contract["pending"],
             "inputs_sha256": INPUTS_SHA256, "raw_files": contract["raw_files"],
             "provenance": {"source_head": contract["source_head"], "landed_head": contract["landed_head"],
@@ -766,6 +1339,11 @@ def extract(contract, raw):
             "public_matched": public_matched(contract, raw),
             "public_profiles": public_matched(contract, raw, profiled=True),
             "structural": public_matched(contract, raw, profiled=True, diagnostic=True),
+            "churn": churn,
+            "churn_full_failures": churn_full_failures(contract, raw, churn),
+            "replay_failures": replay_failures(contract, raw),
+            "manifest_l_maintenance": manifest_l_maintenance(contract, raw),
+            "current_main_applicability": current_main_applicability(contract, raw),
             "restored_maintenance": restored_maintenance(contract, raw),
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
@@ -784,7 +1362,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "97ba7aa988e7a63330c4adfb7e9382902d92151f96f14569ef0202e4d7b6505c"
+REPORT_PROSE_SHA256 = "61a6fad40764f2472913f57f88dd7d6a17bd66ace990f7601da52f87925bb817"
 
 
 def report(result, template=None):
@@ -821,6 +1399,67 @@ def report(result, template=None):
     leaf_rss = result["memory"]["leaf256_diagnostic"]["rss"]
     blocks["rss"] += f"\n\nThe separate 256MiB outer-leaf mapping-budget diagnostic retained {leaf_rss['samples']} samples, with observed kernel VmHWM {leaf_rss['observed_kernel_hwm_bytes']:,} bytes and sampled RSS peak {leaf_rss['sampled_rss_peak_bytes']:,}. Its frozen producer chain and full-fixture oracle are bound here. This single profiled setting run does not establish a repeatable memory or throughput improvement."
     domains = ["dictionary", "outer_leaf", "user_value", "index", "metadata", "wal"]
+    churn = result["churn"]
+    rows = []
+    for case, observation in churn["observations"].items():
+        for row in observation["rounds"]:
+            after = row["snapshots"]["after"]
+            rows.append([case, row["round"], f"{row['wall_seconds']:.3f}", f"{row['write_seconds']:.3f}",
+                         f"{row['checkpoint_seconds']:.3f}", f"{row['verification_seconds']:.3f}", after["retained_bytes_estimate"]])
+    blocks["churn_rounds"] = table(["Cell", "Round", "Wall s", "Refresh/mutation writes s", "Checkpoint s", "Full verify s", "Retained-byte estimate after"], rows)
+    rows = [[case] + [observation["post_close_files"]["domains"][name] for name in domains]
+            + [observation["post_close_files"]["apparent_excluding_wal"]] for case, observation in churn["observations"].items()]
+    blocks["churn_files"] = table(["Closed post-churn cell", "Dictionary", "Outer leaves", "User values", "Index", "Metadata", "WAL", "Total excluding WAL"], rows)
+    blocks["churn_costs"] = table(["Churn command", "GNU elapsed s", "Process RSS high-water bytes", "Observer samples"],
+        [[r["case"], r["gnu_time"]["time_elapsed_seconds"], r["gnu_time"]["kernel_process_rss_hwm_bytes"], r["observer"]["samples"]] for r in churn["runs"]])
+    counters = {case:observation["rounds"][-1]["snapshots"]["after"]["maintenance_counters"] for case, observation in churn["observations"].items()}
+    metrics = [("Full-live-ID prune scans", "vlog_retained_prune.full_live_id_scan_runs"),
+               ("Budget-aborted prune scans", "vlog_retained_prune.budget_abort_runs"),
+               ("Completed prune runs", "vlog_retained_prune.completed_runs"),
+               ("Observed-source fast-path runs", "vlog_retained_prune.observed_source_fast_path_runs"),
+               ("Prune removed bytes", "vlog_retained_prune.removed_bytes"),
+               ("Prune zombie-marked bytes", "vlog_retained_prune.zombie_marked_bytes"),
+               ("Value rewrite runs", "vlog_generation.rewrite.runs"),
+               ("Global value-only census bytes_out counter", "vlog_generation.rewrite.bytes_out"),
+               ("Value payload bytes copied", "vlog_generation.rewrite.value_bytes_copied"),
+               ("Leaf pack runs", "vlog_generation.leaf_pack.runs"),
+               ("Leaf pack bytes copied", "vlog_generation.leaf_pack.bytes_copied"),
+               ("Leaf pack expected reclaim bytes", "vlog_generation.leaf_pack.expected_reclaim_bytes"),
+               ("Leaf pack attributed reclaim bytes", "vlog_generation.leaf_pack.attributed_reclaim_bytes"),
+               ("Leaf pack GC deleted bytes", "vlog_generation.leaf_pack.gc.deleted_bytes")]
+    blocks["churn_counters"] = table(["Final StatsAfter cumulative counter", "Defaults", "Opt-in pack"],
+        [[label] + [int(counters[case]["treedb.cache." + key]) for case in ["defaults", "pack"]] for label, key in metrics])
+    blocks["churn_failures"] = table(["Failed Full cell", "GNU elapsed s", "Process RSS high-water bytes", "Sampled disk max including WAL, apparent / allocated", "Read-only oracle s"],
+        [[a["case"], a["maintenance_cost"]["time_elapsed_seconds"], a["maintenance_cost"]["kernel_process_rss_hwm_bytes"],
+          f"{a['maintenance_cost']['sampled_disk_hwm_including_wal']['apparent']:,} / {a['maintenance_cost']['sampled_disk_hwm_including_wal']['allocated']:,}",
+          f"{a['readonly_oracle']['elapsed_seconds']:.3f}"] for a in result["churn_full_failures"]["attempts"]])
+    blocks["replay_failures"] = table(["Stopped diagnostic", "Rejected identity path", "Child / guard exit", "GNU elapsed s", "Process RSS high-water bytes", "Accepted reads"],
+        [[a["case"], a["rejected_identity_path"], "0 / 1", a["time_elapsed_seconds"],
+          a["kernel_process_rss_hwm_bytes"], a["accepted_reads"]] for a in result["replay_failures"]["attempts"]])
+    repaired = result["manifest_l_maintenance"]["attempts"]
+    blocks["repaired_full_storage"] = table(["Restored cell / boundary", "Dictionary", "Outer leaves", "User values", "Index", "Metadata", "WAL", "Total excluding WAL"],
+        [[a["case"] + " / " + name] + [f"{state['domains'][n]['apparent']:,} / {state['domains'][n]['allocated']:,}" for n in domains]
+          + [f"{state['apparent_excluding_wal']:,} / {state['allocated_excluding_wal']:,}"]
+         for a in repaired for name,state in a["states"].items()])
+    blocks["repaired_full_costs"] = table(["Repaired Full cell", "GNU elapsed s", "Receipt s", "Process RSS high-water bytes", "Sampled disk max including WAL, apparent / allocated", "Pre / post oracle s"],
+        [[a["case"],a["time_elapsed_seconds"],f"{a['receipt_elapsed_seconds']:.3f}",a["kernel_process_rss_hwm_bytes"],
+          f"{a['sampled_disk_hwm_including_wal']['apparent']:,} / {a['sampled_disk_hwm_including_wal']['allocated']:,}",
+          f"{a['oracle_seconds']['pre-maintenance-verify']:.3f} / {a['oracle_seconds']['full-verify']:.3f}"] for a in repaired])
+    blocks["repaired_full_debt"] = table(["Repaired Full cell", "Leaf-GC debt bytes / generations", "Value-log GC debt bytes / segments", "fully / policy fully / byte minimized"],
+        [[a["case"],f"{a['remaining_debt']['leaf_gc_bytes']:,} / {a['remaining_debt']['leaf_gc_generations']}",
+          f"{a['remaining_debt']['value_log_gc_bytes']:,} / {a['remaining_debt']['value_log_gc_segments']}","false / false / false"] for a in repaired])
+    ex = result["manifest_l_maintenance"]["exhaustive"]
+    blocks["repaired_exhaustive"] = table(["Single default-copy Exhaustive", "GNU / receipt s", "Process RSS high-water bytes", "Sampled disk max including WAL, apparent / allocated", "Pre / post oracle s"],
+        [["completed",f"{ex['time_elapsed_seconds']:.2f} / {ex['receipt_elapsed_seconds']:.3f}",ex["kernel_process_rss_hwm_bytes"],
+          f"{ex['sampled_disk_hwm_including_wal']['apparent']:,} / {ex['sampled_disk_hwm_including_wal']['allocated']:,}",
+          f"{ex['oracle_seconds']['pre-maintenance-verify']:.3f} / {ex['oracle_seconds']['exhaustive-verify']:.3f}"]])
+    blocks["repaired_exhaustive"] += "\n\n" + table(["Leaf-GC debt bytes / generations", "Rewrite debt bytes / segments", "Value-log GC debt bytes", "fully / policy fully / byte minimized"],
+        [[f"{ex['remaining_debt']['leaf_gc_bytes']:,} / {ex['remaining_debt']['leaf_gc_generations']}",
+          f"{ex['remaining_debt']['value_log_rewrite_bytes']:,} / {ex['remaining_debt']['value_log_rewrite_segments']}",
+          ex['remaining_debt']['value_log_gc_bytes'],"false / false / false"]])
+    blocks["repaired_exhaustive_storage"] = table(["Sequential Exhaustive boundary", "Dictionary", "Outer leaves", "User values", "Index", "Metadata", "WAL", "Total excluding WAL"],
+        [[name] + [f"{state['domains'][n]['apparent']:,} / {state['domains'][n]['allocated']:,}" for n in domains]
+          + [f"{state['apparent_excluding_wal']:,} / {state['allocated_excluding_wal']:,}"] for name,state in ex["states"].items()])
     rows = [[s["label"]] + [f"{s['domains'][n]['apparent']:,} / {s['domains'][n]['allocated']:,}" for n in domains] +
             [f"{s['apparent_excluding_wal']:,} / {s['allocated_excluding_wal']:,}"] for s in storage]
     blocks["storage_table"] = table(["State", "Dictionary", "Outer leaves", "User values", "Index", "Metadata", "WAL", "Total excluding WAL"], rows)

@@ -1,0 +1,8 @@
+{
+  "baseline": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+  "candidate": "90219d64ced3539accff5d0e50d9b5fa6424ed20",
+  "original_suite_sha256": "6642bcc81476aa9d368c40f9224c12d0eda102a958e889469753f261df379411",
+  "overlay_suite_sha256": "3919b4598b7e816c75fe038d313d4c8ed4dae7960b95e429cf184d42f32b3985",
+  "unchanged_read_region_sha256": "f1e25348bd06413bf55fc8a5c48bfac7ffd6f1c40a8a6a83011b9b73efc204a5",
+  "validation": "Python exact-once anchors, identical frozen source, unchanged warmup/read-phase/oracle, create-only initial write/checkpoint branch; NOT Go-built or syntax-checked"
+}

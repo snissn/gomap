@@ -228,6 +228,99 @@ def main():
         dict(raw, **{base + "commands.json": extract.encoded(commands)}))))
     checks.append(rejected("restored pre-oracle census boundary changed", lambda: extract.restored_maintenance(contract,
         altered(base + "exhaustive-before-oracle-census.json", "apparent_excluding_wal", 0))))
+    churn_prefix = "churn/pair/"
+    churn_path = contract["churn"]["available_stdout"]["defaults"]
+    for label, mutate in [
+        ("churn round omission", lambda v:v[0]["maintenance_churn"]["rounds"].pop()),
+        ("churn full refresh missing", lambda v:v[0]["maintenance_churn"]["rounds"][0].update(restored_keys=40000)),
+        ("churn miss oracle missing", lambda v:v[0]["maintenance_churn"]["rounds"][0].update(verified_misses=6030000)),
+        ("churn workload setting changed", lambda v:v[0]["maintenance_churn"].update(leaf_generation_pack_maintenance_env="1")),
+        ("churn time bracket changed", lambda v:v[0]["maintenance_churn"]["rounds"][0].update(wall_seconds=1)),
+        ("churn missing RSS snapshot", lambda v:v[0]["maintenance_churn"]["rounds"][0]["after"].update(process_rss_supported=False)),
+        ("churn invalid closed file path", lambda v:v[0]["maintenance_churn"]["final_files_after_close"].update({"../escape":1}))]:
+        values = json.loads(raw[churn_path])
+        mutate(values)
+        checks.append(rejected(label, lambda values=values:extract.churn_observations(contract,
+            dict(raw, **{churn_path:extract.encoded(values)}))))
+    for label, path, key, value in [
+        ("churn source identity changed", "receipts-churn-v3/source.json", "head", "0"*40),
+        ("churn source inventory changed", "receipts-churn-v3/source.json", "compiled_project_inputs", {}),
+        ("churn failed run promoted", "churn-3m-1-defaults/1-treedb-churn-defaults/run.json", "rc", 1),
+        ("churn command changed", "churn-3m-1-defaults/1-treedb-churn-defaults/run.json", "command", []),
+        ("churn loader proof changed", "churn-3m-1-defaults/1-treedb-churn-defaults/run.json", "native_resolution", {})]:
+        checks.append(rejected(label, lambda path=path,key=key,value=value:extract.churn_observations(contract,
+            altered(churn_prefix+path,key,value))))
+    checks.append(rejected("churn actual collector replaced", lambda:extract.churn_observations(contract,
+        dict(raw, **{churn_prefix+"measurement-capture.py":b"replacement"}))))
+    samples_path = churn_prefix + "churn-3m-1-defaults-memory.jsonl"
+    samples = [json.loads(line) for line in raw[samples_path].splitlines()]
+    samples[0]["time"] = 0
+    checks.append(rejected("churn observer outside run", lambda:extract.churn_observations(contract,
+        dict(raw, **{samples_path:b"".join(json.dumps(row).encode()+b"\n" for row in samples)}))))
+    failed_prefix = "churn/full-failures/maintenance-churn-3m-defaults-full8192/"
+    for label,path,key,value in [
+        ("churn readonly mutation", "readonly-after-failure/receipt.json", "unchanged", False),
+        ("churn readonly incomplete", "readonly-after-failure/stdout.json", "verified_keys", 2999999)]:
+        checks.append(rejected(label, lambda path=path,key=key,value=value:extract.churn_full_failures(contract,
+            altered(failed_prefix+path,key,value),result["churn"])))
+    commands = json.loads(raw[failed_prefix+"commands.json"])
+    commands[1]["rc"] = 0
+    checks.append(rejected("churn Full failure promoted", lambda:extract.churn_full_failures(contract,
+        dict(raw, **{failed_prefix+"commands.json":extract.encoded(commands)}),result["churn"])))
+    checks.append(rejected("churn Full completed output invented", lambda:extract.churn_full_failures(contract,
+        dict(raw, **{failed_prefix+"full-stdout.json":b"{}"}),result["churn"])))
+    checks.append(rejected("scoped source relabeled whole tree", lambda:extract.current_main_applicability(contract,
+        altered("applicability/current-main-runtime-applicability.json","historical_whole_tree_receipts_unchanged",False))))
+    replay = "replay-failures/"
+    for label, path, key, value in [
+        ("replay failed guard promoted", "replay-3m/1-baseline/run.json", "rc", 0),
+        ("replay child failure mislabeled", "replay-3m/1-baseline/guard/run.json", "rc", 1),
+        ("replay guard source changed", "5004-replay-diagnostic-v2/source-receipt.json", "candidate", "0"*40),
+        ("replay guard exception expanded", "replay-3m/seal.json", "format_identity_exceptions", ["maindb/index.db"]),
+        ("replay backup omitted", "replay-3m/seal.json", "backup", {}),
+        ("replay original preservation lost", "replay-3m-no-vacuum/original-preserved.json", "current_matches_failed_census", False),
+        ("replay native source changed", "replay-3m/1-baseline/run.json", "binary_sha256", "0"*64)]:
+        checks.append(rejected(label, lambda path=path,key=key,value=value:extract.replay_failures(contract,
+            altered(replay+path,key,value))))
+    for label,path,mutate in [
+        ("replay rejected inode unchanged", "replay-3m/1-baseline/guard/post/census.json", lambda v:v["maindb/index.db"].update(
+            ino=json.loads(raw[replay+"replay-3m/seal.json"])["original"]["maindb/index.db"]["ino"])),
+        ("vacuum-off knob missing", "replay-3m-no-vacuum/1-baseline/run.json", lambda v:v["env"].pop("TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM")),
+        ("replay native resource omitted", "replay-native-retained-blobs.json", lambda v:v.pop()),
+        ("replay initial oracle incomplete", "replay-3m/1-baseline/stdout.json", lambda v:v[0].update(initial_verified_keys=2999999)),
+        ("replay read phase missing", "replay-3m/1-baseline/stdout.json", lambda v:v[0]["phases"].pop()),
+        ("replay create phases invented", "replay-3m/create/stdout.json", lambda v:v[0].update(phases=[]))]:
+        value = json.loads(raw[replay+path])
+        mutate(value)
+        checks.append(rejected(label, lambda path=path,value=value:extract.replay_failures(contract,
+            dict(raw, **{replay+path:extract.encoded(value)}))))
+    extract.require(result["replay_failures"]["accepted_reads"] == 0
+                    and result["replay_failures"]["acceptance"] == "HELD", "replay failures clear public gate")
+    repair = "manifest-l/"
+    for label,path,key,value in [
+        ("manifest repair source relabeled", "receipts-manifest-l/source.json", "head", "0"*40),
+        ("manifest repair compiled inventory omitted", "receipts-manifest-l/source.json", "compiled_project_inputs", {}),
+        ("manifest repair failed original modified", "churn-3m-defaults-manifest-l-input/original-preserved.json", "unchanged", False),
+        ("manifest repair terminal binary changed", "maintenance-churn-3m-defaults-manifest-l-full8192/identity.json", "treemap_sha256", "0"*64),
+        ("manifest repair oracle incomplete", "maintenance-churn-3m-defaults-manifest-l-full8192/full-verify-stdout.json", "verified_misses", 6030000),
+        ("manifest repair completion promoted", "maintenance-churn-3m-defaults-manifest-l-full8192/full-stdout.json", "byte_minimized", True),
+        ("manifest repair landed tree changed", "manifest-l-landed-source-equality.json", "landed_tree", "0"*40),
+        ("manifest repair unqualified manifest", "qualified-manifest-manifest-l.json", "provisional", True),
+        ("manifest repair postcampaign inputs changed", "final/manifest-l-post-campaign-receipt.json", "all_frozen_inputs_unchanged", False),
+        ("single Exhaustive retries allowed", "final/maintenance-churn-manifest-l-exhaustive-method.json", "no_retries", False),
+        ("single Exhaustive oracle incomplete", "final/maintenance-churn-3m-defaults-manifest-l-exhaustive8192/exhaustive-verify-stdout.json", "verified_keys", 2999999)]:
+        checks.append(rejected(label, lambda path=path,key=key,value=value:extract.manifest_l_maintenance(contract,
+            altered(repair+path,key,value))))
+    for label,path,mutate in [
+        ("manifest repair causal red promoted", "manifest-l-native-tests/commands.json", lambda v:v[0].update(rc=0)),
+        ("manifest repair race failed", "manifest-l-native-tests/commands.json", lambda v:v[2].update(rc=1)),
+        ("manifest repair inherited timings changed", "churn-3m-defaults-manifest-l-input/run.json", lambda v:v.update(started=0)),
+        ("manifest repair Full failed", "maintenance-churn-3m-defaults-manifest-l-full8192/commands.json", lambda v:v[1].update(rc=1)),
+        ("manifest repair batch changed", "maintenance-churn-3m-defaults-manifest-l-full8192/commands.json", lambda v:v[1]["command"].__setitem__(-1,"128")),
+        ("single Exhaustive original preservation lost", "final/manifest-l-post-campaign-receipt.json", lambda v:v["originals"][0].update(original_unchanged_after_fixed_maintenance=False))]:
+        value=json.loads(raw[repair+path]);mutate(value)
+        checks.append(rejected(label,lambda path=path,value=value:extract.manifest_l_maintenance(contract,
+            dict(raw, **{repair+path:extract.encoded(value)}))))
     prose = (extract.HERE / "REPORT.md").read_text()
     checks.append(rejected("publication prose changed", lambda:
         extract.report(result, prose.replace("The measured candidate is held from merge; final publication remains pending.",

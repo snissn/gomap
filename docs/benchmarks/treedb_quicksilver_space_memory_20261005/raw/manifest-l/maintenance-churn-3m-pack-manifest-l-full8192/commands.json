@@ -1,0 +1,278 @@
+[
+  {
+    "label": "pre-maintenance-verify",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-manifest-l",
+      "-suite",
+      "quicksilver",
+      "-dbs",
+      "treedb",
+      "-profile",
+      "durable",
+      "-quicksilver-case",
+      "realistic",
+      "-keys",
+      "3000000",
+      "-read-workers",
+      "4",
+      "-quicksilver-reads",
+      "6000000",
+      "-quicksilver-updates",
+      "40000",
+      "-quicksilver-duration",
+      "8s",
+      "-quicksilver-read-batch",
+      "64",
+      "-quicksilver-commit",
+      "auto",
+      "-max-wall",
+      "33m0s",
+      "-seed",
+      "24",
+      "-quicksilver-mixture",
+      "primary",
+      "-quicksilver-working-set",
+      "uniform",
+      "-quicksilver-miss-percent",
+      "90",
+      "-quicksilver-verify-dir",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-pack-manifest-l-copy"
+    ],
+    "started": 1791195365.6670628,
+    "finished": 1791195405.7059073,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3181829,
+    "disk_samples": []
+  },
+  {
+    "label": "full",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-manifest-l",
+      "compact",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-pack-manifest-l-copy",
+      "-rw",
+      "-json",
+      "-mode",
+      "full",
+      "-sync-each-phase",
+      "-leaf-pack-max-passes",
+      "64",
+      "-rewrite-batch-size",
+      "8192"
+    ],
+    "started": 1791195405.7346792,
+    "finished": 1791195437.9327514,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3182317,
+    "disk_samples": [
+      {
+        "time": 1791195405.7421322,
+        "apparent": 11479062074,
+        "allocated": 11481137152
+      },
+      {
+        "time": 1791195406.7499778,
+        "apparent": 11479062074,
+        "allocated": 11481137152
+      },
+      {
+        "time": 1791195407.7575285,
+        "apparent": 11479062074,
+        "allocated": 11481137152
+      },
+      {
+        "time": 1791195408.764649,
+        "apparent": 11479062074,
+        "allocated": 11481137152
+      },
+      {
+        "time": 1791195409.772611,
+        "apparent": 11479348601,
+        "allocated": 11481423872
+      },
+      {
+        "time": 1791195410.7805626,
+        "apparent": 11479348601,
+        "allocated": 11481423872
+      },
+      {
+        "time": 1791195411.7874775,
+        "apparent": 11479348601,
+        "allocated": 11481423872
+      },
+      {
+        "time": 1791195412.7955403,
+        "apparent": 11521236604,
+        "allocated": 11523313664
+      },
+      {
+        "time": 1791195413.8034878,
+        "apparent": 11600793669,
+        "allocated": 11602870272
+      },
+      {
+        "time": 1791195414.8106427,
+        "apparent": 11684562513,
+        "allocated": 11686641664
+      },
+      {
+        "time": 1791195415.8192275,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195416.8266258,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195417.8345163,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195418.8417184,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195419.85109,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195420.858598,
+        "apparent": 11981318231,
+        "allocated": 11983405056
+      },
+      {
+        "time": 1791195421.8664615,
+        "apparent": 11739296396,
+        "allocated": 11741380608
+      },
+      {
+        "time": 1791195422.8735828,
+        "apparent": 11160699505,
+        "allocated": 11162775552
+      },
+      {
+        "time": 1791195423.8814585,
+        "apparent": 11160699505,
+        "allocated": 11162775552
+      },
+      {
+        "time": 1791195424.8884819,
+        "apparent": 11160806660,
+        "allocated": 11162882048
+      },
+      {
+        "time": 1791195425.894405,
+        "apparent": 7277311953,
+        "allocated": 7279050752
+      },
+      {
+        "time": 1791195426.8981323,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195427.9014723,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195428.905176,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195429.9085357,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195430.9113317,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195431.9144256,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195432.917386,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195433.9204776,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195434.9237957,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195435.9274197,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      },
+      {
+        "time": 1791195436.9326675,
+        "apparent": 4103862117,
+        "allocated": 4104617984
+      }
+    ]
+  },
+  {
+    "label": "full-verify",
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-manifest-l",
+      "-suite",
+      "quicksilver",
+      "-dbs",
+      "treedb",
+      "-profile",
+      "durable",
+      "-quicksilver-case",
+      "realistic",
+      "-keys",
+      "3000000",
+      "-read-workers",
+      "4",
+      "-quicksilver-reads",
+      "6000000",
+      "-quicksilver-updates",
+      "40000",
+      "-quicksilver-duration",
+      "8s",
+      "-quicksilver-read-batch",
+      "64",
+      "-quicksilver-commit",
+      "auto",
+      "-max-wall",
+      "33m0s",
+      "-seed",
+      "24",
+      "-quicksilver-mixture",
+      "primary",
+      "-quicksilver-working-set",
+      "uniform",
+      "-quicksilver-miss-percent",
+      "90",
+      "-quicksilver-verify-dir",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/churn-3m-pack-manifest-l-copy"
+    ],
+    "started": 1791195437.944204,
+    "finished": 1791195513.0189354,
+    "rc": 0,
+    "timed_out": false,
+    "pid": 3182737,
+    "disk_samples": []
+  }
+]

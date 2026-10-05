@@ -1,0 +1,26 @@
+{
+  "verification_only": true,
+  "engine": "treedb",
+  "data_dir": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-3092893486",
+  "config": {
+    "case": "realistic",
+    "keys": 3000000,
+    "aggregate_reads": 6000000,
+    "workers": 4,
+    "reads_per_snapshot": 64,
+    "concurrent_duration_ns": 8000000000,
+    "updates": 40000,
+    "mixture": "primary",
+    "seed": 24,
+    "commit_mode": "ordinary",
+    "barrier_policy": "initial/final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters",
+    "working_set": "uniform",
+    "miss_percent": 90,
+    "generation": "generic-v1",
+    "key_distribution": "namespace/hostname/opaque approximately 1/3 each; variable lengths; bijective scrambled interior identity",
+    "value_distribution": "80% 32..256 B; 18% 257..2048 B; 2% 2049..32768 B (seeded); equally weighted logarithmic size bands within buckets",
+    "content_distribution": "50% structured; 50% opaque (seeded independent of length)"
+  },
+  "verified_keys": 3000000,
+  "verified_misses": 6040000
+}

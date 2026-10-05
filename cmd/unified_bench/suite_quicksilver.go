@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	quicksilverChurnRounds = flag.Int("quicksilver-churn-rounds", 0, "quicksilver realistic cached TreeDB: bounded maintenance characterization rounds after measured reads (0 disables, maximum 32)")
+	quicksilverChurnPause  = flag.Duration("quicksilver-churn-pause", 6*time.Second, "quicksilver characterization pause per round (positive, maximum 1m; only with churn rounds)")
 	quicksilverVerifyDir   = flag.String("quicksilver-verify-dir", "", "Verify an existing final Quicksilver database without rerunning the workload (one DB, same fixture flags)")
 	quicksilverCase        = flag.String("quicksilver-case", "realistic", "quicksilver fixture: realistic (3M keys), random4k (100k keys), structured256 (250k keys)")
 	quicksilverReads       = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
@@ -41,6 +43,8 @@ const quicksilverSampleLimit = 1000000
 var quicksilverPhaseNames = []string{"quicksilver_hits", "quicksilver_misses", "quicksilver_mixed", "quicksilver_concurrent"}
 
 type quicksilverConfig struct {
+	ChurnRounds         int           `json:"churn_rounds,omitempty"`
+	ChurnPause          time.Duration `json:"churn_pause_ns,omitempty"`
 	Case                string        `json:"case"`
 	Keys                int           `json:"keys"`
 	Reads               int           `json:"aggregate_reads"`
@@ -67,6 +71,9 @@ func (c quicksilverConfig) valueSize() int {
 	return 256
 }
 func (c quicksilverConfig) validate() error {
+	if c.ChurnRounds < 0 || c.ChurnRounds > 32 || c.ChurnPause < 0 || c.ChurnPause > time.Minute || (c.ChurnRounds == 0 && c.ChurnPause != 0) || (c.ChurnRounds > 0 && (c.Case != "realistic" || c.ChurnPause <= 0)) {
+		return fmt.Errorf("quicksilver: churn requires realistic, 1..32 rounds and a positive pause up to 1m (or both zero to disable)")
+	}
 	if c.Case != "random4k" && c.Case != "structured256" && c.Case != "realistic" {
 		return fmt.Errorf("quicksilver: unknown case %q", c.Case)
 	}
@@ -86,6 +93,10 @@ func (c quicksilverConfig) validate() error {
 }
 func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksilverConfig, error) {
 	c := quicksilverConfig{Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates, Seed: 24, CommitMode: *quicksilverCommit, WorkingSet: *quicksilverWorkingSet, MissPercent: *quicksilverMissPercent, Mixture: *quicksilverMixture}
+	c.ChurnRounds = *quicksilverChurnRounds
+	if c.ChurnRounds != 0 || isSet["quicksilver-churn-pause"] {
+		c.ChurnPause = *quicksilverChurnPause
+	}
 	if c.CommitMode == "auto" {
 		c.CommitMode = ""
 	} else if c.CommitMode != "ordinary" && c.CommitMode != "sync" {
@@ -161,6 +172,7 @@ type quicksilverPhase struct {
 	StatsAfter              map[string]string `json:"stats_after,omitempty"`
 }
 type quicksilverResult struct {
+	Churn                     *quicksilverChurnResult `json:"maintenance_churn,omitempty"`
 	wrapper                   kvstore.DB
 	Engine                    string                     `json:"engine"`
 	DBName                    string                     `json:"db_name"`
@@ -740,6 +752,9 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 	if err = c.validate(); err != nil {
 		return
 	}
+	if err = quicksilverValidateChurnEngine(c, engine); err != nil {
+		return
+	}
 	res = quicksilverResult{Correctness: "owned read identity/length/generation; full bytes and all miss classes after durable checkpoint/reopen", DistinctTrackingBytes: ((c.Keys*5 + 63) / 64) * 8 * (c.Workers + 1), Engine: engine, Config: c, GOMAXPROCS: runtime.GOMAXPROCS(0), Profiled: benchConfigHasAnyProfileOutput(cfg), UpdateStride: quicksilverUpdateStride(c.Keys), TraceBytes: quicksilverTraceLength * (64 + 8), SampleCapacity: quicksilverSampleLimit, SampleBytes: quicksilverSampleLimit * 8}
 	res.AccessGeneration = "historical repeated 65536-entry trace"
 	if c.Case == "realistic" {
@@ -939,6 +954,20 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		return
 	}
 	res.VerifiedKeys, res.VerifiedMisses, err = quicksilverVerify(db, c, res.UpdateStride, guard)
+	if err != nil || c.ChurnRounds == 0 {
+		return
+	}
+	// FinalFiles describe the ordinary workload before its verified final reopen.
+	// Keep that cached owner through every characterization round.
+	if err = quicksilverChurn(db, c, &res, guard); err != nil {
+		return
+	}
+	err = db.Close()
+	db = nil
+	if err != nil {
+		return
+	}
+	res.Churn.FinalFiles, err = quicksilverFiles(dir)
 	return
 }
 
@@ -1015,6 +1044,14 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 	}
 	if len(names) == 0 {
 		return "", errors.New("quicksilver: no DBs selected")
+	}
+	for _, name := range names {
+		if err := quicksilverValidateChurnEngine(c, name); err != nil {
+			return "", err
+		}
+	}
+	if cfg.QuicksilverVerifyDir != "" && c.ChurnRounds > 0 {
+		return "", errors.New("quicksilver: retained verification does not accept churn rounds")
 	}
 	if cfg.QuicksilverVerifyDir != "" {
 		return verifyQuicksilverRetained(cfg, c, names, profileDir)

@@ -1,6 +1,6 @@
 # TreeDB space, memory, and maintenance: provisional 3M evidence
 
-This packet records the baseline, 18 public matched runs, six public profile runs, two structural diagnostics, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). The measured candidate is held from merge; final publication remains pending. The maintenance and initial memory observations use one profiled primary run; the later controlled heap comparison uses three profiled durable-primary repeats per source; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
+This packet records the baseline, 18 public matched runs, six public profile runs, two structural diagnostics, a paired six-round churn stress, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). The measured candidate is held from merge; final publication remains pending. The maintenance and initial memory observations use one profiled primary run; the later controlled heap comparison uses three profiled durable-primary repeats per source; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
 
 <!-- BEGIN summary -->
 Full reduced apparent WAL-excluded bytes by 47.39%, from 2,832,310,293 to 1,490,201,793.
@@ -121,7 +121,7 @@ The diagnostic CPU profile attributed 95.41% cumulatively to candidate external-
 
 The profile covers an intentionally terminated 60-second interval on a rebound diagnostic copy. These overlapping cumulative shares must not be added; they do not establish an accepted optimization or full-run scaling result.
 
-Close the public owner before supported offline maintenance. Preserve failed originals; use owned copies and read-only verification for diagnosis. Do not clear recovery/dictionary gates to reclaim reported debt. Scheduler defaults do not prove observed execution or a hard storage bound; qualified churn curves are pending. See [value-log lifecycle](../../../TreeDB/docs/spec/value-log-lifecycle.md) and [recoverable-root maintenance](../../../TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md).
+Close the public owner before supported offline maintenance. Preserve failed originals; use owned copies and read-only verification for diagnosis. Do not clear recovery/dictionary gates to reclaim reported debt. Scheduler defaults do not prove observed execution or a hard storage bound; the completed stress pair below describes observed execution, the repaired restored-copy Full and single Exhaustive observations below retain their separate source and census boundaries. See [value-log lifecycle](../../../TreeDB/docs/spec/value-log-lifecycle.md) and [recoverable-root maintenance](../../../TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md).
 
 ## Maintenance system audit
 
@@ -137,6 +137,158 @@ These policies are separate ([rewrite constants](https://github.com/snissn/gomap
 The ranked algorithm target is repeated whole-closure capture during outer-leaf value rewriting: its default batch is 256 swaps, outer-leaf mode disables the simple logical-reference delta, and each successful publication can scan the reachable roots again ([batch default](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L374), [delta gate](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L2700), [closure scan](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/durable_root_runtime.go#L520)). The retained 60s diagnostic confirms dominance in that interval, while the source-derived scaling hypothesis is approximately `O(N * ceil(M/B))` for N reachable entries, M rewritten pointers, and batch B. It is not a measured full-run scaling curve.
 
 The first performance experiment after R proves restored-copy correctness is the existing `-rewrite-batch-size` option on an isolated offline copy ([CLI](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/cmd/treemap/main.go#L507)). The historical 8192 attempt failed; the later R2 experiment below completed, but its partially maintained input does not supply a matched batch-size speed comparison. The writer already caps pending raw value-frame batches at 4MiB, apart from a single outlier, and limits retained decode scratch to 1MiB ([buffer caps](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L49), [pre-append flush](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L4945)). An 8192 swap batch therefore does not automatically retain 8192 one-MiB values; key, candidate, and swap lists still scale with batch size, so actual memory measurement is required. A matched default/larger-batch experiment should count successful publications and closure scans while measuring elapsed time, RSS, cancellation boundaries, temporary disk, and final pre-oracle census. The separate planned [closure optimization follow-up #5015](https://github.com/snissn/gomap/issues/5015) is not implemented by this packet. Further closure reuse needs exact logical deltas and certified raw-leaf dependencies, with an exact final closure and existing fallback retained. Recovery slots, pins, dictionary identity, and namespace epochs remain correctness gates. Zero-dead packing can still recompress or consolidate live pages; the rehearsal's equal-size repack does not justify a universal skip. No larger online default, epoch clearing, or automatic pack default change is established by this packet.
+
+## Six-round full-refresh churn: one descriptive pair
+
+Frozen churn source [`630468787c4e1b6a361e63f6e28506d8a674a021`](https://github.com/snissn/gomap/commit/630468787c4e1b6a361e63f6e28506d8a674a021) has whole-tree equality with landed [`ba7793dc41f88804f9aba848b79ab089ce4a21ed`](https://github.com/snissn/gomap/commit/ba7793dc41f88804f9aba848b79ab089ce4a21ed). The complete compiled inventory, build/native/runner receipts, qualified manifests, exact commands, actual measurement collector, and RSS observers are retained. The later archive collector is a distinct transfer method. Defaults ran first, then opt-in leaf packing, once each on separately created databases on the shared host. This is one descriptive stress pair, with no speedup, stability, default-policy, or production-workload claim.
+
+Each of six rounds refreshes all 3,000,000 keys, applies 40,000 targeted mutations, checkpoints, pauses at least 30 seconds, then verifies all 3,000,000 present keys and 6,040,000 misses. The initial pre-mutation oracle verifies 6,030,000 misses. This full-dataset refresh deliberately generates much more churn than a workload limited to 40,000 mutations. Round wall time includes refresh writes, checkpoint, pause, and full-fixture verification; it is not foreground p99 or maintenance-only time.
+
+<!-- BEGIN churn_rounds -->
+| Cell | Round | Wall s | Refresh/mutation writes s | Checkpoint s | Full verify s | Retained-byte estimate after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| defaults | 1 | 175.441 | 52.520 | 8.913 | 84.001 | 7,090,906,278 |
+| defaults | 2 | 197.363 | 47.704 | 4.295 | 115.356 | 11,607,350,132 |
+| defaults | 3 | 237.322 | 51.248 | 5.799 | 150.267 | 16,215,624,259 |
+| defaults | 4 | 119.410 | 50.733 | 3.176 | 35.492 | 20,646,536,243 |
+| defaults | 5 | 116.286 | 45.021 | 5.814 | 35.444 | 25,434,373,252 |
+| defaults | 6 | 216.043 | 47.334 | 5.815 | 132.884 | 29,941,149,511 |
+| pack | 1 | 171.391 | 50.553 | 6.140 | 84.694 | 6,969,591,084 |
+| pack | 2 | 168.080 | 47.474 | 4.686 | 85.914 | 11,559,457,519 |
+| pack | 3 | 242.265 | 45.756 | 6.993 | 159.510 | 16,187,131,867 |
+| pack | 4 | 145.586 | 50.649 | 3.065 | 61.864 | 20,635,069,892 |
+| pack | 5 | 171.393 | 43.026 | 7.006 | 91.351 | 24,822,761,253 |
+| pack | 6 | 217.971 | 47.423 | 4.781 | 135.759 | 29,352,073,507 |
+<!-- END churn_rounds -->
+
+The retained-byte column is a runtime estimate after each round, not a directory census. Whole-process heap/RSS snapshots and before/after counters remain in RESULTS.json. Only the closed physical census below measures post-churn file bytes; `report.final_files` remains the original PRE-churn inventory. Apparent bytes are retained here; allocated bytes are unavailable in that collector's final map.
+
+<!-- BEGIN churn_files -->
+| Closed post-churn cell | Dictionary | Outer leaves | User values | Index | Metadata | WAL | Total excluding WAL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| defaults | 852,523 | 10,580,072,989 | 7,517,517,784 | 42,467,328 | 57,080 | 12 | 18,140,967,704 |
+| pack | 885,231 | 9,595,896,246 | 6,950,551,534 | 39,845,888 | 57,526 | 12 | 16,587,236,425 |
+<!-- END churn_files -->
+
+<!-- BEGIN churn_costs -->
+| Churn command | GNU elapsed s | Process RSS high-water bytes | Observer samples |
+| --- | ---: | ---: | ---: |
+| defaults | 1200.93 | 5,427,032,064 | 2,398 |
+| pack | 1257.23 | 5,646,696,448 | 2,510 |
+<!-- END churn_costs -->
+
+GNU time and process RSS high-water cover the entire command, including setup, refreshes, pauses, and all oracles. Observer components and sample bounds remain separate; no per-round physical-byte or instantaneous disk-peak curve was collected.
+
+<!-- BEGIN churn_counters -->
+| Final StatsAfter cumulative counter | Defaults | Opt-in pack |
+| --- | ---: | ---: |
+| Full-live-ID prune scans | 10 | 5 |
+| Budget-aborted prune scans | 10 | 5 |
+| Completed prune runs | 0 | 1 |
+| Observed-source fast-path runs | 0 | 1 |
+| Prune removed bytes | 0 | 0 |
+| Prune zombie-marked bytes | 0 | 536,859,611 |
+| Value rewrite runs | 1 | 3 |
+| Global value-only census bytes_out counter | 5,376,135,605 | 18,178,743,083 |
+| Value payload bytes copied | 1,127,338 | 1,603,854 |
+| Leaf pack runs | 0 | 7 |
+| Leaf pack bytes copied | 0 | 458,903,552 |
+| Leaf pack expected reclaim bytes | 0 | 7,471,634,162 |
+| Leaf pack attributed reclaim bytes | 0 | 0 |
+| Leaf pack GC deleted bytes | 0 | 0 |
+<!-- END churn_counters -->
+
+These are cumulative counters at the last round's StatsAfter. Every default full-live-ID prune scan and every pack full-live-ID scan exhausted the 2-second budget; the pack cell also completed one observed-source fast path. Neither cell reports removed bytes. Zombie marking is separate from physical removal. The 7,471,634,162-byte expected pack reclaim is an estimate; attributed reclaim and pack GC-deleted bytes remain zero. `rewrite.bytes_out` accumulates the global value-only post-rewrite segment census, while `value_bytes_copied` records copied payload bytes ([counter update](https://github.com/snissn/gomap/blob/723e5625f4b46945886d0696c0122db2e2c928cf/TreeDB/caching/db.go#L23349), [census scope](https://github.com/snissn/gomap/blob/723e5625f4b46945886d0696c0122db2e2c928cf/TreeDB/db/vlog_rewrite.go#L2233)). Neither the global census counter nor the retained estimate is a write-amplification measurement. The separately planned [bounded retained-prune progress follow-up #5016](https://github.com/snissn/gomap/issues/5016) addresses repeated budget-abort progress; it does not authorize deletion from incomplete reachability proof. The [whole-closure optimization #5015](https://github.com/snissn/gomap/issues/5015) remains a separate planned performance target.
+
+## Post-churn Full failures and preserved originals
+
+Both retained databases passed the initial writable all-fixture oracle before supported offline Full (`-rewrite-batch-size 8192`, 64 leaf-pack passes). Their apparent and allocated censuses agree before and after that initial oracle. Full then failed with duplicate generation IDs 389 (defaults) and 412 (pack); neither emitted completed maintenance JSON. The preserved canonical on-disk leaf manifest has unique generation IDs in each packet, so the runtime duplicate error must not be relabeled a duplicate in that captured file. The independently tested [#5017 repair](https://github.com/snissn/gomap/issues/5017) and its new restored-copy measurements follow below.
+
+<!-- BEGIN churn_failures -->
+| Failed Full cell | GNU elapsed s | Process RSS high-water bytes | Sampled disk max including WAL, apparent / allocated | Read-only oracle s |
+| --- | ---: | ---: | ---: | ---: |
+| defaults | 70.52 | 2,568,290,304 | 18,891,299,729 / 18,893,565,952 | 39.491 |
+| pack | 34.56 | 2,337,214,464 | 17,025,466,177 / 17,027,809,280 | 26.671 |
+<!-- END churn_failures -->
+
+After failure, the existing diagnostic read-only binary verified all 3,000,000 present keys and 6,040,000 misses with identical path/size/block/mtime censuses before and after its own command. The failed originals were preserved without another writable reopen. This establishes readable fixture data and a stable census at the read-only boundary, not successful Full, minimum size, or a fixed writable runtime. Failure prevented the method's terminal identity receipt; the retained exact commands and preserved method select the previously frozen R2 treemap, whose original source/build chain remains unchanged. Sampled maintenance disk maxima include WAL and may miss shorter peaks. Failed-attempt times are not successful compaction speed comparisons.
+
+The separate applicability receipt compares landed R2 `723e5625` with then-current main `2eeb40a2`: 5,762 Git path/mode/type/object-ID entries match after exactly four documented exclusions (the unrelated MVCC benchmark test/script and two command READMEs). It supports that scoped runtime/harness reuse at those heads. Historical whole-tree receipts and campaign source heads retain their original identities; this receipt does not qualify the subsequent leaf-manifest repair or imply whole-tree equality with later main.
+
+## Repaired Full on fresh copies of the failed churn states
+
+Frozen runtime `f5a82a6f7ac81e6a2959b730e030e6468e75444b` fixes two publication seams: pruning clones the manifest before filtering its generation slice, and GC republishes the final state after pruning ([source](https://github.com/snissn/gomap/blob/f5a82a6f7ac81e6a2959b730e030e6468e75444b/TreeDB/db/leaf_generation_gc.go#L396), [clone](https://github.com/snissn/gomap/blob/f5a82a6f7ac81e6a2959b730e030e6468e75444b/TreeDB/db/leaf_generation_gc.go#L753)). The native causal red test reproduced duplicate generation 2 and mutation of a published manifest; focused green and race commands then passed. Their exact commands, source, outputs, and intervals are retained. Earlier local receipts retain their historical pending fields and sparse-fixture failure, separately from these completed native checks. Source authentication covers 5,766 frozen project files, 2,145 compiled project inputs, all 7,510 compile inputs, and the three new binary identities.
+
+Each measurement starts from a fresh owned copy of its failed original, explicitly rebound with the previously qualified R2 helper. The preparation preserves the original file device/inode/size/block/mtime census. The inherited churn run and stdout describe the input; their recorded timing, source receipts, and pre-churn file tables are not new repaired-runtime benchmark results. Both supported Full commands used batch 8192 and passed all 3,000,000 values and 6,040,000 misses before and after maintenance.
+
+<!-- BEGIN repaired_full_storage -->
+| Restored cell / boundary | Dictionary | Outer leaves | User values | Index | Metadata | WAL | Total excluding WAL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| defaults / final-before-verify | 852,523 / 876,544 | 10,790,648,437 / 10,792,554,496 | 1,995,794,794 / 1,995,837,440 | 75,497,472 / 75,497,472 | 59,011 / 73,728 | 12 / 4,096 | 12,862,852,237 / 12,864,839,680 |
+| defaults / before-maintenance | 852,523 / 876,544 | 10,790,648,437 / 10,792,554,496 | 1,995,794,794 / 1,995,837,440 | 42,467,328 / 42,471,424 | 55,464 / 69,632 | 12 / 4,096 | 12,829,818,546 / 12,831,809,536 |
+| defaults / full-before-oracle | 852,523 / 876,544 | 3,868,232,479 / 3,868,975,104 | 922,093,742 / 922,120,192 | 46,137,344 / 46,137,344 | 55,440 / 69,632 | 12 / 4,096 | 4,837,371,528 / 4,838,178,816 |
+| defaults / full-after | 852,523 / 876,544 | 3,868,232,479 / 3,868,975,104 | 922,093,742 / 922,120,192 | 46,137,344 / 46,137,344 | 55,440 / 69,632 | 12 / 4,096 | 4,837,371,528 / 4,838,178,816 |
+| pack / final-before-verify | 885,231 / 905,216 | 9,685,395,980 / 9,687,392,256 | 1,725,615,107 / 1,725,652,992 | 67,108,864 / 67,108,864 | 59,990 / 77,824 | 12 / 4,096 | 11,479,065,172 / 11,481,137,152 |
+| pack / before-maintenance | 885,231 / 905,216 | 9,685,395,980 / 9,687,392,256 | 1,725,615,107 / 1,725,652,992 | 67,108,864 / 67,108,864 | 56,880 / 73,728 | 12 / 4,096 | 11,479,062,062 / 11,481,133,056 |
+| pack / full-before-oracle | 885,231 / 905,216 | 2,872,206,702 / 2,872,893,440 | 1,188,770,268 / 1,188,798,464 | 41,943,040 / 41,943,040 | 56,864 / 73,728 | 12 / 4,096 | 4,103,862,105 / 4,104,613,888 |
+| pack / full-after | 885,231 / 905,216 | 2,872,705,470 / 2,873,393,152 | 1,188,770,268 / 1,188,798,464 | 41,943,040 / 41,943,040 | 14,473 / 32,768 | 12 / 4,096 | 4,104,318,482 / 4,105,072,640 |
+<!-- END repaired_full_storage -->
+
+The restored-copy boundary, pre-Full writable-oracle boundary, compactor-close boundary, and post-oracle close boundary are distinct. Defaults' post-Full oracle leaves its census unchanged; pack's writable verification changes apparent bytes by 456,377. Domain rows and allocated bytes remain visible instead of attributing this drift to compaction. These are descriptive outcomes on two different failed inputs, not a matched timing comparison with the earlier timeout or original Full failures.
+
+<!-- BEGIN repaired_full_costs -->
+| Repaired Full cell | GNU elapsed s | Receipt s | Process RSS high-water bytes | Sampled disk max including WAL, apparent / allocated | Pre / post oracle s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| defaults | 19.51 | 20.132 | 1,652,928,512 | 13,164,158,737 / 13,166,161,920 | 56.057 / 57.057 |
+| pack | 31.41 | 32.198 | 1,718,579,200 | 11,981,318,231 / 11,983,405,056 | 40.039 / 75.075 |
+<!-- END repaired_full_costs -->
+
+<!-- BEGIN repaired_full_debt -->
+| Repaired Full cell | Leaf-GC debt bytes / generations | Value-log GC debt bytes / segments | fully / policy fully / byte minimized |
+| --- | ---: | ---: | ---: |
+| defaults | 3,447,924,269 / 106 | 1,073,701,052 / 3 | false / false / false |
+| pack | 2,388,326,994 / 75 | 536,844,839 / 2 | false / false / false |
+<!-- END repaired_full_debt -->
+
+All three completion flags remain false. Remaining debt reflects the emitted policy and reachability state, not permission to clear recovery roots, discard snapshot pins, or delete old persistent segments. Post-maintenance point-read throughput and tails were not measured; the existing 4 MiB maintenance regrouping caveat still applies.
+
+Exactly one supported Exhaustive pass followed the default copy's successful Full and post-oracle boundary. Batch 8192, 64 leaf-pack passes, a 1800-second process-group limit, complete pre/post oracles, and no retries were declared in the retained method. It passed all 3,000,000 values and 6,040,000 misses. This sequential characterization starts from that partial maintenance state; it is not a matched speedup comparison with the original baseline timeout.
+
+<!-- BEGIN repaired_exhaustive -->
+| Single default-copy Exhaustive | GNU / receipt s | Process RSS high-water bytes | Sampled disk max including WAL, apparent / allocated | Pre / post oracle s |
+| --- | ---: | ---: | ---: | ---: |
+| completed | 123.65 / 124.498 | 1,891,061,760 | 6,236,727,818 / 6,237,601,792 | 56.055 / 150.152 |
+
+| Leaf-GC debt bytes / generations | Rewrite debt bytes / segments | Value-log GC debt bytes | fully / policy fully / byte minimized |
+| --- | ---: | ---: | ---: |
+| 625,618,556 / 3 | 14,052 / 3 | 0 | false / false / false |
+<!-- END repaired_exhaustive -->
+
+<!-- BEGIN repaired_exhaustive_storage -->
+| Sequential Exhaustive boundary | Dictionary | Outer leaves | User values | Index | Metadata | WAL | Total excluding WAL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| final-before-verify | 852,523 / 876,544 | 3,868,232,479 / 3,868,975,104 | 922,093,742 / 922,120,192 | 46,137,344 / 46,137,344 | 55,440 / 69,632 | 12 / 4,096 | 4,837,371,528 / 4,838,178,816 |
+| before-maintenance | 852,523 / 876,544 | 3,868,232,479 / 3,868,975,104 | 922,093,742 / 922,120,192 | 46,137,344 / 46,137,344 | 55,440 / 69,632 | 12 / 4,096 | 4,837,371,528 / 4,838,178,816 |
+| exhaustive-before-oracle | 852,523 / 876,544 | 970,950,637 / 971,227,136 | 841,340,651 / 841,375,744 | 46,137,344 / 46,137,344 | 18,807 / 32,768 | 12 / 4,096 | 1,859,299,962 / 1,859,649,536 |
+| exhaustive-after | 852,523 / 876,544 | 970,950,637 / 971,227,136 | 841,340,651 / 841,375,744 | 46,137,344 / 46,137,344 | 18,807 / 32,768 | 12 / 4,096 | 1,859,299,962 / 1,859,649,536 |
+<!-- END repaired_exhaustive_storage -->
+
+The final source receipt attests unchanged 5,766 project files, 7,510 compile inputs, 84 headers, and 15 native libraries after the campaign, and binds both failed originals' unchanged device/inode/size/block/mtime preservation receipts. Frozen `f5a82a6f` and landed main `c2605b6d7421d1a5cff3cfd390958193e6f5e0b8` have the same whole-tree identity `6abef64e20d3ce5e43ecc9f1ed4a9757284bcbcd`. The qualified manifest is a separate derived receipt; the original provisional manifest remains byte exact. This qualification applies to the new repaired maintenance runs. Historical public, profile, structural, and churn packets retain their pre-repair source identities and do not measure the later GC fix's performance.
+
+## Stopped same-checkpoint replay diagnostics
+
+The create-only overlay's child process returned zero and verified all 3,000,000 initial values and 6,030,000 initial misses. Its retained original caller then attempted to iterate the emitted null `phases` while printing its summary; this child receipt is not a validated collector completion. The corrected read caller, exact diagnostic overlay, native build receipts, and synthetic guard checks are retained separately.
+
+Each diagnostic planned six fresh-process reads in AB/BA/AB order. Both stopped on their first baseline read. The child completed the initial oracle and three read phases, but the strict resource guard returned one after rejecting an inode replacement. The second attempt used a new explicitly rebound copy of the first failed state and disabled background index vacuum; its preparation receipt preserves the original failed census. It still failed the unchanged guard. No candidate run or accepted paired comparison exists, and no additional metadata exception was added.
+
+<!-- BEGIN replay_failures -->
+| Stopped diagnostic | Rejected identity path | Child / guard exit | GNU elapsed s | Process RSS high-water bytes | Accepted reads |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| replay-3m | maindb/index.db | 0 / 1 | 50.25 | 3,072,024,576 | 0 |
+| replay-3m-no-vacuum | maindb/vlog_health.json | 0 / 1 | 48.7 | 3,042,844,672 | 0 |
+<!-- END replay_failures -->
+
+These diagnostic timings include the strict guard, oracle, and child read phases; they are excluded from the public timing comparison. The 11-entry native-only digest ledger binds retained changed resources and Python bytecode without copying database blobs into this publication. The measured cache-offset candidate remains held: neither these stopped diagnostics nor profiled heap reductions clear its public throughput and p99 regressions. The retained [measured no-go assessment](raw/replay-failures/m-measured-no-go.md) retires this representation from the selected sprint while preserving [#5004](https://github.com/snissn/gomap/issues/5004) and its draft [PR #5006](https://github.com/snissn/gomap/pull/5006) as open and requiring refinement; it does not mark that optimization complete or waive its gate.
 
 ## Public matched comparison: 18 validated runs
 
@@ -174,7 +326,7 @@ Mixed and concurrent tails retain both distributions and matched repeat ratios. 
 | durable holdout | concurrent | 11.769 [11.641, 12.440] | 11.903 [11.883, 12.250] | 1.010 [0.985, 1.023] | 20.636 [20.345, 21.581] | 20.256 [20.134, 21.377] | 0.991 [0.976, 0.996] |
 <!-- END public_tails -->
 
-The measured cache-offset candidate is held from merge. Durable mixed median throughput is lower by approximately 3–4% and p99 is higher by approximately 0.3 microseconds in the primary and holdout workloads. The 54–66-million-byte reduction in profiled pre-phase HeapAlloc and the structural evidence below do not satisfy the public cached performance gate. #5004 and its draft optimization remain open for refinement, without a regression-free performance claim. Replay-failure raw evidence will be imported separately.
+The measured cache-offset candidate is held from merge. Durable primary mixed median throughput is lower by 2.68%, primary concurrent throughput by 3.57%, and holdout mixed throughput by 4.00%; mixed p99 is higher by approximately 0.3 microseconds in primary and holdout. The 54–66-million-byte reduction in profiled pre-phase HeapAlloc and the structural evidence below do not satisfy the public cached performance gate. #5004 and its draft optimization remain open for refinement, without a regression-free performance claim. Both stopped replay diagnostics are retained above.
 
 The guardrails below retain process RSS, command/load time, and final runtime file sizes. These file sizes are apparent bytes after final checkpoint and close, before the final writable reopen/full oracle; they are not allocated-byte censuses or post-oracle retention measurements ([capture boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L932)). Per-domain initial/final totals are in RESULTS.json. GNU-time RSS high-water is a whole-process observation; observer samples retain anonymous/file/shared components at the sampled RSS peak and separate component maxima. These public rows do not exercise the earlier diagnostic's 256MiB leaf-mapping override. Neither unprofiled heap endpoints nor RSS differences establish a cache-memory improvement: GC state is uncontrolled. The separately profiled comparison below supplies controlled heap evidence.
 
@@ -291,7 +443,7 @@ The three original collector plans remain hash-bound. Their 18 unprofiled public
 All three planned row inventories are populated; acceptance gates below remain open.
 <!-- END planned_inputs -->
 
-Each imported run retains its actual `run.json`, stdout, stderr, qualified manifest, and source/build/native/runner receipts. Extraction authenticates the complete raw inventory and manifest/collector/command/source/runtime bindings before interpreting a row, then matches repeat and cell identity to the pinned plan and verifies final values and misses. Public matched rows supply throughput and latency comparisons; profiled public pairs supply heap/allocation/cache observations; instrumented structural-K rows supply diagnostic evidence. Churn, replay-failure evidence import, and final publication remain pending.
+Each imported run retains its actual `run.json`, stdout, stderr, qualified manifest, and source/build/native/runner receipts. Extraction authenticates the complete raw inventory and manifest/collector/command/source/runtime bindings before interpreting a row, then matches repeat and cell identity to the pinned plan and verifies final values and misses. Public matched rows supply throughput and latency comparisons; profiled public pairs supply heap/allocation/cache observations; instrumented structural-K rows supply diagnostic evidence. The paired churn stress, failed originals, stopped replay diagnostics, and repaired maintenance are imported with their distinct boundaries. Final publication review remains pending.
 
 ## Provenance and remaining gates
 
@@ -306,9 +458,6 @@ The generic-v1 primary fixture uses seed 24, 3M keys, 6M aggregate reads, 40k up
 Raw paths and exact SHA-256 values are in inputs.json and RESULTS.json. Larger profiles remain at their recorded native paths with digests. Gzipped raw inputs preserve exact original bytes and bind both compressed and original digests. REPORT.md supplies hash-pinned prose around generated numerical blocks. Reproduce extraction with `python3 extract.py --check`; run bounded validation with `python3 selfcheck.py` and `python3 -O selfcheck.py`. No command here builds binaries or opens a database.
 
 <!-- BEGIN pending -->
-- M: final source qualification; measured candidate 90219 remains held from merge
-- C: qualified default and opt-in maintenance churn curves
-- R: independent acceptance of the retained production-repair and qualified restored-copy maintenance evidence
-- Accept the missing original maintenance build receipt as a documented reconstruction limitation
-- Independent artifact review, latest-head CI, mature Codex review, and final source reconciliation
+- Accept the missing original baseline maintenance build receipt as a documented post-measurement reconstruction limitation
+- Independent artifact review, latest-head CI, mature Codex review, and final publication reconciliation
 <!-- END pending -->

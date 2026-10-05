@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "index_outer_leaves_in_vlog": false,
+  "leaf_prefix_compression": false,
+  "index_columnar_leaves": false,
+  "index_packed_valueptr": false,
+  "index_internal_base_delta": false,
+  "index_adaptive_leaf_encoding": false,
+  "vlog_compression": "off",
+  "vlog_block_codec": "snappy",
+  "vlog_auto_policy": "balanced"
+}

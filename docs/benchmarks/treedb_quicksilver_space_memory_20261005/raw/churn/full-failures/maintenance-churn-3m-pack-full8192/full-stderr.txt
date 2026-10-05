@@ -1,0 +1,25 @@
+CompactStorage error: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: persist exact leaf-generation manifest: treedb: manifest.json generation_id 412 appears more than once
+Command exited with non-zero status 1
+	Command being timed: "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-restore-r2 compact /mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-393144076 -rw -json -mode full -sync-each-phase -leaf-pack-max-passes 64 -rewrite-batch-size 8192"
+	User time (seconds): 25.06
+	System time (seconds): 8.91
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:34.56
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2282436
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 194666
+	Voluntary context switches: 110309
+	Involuntary context switches: 15457
+	Swaps: 0
+	File system inputs: 2792488
+	File system outputs: 1039088
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
