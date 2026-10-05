@@ -23,7 +23,8 @@ import (
 // Both independently recoverable slot generations are rebound in a stable
 // sibling copy that is atomically installed only after its metas are durable.
 // Their commit sequences, roots, allocator generations, and logical dependency
-// frontiers remain unchanged.
+// frontiers remain unchanged. Namespace epochs are derived from the restored
+// parent handles, matching fresh producer authority in the destination layout.
 func RebindDurableRootSnapshotV1(dir string) error {
 	return RebindDurableRootSnapshotLayoutV1(dir, "")
 }
@@ -294,10 +295,21 @@ func rebindSnapshotManifestEntryV1(dir, sideRoot string, entry *rootpublication.
 	entry.Identity = identity
 	if entry.Namespace != nil {
 		parentPath := filepath.Dir(resourcePath)
-		parentIdentity, err := stableSnapshotPathIdentityV1(parentPath, entry.Namespace.ParentIdentity.Generation, rootpublication.SyncStableNamespace)
+		parent, err := os.Open(parentPath)
 		if err != nil {
 			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)
 		}
+		// A namespace epoch identifies its physical parent, unlike the child's
+		// persisted logical generation. Capture both from the same exact handle
+		// so restored and freshly produced authority agree in the copied layout.
+		syncErr := rootpublication.SyncStableNamespace(parent)
+		parentIdentity, identityErr := rootpublication.StableIdentityFromFile(parent)
+		parentGeneration, generationErr := rootpublication.StableNamespaceParentGeneration(parent)
+		closeErr := parent.Close()
+		if err := errors.Join(syncErr, identityErr, generationErr, closeErr); err != nil {
+			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)
+		}
+		parentIdentity.Generation = parentGeneration
 		entry.Namespace.ParentIdentity = parentIdentity
 	}
 	return nil
