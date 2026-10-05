@@ -310,17 +310,20 @@ func TestVectorPopulationPhysicalIteratorCancellationV1(t *testing.T) {
 func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		for _, tc := range []struct {
-			name       string
-			sameKey    bool
-			cancelAt   int
-			maxWork    int
-			next       bool
-			wantErr    error
+			name      string
+			sameKey   bool
+			cancelAt  int
+			maxWork   int
+			extraRows bool
+			nextSteps int
+			wantValid bool
+			wantErr   error
 		}{
-			{"initialization", false, 2, 64, false, context.Canceled},
-			{"next", false, 3, 64, true, context.Canceled},
-			{"shadowed", true, 3, 64, false, context.Canceled},
-			{"shadowed-work-cap", true, 0, 2, false, errCollectionIndexScanWorkCap},
+			{"initialization", false, 2, 64, false, 0, false, context.Canceled},
+			{"next", false, 3, 64, false, 1, false, context.Canceled},
+			{"shadowed", true, 3, 64, false, 0, false, context.Canceled},
+			{"next-shadowed", false, 5, 64, true, 2, false, context.Canceled},
+			{"legacy-shadowed-work-cap", true, 0, 2, false, 0, true, errCollectionIndexScanWorkCap},
 		} {
 			t.Run(fmt.Sprintf("%s/reverse=%v", tc.name, reverse), func(t *testing.T) {
 				first, second := newCollectionRunTable(1), newCollectionRunTable(1)
@@ -332,6 +335,14 @@ func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
 					key = "a"
 				}
 				setCollectionRunValue(second, []byte(key), []byte("old"))
+				if tc.extraRows {
+					shared := "c"
+					if reverse {
+						shared = "0"
+					}
+					setCollectionRunValue(first, []byte(shared), []byte("new"))
+					setCollectionRunValue(second, []byte(shared), []byte("old"))
+				}
 				first.Freeze()
 				second.Freeze()
 				sources := []bufferedRootRunIteratorSource{{iter: first.NewIterator(nil, nil)}, {iter: second.NewIterator(nil, nil), priority: 1}}
@@ -348,13 +359,13 @@ func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
 				}
 				it := newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources, nil, nil, false, true, reverse, tc.maxWork, nil, inspectionError)
 				defer it.Close()
-				if tc.next {
+				for i := 0; i < tc.nextSteps; i++ {
 					if !it.Valid() {
 						t.Fatal("missing row before cancellation")
 					}
 					it.Next()
 				}
-				if it.Valid() || !errors.Is(it.Error(), tc.wantErr) {
+				if it.Valid() != tc.wantValid || !errors.Is(it.Error(), tc.wantErr) {
 					t.Fatalf("queued row after failure: valid=%v err=%v want %v", it.Valid(), it.Error(), tc.wantErr)
 				}
 				it.Seek([]byte("a"))
