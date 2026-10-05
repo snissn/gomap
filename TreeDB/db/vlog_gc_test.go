@@ -31,7 +31,9 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if stats != (ValueLogGCStats{}) {
+	stats.RecoverableCaptures = 0
+	stats.Membership = RecoverableValueLogMembershipStats{}
+	if !reflect.DeepEqual(stats, ValueLogGCStats{}) {
 		t.Fatalf("expected zero stats for empty value-log set, got %+v", stats)
 	}
 }
@@ -57,7 +59,9 @@ func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if stats != (ValueLogGCStats{}) {
+	stats.RecoverableCaptures = 0
+	stats.Membership = RecoverableValueLogMembershipStats{}
+	if !reflect.DeepEqual(stats, ValueLogGCStats{}) {
 		t.Fatalf("expected zero stats for nil post-refresh value-log set, got %+v", stats)
 	}
 	if calls != 1 {
@@ -834,6 +838,24 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	}
 }
 
+// Fresh databases retain the legitimately uncovered genesis root. Verify the
+// fixture rather than invalidating the unrelated logical reference tracker.
+func requireUncoveredValueLogGCRootForTest(tb testing.TB, db *DB) {
+	tb.Helper()
+	roots, err := db.CaptureRecoverableRootSetForInspection(context.Background())
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer roots.Release()
+	for _, root := range roots.Roots() {
+		resources, _, _, exact := roots.resourcesForRootExact(root)
+		if exact && resources == nil {
+			return
+		}
+	}
+	tb.Fatal("fixture has no legitimate uncovered recovery root")
+}
+
 func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -846,7 +868,7 @@ func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
 	if err := db.RefreshValueLogSet(); err != nil {
 		t.Fatalf("refresh value-log set: %v", err)
 	}
-	db.valueLogRefTracker.invalidate()
+	requireUncoveredValueLogGCRootForTest(t, db)
 
 	scanStarted := make(chan struct{})
 	releaseScan := make(chan struct{})
@@ -854,20 +876,27 @@ func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(releaseScan) }) }
 	defer release()
 	var once sync.Once
-	restore := registerScanValueLogRefCountsHook(func() {
+	db.testValueLogMembershipBeforeFallbackHook = func() {
 		once.Do(func() {
 			close(scanStarted)
 			<-releaseScan
 		})
-	})
-	defer restore()
+	}
 
 	gcDone := make(chan error, 1)
+	var gcStats ValueLogGCStats
 	go func() {
-		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcStats = stats
 		gcDone <- err
 	}()
-	<-scanStarted
+	select {
+	case <-scanStarted:
+	case err := <-gcDone:
+		t.Fatalf("GC returned before actual fallback collector: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("GC did not enter actual fallback collector")
+	}
 
 	publishDone := make(chan error, 1)
 	go func() { publishDone <- db.Set([]byte("publish-during-gc-scan"), []byte("ok")) }()
@@ -883,6 +912,9 @@ func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
 	if err := <-gcDone; err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
+	if gcStats.Membership.UncoveredRoots == 0 || gcStats.Membership.FullRootScans == 0 {
+		t.Fatal("paused GC did not report actual uncovered-root scans")
+	}
 }
 
 func TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe(t *testing.T) {
@@ -897,7 +929,7 @@ func TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe(t *testing.T) {
 	if err := db.RefreshValueLogSet(); err != nil {
 		t.Fatalf("refresh value-log set: %v", err)
 	}
-	db.valueLogRefTracker.invalidate() // Exercise the full-scan fallback split.
+	requireUncoveredValueLogGCRootForTest(t, db)
 	oldPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000001.log")
 
 	postScan := make(chan struct{})
@@ -914,15 +946,34 @@ func TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe(t *testing.T) {
 	})
 	defer restore()
 	gcDone := make(chan error, 1)
+	var gcStats ValueLogGCStats
 	go func() {
-		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcStats = stats
 		gcDone <- err
 	}()
-	<-postScan
+	select {
+	case <-postScan:
+	case err := <-gcDone:
+		t.Fatalf("GC returned before post-proof seam: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("GC did not reach post-proof seam")
+	}
 	setValueLogPointer(t, db, []byte("old-first-reference"), oldPtr)
 	release()
 	if err := <-gcDone; err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if gcStats.Membership.FullRootScans == 0 {
+		t.Fatal("first-reference race did not exercise uncovered-root fallback")
+	}
+	for _, id := range gcStats.ZombieMarkedFileIDs {
+		if id == oldPtr.FileID {
+			t.Fatal("stale proof marked the newly referenced old identity")
+		}
+	}
+	if got, err := db.Get([]byte("old-first-reference")); err != nil || string(got) != "old" {
+		t.Fatalf("newly referenced old value = %q: %v", got, err)
 	}
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("old segment first referenced after scan was removed: %v", err)
@@ -941,7 +992,7 @@ func TestValueLogGC_PostScanNewSegmentIsSafe(t *testing.T) {
 	if err := db.RefreshValueLogSet(); err != nil {
 		t.Fatalf("refresh value-log set: %v", err)
 	}
-	db.valueLogRefTracker.invalidate() // Exercise the full-scan fallback split.
+	requireUncoveredValueLogGCRootForTest(t, db)
 
 	postScan := make(chan struct{})
 	releaseGC := make(chan struct{})
@@ -957,11 +1008,19 @@ func TestValueLogGC_PostScanNewSegmentIsSafe(t *testing.T) {
 	})
 	defer restore()
 	gcDone := make(chan error, 1)
+	var gcStats ValueLogGCStats
 	go func() {
-		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcStats = stats
 		gcDone <- err
 	}()
-	<-postScan
+	select {
+	case <-postScan:
+	case err := <-gcDone:
+		t.Fatalf("GC returned before post-proof seam: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("GC did not reach post-proof seam")
+	}
 
 	newPtr := appendPointersInNewSegment(t, db.dir, 0, 3, 7_000, 1, func(int) []byte { return []byte("new") })[0]
 	if err := db.RefreshValueLogSet(); err != nil {
@@ -972,6 +1031,14 @@ func TestValueLogGC_PostScanNewSegmentIsSafe(t *testing.T) {
 	release()
 	if err := <-gcDone; err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if gcStats.Membership.FullRootScans == 0 {
+		t.Fatal("new-segment race did not exercise uncovered-root fallback")
+	}
+	for _, id := range gcStats.ZombieMarkedFileIDs {
+		if id == newPtr.FileID {
+			t.Fatal("stale proof marked the new referenced identity")
+		}
 	}
 	newPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000003.log")
 	if _, err := os.Stat(newPath); err != nil {
@@ -998,7 +1065,7 @@ func TestValueLogGC_RepeatedPostScanPublicationAbortsWithoutDelete(t *testing.T)
 	if err := db.RefreshValueLogSet(); err != nil {
 		t.Fatalf("refresh value-log set: %v", err)
 	}
-	db.valueLogRefTracker.invalidate()
+	requireUncoveredValueLogGCRootForTest(t, db)
 	oldPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000001.log")
 
 	var attempts int
@@ -1015,10 +1082,13 @@ func TestValueLogGC_RepeatedPostScanPublicationAbortsWithoutDelete(t *testing.T)
 	if publishErr != nil {
 		t.Fatalf("publish after scan: %v", publishErr)
 	}
+	if stats.Membership.FullRootScans == 0 {
+		t.Fatal("stale retry did not exercise uncovered-root fallback")
+	}
 	if attempts != 2 {
 		t.Fatalf("scan attempts = %d, want bounded initial attempt plus one retry", attempts)
 	}
-	if stats.SegmentsDeleted != 0 || stats.BytesDeleted != 0 {
+	if stats.SegmentsDeleted != 0 || stats.BytesDeleted != 0 || len(stats.ZombieMarkedFileIDs) != 0 || len(stats.PendingFileIDs) != 0 || len(stats.DeletedFileIDs) != 0 {
 		t.Fatalf("stale retry deleted segments: %+v", stats)
 	}
 	if _, err := os.Stat(oldPath); err != nil {

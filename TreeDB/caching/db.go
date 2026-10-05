@@ -6208,6 +6208,7 @@ const (
 	retainedPruneModeNoCandidates
 	retainedPruneModeObservedSourceFastPath
 	retainedPruneModeFullLiveIDScan
+	retainedPruneModeCertifiedMembership
 )
 
 func retainedPruneModeString(mode uint32) string {
@@ -6218,12 +6219,15 @@ func retainedPruneModeString(mode uint32) string {
 		return "observed_source_fast_path"
 	case retainedPruneModeFullLiveIDScan:
 		return "full_live_id_scan"
+	case retainedPruneModeCertifiedMembership:
+		return "certified_membership"
 	default:
 		return "none"
 	}
 }
 
 type valueLogLiveIDScanStats struct {
+	Membership          backenddb.RecoverableValueLogMembershipStats
 	Records             int64
 	ValuePointerRecords int64
 	OuterLeafRecords    int64
@@ -6654,6 +6658,10 @@ type retainedValueLogPruneStats struct {
 	ObservedSourceZombieMarkedBytes    int64
 	Mode                               retainedPruneMode
 	ScanStats                          valueLogLiveIDScanStats
+	GCStats                            backenddb.ValueLogGCStats
+	GCCalls                            uint64
+	PendingFileIDs                     []uint32
+	DeletedFileIDs                     []uint32
 	ElapsedNanos                       int64
 	AbortedClose                       bool
 	AbortedForegroundWrites            bool
@@ -6665,6 +6673,10 @@ type retainedValueLogPruneStats struct {
 
 type retainedValueLogPruneRunOptions struct {
 	fullLiveIDScanBudget time.Duration
+	// An explicit synchronous maintenance caller may reclaim a proven-closed
+	// candidate that the backend's newest-sequence heuristic still calls active.
+	// Scheduler force is admission pressure, not this stronger authorization.
+	reclaimClosedCandidates bool
 }
 
 func retainedPruneStatusForStats(pruneStats retainedValueLogPruneStats) retainedPruneStatus {
@@ -6730,6 +6742,7 @@ func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPrune
 		return
 	}
 	status := retainedPruneStatusForStats(pruneStats)
+	db.observeRetainedPruneMembership(pruneStats)
 	db.retainedValueLogPruneLastStatus.Store(uint32(status))
 	db.retainedValueLogPruneLastMode.Store(uint32(pruneStats.Mode))
 	if pruneStats.ElapsedNanos > 0 {
@@ -6958,7 +6971,9 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 }
 
 func (db *DB) pruneRetainedValueLogsWithObservedContext(ctx context.Context, force bool, observedSourceIDs map[uint32]struct{}) retainedValueLogPruneStats {
-	return db.pruneRetainedValueLogsWithObservedContextOptions(ctx, force, observedSourceIDs, retainedValueLogPruneRunOptions{})
+	return db.pruneRetainedValueLogsWithObservedContextOptions(ctx, force, observedSourceIDs, retainedValueLogPruneRunOptions{
+		reclaimClosedCandidates: force,
+	})
 }
 
 func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Context, force bool, observedSourceIDs map[uint32]struct{}, runOpts retainedValueLogPruneRunOptions) retainedValueLogPruneStats {
@@ -6987,14 +7002,7 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 		inUse[path] = struct{}{}
 	}
 
-	type pruneCandidate struct {
-		path     string
-		size     int64
-		id       uint32
-		hasID    bool
-		observed bool
-	}
-	candidatePaths := make([]pruneCandidate, 0, len(paths))
+	candidatePaths := make([]retainedPruneCandidate, 0, len(paths))
 	for i, path := range paths {
 		if i == 0 || i&foregroundWriteResumeCheckMask == 0 {
 			if err := retainedPruneContextErr(ctx); err != nil {
@@ -7006,7 +7014,7 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 			}
 		}
 		size := db.valueLogClosedSegmentSize(path)
-		candidate := pruneCandidate{path: path, size: size}
+		candidate := retainedPruneCandidate{path: path, size: size}
 		if laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path)); ok && valueLog && laneID >= 0 {
 			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
 				candidate.id = id
@@ -7063,6 +7071,10 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 		return out
 	}
 
+	if db.pruneRetainedValueLogsBatch(ctx, candidatePaths, force, observedSourceIDs, runOpts, &out) {
+		return out
+	}
+
 	// When a queued rewrite explicitly observed source segment IDs that are
 	// currently pinned by retention, we already know those segments are
 	// unreachable in the backend index (otherwise rewrite+GC would not have
@@ -7104,7 +7116,6 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				var expectedIdentity rootpublication.StableIdentity
 				if db.valueLogReader != nil {
 					expectedIdentity, _ = db.valueLogReader.StableSegmentIdentity(id)
-					_ = db.valueLogReader.EvictSegment(id)
 				}
 				if err := marker.MarkValueLogZombie(id); err != nil {
 					if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
@@ -7135,6 +7146,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 					}
 					db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
 					continue
+				}
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.EvictSegment(id)
 				}
 				out.ZombieMarkedSegments++
 				if size > 0 {
@@ -7250,7 +7264,6 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 			var expectedIdentity rootpublication.StableIdentity
 			if db.valueLogReader != nil {
 				expectedIdentity, _ = db.valueLogReader.StableSegmentIdentity(id)
-				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
 				if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
@@ -7285,6 +7298,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				}
 				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
 				continue
+			}
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.EvictSegment(id)
 			}
 			out.ZombieMarkedSegments++
 			if size > 0 {
@@ -9574,6 +9590,9 @@ type DB struct {
 	foregroundMaintenanceGraceCancelValue                        uint32
 	retainedPruneLastStartUnixNano                               atomic.Int64
 	retainedValueLogPruneLastUnixNano                            atomic.Int64
+	retainedPruneMembershipMu                                    sync.Mutex
+	retainedPruneMembershipTotals                                retainedPruneMembershipCounters
+	retainedPruneMembershipLast                                  retainedPruneMembershipCounters
 	retainedValueLogPruneLastStatus                              atomic.Uint32
 	retainedValueLogPruneLastMode                                atomic.Uint32
 	retainedValueLogPruneLastForce                               atomic.Bool
@@ -32939,6 +32958,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.last_force"] = fmt.Sprintf("%t", db.retainedValueLogPruneLastForce.Load())
 	stats["treedb.cache.vlog_retained_prune.active"] = fmt.Sprintf("%t", retainedPruneActive)
 	stats["treedb.cache.vlog_retained_prune.inflight"] = fmt.Sprintf("%t", retainedPruneInflight)
+	db.retainedPruneMembershipMu.Lock()
+	membershipLast, membershipTotals := db.retainedPruneMembershipLast, db.retainedPruneMembershipTotals
+	db.retainedPruneMembershipMu.Unlock()
+	membershipLast.appendStats(stats, "last_")
+	membershipTotals.appendStats(stats, "total_")
 	stats["treedb.cache.vlog_retained_prune.last_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneLastElapsedNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_retained_prune.total_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneTotalNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_retained_prune.max_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneMaxNanos.Load())/float64(time.Millisecond))

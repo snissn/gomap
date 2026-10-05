@@ -44,11 +44,36 @@ slots and publication debt; resource work is bounded by retained manifests and
 pins. Maintenance operations walk the captured roots only when they need a
 resource-specific reachability projection.
 
+Value-log membership reuses an exact root's physical resource closure only after
+binding all five root scalars to the current index generation/physical identity
+and validating registered reachability policies and exact manager physical
+registrations. The index pin is separate from the external closure. Ordinary
+manager recapture has no new namespace operation; an independent canonical
+binding check guards against basename reuse. When a producer supplies a namespace
+obligation, its parent generation and canonical name must also agree. Nil or unbound closures
+are not certificates. Both durable slots and the visible root participate;
+pending, ambiguous and replay resources add conservative presence without
+independently certifying absence. Their private captured debt view shares the
+existing ownership lifetime; unresolved manager authority there fails closed
+before mutation. It does not turn a missing or mismatched exact-root
+certificate into a debt error. Each uncovered root uses complete
+user/system/collection/raw-leaf projection. Dictionary/template numeric IDs in
+foreign namespaces do not confer main value-log membership. Existing main GC
+adapters exclude raw and packed `leaf_vlog` files from candidate mutation.
+Detached cache point, system and iterator roots use complete projection;
+numeric root-ID equality is insufficient to reuse backend authority.
+
+Membership counters distinguish certified/uncovered roots, full fallback scans,
+visited records, pointer projections and physical bytes read. Conservative
+membership is not a logical reference count or reclaimed progress. Destructive
+GC still captures fresh authority after maintenance admission and revalidates
+that authority at the mutation fence.
+
 ## Checked destructive-call-site inventory
 
 | Storage class | Destructive owner | Capability integration | Status |
 |---|---|---|---|
-| Persistent value-log segments | `TreeDB/db/vlog_gc.go` | scans value pointers from every captured root, unions exact referenced segment IDs, then revalidates under `publishPrepareMu` before `MarkZombie`; full GC only retires segments absent from the whole union | active |
+| Persistent value-log segments | `TreeDB/db/vlog_gc.go` | reuses certified exact-root physical membership or completely projects uncovered roots, unions conservative segment presence, then revalidates under `publishPrepareMu` before `MarkZombie`; full GC only retires segments absent from the whole union | active |
 | Value-log rewrite sources | `TreeDB/db/vlog_rewrite.go` | publishes rewritten pointers first; source retirement delegates to capability-backed value-log GC. A source remains in the current manager topology while any recoverable root still references it. Once absent from every recoverable root, zombie publication removes it from the current topology while snapshot/resource pins defer physical unlink; a stale cleanup capability records retained debt rather than failing the committed rewrite | active |
 | Exported/cached value-log zombie requests | `TreeDB/db/db.go` (`MarkValueLogZombie`) and cached retention callers | delegates to capability-backed observed-source GC instead of directly marking a manager file zombie | active |
 | Zero-byte value-log cleanup | `TreeDB/db/compact_storage.go` (`pruneZeroByteValueLogFiles`) | captures and revalidates under the publication fence, then keeps that fence through stable deletion and directory durability | active |

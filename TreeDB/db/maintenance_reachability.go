@@ -46,6 +46,7 @@ type maintenanceReachabilityResult struct {
 
 	// Internal evidence for collector-selection tests. These count actual
 	// expensive collector work, not merely selected collectors.
+	recordsScanned       uint64
 	recordLengthLookups  uint64
 	leafFrameProjections uint64
 }
@@ -212,6 +213,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 
 	scanLeafValues := func(n node.Node, entry *memoEntry) error {
 		for i := uint16(0); i < n.Count(); i++ {
+			result.recordsScanned++
 			_, ptr, flags, err := n.GetLeafValueView(i)
 			if err != nil {
 				return err

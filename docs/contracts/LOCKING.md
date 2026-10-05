@@ -115,3 +115,25 @@ search, independent-node projection, restore/replay, leadership changes and
 ambiguous apply after an owner has released admission remain governed by their
 existing fail-closed identity and proof checks; this local lease does not certify
 them or add retries.
+
+
+## Cached retained value-log GC cutover
+
+Retained pruning completes certified membership and any uncovered/detached-root
+projection outside the cache writer fence. One existing backend `ValueLogGC`
+call admits maintenance, captures and proves fresh recoverable roots, then
+invokes `BeforeMutation` at most once with that capture's immutable StateToken
+and concrete Pager pointer. The cache uses `writeMu.TryLock`; contention aborts
+instead of waiting beyond the quiet-time budget. Under this lock it checks the
+exact token/pager, cache publication domain and current mutable/in-use paths.
+The callback does not re-enter backend APIs or perform a scan.
+
+The lock order is backend maintenance admission, cache `writeMu`, then backend
+`publishPrepareMu`. GC checks context before/after the callback and revalidates
+its fresh capability under the publication lock before marking. The callback's
+release function runs exactly once on success, error, stale, cancellation and
+zero-candidate returns, including when the callback itself returns an error.
+Complete proof never runs while the caller fence is held. Partial successful
+marks publish topology before fences release; cancellation remains active
+through cutover. Only successfully marked IDs authorize cache eviction and
+retention cleanup. Snapshot/resource pins independently defer physical unlink.
