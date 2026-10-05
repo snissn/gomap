@@ -1178,7 +1178,7 @@ cases: pinned prune at N/2N plus pinned cancellation and no-prune control.
 Linux `/proc` supplies RSS; the driver retains source hashes, commands, raw
 logs, results and the tagged binary. The validator rejects missing actual
 partial-output/retirement witnesses, inconsistent native counters, source
-changes and checksum drift. Self-tests mutate copies of real successful
+changes, checksum drift and incomplete or duplicate smoke/full matrices. Self-tests mutate copies of real successful
 packets and never count as lifecycle measurements.
 
 Forced-GC heap cuts and sampled RSS describe the whole process. Logical
@@ -1194,7 +1194,8 @@ and an externally recorded exact product/harness source freeze.
 
 `scripts/native_prune_foreground.py` runs eight fresh-process N64/128 cases:
 Q32/1MiB RELAXED prune with finite burst, growing output or fixed-cardinality
-churn, plus zero-work burst references. Real reads continue after writes stop.
+churn, plus zero-work burst references. Real reads continue after writes stop; each case records a completed read
+started after the final write, including early prune completion.
 The bounded start cut requires actual allocated partial private output. The
 pilot retains physical, writer, old-reader, pointer and reopen checks.
 

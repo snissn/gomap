@@ -49,6 +49,7 @@ def validate(x, n, mode, algorithm):
             need(type(v) is int, 'signed counter ' + k)
         elif k not in strings | bools | {'ReadLatency', 'WriteLatency', 'QuantumLatency'}:
             need(uint(v), 'counter ' + k)
+    need(0 < x['ReadsAfterWriterStop'] <= x['Reads'], 'post-writer completed read witness')
     need(x['ReadersStopWithWriter'] is False and x['ForcedBudgetError'] is False, 'continuing-reader measurement only')
     need(not x['Error'] and x['Refusals'] == 0, 'failed/refused work')
     need(x['Pruned'] == n - 1 and x['ACKWhileWriterActive'] + x['ACKAfterWriterStop'] == n - 1, 'ACK accounting')
@@ -103,7 +104,7 @@ def self_test(out, root):
     r = packet(out, root)
     x = json.loads((out / r['cases'][0]['result']).read_text())
     c = r['cases'][0]
-    probes = [lambda y: y.update(ReadersStopWithWriter=True), lambda y: y.update(ForcedBudgetError=True), lambda y: y.update(Calls=float(y['Calls'])), lambda y: y.update(Refusals=False), lambda y: y['ReadLatency'].update(Buckets=[-1, y['Reads'] + 1] + [0] * 6)]
+    probes = [lambda y: y.update(ReadsAfterWriterStop=0), lambda y: y.update(ReadersStopWithWriter=True), lambda y: y.update(ForcedBudgetError=True), lambda y: y.update(Calls=float(y['Calls'])), lambda y: y.update(Refusals=False), lambda y: y['ReadLatency'].update(Buckets=[-1, y['Reads'] + 1] + [0] * 6)]
     for mutate in probes:
         y = copy.deepcopy(x); mutate(y)
         try:
@@ -119,7 +120,7 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative receipt accepted')
-    print('eleven in-memory negative checks PASS; retained measurements unchanged')
+    print('twelve in-memory negative checks PASS; retained measurements unchanged')
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -144,23 +145,35 @@ def main():
     result = subprocess.run(cmd, cwd=root, env=env, capture_output=True, timeout=180); (out / 'build.log').write_bytes(result.stdout + result.stderr)
     need(result.returncode == 0, 'build'); need(source == bindings(root), 'source drift'); binary_sha = sha(binary); cases = []; errors = []
     for n, mode, algorithm in MATRIX:
-        need(source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256'], 'source/executable drift')
+        try:
+            stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
+        except OSError:
+            stable = False
+        if not stable:
+            errors.append(f'source/executable drift before {algorithm}-{mode}-{n}')
+            break
         name = f'{algorithm}-{mode}-{n}'; output = out / (name + '.json'); raw = out / (name + '.log'); command = out / (name + '-command.json')
         ee = dict(env); ee.update(MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
         cmd = [str(binary), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v']
         (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(build_env, **{k: v for k, v in ee.items() if k.startswith('MVCC_FOREGROUND_')})}, indent=2) + '\n')
         start = time.monotonic(); result = subprocess.run(cmd, cwd=root, env=ee, capture_output=True, timeout=150); raw.write_bytes(result.stdout + result.stderr)
-        need(source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256'], 'source/executable drift')
-        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': sha(binary)}
+        try:
+            stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
+        except OSError:
+            stable = False
+        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': sha(binary) if binary.is_file() else None}
         for key, file in [('raw', raw), ('result', output), ('command', command)]:
             c[key] = file.name; c[key + '_sha256'] = sha(file) if file.exists() else None
         cases.append(c)
+        if not stable:
+            errors.append('source/executable drift after ' + name)
+            break
         try:
             need(result.returncode == 0, 'process ' + name); validate(json.loads(output.read_text()), n, mode, algorithm)
         except (ValueError, KeyError, TypeError, OSError) as e:
             errors.append(str(e))
         print(name + (' PASS' if result.returncode == 0 else ' RED'), flush=True)
-    receipt = {'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': True, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': sha(out / 'build-command.json'), 'build_log_sha256': sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}}
+    receipt = {'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source == bindings(root), 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': sha(out / 'build-command.json'), 'build_log_sha256': sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}}
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n'); need(not errors, 'causal failures ' + repr(errors)); packet(out, root)
     print('causal packet PASS; retained latency qualification outstanding')
 

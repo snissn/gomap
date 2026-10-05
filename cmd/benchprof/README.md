@@ -509,7 +509,7 @@ Real public read/write/quantum intervals include lock wait, with fixed buckets
 and sampled ACK active/stop attribution. They do not qualify tail latency;
 zero-work references fence foreground and have a different start cut. These
 packets are not benchprof inputs. The fail-closed validator checks eight unique
-continuing-reader cases, real data oracles, caps and executable/source bindings.
+continuing-reader cases with completed post-writer reads, real data oracles, caps and executable/source bindings.
 
 ## Current source-population audit microbenchmarks
 

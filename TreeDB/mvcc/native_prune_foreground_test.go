@@ -68,7 +68,7 @@ type foregroundResult struct {
 	PID                                                                                                                                              int
 	Calls, Records, Bytes, Pruned, MaxRecords, MaxBytes, WriterActiveCalls, ACKWhileWriterActive, ACKAfterWriterStop                                 uint64
 	CancelTransitions, CancelDrains, FloorRecaptures, QualificationResets, NewPreparations, Refusals, MinimumRecords, MinimumBytes                   uint64
-	Reads, Writes, ReadIntervalsOverlappingQuantum, WriteIntervalsOverlappingQuantum, ForegroundIntervalsAtQuantumStart                              uint64
+	Reads, ReadsAfterWriterStop, Writes, ReadIntervalsOverlappingQuantum, WriteIntervalsOverlappingQuantum, ForegroundIntervalsAtQuantumStart        uint64
 	WriterDurationNS                                                                                                                                 uint64
 	WriterStopReason                                                                                                                                 string
 	ReadLatency, WriteLatency, QuantumLatency                                                                                                        foregroundLatency
@@ -237,10 +237,16 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	var stopReads atomic.Bool
 	var wg sync.WaitGroup
 	writerDone := make(chan struct{})
+	readerDone := make(chan struct{})
+	postWriterRead := make(chan struct{})
 	errCh := make(chan error, 2)
 	active.Store(true)
 	writerStart := time.Now()
 	wg.Add(2)
+	defer func() {
+		stopReads.Store(true)
+		wg.Wait()
+	}()
 	go func() {
 		defer wg.Done()
 		defer close(writerDone)
@@ -291,9 +297,17 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
+		defer close(readerDone)
 		for !stopReads.Load() {
 			if r.ReadersStopWithWriter && !active.Load() {
 				return
+			}
+			// Only a read started after the final write can witness this phase.
+			afterWriter := false
+			select {
+			case <-writerDone:
+				afterWriter = true
+			default:
 			}
 			readInCall.Store(true)
 			overlap := inQuantum.Load()
@@ -315,6 +329,12 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 				return
 			}
 			r.Reads++
+			if afterWriter {
+				r.ReadsAfterWriterStop++
+				if r.ReadsAfterWriterStop == 1 {
+					close(postWriterRead)
+				}
+			}
 			runtime.Gosched()
 		}
 	}()
@@ -348,6 +368,12 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		runtime.Gosched()
 	}
 	<-writerDone
+	if !r.ReadersStopWithWriter {
+		select {
+		case <-postWriterRead:
+		case <-readerDone:
+		}
+	}
 	stopReads.Store(true)
 	wg.Wait()
 	close(errCh)
@@ -435,6 +461,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.LastNativeRunIndex = state.Private.Native.RunIndex
 			t.Logf("terminal causal state action=%d floorLoading=%v integrity=%v native=%+v", cursor.action, cursor.loadingFloor, cursor.integrityDone, state)
 		}
+	}
+	if !r.ReadersStopWithWriter && r.ReadsAfterWriterStop == 0 {
+		fail(fmt.Errorf("no completed read started after writer stop"))
 	}
 	if r.Writes == 0 || r.Reads == 0 || r.WriterActiveCalls == 0 || r.ForegroundIntervalsAtQuantumStart+r.ReadIntervalsOverlappingQuantum+r.WriteIntervalsOverlappingQuantum == 0 {
 		fail(fmt.Errorf("no genuine overlap/progress witness"))
@@ -538,7 +567,7 @@ func TestNativePruneForegroundBudgetErrorJoinsWorkers(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
+	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || result.ReadsAfterWriterStop == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
 		t.Fatalf("error did not reach joined cleanup/oracles: %+v\n%s", result, raw)
 	}
 }

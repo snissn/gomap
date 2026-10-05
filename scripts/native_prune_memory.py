@@ -91,7 +91,13 @@ def validate_packet(out, root=None):
     labels=receipt.get('labels');require(isinstance(labels,dict) and all(isinstance(labels.get(k),str) and labels[k] for k in ('heap','rss','hwm','retirement_bytes','allocations','reader','output','control')),'missing measurement scope labels')
     require(receipt['contract']==CONTRACT and receipt['source_digest']==digest(source) and receipt['source_stable'] is True,'invalid source receipt')
     if root is not None:same_source(source,bindings(root))
+    require(receipt.get('errors') == [],'receipt errors')
     cases=receipt['cases'];require(isinstance(cases,list) and cases,'missing cases')
+    n=receipt['n']
+    expected={(n,'prune',True),(2*n,'prune',True),(n,'cancel',True),(n,'control',True)} if receipt['smoke'] else {(size,mode,pin) for size in (n,2*n) for mode in ('prune','control','cancel') for pin in (False,True)}
+    for c in cases:
+        require(type(c['n']) is int and type(c['mode']) is str and type(c['pinned']) is bool and type(c['exit_code']) is int,'invalid case identity/process types')
+    require(len(cases)==len(expected) and {(c['n'],c['mode'],c['pinned']) for c in cases}==expected,'missing/duplicate lifecycle cases')
     for c in cases:
         require(pathlib.Path(c['raw']).name==c['raw'] and pathlib.Path(c['result']).name==c['result'],'invalid artifact path')
         raw=out/c['raw'];require(raw.is_file() and hashlib.sha256(raw.read_bytes()).hexdigest()==c['raw_sha256'],'missing/drifted raw log')
@@ -99,8 +105,6 @@ def validate_packet(out, root=None):
         require(c['exit_code']==0 and c['source_digest_before']==c['source_digest_after']==receipt['source_digest'],'failed/drifted process')
         validate_case(json.loads(result.read_text()),c['n'],c['mode'],c['pinned'])
     require(len({c['result'] for c in cases})==len(cases),'case overwritten')
-    if not receipt['smoke']:
-        n=receipt['n']; require({(c['n'],c['mode'],c['pinned']) for c in cases}=={(size,mode,pin) for size in (n,2*n) for mode in ('prune','control','cancel') for pin in (False,True)},'missing paired lifecycle cases')
     return receipt
 
 def self_test(out):
@@ -133,33 +137,38 @@ def self_test(out):
     try:json.loads('{')
     except json.JSONDecodeError:pass
     else:raise ValueError('malformed JSON accepted')
-    # Parser fixtures use a copy of one real successful case; they are never
-    # published as lifecycle measurements or substituted for actual evidence.
+    # Parser fixtures copy the complete real packet; measurements stay untouched.
     with tempfile.TemporaryDirectory(prefix='native-memory-validator-') as tmp:
         tmp=pathlib.Path(tmp)
-        for name in ('source-bindings.json',c['raw'],c['result']):shutil.copyfile(out/name,tmp/name)
-        rr=dict(r);rr['cases']=[dict(c)];rr['smoke']=True
-        (tmp/'receipt.json').write_text(json.dumps(rr));validate_packet(tmp)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero'):
-            original=(out/c['result']).read_bytes();(tmp/c['result']).write_bytes(original)
-            shutil.copyfile(out/c['raw'],tmp/c['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
-            test_receipt=json.loads(json.dumps(rr))
-            if fault=='missing':(tmp/c['result']).unlink()
+        for name in {'source-bindings.json'} | {c[k] for c in r['cases'] for k in ('raw','result')}:
+            shutil.copyfile(out/name,tmp/name)
+        (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
+        witness_index=r['cases'].index(witness_case)
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors'):
+            original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
+            shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
+            test_receipt=json.loads(json.dumps(r));case=test_receipt['cases'][witness_index]
+            if fault=='missing':(tmp/case['result']).unlink()
             elif fault=='malformed':
-                (tmp/c['result']).write_text('{')
-                test_receipt['cases'][0]['result_sha256']=hashlib.sha256(b'{').hexdigest()
-            elif fault=='raw-drift':(tmp/c['raw']).write_bytes(b'changed raw witness')
+                (tmp/case['result']).write_text('{');case['result_sha256']=hashlib.sha256(b'{').hexdigest()
+            elif fault=='raw-drift':(tmp/case['raw']).write_bytes(b'changed raw witness')
             elif fault=='source-drift':(tmp/'source-bindings.json').write_text('{}')
+            elif fault=='missing-case':test_receipt['cases'].pop()
+            elif fault=='duplicate-case':test_receipt['cases'].append(dict(case))
+            elif fault=='replacement-duplicate':test_receipt['cases'][-1]=dict(test_receipt['cases'][0])
+            elif fault=='bool-exit':case['exit_code']=False
+            elif fault=='bool-n':case['n']=True
+            elif fault=='invalid-pinned':case['pinned']=1
+            elif fault=='invalid-mode':case['mode']=None
+            elif fault=='receipt-errors':test_receipt['errors']=['rejected']
             else:
-                # Keep every checksum and case identity truthful to the mutated
-                # parser fixture, so refusal must come from custody semantics.
-                require(c['mode']!='control','packet self-test needs partial-output first case')
+                # Truthful fixture checksums force refusal at the custody check.
                 mutated=json.loads(original);cut=next(s for s in mutated['cuts'] if s['name']=='partial_private_output');target=cut['State']
                 path=next(path for name,path,value in witness_faults if name==fault)
                 for key in path[:-1]:target=target[key]
                 target[path[-1]]=0
-                content=(json.dumps(mutated)+'\n').encode();(tmp/c['result']).write_bytes(content)
-                test_receipt['cases'][0]['result_sha256']=hashlib.sha256(content).hexdigest()
+                content=(json.dumps(mutated)+'\n').encode();(tmp/case['result']).write_bytes(content)
+                case['result_sha256']=hashlib.sha256(content).hexdigest()
             (tmp/'receipt.json').write_text(json.dumps(test_receipt))
             try:validate_packet(tmp)
             except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError):pass
@@ -176,21 +185,26 @@ def run(args):
     (out/'build-command.json').write_text(json.dumps({'cwd':str(root),'argv':build},indent=2)+'\n')
     p=subprocess.run(build,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180)
     (out/'build.log').write_bytes(p.stdout);require(p.returncode==0,'harness build failed');same_source(before,bindings(root))
-    cases=[]
+    cases=[];errors=[]
     matrix=[(args.n,'prune',True),(2*args.n,'prune',True),(args.n,'cancel',True),(args.n,'control',True)] if args.smoke else [(n,mode,pin) for n in (args.n,2*args.n) for mode in ('prune','control','cancel') for pin in (False,True)]
     for n,mode,pin in matrix:
-        same_source(before,bindings(root));name=f'{mode}-{n}-pinned{int(pin)}';result=out/(name+'.json');raw=out/(name+'.log')
+        if before!=bindings(root):
+            errors.append(f'source drift before {mode}-{n}-pinned{int(pin)}');break
+        name=f'{mode}-{n}-pinned{int(pin)}';result=out/(name+'.json');raw=out/(name+'.log')
         case_env=dict(env);case_env.update(MVCC_MEMORY_RESULT=str(result),MVCC_MEMORY_N=str(n),MVCC_MEMORY_MODE=mode,MVCC_MEMORY_PINNED=str(int(pin)))
         cmd=[str(binary),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v']
         (out/(name+'-command.json')).write_text(json.dumps({'cwd':str(root),'argv':cmd,'case_env':{k:v for k,v in case_env.items() if k.startswith('MVCC_MEMORY_')}},indent=2)+'\n')
         start=time.monotonic();p=subprocess.run(cmd,cwd=root,env=case_env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=150);raw.write_bytes(p.stdout)
         after=bindings(root)
         if before!=after:(out/'drifted-source-bindings.json').write_text(json.dumps(after,indent=2)+'\n')
-        same_source(before,after);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
-        validate_case(json.loads(result.read_text()),n,mode,pin)
-        cases.append({'n':n,'mode':mode,'pinned':pin,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest(),'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
+        cases.append({'n':n,'mode':mode,'pinned':pin,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
+        try:
+            same_source(before,after);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
+            validate_case(json.loads(result.read_text()),n,mode,pin)
+        except (ValueError,KeyError,TypeError,OSError) as e:
+            errors.append(str(e));break
         print(name+' PASS',flush=True)
-    receipt={'contract':CONTRACT,'source_root':str(root),'source_digest':source_digest,'source_count':len(before),'source_stable':True,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
+    receipt={'contract':CONTRACT,'source_root':str(root),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');validate_packet(out,root);self_test(out)
     summary=[]
     for c in cases:

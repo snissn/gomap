@@ -76,6 +76,9 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 	if path == "" {
 		t.Skip("opt-in fresh-process memory harness")
 	}
+	if !filepath.IsAbs(path) {
+		t.Fatal("result path must be absolute")
+	}
 	n, err := strconv.Atoi(os.Getenv("MVCC_MEMORY_N"))
 	if err != nil || n < 64 {
 		t.Fatal("MVCC_MEMORY_N must be >=64")
@@ -406,9 +409,6 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	cut("directory_cleanup")
-	if !filepath.IsAbs(path) {
-		t.Fatal("result path must be absolute")
-	}
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
 		t.Fatal(e)
