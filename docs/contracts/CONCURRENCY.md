@@ -25,6 +25,14 @@
 
 ### Typed graph reads
 
+The internal immutable memtable foundation uses writer-private preparation and
+separate immutable read headers with owned strings. Retained views/cursors keep
+their source generation and concrete resource owners alive until Close; budget
+Close denies new admissions while existing views remain valid. Release callbacks
+are deferred outside publication/admission locks. It supplies no standalone
+public DB mode at this stage. See
+[the precise ownership contract](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
 An ordinary typed graph read may use the previous coherent generation while an
 immediate write is in progress. Admission requires the snapshot catalog and
 immutable publication to match; a changed publication or an outstanding

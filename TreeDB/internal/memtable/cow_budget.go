@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"unsafe"
 )
 
 var (
@@ -42,8 +43,8 @@ func (l COWLimits) Validate() error {
 }
 
 type COWStats struct {
-	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes uint64
-	Views, Generations, Sources                                      int
+	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes uint64
+	Views, Generations, Sources                                                    int
 }
 
 // COWBudget is shared by the fixed shard vector and its frozen generations.
@@ -52,17 +53,41 @@ type COWBudget struct {
 	mu     sync.Mutex
 	limits COWLimits
 	stats  COWStats
+	closed bool
 }
 
 func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
-	return &COWBudget{limits: limits}, nil
+	control := cowAllocation(uint64(unsafe.Sizeof(COWBudget{})))
+	if control > limits.MaxTotalBytes {
+		return nil, ErrCOWCapacity
+	}
+	return &COWBudget{limits: limits, stats: COWStats{TotalBytes: control, PeakBytes: control, ControlBytes: control}}, nil
 }
 
 func (b *COWBudget) Stats() COWStats   { b.mu.Lock(); defer b.mu.Unlock(); return b.stats }
 func (b *COWBudget) Limits() COWLimits { return b.limits }
+
+// Close refuses new retention-increasing admissions. Existing view/source
+// leases remain valid; the budget wrapper is released after their last owner.
+func (b *COWBudget) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.releaseControlLocked()
+}
+func (b *COWBudget) releaseControlLocked() {
+	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 {
+		b.stats.TotalBytes -= b.stats.ControlBytes
+		b.stats.ControlBytes = 0
+	}
+}
+
+// COWAllocationCharge lets C2 charge concrete wrapper/backing capacities using
+// the same conservative Go allocator rounding as the source reservation.
+func COWAllocationCharge(n uint64) uint64 { return cowAllocation(n) }
 
 func cowAdd(a, c uint64) (uint64, bool) {
 	if c > math.MaxUint64-a {
@@ -126,6 +151,9 @@ type cowGeneration struct {
 func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return nil, ErrCOWClosed
+	}
 	if b.stats.Generations >= b.limits.MaxGenerations || base > b.limits.MaxGenerationBytes ||
 		base > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes || !b.addLocked(base) {
 		return nil, ErrCOWCapacity
@@ -160,6 +188,7 @@ func (g *cowGeneration) release() []cowResourceOwner {
 	if g.retired {
 		b.stats.RetiredBytes -= g.history
 	}
+	b.releaseControlLocked()
 	owners := g.owners
 	g.owners = nil
 	g.ids = nil

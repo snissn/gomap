@@ -2,6 +2,24 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Immutable memtable foundation: `TestCOWOwnedHeadersAndBytes` covers old header
+identity, caller/output alias attempts and legacy arena poison/reset isolation;
+`TestCOWPrivatePreparationCancelAndResourceOwnership` covers private cancellation,
+preallocated publication and independently retained exact-once resource owners.
+`TestCOWSplitDeleteBatchHeightAndMetadata`, `TestCOWDependencyLayoutContract`,
+`TestCOWDependencyReserveWitness`, `TestCOWBatchReserveWitness` and
+`TestCOWRebalanceCapacityHistoryWitness` bind allocation reserves to dependency
+layout, split/rebalance/capacity and batch-height boundaries.
+`TestCOWConcurrentTraversalAndClose`, `TestCOWBudgetCloseKeepsExistingViews` and
+`TestCOWSuccessorAndChargedCursorAdapter` cover concurrent traversal/lifetime and
+allocation-free successor dispatch. `TestCOWLimitsAndRefusal`,
+`TestCOWFiniteReplacementHistoryAndResume` and `TestCOWRetainedGenerationPlateau`
+cover finite admission, cumulative replacement history, pinned residency and
+release/resumption. `BenchmarkCOWPrepareReplace`, `BenchmarkCOWCapture` and
+`BenchmarkCOWScan` witness internal N/2N preparation/capture/output costs; the
+[capture commands and scope](cow-memtable-ownership.md) keep these distinct from
+future integrated DB lifecycle qualification.
+
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real
 within-apply rotations and an empty current lane. It requires zero fresh-load

@@ -311,6 +311,10 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	g := w.generation
 	b := g.budget
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil, ErrCOWClosed
+	}
 	total := c.Total()
 	if g.frozen || total > b.limits.MaxInFlightBytes-b.stats.ReservedBytes ||
 		c.History() > b.limits.MaxGenerationBytes-g.history ||

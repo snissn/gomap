@@ -13,6 +13,7 @@ func BenchmarkCOWPrepareReplace(b *testing.B) {
 			budget, w := cowTestWriter(b, DefaultCOWLimits())
 			root := cowTestPublish(b, w, cowTestEntries(n))
 			entries := []COWMutation{{Key: []byte("00000000"), Value: []byte("replacement")}}
+			initialCharge := budget.Stats().HistoryBytes
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -25,10 +26,11 @@ func BenchmarkCOWPrepareReplace(b *testing.B) {
 				root = next
 			}
 			b.StopTimer()
-			b.ReportMetric(float64(budget.Stats().HistoryBytes)/float64(b.N), "charged-B/op")
+			b.ReportMetric(float64(budget.Stats().HistoryBytes-initialCharge)/float64(b.N), "charged-B/op")
 			b.ReportMetric(float64(budget.Stats().PeakBytes), "peak-charged-B")
 			cowTestRelease(root)
 			cowTestClose(w)
+			budget.Close()
 		})
 	}
 }

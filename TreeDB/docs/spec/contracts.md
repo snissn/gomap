@@ -505,6 +505,15 @@ When the cached layer is enabled:
 
 ## 6. Concurrency and Locking
 
+The internal immutable memtable foundation has separate writer-private and
+published read headers, owned immutable payloads and finite generation/view
+admission. Old views survive replacement, physical deletion and budget Close.
+Private cancellation has no visibility; resource callbacks run only after final
+ownership release and outside publication/admission locks. The full internal
+contract is [immutable memtable ownership](cow-memtable-ownership.md). This
+foundation adds no independently usable public DB mode or stronger public
+durability/snapshot semantics before the coherent cached installer is integrated.
+
 ### 6.1 Process-level locking
 
 - Read-write open acquires exclusive directory lock.

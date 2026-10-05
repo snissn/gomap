@@ -28,6 +28,9 @@ func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return nil, ErrCOWClosed
+	}
 	if b.stats.Views >= b.limits.MaxViews || !b.addLocked(charge) {
 		return nil, ErrCOWCapacity
 	}
@@ -58,6 +61,7 @@ func (v *COWView) Close() {
 	b.mu.Lock()
 	b.stats.Views--
 	b.stats.TotalBytes -= v.charge
+	b.releaseControlLocked()
 	b.mu.Unlock()
 	v.mu.Unlock()
 	retirement := r.Release()

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,7 @@ func TestCOWOwnedHeadersAndBytes(t *testing.T) {
 	b, w := cowTestWriter(t, DefaultCOWLimits())
 	key, value := []byte("key"), []byte("old")
 	old := cowTestPublish(t, w, []COWMutation{{Key: key, Value: value, Flags: node.FlagInline, Revision: 7}})
+	oldHeaderID := reflect.ValueOf(old.tree).Elem().FieldByName("isoid").Uint()
 	key[0] = 'X'
 	value[0] = 'X'
 	view, e := old.Acquire(0)
@@ -68,6 +70,9 @@ func TestCOWOwnedHeadersAndBytes(t *testing.T) {
 	copyValue := []byte(got.Value)
 	copyValue[0] = '!'
 	again, _ := old.Get([]byte("key"))
+	if got := reflect.ValueOf(old.tree).Elem().FieldByName("isoid").Uint(); got != oldHeaderID {
+		t.Fatal("published header was copied or mutated")
+	}
 	if again.Value != "old" {
 		t.Fatal("safe output alias changed owned bytes")
 	}
@@ -86,6 +91,7 @@ func TestCOWOwnedHeadersAndBytes(t *testing.T) {
 	}
 	view.Close()
 	view.Close()
+	b.Close()
 	if s := b.Stats(); s.TotalBytes != 0 || s.Generations != 0 || s.Views != 0 {
 		t.Fatalf("leak: %+v", s)
 	}
@@ -154,6 +160,7 @@ func TestCOWPrivatePreparationCancelAndResourceOwnership(t *testing.T) {
 		t.Fatal("old header did not retain generation resources")
 	}
 	cowTestRelease(old)
+	b.Close()
 	if released.Load() != 2 || b.Stats().TotalBytes != 0 {
 		t.Fatalf("final release=%d stats=%+v", released.Load(), b.Stats())
 	}
@@ -206,6 +213,7 @@ func TestCOWFiniteReplacementHistoryAndResume(t *testing.T) {
 	cowTestRelease(root)
 	cowTestClose(fresh)
 	t.Logf("accepted constant-size replacements=%d peak engine charge=%d", accepted, b.Stats().PeakBytes)
+	b.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
 	}
@@ -238,6 +246,7 @@ func TestCOWSplitDeleteBatchHeightAndMetadata(t *testing.T) {
 	cowTestRelease(old)
 	cowTestRelease(next)
 	cowTestClose(w)
+	b.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
 	}
@@ -303,12 +312,16 @@ func TestCOWConcurrentTraversalAndClose(t *testing.T) {
 	view.Close()
 	cowTestRelease(old)
 	cowTestClose(w)
+	b.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
 	}
 }
 
 func TestCOWLimitsAndRefusal(t *testing.T) {
+	if _, err := ModeFromString("cow_btree"); err == nil {
+		t.Fatal("C1 exposed incomplete DB mode")
+	}
 	l := DefaultCOWLimits()
 	l.MaxViews = 1
 	l.MaxGenerations = 1
@@ -355,6 +368,67 @@ func TestCOWLimitsAndRefusal(t *testing.T) {
 	if _, e = NewCOWBudget(l); e == nil {
 		t.Fatal("unlimited limit accepted")
 	}
+}
+
+func TestCOWDependencyLayoutContract(t *testing.T) {
+	mapType := reflect.TypeOf(btree.Map[string, cowValue]{})
+	root, ok := mapType.FieldByName("root")
+	if !ok {
+		t.Fatal("dependency root layout changed")
+	}
+	actualNode := root.Type.Elem()
+	if actualNode.Size() != unsafe.Sizeof(cowNodeLayout{}) {
+		t.Fatalf("dependency node size %d mirror %d", actualNode.Size(), unsafe.Sizeof(cowNodeLayout{}))
+	}
+	items, ok := actualNode.FieldByName("items")
+	if !ok {
+		t.Fatal("dependency items layout changed")
+	}
+	if items.Type.Elem().Size() != unsafe.Sizeof(cowPairLayout{}) {
+		t.Fatalf("pair size %d mirror %d", items.Type.Elem().Size(), unsafe.Sizeof(cowPairLayout{}))
+	}
+	for _, name := range []string{"isoid", "count", "items", "children"} {
+		got, ok := actualNode.FieldByName(name)
+		want, _ := reflect.TypeOf(cowNodeLayout{}).FieldByName(name)
+		if !ok || got.Offset != want.Offset {
+			t.Fatalf("dependency node field %s changed", name)
+		}
+	}
+	m := btree.NewMap[string, cowValue](32)
+	v := reflect.ValueOf(m).Elem()
+	if v.FieldByName("copyValues").Bool() || v.FieldByName("isoCopyValues").Bool() {
+		t.Fatal("immutable values unexpectedly invoke dependency copying")
+	}
+	for i := 0; i < 4096; i++ {
+		m.Set(fmt.Sprintf("%08d", i), cowValue{value: "owned"})
+	}
+	for i := 0; i < 2048; i++ {
+		m.Delete(fmt.Sprintf("%08d", i))
+	}
+	pairLimit := cowAllocation(126 * uint64(unsafe.Sizeof(cowPairLayout{})))
+	childLimit := cowAllocation(128 * uint64(unsafe.Sizeof(uintptr(0))))
+	var check func(reflect.Value)
+	check = func(p reflect.Value) {
+		if p.IsNil() {
+			return
+		}
+		n := p.Elem()
+		items := n.FieldByName("items")
+		if uint64(items.Cap())*uint64(items.Type().Elem().Size()) > pairLimit {
+			t.Fatal("item capacity escaped reserve")
+		}
+		children := n.FieldByName("children")
+		if !children.IsNil() {
+			a := children.Elem()
+			if uint64(a.Cap())*uint64(a.Type().Elem().Size()) > childLimit {
+				t.Fatal("child capacity escaped reserve")
+			}
+			for i := 0; i < a.Len(); i++ {
+				check(a.Index(i))
+			}
+		}
+	}
+	check(reflect.ValueOf(m).Elem().FieldByName("root"))
 }
 
 func TestCOWDependencyReserveWitness(t *testing.T) {
@@ -578,6 +652,82 @@ func TestCOWRetainedGenerationPlateau(t *testing.T) {
 	}
 	cowTestClose(w)
 	t.Logf("writes=%d generations=%d engine=%d retired=%d peak-charge=%d sampled-heap-high=%d sampled-inuse-high=%d held-heap=%d drained-heap=%d", writes, charged.Generations, charged.TotalBytes, charged.RetiredBytes, charged.PeakBytes, peakHeap, peakInuse, held.HeapAlloc, drained.HeapAlloc)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+	view, e := root.Acquire(0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	b.Close()
+	b.Close()
+	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	if _, e = w.Prepare(nil, COWPrepareOptions{}); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	if _, e = NewCOWWriter(b); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	cowTestClose(w)
+	cowTestRelease(root)
+	got, ok, e := view.Get([]byte("key"))
+	if e != nil || !ok || got.Value != "old" {
+		t.Fatal("budget close revoked existing view")
+	}
+	if b.Stats().ControlBytes == 0 {
+		t.Fatal("budget control owner released before old view")
+	}
+	view.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWSuccessorAndChargedCursorAdapter(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, cowTestEntries(1024))
+	start, end := []byte("00000010"), []byte("00000012")
+	if a := testing.AllocsPerRun(100, func() {
+		r, ok := root.SeekGE(start, end)
+		if !ok || r.Key != "00000010" {
+			panic("bad successor")
+		}
+	}); a != 0 {
+		t.Fatalf("SeekGE allocations %g", a)
+	}
+	if _, ok := root.SeekGE(end, end); ok {
+		t.Fatal("empty domain matched")
+	}
+	before := b.Stats()
+	cursor, e := root.CursorWithExtraBytes(start, end, 512)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if b.Stats().TotalBytes-before.TotalBytes < 512 {
+		t.Fatal("adapter extra bytes not charged")
+	}
+	for _, key := range []string{"00000010", "00000011"} {
+		r, ok, e := cursor.Record()
+		if e != nil || !ok || r.Key != key {
+			t.Fatalf("cursor %+v %v %v", r, ok, e)
+		}
+		_ = cursor.Next()
+	}
+	if _, ok, _ := cursor.Record(); ok {
+		t.Fatal("cursor escaped domain")
+	}
+	cursor.Close()
+	cowTestRelease(root)
+	cowTestClose(w)
+	b.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
 	}
