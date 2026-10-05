@@ -45,7 +45,17 @@ type commandWALBatchIntent struct {
 	dependencyResources *rootpublication.StableResourceSet
 	statsPath           commandWALAppendStatsPath
 	statsPathSet        bool
+	rawKVFinalize       RawKVCommandWALFinalize
 }
+
+// RawKVCommandWALFinalize is the internal cached-publication validation seam.
+// It runs after canonical payload encoding and exact dependency capture, before
+// any command frame is accepted. payload and lookup are borrowed for this call;
+// callers must not retain them, mutate payload, or independently read buffered
+// pointers to reconstruct the producer RID. A refusal leaves the journal intact.
+// The callback acquires its own live-reader leases; dependency ownership remains
+// with the command intent and, after append, the existing WAL debt authority.
+type RawKVCommandWALFinalize func(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error
 
 const rawKVCommandWALRIDInlineCacheEntries = 4
 const rawKVCommandWALRIDMaxPooledOverflowEntries = 4 * 1024
@@ -1425,6 +1435,15 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode(prepa
 	return lsn, err
 }
 
+// AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode adds
+// final canonical metadata validation and independently owned live leases to
+// the existing prepared entry path. All fallible installation work belongs in
+// prepare/finalize; publication after a successful append cannot rebuild it.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, error) {
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, false)
+	return lsn, err
+}
+
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
 // diagnostic counterpart to the prepared ordered-entry scan append.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, CommandWALRequestTiming, error) {
@@ -1442,6 +1461,10 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndModeMeasur
 }
 
 func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, nil, scanEntries, opHint, mode, measured)
+}
+
+func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
 	var timing CommandWALRequestTiming
 	if db == nil || !db.commandWAL {
 		return 0, timing, nil
@@ -1501,6 +1524,7 @@ func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func
 	if intent == nil || err != nil {
 		return 0, timing, err
 	}
+	intent.rawKVFinalize = finalize
 	defer releaseUnassignedCommandWALIntent(intent)
 	lsn, err := db.appendCommandWALIntentWithTiming(intent, mode.sync(), func() *CommandWALRequestTiming {
 		if measured {
@@ -1739,7 +1763,9 @@ func (db *DB) captureCommandWALExternalDependencies(intent *commandWALBatchInten
 		return nil, err
 	}
 	intent.dependencyResources = resources
-	intent.rawKVRIDCache.release()
+	if intent.rawKVFinalize == nil {
+		intent.rawKVRIDCache.release()
+	}
 	return resources, nil
 }
 
@@ -2612,6 +2638,17 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	}
 	if err != nil {
 		return 0, err
+	}
+	if intent.rawKVFinalize != nil {
+		if err := intent.rawKVFinalize(intent.payload, intent.rawKVRIDCache.lookup); err != nil {
+			return 0, err
+		}
+		// The callback's borrowed identity authority ends here. Its separately
+		// acquired generation resources remain owned by the cache candidate.
+		if intent.rawKVRIDCache != nil {
+			intent.rawKVRIDCache.release()
+		}
+		intent.rawKVFinalize = nil
 	}
 	if intent.rawKVRIDCache != nil && dependencies == nil {
 		intent.rawKVRIDCache.release()
