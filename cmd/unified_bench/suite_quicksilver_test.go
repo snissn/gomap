@@ -56,6 +56,120 @@ func TestQuicksilverWorkflow(t *testing.T) {
 	}
 }
 
+func TestQuicksilverRetainedVerification(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	dir := t.TempDir()
+	if _, err := runQuicksilverEngine(BenchConfig{}, c, "treedb", NewTreeDBPublicCommandWAL, dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg := BenchConfig{DBsArg: "treedb", QuicksilverVerifyDir: dir}
+	raw, err := runQuicksilverSuite(cfg, c, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report quicksilverVerificationResult
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.VerificationOnly || report.VerifiedKeys != c.Keys || report.VerifiedMisses != c.Keys || report.DataDir != dir {
+		t.Fatalf("incomplete verification: %+v", report)
+	}
+	db, err := NewTreeDBPublicCommandWAL(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := quicksilverKey(0)
+	if err := db.Delete(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runQuicksilverSuite(cfg, c, ""); err == nil {
+		t.Fatal("accepted a deleted live key")
+	}
+}
+
+func TestQuicksilverRetainedVerificationRejectsBeforeOpen(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent")
+	for _, dir := range []string{missing, t.TempDir()} {
+		if _, err := runQuicksilverSuite(BenchConfig{DBsArg: "treedb", QuicksilverVerifyDir: dir}, quicksilverSmokeConfig(), ""); err == nil {
+			t.Fatal("accepted absent/empty database")
+		}
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("initialized a missing database: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sentinel"), []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cfg := range []BenchConfig{
+		{DBsArg: "treedb,hashdb", QuicksilverVerifyDir: dir},
+		{DBsArg: "treedb", QuicksilverVerifyDir: dir, CPUProfile: "unused.pprof"},
+		{DBsArg: "treedb", QuicksilverVerifyDir: dir},
+	} {
+		if _, err := runQuicksilverSuite(cfg, quicksilverSmokeConfig(), ""); err == nil {
+			t.Fatal("accepted incompatible verification mode")
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "sentinel" {
+		t.Fatalf("opened a rejected directory: %v %v", entries, err)
+	}
+}
+
+func TestQuicksilverRetainedRealisticVerification(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	c.Case, c.Seed = "realistic", 24
+	dir := t.TempDir()
+	initial, err := runQuicksilverEngine(BenchConfig{}, c, "treedb", NewTreeDBPublicCommandWAL, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := BenchConfig{DBsArg: "treedb", QuicksilverVerifyDir: dir}
+	raw, err := runQuicksilverSuite(cfg, c, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report quicksilverVerificationResult
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.VerifiedKeys != initial.VerifiedKeys || report.VerifiedMisses != initial.VerifiedMisses {
+		t.Fatalf("verification differs from suite: %+v", report)
+	}
+	c.Seed = 91
+	if _, err := runQuicksilverSuite(cfg, c, ""); err == nil {
+		t.Fatal("accepted the wrong fixture seed")
+	}
+}
+
+func TestQuicksilverRetainedBackendVerification(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	c.Case = "structured256"
+	dir := t.TempDir()
+	if _, err := runQuicksilverEngine(BenchConfig{}, c, "treedb_backend", NewTreeDBBackend, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runQuicksilverSuite(BenchConfig{DBsArg: "treedb_backend", QuicksilverVerifyDir: dir}, c, ""); err != nil {
+		t.Fatal(err)
+	}
+	publicDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(publicDir, "maindb"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "maindb", "index.db"), []byte("public marker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runQuicksilverSuite(BenchConfig{DBsArg: "treedb_backend", QuicksilverVerifyDir: publicDir}, c, ""); err == nil {
+		t.Fatal("accepted a public database as a backend database")
+	}
+	if _, err := os.Stat(filepath.Join(publicDir, "index.db")); !os.IsNotExist(err) {
+		t.Fatalf("initialized the wrong layout: %v", err)
+	}
+}
+
 func TestQuicksilverOracle(t *testing.T) {
 	for _, n := range []int{1, 73, 7919, 15838} {
 		stride := quicksilverUpdateStride(n)
