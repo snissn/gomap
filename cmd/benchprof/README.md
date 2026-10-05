@@ -501,6 +501,9 @@ Native ownership counters prove actual partial
 output and custody, but do not measure exclusive cursor/tree heap. The packets
 are not benchprof inputs and cannot satisfy the native runtime's exclusive
 retained/peak measurement gate.
+The reported sampled maintenance RSS maximum must equal the maximum of
+eligible named cuts and the retained periodic RSS/call witness; periodic
+sample count and call alignment are validated.
 
 Memory v2 retains two fixed-size scalar peak witnesses for retirement cells,
 including the observing call and custody phase. Validators bind reported maxima

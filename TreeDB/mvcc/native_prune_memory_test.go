@@ -34,7 +34,15 @@ type nativeMemoryPeak struct {
 	State treedb.MaintenanceMemoryStateForTest
 }
 
+// The periodic maximum retains only its observing call and RSS scalar.
+// Named-cut RSS samples already live in the fixed lifecycle cut list.
+type nativeMemoryRSSPeak struct {
+	Call, RSS uint64
+}
+
 type nativeMemoryResult struct {
+	RSSPeriodicPeak                      nativeMemoryRSSPeak
+	RSSPeriodicSamples                   uint64
 	RetirementPeak, SourceRetirementPeak nativeMemoryPeak
 	CursorCloseOracle                    bool
 
@@ -265,6 +273,13 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		}
 		if calls%128 == 0 {
 			rss, _ := nativeMemoryProc()
+			if rss == 0 {
+				t.Fatal("missing periodic Linux RSS observation")
+			}
+			result.RSSPeriodicSamples++
+			if rss > result.RSSPeriodicPeak.RSS {
+				result.RSSPeriodicPeak = nativeMemoryRSSPeak{Call: result.Calls, RSS: rss}
+			}
 			if rss > result.SampledMaintenanceRSSPeak {
 				result.SampledMaintenanceRSSPeak = rss
 			}

@@ -9,6 +9,7 @@ This separate contract does not qualify the native-prune benchmark schema.
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 CONTRACT = 'gomap-native-memory-v2'
+MAINTENANCE_RSS_CUTS = frozenset(('prepared', 'partial_private_output', 'accepted_relaxed', 'cancel_requested', 'cancel_drained', 'finish', 'cursor_close', 'db_owned_cleanup'))
 BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH','GOGC','GOMEMLIMIT','GODEBUG')
 
 def sha(path):
@@ -46,11 +47,11 @@ def validate_state(a):
 
 def validate_case(x, n, mode, pinned):
     require(isinstance(x, dict), 'result must be object')
-    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','RetirementPeak','SourceRetirementPeak','cuts')
+    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','RSSPeriodicPeak','RSSPeriodicSamples','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','RetirementPeak','SourceRetirementPeak','cuts')
     require(all(k in x for k in required), 'missing result field')
     require((x['schema'],x['n'],x['mode'],x['pinned']) == (CONTRACT,n,mode,pinned), 'case identity mismatch')
     for k in required:
-        if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
+        if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak','RSSPeriodicPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
             require(type(x[k]) is int and x[k] >= 0, 'invalid numeric field '+k)
     for k in ('pinned','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel'):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
@@ -91,6 +92,15 @@ def validate_case(x, n, mode, pinned):
         if s['name']=='accepted_relaxed':require(a.get('Native') and a.get('Accepted') and p.get('Build'),'missing real DB custody')
         if s['name'] in ('finish','cancel_drained','cursor_close','db_owned_cleanup','reader_released','db_close','reopen','final_db_close','directory_cleanup'):
             require(not a['Native'] and not a['Accepted'] and not p['Build'] and p['AllocatedPages']==0 and p['Dependencies']==0 and p['RetirementCells']==0 and all(z[k]==0 for k in ('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes')),'terminal owner retained')
+    periodic=x['RSSPeriodicPeak']
+    require(isinstance(periodic,dict) and all(type(periodic.get(k)) is int and periodic[k]>=0 for k in ('Call','RSS')),'missing/malformed periodic RSS witness')
+    require(x['RSSPeriodicSamples']==x['Calls']//128,'missing periodic RSS schedule coverage')
+    if x['RSSPeriodicSamples']==0:
+        require(periodic['Call']==0 and periodic['RSS']==0,'nonzero empty periodic RSS witness')
+    else:
+        require(periodic['RSS']>0 and 128<=periodic['Call']<=x['Calls'] and periodic['Call']%128==0,'invalid periodic RSS witness call/sample')
+    observed_rss=max([periodic['RSS']]+[s['RSS'] for s in cuts if s['name'] in MAINTENANCE_RSS_CUTS])
+    require(x['SampledMaintenanceRSSPeak']==observed_rss,'unwitnessed sampled maintenance RSS maximum')
     require(x['MaxSourceRetirementCells']<=x['MaxRetirementCells'],'source peak exceeds overall peak')
     for field, maximum, source_only in (('RetirementPeak','MaxRetirementCells',False),('SourceRetirementPeak','MaxSourceRetirementCells',True)):
         w=x[field];require(isinstance(w,dict) and type(w.get('Call')) is int,'missing/malformed peak witness')
@@ -179,7 +189,7 @@ def self_test(out):
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1'):
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type'):
             original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
             shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
             shutil.copyfile(out/witness_case['command'],tmp/witness_case['command']);shutil.copyfile(out/'build-command.json',tmp/'build-command.json')
@@ -196,7 +206,7 @@ def self_test(out):
             elif fault=='bool-n':case['n']=True
             elif fault=='invalid-pinned':case['pinned']=1
             elif fault=='invalid-mode':case['mode']=None
-            elif fault in ('inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1'):
+            elif fault in ('inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type'):
                 altered=json.loads(original)
                 if fault=='inflated-overall-peak':altered['MaxRetirementCells']+=1
                 elif fault=='inflated-source-peak':altered['MaxSourceRetirementCells']+=1
@@ -205,6 +215,14 @@ def self_test(out):
                 elif fault=='overall-peak-source-phase':
                     altered['MaxRetirementCells']=max(altered['MaxRetirementCells'],altered['MaxSourceRetirementCells']+1)
                     peak=altered['RetirementPeak']['State'];peak['Private']['RetirementCells']=altered['MaxRetirementCells'];peak['EOF']=False;peak['Accepted']=False
+                elif fault=='rss-peak-inflated':altered['SampledMaintenanceRSSPeak']+=1
+                elif fault=='rss-witness-missing':del altered['RSSPeriodicPeak']
+                elif fault=='rss-witness-type':altered['RSSPeriodicPeak']['RSS']=True
+                elif fault=='rss-witness-zero':altered['RSSPeriodicPeak']={'Call':0,'RSS':0}
+                elif fault=='rss-witness-call':altered['RSSPeriodicPeak']['Call']=altered['Calls']+128
+                elif fault=='rss-witness-alignment':altered['RSSPeriodicPeak']['Call']=129
+                elif fault=='rss-schedule-missing':altered['RSSPeriodicSamples']+=1
+                elif fault=='rss-schedule-type':altered['RSSPeriodicSamples']=True
                 else:altered['schema']='gomap-native-memory-v1'
                 (tmp/case['result']).write_text(json.dumps(altered));case['result_sha256']=sha(tmp/case['result'])
             elif fault=='receipt-errors':test_receipt['errors']=['rejected']

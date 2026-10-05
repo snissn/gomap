@@ -1201,6 +1201,14 @@ claim no observing call or phase. These scalars do not measure owner-exclusive h
 Partial-output cuts require real allocated output and nonzero source retirement.
 Custody bounds and record-count scaling are evaluated separately from this
 presence witness.
+The sampled maintenance RSS peak is checked against the eligible named cuts
+and one constant-size periodic maximum witness (RSS and observing call).
+Periodic samples run every 128 maintenance calls; the recorded sample count
+must match that schedule, and missing periodic Linux RSS fails closed.
+The maximum includes terminal maintenance and custody cleanup cuts, even after
+native ownership is released. It remains aggregate process RSS.
+Earlier v2 results without these periodic witness fields remain historical and
+fail the current validator; missing samples are never reconstructed.
 
 ## Native prune foreground causal pilot
 
