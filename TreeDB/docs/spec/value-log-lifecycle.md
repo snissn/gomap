@@ -358,6 +358,13 @@ frozen resources release on abort/conflict, and successful publication transfers
 ownership to the existing slot/runtime resource sets. Dictionary/template proofs
 and packed-generation authority retain their existing inherited-closure rules.
 
+On platforms without stable relative namespace authority, including Windows,
+registry-owned producer segments created by rotation cannot be certified for
+publication. Rewrite returns the existing typed namespace-persistence error in
+that case. The rotated-producer success tests and compressed outer-leaf benchmark
+require this capability; paged-leaf controls and typed failure tests remain
+enabled. The failure must not be replaced by a weaker path-based recapture.
+
 Exact newest-candidate membership is not deletion permission. Both recoverable
 meta slots, queued publication debt, replay references, snapshots, and identity
 pins still contribute to `RecoverableRootSet`; existing GC/rewrite deletion gates
