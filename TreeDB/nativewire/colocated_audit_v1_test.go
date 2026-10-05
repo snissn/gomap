@@ -3,9 +3,14 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/collections"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -31,7 +36,7 @@ func TestColocatedAuditPlanBoundsV1(t *testing.T) {
 // plan fields: absence of the new capability must be a decoder failure, never
 // a compiler failure or an ordinary-diagnostics fallback.
 func TestColocatedAuditPopulationOnlyDecodeV1(t *testing.T) {
-	const population = `"Population":{"Rows":1,"Dimensions":2,"SHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Limits":{"MaxRows":2,"MaxIDBytes":128,"MaxDocumentBytes":4096,"MaxTotalBytes":8192,"MaxInspected":32}}`
+	const population = `"Population":{"Rows":1,"Dimensions":2,"SHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Limits":{"MaxRows":2,"MaxIDBytes":128,"MaxSourceRecordBytes":4096,"MaxTotalBytes":8192,"MaxInspected":32}}`
 	raw := `{"Version":1,"RunID":"initial-population","HighestNewCommitIndex":0,"RequiredAppliedIndex":1,"Writes":[],"Final":[],` + population + `}`
 	p, err := DecodeColocatedAuditPlanV1(context.Background(), strings.NewReader(raw))
 	if err != nil {
@@ -70,7 +75,29 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := ColocatedAuditPlanV1{Version: 1, RunID: "audit-test"}
+		population := colocatedAuditSeedPopulationV1()
+		initial := ColocatedAuditPlanV1{Version: 1, RunID: "initial-population", Population: &population}
+		status, err := node.Status(ctx)
+		if err != nil || len(status.Groups) != 1 {
+			t.Fatalf("initial applied floor: %+v %v", status, err)
+		}
+		initial.RequiredAppliedIndex = status.Groups[0].Applied.Index
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, n := range nodes {
+				s, e := n.Status(ctx)
+				if e != nil || len(s.Groups) != 1 || s.Groups[0].Applied.Index < initial.RequiredAppliedIndex {
+					return false
+				}
+			}
+			return true
+		})
+		for _, n := range nodes {
+			report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, initial)
+			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 || report.ColocatedAudit.Population.Rows != 3 || len(report.ColocatedAudit.Witnesses) != 0 || len(report.ColocatedAudit.Final) != 0 || report.ColocatedAudit.AppliedIndex < initial.RequiredAppliedIndex {
+				t.Fatalf("initial voter%s=%+v err%v", n.config.NodeID, report.ColocatedAudit, err)
+			}
+		}
+		p := ColocatedAuditPlanV1{Version: 1, RunID: "audit-test", Population: &population}
 		for i := 0; i < 6; i++ {
 			document := []byte(fmt.Sprintf(`{"embedding":[-1,0],"kind":"audit-%d"}`, i))
 			if i == 5 {
@@ -102,9 +129,14 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			// CLI/client attachment goes through the EXISTING authenticated diagnostics
 			// operation and validates actual per-voter current-FSM state.
 			report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, p)
-			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != 6 || len(report.ColocatedAudit.Witnesses) != 6 || len(report.ColocatedAudit.Final) != 1 {
+			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != 6 || len(report.ColocatedAudit.Witnesses) != 6 || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
 				t.Fatalf("audit voter%s=%+v err%v", n.config.NodeID, report.ColocatedAudit, err)
 			}
+		}
+		legacy := p
+		legacy.Population = nil
+		if report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, node.config.NodeID, legacy); err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.Population != nil {
+			t.Fatalf("legacy audit changed: %+v %v", report.ColocatedAudit, err)
 		}
 		raw, _ := json.Marshal(p)
 		var bad ColocatedAuditPlanV1
@@ -137,6 +169,8 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			t.Fatal("audit accepted missing current-FSM binding")
 		}
 		t.Run("ConcurrentFollowerApply", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
 			ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			leader, err := node.client.leader(ctx, node.config.Groups[0])
@@ -230,7 +264,90 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 				return err == nil && len(s.Groups) == 1 && s.Groups[0].Applied.Index >= response.CommitIndex
 			})
 		})
+		t.Run("UntouchedCurrentPopulation", func(t *testing.T) {
+			originalY, err := node.vector.collection.Get([]byte("base-minus-y"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(floor uint64, want bool) {
+				t.Helper()
+				observation := initial
+				observation.RequiredAppliedIndex = floor
+				fixedPeerWaitV1(t, ctx, func() bool {
+					for _, n := range nodes {
+						s, e := n.Status(ctx)
+						if e != nil || len(s.Groups) != 1 || s.Groups[0].Applied.Index < floor {
+							return false
+						}
+					}
+					return true
+				})
+				for _, n := range nodes {
+					report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, observation)
+					if want {
+						if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
+							t.Fatalf("restored voter%s %+v %v", n.config.NodeID, report.ColocatedAudit, err)
+						}
+					} else if err == nil || report.ColocatedAudit != nil {
+						t.Fatalf("untouched drift voter%s produced receipt %+v %v", n.config.NodeID, report.ColocatedAudit, err)
+					}
+				}
+			}
+			stale := public.ReplaceRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-y"), IdempotencyKey: []byte("population-stale"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"seed"}`)}
+			changed, err := client.VectorReplaceV1(ctx, stale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(changed.AppliedIndex, false)
+			stale.IdempotencyKey = []byte("population-restored")
+			stale.Vector = []float32{0, -1}
+			stale.Document = originalY
+			restored, err := client.VectorReplaceV1(ctx, stale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(restored.AppliedIndex, true)
+			extra := public.InsertRequestV1{Version: 1, Generation: g, ID: []byte("population-extra"), IdempotencyKey: []byte("population-extra"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"extra"}`)}
+			inserted, err := client.VectorInsertV1(ctx, extra)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(inserted.AppliedIndex, false)
+			deleted, err := client.VectorDeleteV1(ctx, public.DeleteRequestV1{Version: 1, Generation: g, ID: extra.ID, IdempotencyKey: []byte("population-delete-extra")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(deleted.AppliedIndex, true)
+			missing, err := client.VectorDeleteV1(ctx, public.DeleteRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-y"), IdempotencyKey: []byte("population-missing")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(missing.AppliedIndex, false)
+			back, err := client.VectorInsertV1(ctx, public.InsertRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-y"), IdempotencyKey: []byte("population-back"), Vector: []float32{0, -1}, Document: originalY})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(back.AppliedIndex, true)
+		})
 	})
+}
+
+func colocatedAuditSeedPopulationV1() collections.VectorSourcePopulationExpectationV1 {
+	h := sha256.New()
+	var word [4]byte
+	for _, row := range []struct {
+		id string
+		v  []float32
+	}{{"base-minus-x", []float32{-1, 0}}, {"base-minus-y", []float32{0, -1}}, {"base-x", []float32{1, 0}}} {
+		binary.LittleEndian.PutUint32(word[:], uint32(len(row.id)))
+		h.Write(word[:])
+		h.Write([]byte(row.id))
+		for _, v := range row.v {
+			binary.LittleEndian.PutUint32(word[:], math.Float32bits(v))
+			h.Write(word[:])
+		}
+	}
+	return collections.VectorSourcePopulationExpectationV1{Rows: 3, Dimensions: 2, SHA256: hex.EncodeToString(h.Sum(nil)), Limits: collections.VectorSourcePopulationLimitsV1{MaxRows: 16, MaxIDBytes: 128, MaxSourceRecordBytes: 4096, MaxTotalBytes: 32 << 20, MaxInspected: 65536}}
 }
 
 func TestColocatedAuditOrdinarySchemaAndStrictDecodeV1(t *testing.T) {

@@ -9,9 +9,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
+
+func TestPeerPopulationAuditPreMarshalBoundV1(t *testing.T) {
+	p := ColocatedAuditPlanV1{Version: 1, RunID: "population", RequiredAppliedIndex: 1, Population: &collections.VectorSourcePopulationExpectationV1{Rows: math.MaxUint64, Dimensions: 4096, SHA256: strings.Repeat("a", 64), Limits: collections.VectorSourcePopulationLimitsV1{MaxRows: math.MaxUint64, MaxIDBytes: math.MaxUint64, MaxSourceRecordBytes: math.MaxUint64, MaxTotalBytes: math.MaxUint64, MaxInspected: math.MaxUint64}}}
+	body := fixedPeerRequestV1{ColocatedAudit: &p}
+	bound, err := preflightPeerRequestBytesV1(body)
+	raw, marshalErr := json.Marshal(body)
+	if err != nil || marshalErr != nil || bound < int64(len(raw)) {
+		t.Fatalf("population JSON=%d bound=%d errors=%v/%v", len(raw), bound, err, marshalErr)
+	}
+	p.Population.SHA256 = strings.Repeat("\x00", fixedPeerMaxRPCBytesV1/6)
+	if _, err := preflightPeerRequestBytesV1(body); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+		t.Fatalf("oversized population before marshal: %v", err)
+	}
+	p.Population.SHA256 = strings.Repeat("a", 64)
+	p.Writes = make([]ColocatedAuditWriteV1, 1)
+	if _, err := preflightPeerRequestBytesV1(body); !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+		t.Fatalf("partial ledger admitted: %v", err)
+	}
+}
 
 func TestPeerSecurityByteRefusalIsDefiniteBeforeSendV1(t *testing.T) {
 	fixture, config := peerTransportFixtureV1(t)

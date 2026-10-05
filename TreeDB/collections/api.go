@@ -9377,6 +9377,7 @@ type bufferedRootRunsIterator struct {
 	inspected          int
 	workCapped         bool
 	onInspected        func(int)
+	inspectionError    func() error
 }
 
 type bufferedRootRunIteratorSource struct {
@@ -9455,6 +9456,10 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(source
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int, onInspected func(int)) iterator.UnsafeIterator {
+	return newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected, onInspected, nil)
+}
+
+func newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int, onInspected func(int), inspectionError func() error) iterator.UnsafeIterator {
 	// Source construction is physical work too: a direct bounded scan must not
 	// open an unbounded stack of overlay roots before the capped merge gets a
 	// chance to reject it. A source has an initially-positioned physical entry,
@@ -9478,6 +9483,7 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInsp
 		end:                end,
 		maxInspected:       maxInspected,
 		onInspected:        onInspected,
+		inspectionError:    inspectionError,
 	}
 	if len(sources) <= len(it.priorityInline) {
 		it.priorities = it.priorityInline[:0]
@@ -9730,6 +9736,12 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 }
 
 func (it *bufferedRootRunsIterator) inspect(count int) bool {
+	if it.inspectionError != nil {
+		if err := it.inspectionError(); err != nil {
+			it.firstErr = err
+			return false
+		}
+	}
 	if it.maxInspected <= 0 || count <= it.maxInspected-it.inspected {
 		it.inspected += count
 		if it.onInspected != nil {
@@ -25227,6 +25239,17 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 }
 
 func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int)) (iterator.UnsafeIterator, error) {
+	return collectionIteratorAtCatalogRootWithInspectionError(snap, catalog, rootName, start, end, includeDeleted, maxInspected, onInspected, nil)
+}
+
+// The optional inspection error checks cancellation during physical merge
+// work, including superseded rows and tombstones that never reach a callback.
+func collectionIteratorAtCatalogRootWithInspectionError(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int), inspectionError func() error) (iterator.UnsafeIterator, error) {
+	if inspectionError != nil {
+		if err := inspectionError(); err != nil {
+			return nil, err
+		}
+	}
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -25240,7 +25263,7 @@ func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapsh
 			return nil, nil
 		}
 		if err == nil && it != nil && maxInspected > 0 {
-			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
+			return newBufferedRootRunIteratorSourcesIteratorWithInspectionError([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected, onInspected, inspectionError), nil
 		}
 		return it, err
 	}
@@ -25253,6 +25276,14 @@ func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapsh
 	}
 	sources := make([]bufferedRootRunIteratorSource, 0, len(rootIDs))
 	for i, rootID := range rootIDs {
+		if inspectionError != nil {
+			if err := inspectionError(); err != nil {
+				for _, source := range sources {
+					_ = source.iter.Close()
+				}
+				return nil, err
+			}
+		}
 		if rootID == 0 {
 			continue
 		}
@@ -25276,7 +25307,7 @@ func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapsh
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
+	return newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources, start, end, includeDeleted, false, false, maxInspected, onInspected, inspectionError), nil
 }
 
 func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool) (iterator.UnsafeIterator, error) {
