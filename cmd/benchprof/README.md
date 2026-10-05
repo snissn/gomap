@@ -468,6 +468,24 @@ block/mutex/trace artifacts cover the whole multi-engine suite, including setup
 and verification. Throughput and profile-overhead observations must remain
 separate. See the [suite contract and commands](../unified_bench/README.md#quicksilver-shaped-kv-workload).
 
+Optional sparse maintenance churn retains the canonical read profile names and
+labels restored-key/commit counts separately from default full-refresh stress.
+Retained-final measurement (`-quicksilver-measure-dir`) runs the same reads and
+an explicitly idempotent writer after pre-oracle proof, without load/restore;
+post-checkpoint/reopen proof includes a live-key census. It exports the same
+canonical read and final checkpoint artifacts, with zero initial checkpoint
+duration and no initial checkpoint CPU file. An explicit initial profile request
+is rejected. Existing parsers need no new phase names. Detailed state/fixture
+labels and zero setup timings live in `quicksilver_results.json`.
+
+The optional capture `rss_samples.jsonl` and its `.summary.json` sidecar are
+external Linux process observations, not pprof/benchprof inputs. The reusable
+owned-process helper also observes caller-attested native `treemap` invocations.
+Absolute timestamps align these anonymous/file/RSS samples with existing churn
+snapshots; sample maxima remain separate from `/usr/bin/time -v` HWM. Sampling
+errors and absent samples invalidate capture and retain the failed packet. See
+[the suite capture contract](../unified_bench/README.md#quicksilver-shaped-kv-workload).
+
 Quicksilver canonical results also produce a point-read throughput table in
 `insights.md/html` and `quicksilver_ops` rows in `insights.json`. These read
 phases remain separate from the scan-specific throughput comparisons.
