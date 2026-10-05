@@ -3709,3 +3709,22 @@ This qualifies bounded ordinary growth and native client-call overlap, not
 sustained throughput, representative recall, broad mutation support, whole-host
 failure tolerance or unobserved whole-lifetime resource peaks. Write-phase cost
 attribution and broader resource qualification remain open with #4959/#4250.
+
+
+### Changing-top10 mixed harness (#4997)
+
+`TestMixedChangingTop10ConservativeCompatibleRecallV2` is a retained semantic
+regression: a whole response valid against two populations has recall1 at the
+baseline and recall0.9 after a tail replacement; validation must report0.9.
+The unchanged exported admission still refuses the changed corpus. Profile
+planning independently checks all seven full-population canonical oracles,
+immutable exports, deterministic six-original hashes, actual membership changes,
+future/stale/mixed postimage refusals and strict fallback rejection.
+`TestMixedChangingTop10PostJoinRecallV2` tightens the online prefix range using
+actual invocation/ACK intervals, checks compatible masks, reuses retained recall
+scalars and verifies recomputed aggregate mean/query counts, including cancellation.
+Existing UNKNOWN, retry identity, token visibility, retention and invariant-profile
+controls remain required. These are authored controls until root normal/race
+execution is attached; no runtime recall or full-source population result follows
+from source inspection. See command README for validation/retention benchmarks,
+allocation boundaries and the optional external population attachment distinction.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -160,7 +161,7 @@ func BenchmarkMixedRetainedCallV1(b *testing.B) {
 	}
 }
 
-func mixedTestPlanV1(t *testing.T) (recallInput, mixedReport) {
+func mixedTestPlanV1(t testing.TB) (recallInput, mixedReport) {
 	t.Helper()
 	in, admission := recallTestQueries(t)
 	for i := 0; i < 4; i++ {
@@ -212,9 +213,9 @@ func TestMixedSinglePrefixCanonicalRecallV1(t *testing.T) {
 	}
 }
 
-func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
+func mixedAmbiguousFixtureV2(t testing.TB) (recallInput, mixedReport, public.SearchResponseV1, *recallInput) {
+	t.Helper()
 	in, r := mixedTestPlanV1(t)
-	exportedBefore := hashJSON(in.exported)
 	q := r.Admission.Queries[0]
 	response := windowTestResponse(&r.Admission)
 	// Move one existing tail into the top10. The response omits that ID, so
@@ -224,6 +225,7 @@ func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
 	request := *w.Replace
 	request.Vector = append([]float32(nil), q.Request.Query...)
 	w.Replace = &request
+	r.Writes[0] = w
 	state, err := mixedPopulation(&in, []mixedWrite{w})
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +256,13 @@ func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
 	if pacedSameTruth(r.Prefixes[0].Truth[0], r.Prefixes[1].Truth[0]) {
 		t.Fatal("fixture failed to change full canonical top10")
 	}
+	return in, r, response, state
+}
+
+func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
+	in, r, response, state := mixedAmbiguousFixtureV2(t)
+	exportedBefore := hashJSON(in.exported)
+	q := r.Admission.Queries[0]
 	for _, tc := range []struct {
 		name         string
 		lower, upper int
@@ -370,5 +379,189 @@ func TestMixedVisibilityFailureStopsNextSlotV1(t *testing.T) {
 	mixedSummary(&r)
 	if writer.calls != 1 || calls != 1 || r.WriteCounts.Succeeded != 1 || r.WriteCounts.Unissued != 5 || len(r.Retries) != 0 || r.Visibility[0].Outcome == "succeeded" {
 		t.Fatalf("failed visibility did not consume %+v", r.WriteCounts)
+	}
+}
+
+func TestMixedChangingTop10ProfilePlanV2(t *testing.T) {
+	in, initial := mixedTestPlanV1(t)
+	admission := initial.Admission
+	exported := hashJSON(in.exported)
+	r := mixedReport{Profile: mixedProfileChangingTop10, windowReport: windowReport{Admission: admission}, PaceInterval: time.Second}
+	final, err := mixedPlan(context.Background(), &in, &r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Writes) != 6 || len(r.Prefixes) != 7 || r.Prefixes[0].Top10SHA256 == r.Prefixes[1].Top10SHA256 {
+		t.Fatal("missing changed six-slot plan")
+	}
+	if string(r.Writes[0].Replace.ID) != in.corpusIDs[0] || string(r.Writes[2].Delete.ID) != in.corpusIDs[1] || string(r.Writes[3].Replace.ID) != in.corpusIDs[2] || string(r.Writes[5].Delete.ID) != in.corpusIDs[3] {
+		t.Fatal("targets are not deterministic existing corpus IDs")
+	}
+	for prefix := range r.Prefixes {
+		state, err := mixedPopulation(&in, r.Writes[:prefix])
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(state.vectors))
+		for id := range state.vectors {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		if r.Prefixes[prefix].PopulationRows != len(ids) {
+			t.Fatal("prefix population count")
+		}
+		for qi, q := range admission.Queries {
+			truth, err := recallTop10(context.Background(), q.scorer, ids, state.vectors)
+			if err != nil || !pacedSameTruth(truth, r.Prefixes[prefix].Truth[qi]) {
+				t.Fatalf("full prefix%d query%d truth: %v", prefix, qi, err)
+			}
+		}
+	}
+	post, _, err := mixedTruthForProfile(context.Background(), final, admission, 6, r.Profile)
+	if err != nil || post.OracleBasis != "derived-changing-prefix-full-canonical-fp32" {
+		t.Fatalf("derived truth provenance: %+v %v", post, err)
+	}
+	if hashJSON(in.exported) != exported {
+		t.Fatal("exported baseline was rewritten")
+	}
+	ordinary := pacedRecallCopy(admission, "ordinary")
+	if recallPlan(context.Background(), final, &ordinary) == nil {
+		t.Fatal("ordinary baseline admission weakened")
+	}
+	again := mixedReport{Profile: r.Profile, windowReport: windowReport{Admission: admission}, PaceInterval: time.Second}
+	if _, err := mixedPlan(context.Background(), &in, &again); err != nil || hashJSON(again.Writes) != hashJSON(r.Writes) || hashJSON(again.Prefixes) != hashJSON(r.Prefixes) {
+		t.Fatalf("nondeterministic plan: %v", err)
+	}
+	q := admission.Queries[0]
+	response := windowTestResponse(&admission)
+	response.Neighbors = r.Prefixes[1].Truth[0]
+	if _, err := mixedValidatePrefix(&q, response, &in, &r, 0, 0); err == nil {
+		t.Fatal("future postimage before invocation accepted")
+	}
+	response.Neighbors = r.Prefixes[0].Truth[0]
+	if _, err := mixedValidatePrefix(&q, response, &in, &r, 3, 6); err == nil {
+		t.Fatal("stale baseline after deletion ACK accepted")
+	}
+	response.Neighbors = append([]public.NeighborV1(nil), r.Prefixes[4].Truth[0]...)
+	a := string(r.Writes[0].Replace.ID)
+	for i := range response.Neighbors {
+		if response.Neighbors[i].ID == a {
+			for _, old := range r.Prefixes[0].Changed[0] {
+				if old.ID == a {
+					response.Neighbors[i].Score = math.Float32frombits(old.ScoreBits)
+				}
+			}
+		}
+	}
+	sort.Slice(response.Neighbors, func(i, j int) bool { return recallLess(response.Neighbors[i], response.Neighbors[j]) })
+	if _, err := mixedValidatePrefix(&q, response, &in, &r, 0, 6); err == nil {
+		t.Fatal("mixed old A and replaced C postimages accepted")
+	}
+	response.Neighbors = r.Prefixes[6].Truth[0]
+	if value, err := mixedValidatePrefix(&q, response, &in, &r, 6, 6); err != nil || value != 1 {
+		t.Fatalf("final exact prefix: %v %v", value, err)
+	}
+	response.Counters.ExactScanPartitions = 1
+	if _, err := mixedValidatePrefix(&q, response, &in, &r, 6, 6); err == nil {
+		t.Fatal("fallback accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := hashJSON(again)
+	if _, err := mixedPlan(ctx, &in, &again); !errors.Is(err, context.Canceled) || hashJSON(again) != before {
+		t.Fatalf("canceled planning mutated output: %v", err)
+	}
+	var out bytes.Buffer
+	for _, args := range [][]string{{"-mode", "read-window", "-mixed-profile", "changing-top10"}, {"-mode", "mixed-window", "-mixed-profile", "unknown"}} {
+		if runArgs(context.Background(), args, &out) == nil {
+			t.Fatalf("accepted invalid mode/profile %v", args)
+		}
+	}
+}
+
+func TestMixedChangingTop10PostJoinRecallV2(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		start, end int64
+		want       float64
+		mask       uint8
+	}{{"ACK-before-call", 30, 40, .9, 2}, {"not-yet-invoked", 1, 5, 1, 1}, {"overlapping", 15, 25, .9, 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, r, response, _ := mixedAmbiguousFixtureV2(t)
+			r.Writes = r.Writes[:1]
+			r.Writes[0].Invoked, r.Writes[0].Outcome = true, "succeeded"
+			r.Writes[0].StartNS, r.Writes[0].EndNS = 10, 20
+			online := .9
+			r.Attempts = []windowAttempt{{Ordinal: 0, Phase: "measured", StartNS: tc.start, EndNS: tc.end, Response: &response, Outcome: "succeeded", RecallAt10: &online}}
+			r.Counts.Succeeded = 1
+			if err := mixedRecheck(context.Background(), &in, &r); err != nil {
+				t.Fatal(err)
+			}
+			windowSummarize(&r.windowReport)
+			if r.Attempts[0].RecallAt10 != &online || online != tc.want || r.MeanRecallAt10 == nil || *r.MeanRecallAt10 != tc.want || r.MeasuredQuerySucceeded[0] != 1 {
+				t.Fatalf("final recall not reaccounted: %+v", r.windowReport)
+			}
+			if len(r.ReadPrefixes) != 1 || r.ReadPrefixes[0].CompatibleMask != tc.mask || r.ReadPrefixes[0].RecallAt10 != tc.want {
+				t.Fatalf("exact compatible mask: %+v", r.ReadPrefixes)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := mixedRecheck(ctx, &in, &r); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled final proof: %v", err)
+			}
+		})
+	}
+	raw, err := json.Marshal(mixedReadPrefix{Ordinal: 65535, Lower: 0, Upper: 6, Matched: -1, CompatibleMask: 127, RecallAt10: .9})
+	if err != nil || len(raw)+1 > mixedReadPrefixMaxBytes {
+		t.Fatalf("prefix receipt exceeds reserved bound: %d %v", len(raw), err)
+	}
+}
+
+// Admission/full-population oracle setup is excluded. Both cases validate ten
+// retained neighbors against all seven possible prefixes with prepared scorers.
+func BenchmarkMixedPrefixValidationV2(b *testing.B) {
+	for _, profile := range []string{"invariant", mixedProfileChangingTop10} {
+		b.Run(profile, func(b *testing.B) {
+			in, r := mixedTestPlanV1(b)
+			if profile == mixedProfileChangingTop10 {
+				r.Writes, r.Prefixes, r.Profile = nil, nil, profile
+				if _, err := mixedPlan(context.Background(), &in, &r); err != nil {
+					b.Fatal(err)
+				}
+			}
+			q := r.Admission.Queries[0]
+			response := windowTestResponse(&r.Admission)
+			// Exclude every mutable target so all prefixes are compatible. This is an
+			// approximate response, not a forced exact-search or favorable-prefix gate.
+			ids := make([]string, 0, len(in.vectors))
+			vectors := make(map[string][]float32)
+			for id, v := range in.vectors {
+				changed := false
+				for _, c := range r.Prefixes[0].Changed[0] {
+					changed = changed || id == c.ID
+				}
+				if !changed {
+					ids = append(ids, id)
+					vectors[id] = v
+				}
+			}
+			sort.Strings(ids)
+			var err error
+			response.Neighbors, err = recallTop10(context.Background(), q.scorer, ids, vectors)
+			if err != nil {
+				b.Fatal(err)
+			}
+			proof, err := mixedValidatePrefixProof(&q, response, &in, &r, 0, 6)
+			if err != nil || proof.CompatibleMask != 127 {
+				b.Fatalf("not all prefixes compatible: %+v %v", proof, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := mixedValidatePrefixProof(&q, response, &in, &r, 0, 6); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
