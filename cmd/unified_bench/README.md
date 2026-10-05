@@ -1159,6 +1159,68 @@ always refuses while these actual owner-boundary measurements are unavailable.
 It does not accept zeros, outer-call latency, profiles or process heap as
 substitutes. A valid tooling packet makes no performance or qualification claim.
 
+### Native prune memory lifecycle harness
+
+`scripts/native_prune_memory.py` runs `TestNativePruneMemoryLifecycle` with
+`treedb_test,mvcc_native_memory` tags in a fresh process per case. The full
+matrix pairs N/2N histories, prune/no-prune/cancel and pinned/unpinned readers.
+It uses real Q32/1MiB public RELAXED pruning, persistent-pointer survivors and
+physical deletion, old-reader, custody, cancellation and reopen checks.
+
+```sh
+python3 scripts/native_prune_memory.py --go "$GO" --n 512 --out "$OUT"
+python3 scripts/native_prune_memory.py --out "$OUT" --validate
+python3 scripts/native_prune_memory.py --out "$OUT" --self-test
+```
+
+Output must be a new directory. `--smoke --n 64 --race` runs four diagnostic
+cases: pinned prune at N/2N plus pinned cancellation and no-prune control.
+Linux `/proc` supplies RSS; the driver retains source hashes, commands, raw
+logs, results and the tagged binary. The validator rejects missing actual
+partial-output/retirement witnesses, inconsistent native counters, source
+changes and checksum drift. Self-tests mutate copies of real successful
+packets and never count as lifecycle measurements.
+
+Forced-GC heap cuts and sampled RSS describe the whole process. Logical
+retirement payload and a held-buffer size are partial ownership witnesses;
+exclusive cursor/tree retained and peak bytes remain unmeasured. Allocation
+scopes separate fixture, maintenance and later Close/reopen/oracle work;
+they include observer and verification traffic. These packets are standalone
+artifacts, have no benchprof input contract and do not qualify schema 1's
+native runtime gate. Expensive collection requires reviewed landed tooling
+and an externally recorded exact product/harness source freeze.
+
+## Native prune foreground causal pilot
+
+`scripts/native_prune_foreground.py` runs eight fresh-process N64/128 cases:
+Q32/1MiB RELAXED prune with finite burst, growing output or fixed-cardinality
+churn, plus zero-work burst references. Real reads continue after writes stop.
+The bounded start cut requires actual allocated partial private output. The
+pilot retains physical, writer, old-reader, pointer and reopen checks.
+
+```sh
+python3 scripts/native_prune_foreground.py --go "$GO" --race --out "$OUT"
+python3 scripts/native_prune_foreground.py --out "$OUT" --validate
+python3 scripts/native_prune_foreground.py --out "$OUT" --self-test
+```
+
+Use a new output directory. Schema `gomap-native-foreground-v2` binds source,
+resolved Go executable/version, binary, build command/environment and each
+case's command, raw log and result. The driver forces continuing readers and
+rejects control/forced-error runs, malformed counters, duplicate/missing cases,
+nonzero exits, failures and checksum/source/binary drift. The forced budget
+error test verifies worker join and real cleanup under race; it is a diagnostic,
+not a matrix measurement. Build controls are CGO=1, GOWORK=off,
+GOTOOLCHAIN=local and GOFLAGS=-p=2; inherited GOMAXPROCS is recorded.
+
+Fixed latency buckets cover actual public-call intervals including lock wait;
+ACK active/stop classification is sampled at return. These are causal pilot
+observations, not retained tail-latency qualification. Zero-work references
+fence foreground and have a different start cut. Optional tags need the M7
+native interfaces; ordinary main builds exclude these tests. Neither pilot
+packet is a benchprof input. Reviewed tooling landing and exact product source
+freeze precede expensive qualification collection.
+
 ## Current source-population audit microbenchmarks
 
 These standalone Go benchmarks time admitted source-vector proof work and

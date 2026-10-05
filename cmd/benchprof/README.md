@@ -491,6 +491,26 @@ traffic. These files are not benchprof inputs and do not change its parsers or
 the runtime while actual sync, fence and owned retained/peak measurements remain
 missing; `validate --qualify` refuses that verdict.
 
+### Native prune memory lifecycle packets
+
+`scripts/native_prune_memory.py` produces standalone fresh-process memory
+lifecycle packets; see [the commands and measurement limits](../unified_bench/README.md#native-prune-memory-lifecycle-harness).
+Its forced-GC heap cuts, sampled Linux RSS and allocation scopes include
+process/fixture/observer work. Native ownership counters prove actual partial
+output and custody, but do not measure exclusive cursor/tree heap. The packets
+are not benchprof inputs and cannot satisfy the native runtime's exclusive
+retained/peak measurement gate.
+
+## Native prune foreground pilot packets
+
+`scripts/native_prune_foreground.py` emits standalone schema-v2 causal packets;
+see [commands, source/binary bindings and limits](../unified_bench/README.md#native-prune-foreground-causal-pilot).
+Real public read/write/quantum intervals include lock wait, with fixed buckets
+and sampled ACK active/stop attribution. They do not qualify tail latency;
+zero-work references fence foreground and have a different start cut. These
+packets are not benchprof inputs. The fail-closed validator checks eight unique
+continuing-reader cases, real data oracles, caps and executable/source bindings.
+
 ## Current source-population audit microbenchmarks
 
 These standalone Go benchmarks time admitted source-vector proof work and
