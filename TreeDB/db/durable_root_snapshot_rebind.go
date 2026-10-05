@@ -23,8 +23,8 @@ import (
 // Both independently recoverable slot generations are rebound in a stable
 // sibling copy that is atomically installed only after its metas are durable.
 // Their commit sequences, roots, allocator generations, and logical dependency
-// frontiers remain unchanged. Namespace epochs are derived from the restored
-// parent handles, matching fresh producer authority in the destination layout.
+// frontiers remain unchanged. Dictionary and template namespace epochs are
+// derived from restored parent handles, matching fresh destination authority.
 func RebindDurableRootSnapshotV1(dir string) error {
 	return RebindDurableRootSnapshotLayoutV1(dir, "")
 }
@@ -299,12 +299,16 @@ func rebindSnapshotManifestEntryV1(dir, sideRoot string, entry *rootpublication.
 		if err != nil {
 			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)
 		}
-		// A namespace epoch identifies its physical parent, unlike the child's
-		// persisted logical generation. Capture both from the same exact handle
-		// so restored and freshly produced authority agree in the copied layout.
+		// Side-store producers derive the namespace epoch from the physical
+		// parent. Other producers may instead bind an immutable manifest revision
+		// or asset file generation, which must remain unchanged during restore.
 		syncErr := rootpublication.SyncStableNamespace(parent)
 		parentIdentity, identityErr := rootpublication.StableIdentityFromFile(parent)
-		parentGeneration, generationErr := rootpublication.StableNamespaceParentGeneration(parent)
+		parentGeneration := entry.Namespace.ParentIdentity.Generation
+		var generationErr error
+		if entry.Kind == rootpublication.ResourceDictionary || entry.Kind == rootpublication.ResourceTemplate {
+			parentGeneration, generationErr = rootpublication.StableNamespaceParentGeneration(parent)
+		}
 		closeErr := parent.Close()
 		if err := errors.Join(syncErr, identityErr, generationErr, closeErr); err != nil {
 			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)

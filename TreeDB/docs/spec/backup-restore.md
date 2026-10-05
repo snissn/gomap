@@ -59,10 +59,11 @@ The opt-in DPM2 dependency directory is also a COW root in `index.db`; preserve
 both recoverable root slots and the required-format marker. Snapshot namespace
 rebinding changes physical identity values in the staged private copy while
 preserving logical keys and validating each selected root's page extent.
-For both dependency layouts and both recoverable slots, namespace parent
-identities and epochs are captured from the exact destination parent handles
-using the same epoch derivation as fresh producer authority. Child resource
-generations, frontiers, root coordinates and commit sequences remain unchanged.
+For both dependency layouts and both recoverable slots, dictionary and template
+namespace parent identities and epochs are captured from the exact destination
+parent handles using the same epoch derivation as fresh side-store authority.
+Other producer namespace epochs, child resource generations, frontiers, root
+coordinates and commit sequences remain unchanged.
 Keeping the source namespace epoch would let recovery validate the copied
 physical parent but cause a later dictionary resource merge to reject fresh
 destination authority. Ordinary open still validates persisted identities without
