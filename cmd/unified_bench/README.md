@@ -1259,6 +1259,12 @@ fail the current validator; missing samples are never reconstructed.
 
 ## Native prune foreground causal pilot
 
+Foreground receipts retain `capture_out`, the original absolute capture directory.
+Validation checks archived files in the current `--out` directory against their
+hashes and checks recorded build/run paths against `capture_out`, so moving a
+completed packet preserves validation. Missing, relative or inconsistent capture
+paths fail closed. Original source bindings remain required.
+
 `scripts/native_prune_foreground.py` runs eight fresh-process N64/128 cases:
 Q32/1MiB RELAXED prune with finite burst, growing output or fixed-cardinality
 churn, plus zero-work burst references. Real reads continue after writes stop; each case records a completed read

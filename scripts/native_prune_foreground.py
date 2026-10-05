@@ -84,11 +84,13 @@ def packet(out, root=None, receipt=None):
     if root:
         need(source == bindings(root), 'source drift')
     matrix(r['cases'])
+    need(type(r['capture_out']) is str and pathlib.Path(r['capture_out']).is_absolute(), 'capture directory')
+    capture = pathlib.Path(r['capture_out'])
     for file, key in [('foreground.test', 'binary_sha256'), ('build-command.json', 'build_command_sha256'), ('build.log', 'build_log_sha256')]:
         need(valid_sha(r[key]) and sha(out / file) == r[key], 'build binding ' + file)
     build = json.loads((out / 'build-command.json').read_text())
     need(build['go'] == r['go'] and build['argv'][0] == r['go']['path'] and type(r['go']['version']) is str and r['go']['version'].startswith('go version ') and valid_sha(r['go']['sha256']), 'Go identity')
-    need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(out / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
+    need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(capture / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
     need(build['env'] == r['build_env'] and all(k in r['build_env'] for k in BUILD_KEYS), 'build environment binding')
     need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None, 'GOGC': None, 'GOMEMLIMIT': None, 'GODEBUG': None}.items()), 'controlled build environment')
     for c in r['cases']:
@@ -96,8 +98,8 @@ def packet(out, root=None, receipt=None):
             need(type(c[key]) is str and pathlib.Path(c[key]).name == c[key] and valid_sha(c[key + '_sha256']) and sha(out / c[key]) == c[key + '_sha256'], 'case binding ' + key)
         need(c['binary_before_sha256'] == c['binary_after_sha256'] == r['binary_sha256'], 'case binary stability')
         cmd = json.loads((out / c['command']).read_text())
-        need(cmd['env'] == dict(r['build_env'], MVCC_FOREGROUND_RESULT=str(out / c['result']), MVCC_FOREGROUND_N=str(c['n']), MVCC_FOREGROUND_MODE=c['mode'], MVCC_FOREGROUND_ALGORITHM=c['algorithm'], MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0'), 'case environment')
-        need(cmd['argv'] == [str(out / 'foreground.test'), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v'] and cmd['cwd'] == build['cwd'], 'case invocation/cwd')
+        need(cmd['env'] == dict(r['build_env'], MVCC_FOREGROUND_RESULT=str(capture / c['result']), MVCC_FOREGROUND_N=str(c['n']), MVCC_FOREGROUND_MODE=c['mode'], MVCC_FOREGROUND_ALGORITHM=c['algorithm'], MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0'), 'case environment')
+        need(cmd['argv'] == [str(capture / 'foreground.test'), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v'] and cmd['cwd'] == build['cwd'], 'case invocation/cwd')
         validate(json.loads((out / c['result']).read_text()), c['n'], c['mode'], c['algorithm'])
     return r
 
@@ -113,7 +115,7 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative result accepted')
-    probes = [lambda y: y.update(race=not y['race']), lambda y: y['cases'].append(copy.deepcopy(y['cases'][0])), lambda y: y.update(errors=['rejected']), lambda y: y.update(binary_sha256='0' * 64), lambda y: y.update(build_command_sha256='0' * 64), lambda y: y.update(source_digest='0' * 64), lambda y: y['cases'][0].update(exit_code=False)]
+    probes = [lambda y: y.update(race=not y['race']), lambda y: y['cases'].append(copy.deepcopy(y['cases'][0])), lambda y: y.update(errors=['rejected']), lambda y: y.update(binary_sha256='0' * 64), lambda y: y.update(build_command_sha256='0' * 64), lambda y: y.update(source_digest='0' * 64), lambda y: y['cases'][0].update(exit_code=False), lambda y: y.pop('capture_out'), lambda y: y.update(capture_out='relative'), lambda y: y.update(capture_out=False), lambda y: y.update(capture_out=str(out / 'wrong-capture'))]
     for mutate in probes:
         y = copy.deepcopy(r); mutate(y)
         try:
@@ -121,7 +123,7 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative receipt accepted')
-    print('thirteen in-memory negative checks PASS; retained measurements unchanged')
+    print('seventeen in-memory negative checks PASS; retained measurements unchanged')
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -182,7 +184,7 @@ def main():
         except (ValueError, KeyError, TypeError, OSError) as e:
             errors.append(str(e))
         print(name + (' PASS' if result.returncode == 0 else ' RED'), flush=True)
-    receipt = {'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source == bindings(root), 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': sha(out / 'build-command.json'), 'build_log_sha256': sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}}
+    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source == bindings(root), 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': sha(out / 'build-command.json'), 'build_log_sha256': sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}}
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n'); need(not errors, 'causal failures ' + repr(errors)); packet(out, root)
     print('causal packet PASS; retained latency qualification outstanding')
 

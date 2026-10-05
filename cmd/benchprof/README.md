@@ -536,6 +536,12 @@ presence witness.
 
 ## Native prune foreground pilot packets
 
+Foreground receipts retain `capture_out`, the original absolute capture directory.
+Validation checks archived files in the current `--out` directory against their
+hashes and checks recorded build/run paths against `capture_out`, so moving a
+completed packet preserves validation. Missing, relative or inconsistent capture
+paths fail closed. Original source bindings remain required.
+
 `scripts/native_prune_foreground.py` emits standalone schema-v2 causal packets;
 see [commands, source/binary bindings and limits](../unified_bench/README.md#native-prune-foreground-causal-pilot).
 Real public read/write/quantum intervals include lock wait, with fixed buckets
