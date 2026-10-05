@@ -95,6 +95,37 @@ class CaptureRehearsal(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
 
+    def test_churn_pause_pair_preflight(self):
+        for text, ns in (('6s', 6000000000), ('1m', 60000000000), ('1m0s', 60000000000),
+                         ('1ms', 1000000), ('2ns', 2), ('1.5µs', 1500), ('1.000000001s', 1000000001)):
+            cell = dict(engine='treedb', churn_rounds=2, churn_pause=text, churn_pause_ns=ns)
+            self.assertEqual(capture.churn_settings(cell), (2, ns))
+        for text, ns in (('1m', 1), ('6s', 1), ('1ns', 60000000000), ('0.5s', 500000001),
+                         ('30s30s', 60000000000), ('-1s', 1), ('', 1), ('9'*1000+'s', 1),
+                         (6000000000, 6000000000)):
+            with self.assertRaisesRegex(AssertionError, 'text must match nanoseconds'):
+                capture.churn_settings(dict(engine='treedb', churn_rounds=2, churn_pause=text, churn_pause_ns=ns))
+        with self.assertRaisesRegex(AssertionError, 'text must match nanoseconds'):
+            capture.churn_settings(dict(engine='treedb', churn_rounds=2, churn_pause_ns=1))
+        # Exercise the shared main preflight: hostile pairs stop before any
+        # benchmark or native-library subprocess, without constructing a DB.
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            receipt = root/'receipt.json'
+            receipt.write_text('{}')
+            manifest = dict(build_env={'GOWORK': 'off'}, libraries={}, sources={},
+                            receipts={role: dict(path='receipt.json', sha256=capture.sha256(receipt))
+                                      for role in ('source', 'build', 'native', 'runner')})
+            plan = dict(output='invalid', cells=[dict(label='invalid', engine='treedb', churn_rounds=32,
+                                                      churn_pause='1m', churn_pause_ns=1)])
+            manifest_path, plan_path = root/'manifest.json', root/'plan.json'
+            manifest_path.write_text(json.dumps(manifest))
+            plan_path.write_text(json.dumps(plan))
+            with mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run') as run:
+                with self.assertRaisesRegex(AssertionError, 'text must match nanoseconds'):
+                    capture.main()
+                run.assert_not_called()
+
     def test_churn_wall_allowance_maximum_and_precision(self):
         self.assertEqual(capture.capture_wall_limit(dict(engine='treedb')), '30m')
         self.assertEqual(capture.capture_wall_limit(dict(engine='treedb', churn_rounds=2)), '30m12s')
@@ -117,6 +148,8 @@ class CaptureRehearsal(unittest.TestCase):
                                           leaf_generation_pack_maintenance_env='', rounds=rounds,
                                           final_files_after_close={'maindb/index.db': 4096})
         with tempfile.TemporaryDirectory() as temp:
+            capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
+            cell['churn_pause'] = '1m'
             capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
             packet['registered_cli_flags']['max-wall'] = '30m0s'
             with self.assertRaises(AssertionError):

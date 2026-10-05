@@ -17,7 +17,9 @@ Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
 commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns}]. Defaults match
 the prior 3M capture flow. Custom duration requires duration_ns and Go's canonical
-duration string. Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
+duration string. Churn pauses require matching nanoseconds and canonical text
+(`1m` is an accepted alias for `1m0s`); the pair is checked before launch.
+Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
 fast, wal_on_fast; auto commit resolves ordinary for realistic, sync for history.
 Raw stdout/stderr (including time-v), metadata, manifest and plan survive failures.
 Realistic mixed/concurrent miss ratios use Bernoulli configured p: endpoints are
@@ -94,6 +96,16 @@ def validate_native(binary, source, libraries, env, root, directory, metadata):
     assert native['libraries'], 'dynamic resolution contained no absolute dependencies'
 
 
+def churn_pause_text(pause):
+    if pause == 60000000000:
+        return '1m0s'
+    for unit, ns in (('s', 1000000000), ('ms', 1000000), ('µs', 1000), ('ns', 1)):
+        if pause >= ns:
+            whole, tail = divmod(pause, ns)
+            fraction = ('.' + f'{tail:0{len(str(ns))-1}d}'.rstrip('0')) if tail else ''
+            return f'{whole}{fraction}{unit}'
+
+
 def churn_settings(cell):
     rounds = cell.get('churn_rounds', 0)
     assert type(rounds) is int and 0 <= rounds <= 32, 'churn rounds must be bounded 0..32'
@@ -103,7 +115,10 @@ def churn_settings(cell):
     assert cell['engine'] == 'treedb' and cell.get('case', 'realistic') == 'realistic', 'churn requires realistic cached TreeDB'
     pause = cell.get('churn_pause_ns', 6000000000)
     assert type(pause) is int and 0 < pause <= 60000000000, 'churn pause must be bounded positive up to 1m'
-    assert cell.get('churn_pause', '6s') == '6s' or 'churn_pause_ns' in cell, 'custom pause requires churn_pause_ns'
+    text = cell.get('churn_pause', '6s')
+    assert text == '6s' or 'churn_pause_ns' in cell, 'custom pause requires churn_pause_ns'
+    canonical = churn_pause_text(pause)
+    assert text == canonical or (text == '1m' and canonical == '1m0s'), 'churn pause text must match nanoseconds in canonical form (1m also accepted)'
     return rounds, pause
 
 
@@ -185,7 +200,7 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert (c['churn_rounds'], c['churn_pause_ns']) == (rounds, pause)
         assert flags['max-wall'] == capture_wall_limit(cell), 'churn guard must retain 30m work allowance plus all requested pauses'
         assert flags['quicksilver-churn-rounds'] == str(rounds)
-        assert flags['quicksilver-churn-pause'] == cell.get('churn_pause', '6s')
+        assert flags['quicksilver-churn-pause'] == churn_pause_text(pause)
         churn = r['maintenance_churn']
         assert churn['label'] == 'bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound'
         assert churn['leaf_generation_pack_maintenance_env'] == metadata['env'].get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '')

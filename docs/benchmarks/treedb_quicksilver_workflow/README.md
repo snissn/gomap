@@ -189,9 +189,13 @@ and this instrumentation makes no performance improvement claim. Link findings
 about automatic maintenance to #1185/#943.
 
 The frozen `scripts/unified_bench_quicksilver_capture.py` collector accepts
-optional cell fields `churn_rounds`, `churn_pause` (Go canonical duration), and
-`churn_pause_ns` (required with a custom pause). Existing plans produce the same
-commands. The manifest's `build_env` can explicitly set
+optional cell fields `churn_rounds`, `churn_pause`, and `churn_pause_ns`
+(required with a custom pause). Pause text must match the exact nanosecond value
+before launch. Supported text is Go's canonical form within the positive 1m
+bound: one numeric component in `s`, `ms`, `µs`, or `ns`, or `1m0s`; `1m` is
+also accepted and reported as `1m0s`. Examples: `6s`, `1ms`, `1.5µs`, `2ns`.
+Other compound or noncanonical spellings are rejected. Existing ordinary plans
+produce the same commands. The manifest's `build_env` can explicitly set
 `TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE=0` or `1` for matched default
 versus opt-in attribution; unset remains the default. This value, source head,
 command, resolved commit API/config, round counts, requested/observed pause and
