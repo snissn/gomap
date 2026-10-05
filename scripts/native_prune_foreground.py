@@ -13,7 +13,7 @@ import time
 
 C = 'gomap-native-foreground-v2'
 MATRIX = [(n, m, 'bounded') for n in (64, 128) for m in ('burst', 'growth', 'churn')] + [(n, 'burst', 'unbounded') for n in (64, 128)]
-BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOMAXPROCS', 'GOROOT', 'PATH')
+BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOMAXPROCS', 'GOROOT', 'PATH', 'GOGC', 'GOMEMLIMIT', 'GODEBUG')
 
 def need(x, message):
     if not x:
@@ -90,7 +90,7 @@ def packet(out, root=None, receipt=None):
     need(build['go'] == r['go'] and build['argv'][0] == r['go']['path'] and type(r['go']['version']) is str and r['go']['version'].startswith('go version ') and valid_sha(r['go']['sha256']), 'Go identity')
     need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(out / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
     need(build['env'] == r['build_env'] and all(k in r['build_env'] for k in BUILD_KEYS), 'build environment binding')
-    need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None}.items()), 'controlled build environment')
+    need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None, 'GOGC': None, 'GOMEMLIMIT': None, 'GODEBUG': None}.items()), 'controlled build environment')
     for c in r['cases']:
         for key in ('raw', 'result', 'command'):
             need(type(c[key]) is str and pathlib.Path(c[key]).name == c[key] and valid_sha(c[key + '_sha256']) and sha(out / c[key]) == c[key + '_sha256'], 'case binding ' + key)
@@ -137,6 +137,8 @@ def main():
     out.mkdir(exist_ok=False, parents=True)
     source = bindings(root); (out / 'source-bindings.json').write_text(json.dumps(source, indent=2) + '\n')
     env = {k: v for k, v in os.environ.items() if not k.startswith('MVCC_FOREGROUND_')}; env.pop('GOROOT', None); env.update(CGO_ENABLED='1', GOWORK='off', GOTOOLCHAIN='local', GOFLAGS='-p=2', MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0')
+    for key in ('GOGC', 'GOMEMLIMIT', 'GODEBUG'):
+        env.pop(key, None)
     go_path = pathlib.Path(shutil.which(args.go, path=env.get('PATH')) or args.go).resolve(); need(go_path.is_file(), 'Go executable')
     env['PATH'] = str(go_path.parent) + os.pathsep + env.get('PATH', '')
     version = subprocess.run([str(go_path), 'version'], env=env, cwd=root, capture_output=True, text=True, check=True).stdout.strip()
@@ -157,12 +159,18 @@ def main():
         ee = dict(env); ee.update(MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
         cmd = [str(binary), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v']
         (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(build_env, **{k: v for k, v in ee.items() if k.startswith('MVCC_FOREGROUND_')})}, indent=2) + '\n')
-        start = time.monotonic(); result = subprocess.run(cmd, cwd=root, env=ee, capture_output=True, timeout=150); raw.write_bytes(result.stdout + result.stderr)
+        start = time.monotonic(); process_error = ''
+        try:
+            result = subprocess.run(cmd, cwd=root, env=ee, capture_output=True, timeout=150)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            process_error = str(e)
+            result = subprocess.CompletedProcess(cmd, -1, getattr(e, 'stdout', None) or b'', (getattr(e, 'stderr', None) or b'') + ('\nDRIVER ERROR: ' + process_error + '\n').encode())
+        raw.write_bytes(result.stdout + result.stderr)
         try:
             stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
         except OSError:
             stable = False
-        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': sha(binary) if binary.is_file() else None}
+        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'process_error': process_error, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': sha(binary) if binary.is_file() else None}
         for key, file in [('raw', raw), ('result', output), ('command', command)]:
             c[key] = file.name; c[key + '_sha256'] = sha(file) if file.exists() else None
         cases.append(c)

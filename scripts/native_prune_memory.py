@@ -9,7 +9,7 @@ This separate contract does not qualify the native-prune benchmark schema.
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 CONTRACT = 'gomap-native-memory-v1'
-BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH')
+BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH','GOGC','GOMEMLIMIT','GODEBUG')
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -100,7 +100,7 @@ def validate_packet(out, root=None):
         require(sha(out/file)==receipt[key],'missing/drifted build artifact '+file)
     build=json.loads((out/'build-command.json').read_text());go=receipt['go'];env=receipt['build_env']
     require(build['go']==go and type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['version']) is str and go['version'].startswith('go version ') and type(go['sha256']) is str and len(go['sha256'])==64 and all(c in '0123456789abcdef' for c in go['sha256']),'Go identity')
-    require(build['env']==env and all(k in env for k in BUILD_KEYS) and all(env[k]==v for k,v in {'CGO_ENABLED':'1','GOFLAGS':'-p=2','GOWORK':'off','GOTOOLCHAIN':'local','GOROOT':None}.items()),'controlled build environment')
+    require(build['env']==env and all(k in env for k in BUILD_KEYS) and all(env[k]==v for k,v in {'CGO_ENABLED':'1','GOFLAGS':'-p=2','GOWORK':'off','GOTOOLCHAIN':'local','GOROOT':None,'GOGC':None,'GOMEMLIMIT':None,'GODEBUG':None}.items()),'controlled build environment')
     require(build['cwd']==receipt['source_root'] and build['argv']==[go['path'],'test','-c']+(['-race'] if receipt['race'] else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(capture/'native-memory.test'),'./TreeDB/mvcc'],'build invocation')
     require(receipt.get('errors') == [],'receipt errors')
     cases=receipt['cases'];require(isinstance(cases,list) and cases,'missing cases')
@@ -210,6 +210,7 @@ def run(args):
     before=bindings(root);source_digest=digest(before)
     (out/'source-bindings.json').write_text(json.dumps(before,indent=2)+'\n')
     env={k:v for k,v in os.environ.items() if not k.startswith('MVCC_MEMORY_')};env.pop('GOROOT',None);env.update(CGO_ENABLED='1',GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='-p=2')
+    for key in ('GOGC','GOMEMLIMIT','GODEBUG'):env.pop(key,None)
     go_path=pathlib.Path(shutil.which(args.go,path=env.get('PATH')) or args.go).resolve();require(go_path.is_file(),'Go executable')
     env['PATH']=str(go_path.parent)+os.pathsep+env.get('PATH','')
     version=subprocess.run([str(go_path),'version'],cwd=root,env=env,capture_output=True,text=True,check=True).stdout.strip()
@@ -230,12 +231,16 @@ def run(args):
         case_env=dict(env);case_env.update(MVCC_MEMORY_RESULT=str(result),MVCC_MEMORY_N=str(n),MVCC_MEMORY_MODE=mode,MVCC_MEMORY_PINNED=str(int(pin)))
         cmd=[str(binary),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v']
         command=out/(name+'-command.json');command.write_text(json.dumps({'cwd':str(root),'argv':cmd,'env':dict(build_env,**{k:v for k,v in case_env.items() if k.startswith('MVCC_MEMORY_')})},indent=2)+'\n')
-        start=time.monotonic();p=subprocess.run(cmd,cwd=root,env=case_env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=150);raw.write_bytes(p.stdout)
+        start=time.monotonic();process_error=''
+        try:p=subprocess.run(cmd,cwd=root,env=case_env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=150)
+        except (subprocess.TimeoutExpired,OSError) as e:
+            process_error=str(e);p=subprocess.CompletedProcess(cmd,-1,(getattr(e,'output',None) or b'')+('\nDRIVER ERROR: '+process_error+'\n').encode())
+        raw.write_bytes(p.stdout)
         after=bindings(root)
         if before!=after:(out/'drifted-source-bindings.json').write_text(json.dumps(after,indent=2)+'\n')
         try:stable=before==after and sha(binary)==binary_sha and sha(go_path)==go['sha256']
         except OSError:stable=False
-        cases.append({'command':command.name,'command_sha256':sha(command),'binary_before_sha256':binary_sha,'binary_after_sha256':sha(binary) if binary.is_file() else None,'n':n,'mode':mode,'pinned':pin,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
+        cases.append({'command':command.name,'command_sha256':sha(command),'binary_before_sha256':binary_sha,'binary_after_sha256':sha(binary) if binary.is_file() else None,'n':n,'mode':mode,'pinned':pin,'process_error':process_error,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
         try:
             require(stable,'source/executable drift after '+name);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
             validate_case(json.loads(result.read_text()),n,mode,pin)
