@@ -3,6 +3,7 @@
 package valuelog
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -55,23 +56,69 @@ func TestStableValueLogRotationUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	}
 }
 
-func TestStableValueLogCurrentCreationUsesRetainedParentAndFailsTyped(t *testing.T) {
-	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(t.TempDir(), "000001.vlog"), 1, rootpublication.NewIdentityPinRegistry())
+func TestStableValueLogCurrentCreationUsesExactChildWindowsEvidence(t *testing.T) {
+	if !rootpublication.StableNamespaceCreationSupported() || rootpublication.StableRelativeNamespaceSupported() {
+		t.Fatal("Windows must advertise create-only namespace authority")
+	}
+	path := filepath.Join(t.TempDir(), "000001.vlog")
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(path, 1, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	token, err := writer.StableResourceToken(StableResourceRegistration{
+	want := []byte("exact-child-creation")
+	if _, err := writer.Append(0, nil, 1, want); err != nil {
+		t.Fatal(err)
+	}
+	registration := StableResourceRegistration{
 		LogicalLane: "outer-leaf", Generation: 1, DiagnosticPath: "leaf_vlog/000001.vlog",
 		Reachability: rootpublication.ReachabilityOuterLeafRawPointer, ParentGeneration: 1,
 		NamespaceOperation: rootpublication.NamespaceCreate,
-	})
-	if token != nil {
-		token.Release()
-		t.Fatal("unsupported current-segment capture returned a token")
 	}
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		t.Fatalf("current-segment capture error=%v want ErrNamespacePersistenceUnsupported", err)
+	token, err := writer.StableResourceToken(registration)
+	if err != nil {
+		t.Fatalf("current-segment creation capture: %v", err)
+	}
+	defer token.Release()
+	if token.Namespace() == nil || token.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("current-segment capture lost creation authority")
+	}
+	if err := token.SyncThrough(); err != nil {
+		t.Fatalf("sync captured child: %v", err)
+	}
+	wrongParent, err := rootpublication.OpenStableParent(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrongParent.Close()
+	registration.NamespaceParent = wrongParent
+	conflicting, err := writer.StableResourceToken(registration)
+	if conflicting != nil {
+		conflicting.Release()
+		t.Fatal("wrong parent acquired creation authority")
+	}
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("wrong parent error=%v want ErrResourceConflict", err)
+	}
+	token.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("released creation retained %d pins", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("closed creation retained %d identities", got)
+	}
+	reader, err := NewReader(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	rid, got, _, err := reader.ReadNext()
+	if err != nil || rid != 1 || !bytes.Equal(got, want) {
+		t.Fatalf("reopened creation rid=%d value=%q err=%v", rid, got, err)
 	}
 }
 
@@ -118,15 +165,29 @@ func TestOrdinaryValueLogRotationRefreshesParentForStableWindowsRotation(t *test
 func TestUnsupportedStableRotationDoesNotLeakRegistryOwnership(t *testing.T) {
 	dir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
-	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	// Creation is supported, but a closed segment's rename obligation still
+	// requires unsupported parent persistence. Exercise that actual boundary
+	// without treating a create-only Windows producer as unsupported.
+	oldPath := filepath.Join(dir, "previous.vlog")
+	firstPath := filepath.Join(dir, "000001.vlog")
+	if err := os.WriteFile(oldPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(oldPath, firstPath); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewWriterWithStableResourcePinRegistry(firstPath, 1, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer writer.Close()
 	secondPath := filepath.Join(dir, "000002.vlog")
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false,
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
-			Reachability: rootpublication.ReachabilityValueLogPointer,
+			Reachability:    rootpublication.ReachabilityValueLogPointer,
+			NamespaceParent: writer.stableParent, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceRename, OldName: "previous.vlog", NewName: "000001.vlog",
 		},
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",

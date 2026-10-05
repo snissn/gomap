@@ -417,14 +417,40 @@ func TestCompactStorageExhaustiveCommandWALRandom4KOffline(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				backend.SetStableDictionaryResourceProvider(nil)
-				stats, compactErr := backend.CompactStorage(context.Background(), backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true})
+				before, ok := backend.StateToken()
+				if !ok {
+					_ = cleanup()
+					t.Fatal("missing state before partial compact")
+				}
+				injected := false
+				stats, compactErr := backend.CompactStorage(context.Background(), backenddb.CompactStorageOptions{
+					Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true,
+					LeafGenerationProtectedRootIDPairFunc: func() ([]uint64, []uint64) {
+						// Initial audit and rewrite preparation still need the real
+						// producer authority. The next root refresh after committed
+						// rewrite is the leaf-pack phase, following value-log GC.
+						// Keep the extra protected roots unchanged while injecting
+						// the missing packed dependency at that existing boundary.
+						if state, ok := backend.StateToken(); ok && state.CommitSeq > before.CommitSeq {
+							backend.SetStableDictionaryResourceProvider(nil)
+							injected = true
+						}
+						return nil, nil
+					},
+				})
+				after, hasAfter := backend.StateToken()
 				closeErr := cleanup()
 				if !errors.Is(compactErr, rootpublication.ErrUnresolvedResource) || closeErr != nil {
 					t.Fatalf("partial compact: operation=%v cleanup=%v", compactErr, closeErr)
 				}
 				if !compactStoragePublicPhaseSeen(stats.Phases, "value-log-gc") {
 					t.Fatal("failure did not follow committed maintenance phases")
+				}
+				if !injected || !hasAfter || after.CommitSeq <= before.CommitSeq || stats.ValueLogRewrite.ValueRecordsCopied == 0 {
+					t.Fatalf("failure lacked committed rewrite: injected=%v before=%d after=%d copied=%d", injected, before.CommitSeq, after.CommitSeq, stats.ValueLogRewrite.ValueRecordsCopied)
+				}
+				if len(stats.Phases) == 0 || stats.Phases[len(stats.Phases)-1].Name != "leaf-generation-pack-1" {
+					t.Fatalf("missing dependency failed outside leaf pack: phases=%+v", stats.Phases)
 				}
 				verifyReadOnly()
 			}

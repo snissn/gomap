@@ -605,6 +605,14 @@ type DB struct {
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned atomic.Bool
 
+	// Candidate closure work counts actual collector traversal, separate from
+	// matching/COW reads and descriptor discovery.
+	durableRootCandidateFullScans      atomic.Uint64
+	durableRootCandidateLeafOnlyScans  atomic.Uint64
+	durableRootCandidatePagesVisited   atomic.Uint64
+	durableRootCandidateOuterBodies    atomic.Uint64
+	durableRootCandidateOuterBodyBytes atomic.Uint64
+
 	durableRootManifestBuildCount      atomic.Uint64
 	durableRootManifestBuildNs         atomic.Uint64
 	durableRootManifestEntriesSeen     atomic.Uint64

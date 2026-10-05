@@ -67,7 +67,7 @@ func (w *Writer) newStableCreationProof(parent, child *os.File, path string) (*r
 
 func (w *Writer) prepareStableCreationProof(parent, child *os.File, path string, created, syncDirectory, retainProof bool) (*rootpublication.StableNamespaceCreationProof, bool, bool, error) {
 	if created && retainProof && syncDirectory {
-		if rootpublication.StableRelativeNamespaceSupported() {
+		if rootpublication.StableNamespaceCreationSupported() {
 			proof, err := w.newStableCreationProof(parent, child, path)
 			return proof, false, false, err
 		}

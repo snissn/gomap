@@ -108,6 +108,9 @@ type valueLogRefDelta struct {
 	requiresCandidateProjection bool
 	allowEmptyDependencyReuse   bool
 	outerLeafDependencyReuse    bool
+	// exactRewriteProjection certifies a matched logical rewrite delta. Raw
+	// membership is collected exactly from the candidate; no base superset.
+	exactRewriteProjection bool
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -151,6 +154,7 @@ func (d *valueLogRefDelta) resetForReuse() {
 	d.requiresCandidateProjection = false
 	d.allowEmptyDependencyReuse = false
 	d.outerLeafDependencyReuse = false
+	d.exactRewriteProjection = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
