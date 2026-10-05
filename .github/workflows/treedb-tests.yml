@@ -227,6 +227,7 @@ jobs:
         run: |
           python3 .github/scripts/test_treedb_ci_contract.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
+          python3 .github/scripts/test_ci_impact.py
 
       - name: Vet
         working-directory: TreeDB
@@ -1056,6 +1057,55 @@ jobs:
           path: artifacts/snapshot_iterator_perf/
           if-no-files-found: error
           retention-days: 14
+
+  impact-shadow:
+    name: CI impact (advisory only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # This job never supplies conditions or dependencies to execution/gates.
+    steps:
+      - name: Checkout event candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Fetch exact event objects for advisory discovery
+        continue-on-error: true
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            for sha in "$BASE_SHA" "$HEAD_SHA"; do
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+              git cat-file -e "${sha}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$sha"
+            done
+          fi
+      - name: Emit advisory impact receipt
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          EVENT_NAME: ${{ github.event_name }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          python3 .github/scripts/ci_impact.py plan --repo . \
+            --event-name "$EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" \
+            --candidate "$CANDIDATE_SHA" --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" --workflow-ref "$WORKFLOW_REF" \
+            --output "$RUNNER_TEMP/ci-impact-shadow/receipt.json"
+      - name: Upload advisory receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-impact-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-impact-shadow/
+          retention-days: 30
+          if-no-files-found: warn
 
   required:
     name: TreeDB required gate
