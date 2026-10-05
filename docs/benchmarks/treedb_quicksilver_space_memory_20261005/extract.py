@@ -7,9 +7,10 @@ import json
 import math
 from pathlib import Path
 import re
+from statistics import median
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "bb664a3fcda88958938ef12c218f054d19e3c811e604a5a4de71761a99bb3a68"
+INPUTS_SHA256 = "493763cef652bb341c2d3ab33d44447fa9638f68f9e121ff73fa01b7ff85438c"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -118,12 +119,12 @@ def command_summary(command, stderr):
     return out
 
 
-def rss_summary(rows, run=None):
+def rss_summary(rows, run=None, binary="unified-bench-baseline"):
     require(rows, "empty RSS observation")
     pids = {row["pid"] for row in rows}
     require(len(pids) == 1, "RSS summary requires one observed process")
     for row in rows:
-        require(row["exe"].endswith("/unified-bench-baseline"), "unexpected RSS executable")
+        require(row["exe"].endswith("/" + binary), "unexpected RSS executable")
         if run:
             require(run["started"] <= row["time"] <= run["finished"], "RSS sample outside run")
         mem = row["memory"]
@@ -137,6 +138,168 @@ def rss_summary(rows, run=None):
             "independent_sampled_component_maxima": {
                 key: max(row["memory"][key] for row in rows)
                 for key in ["RssAnon", "RssFile", "RssShmem", "VmSwap"]}}
+
+
+def public_matched(contract, raw):
+    prefix = "public-matched/"
+    bundle = prefix + "offsets-3m-matched/"
+    read = lambda name: json.loads(raw[prefix + name])
+    fixed = contract["public_matched"]
+    manifest = read("qualified-manifest-offsets.json")
+    require(raw[prefix + "qualified-manifest-offsets.json"] == raw[bundle + "manifest.json"],
+            "public manifest copies differ")
+    require(manifest["provisional"] is True and manifest["sources"] == fixed["sources"],
+            "public frozen source identity differs")
+    plan_bytes = raw[bundle + "plan.json"]
+    require(sha(plan_bytes) == fixed["plan_sha256"] and
+            plan_bytes == raw["pending-plans/offsets-3m-matched-plan.json"], "public plan differs")
+    plan = json.loads(plan_bytes)
+    require(plan["repeats"] == 3 and len(plan["cells"]) == 6 and
+            len({c["label"] for c in plan["cells"]}) == 6, "public matrix dimensions differ")
+    receipts = {}
+    for name, receipt in manifest["receipts"].items():
+        data = raw[prefix + receipt["path"]]
+        require(sha(data) == receipt["sha256"] and data == raw[bundle + name + "-receipt.json"],
+                "public receipt binding differs: " + name)
+        receipts[name] = json.loads(data)
+    observations = [json.loads(line) for line in raw[prefix + "offsets-3m-matched-memory.jsonl"].splitlines()]
+    observed_count = 0
+    for name, identity in fixed["sources"].items():
+        source, build = receipts["source"][name], receipts["build"][name]
+        require(source["head"] == build["head"] == identity["head"] and
+                source["producer_script_sha256"] == fixed["collector_sha256"], "public producer differs")
+        require(source["compiled_project_inputs"] and all(source["files"].get(p) == digest
+                for p, digest in source["compiled_project_inputs"].items()), "public compiled source differs")
+        require(build["binaries"][identity["binary"]]["binary_sha256"] == identity["binary_sha256"]
+                and build["go_version"] == "go version go1.26.3 linux/amd64\n", "public build differs")
+        require(all(b["rc"] == 0 and b["head"] == identity["head"] for b in build["builds"].values())
+                and all(build["environment"][k] == manifest["build_env"][k]
+                        for k in build["environment"]), "public build environment/status differs")
+        require(receipts["native"][name]["libraries"] == manifest["libraries"], "public native receipt differs")
+        require(receipts["runner"][name]["shared_host"] is True, "public runner qualification differs")
+    phase_names = ["quicksilver_" + n for n in ["hits", "misses", "mixed", "concurrent"]]
+    records = []
+    for repeat in range(1, 4):
+        for cell in plan["cells"]:
+            path = bundle + str(repeat) + "-" + cell["label"] + "/"
+            run = json.loads(raw[path + "run.json"])
+            require(run["cell"] == cell and run["repeat"] == repeat and run["validated"] is True
+                    and run["rc"] == 0 and cell["profiled"] is False, "public row identity/status differs")
+            identity = fixed["sources"][cell["source"]]
+            require(run["source"] == identity and run["manifest_sha256"] == sha(raw[bundle + "manifest.json"])
+                    and run["plan_sha256"] == fixed["plan_sha256"]
+                    and run["collector_sha256"] == fixed["collector_sha256"]
+                    and run["env"] == fixed["environment"], "public row provenance differs")
+            binary = "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/" + identity["binary"]
+            command = [binary, "-suite", "quicksilver", "-dbs", "treedb", "-profile", cell["profile"],
+                       "-quicksilver-case", cell["case"], "-keys", str(cell["keys"]),
+                       "-read-workers", str(cell["workers"]), "-quicksilver-reads", str(cell["reads"]),
+                       "-quicksilver-updates", str(cell["updates"]), "-quicksilver-duration", cell["duration"],
+                       "-quicksilver-read-batch", "64", "-quicksilver-commit", "auto", "-max-wall", "30m",
+                       "-seed", str(cell["seed"]), "-quicksilver-mixture", cell["mixture"],
+                       "-quicksilver-working-set", cell["working_set"], "-quicksilver-miss-percent", str(cell["miss_percent"])]
+            require(run["command"] == command, "public command differs")
+            resolution = run["native_resolution"]
+            libraries = {p:v["sha256"] for p,v in manifest["libraries"].items()}
+            ldd = raw[path + "ldd.stdout.txt"].decode()
+            resolved_paths = set(re.findall(r"(?:=>\s+|^\s*)(/\S+)\s+\(", ldd, re.M))
+            require(resolution["command"] == ["/usr/bin/ldd", binary] and resolution["rc"] == 0
+                    and resolution["linkage"] == "dynamic" and resolution["libraries"] == libraries
+                    and resolved_paths == set(libraries) and raw[path + "ldd.stderr.txt"] == b""
+                    and resolution["loader_env"] == {"LD_LIBRARY_PATH": run["env"]["LD_LIBRARY_PATH"],
+                                                     "LD_PRELOAD": "", "LD_AUDIT": ""}, "public loader proof differs")
+            outputs = json.loads(raw[path + "stdout.json"])
+            require(len(outputs) == 1, "public result inventory differs")
+            value = outputs[0]
+            require(value["engine"] == "treedb" and value["profiled"] is False and value["gomaxprocs"] == 12,
+                    "public result configuration differs")
+            config = dict(contract["fixture"], mixture=cell["mixture"], working_set=cell["working_set"],
+                          miss_percent=cell["miss_percent"])
+            require(all(value["config"].get(k) == v for k,v in config.items()), "public fixture differs")
+            require(value["initial_verified_keys"] == value["verified_keys"] == 3000000
+                    and value["initial_verified_misses"] == 6030000 and value["verified_misses"] == 6040000
+                    and value["updated_keys"] == 40000
+                    and value["mutations"] == {"updates":10000,"deletes":10000,"inserts":10000,
+                                                "overwrite_targets":10000,"overwrite_sets":40000},
+                    "public fixture oracle/mutations incomplete")
+            require([p["name"] for p in value["phases"]] == phase_names, "public phase inventory differs")
+            phases = []
+            for phase in value["phases"]:
+                require(all(math.isfinite(phase[k]) and phase[k] >= 0 for k in
+                            ["ops", "seconds", "composition_seconds", "ops_per_sec", "p50_us", "p95_us",
+                             "p99_us", "p999_us", "max_us", "process_allocated_bytes", "process_bytes_per_op"])
+                        and 0 < phase["p99_us"] <= phase["p999_us"] <= phase["max_us"], "public phase metric invalid")
+                require(phase["ops"] > 0 and phase["seconds"] > 0 and
+                        math.isclose(phase["ops"] / phase["seconds"], phase["ops_per_sec"], rel_tol=1e-12)
+                        and math.isclose(phase["process_allocated_bytes"] / phase["ops"],
+                                         phase["process_bytes_per_op"], rel_tol=1e-12), "public phase ratio differs")
+                require(phase["requested_present"] + phase["requested_absent"] == phase["ops"],
+                        "public request count differs")
+                if phase["name"] != "quicksilver_concurrent":
+                    require(phase["ops"] == 6000000 and phase["observed_hits"] == phase["requested_present"],
+                            "public read identity/count differs")
+                phases.append({k:phase[k] for k in ["name", "ops", "seconds", "composition_seconds", "ops_per_sec",
+                    "p50_us", "p95_us", "p99_us", "p999_us", "max_us", "process_allocated_bytes",
+                    "process_bytes_per_op", "process_heap_alloc_before", "process_heap_alloc_after",
+                    "process_gc_cycles", "requested_present", "requested_absent", "observed_hits"]})
+            require([r["phase"] for r in run["miss_ratio_validation"]] == phase_names[2:], "miss screening inventory differs")
+            for screen, phase in zip(run["miss_ratio_validation"], phases[2:]):
+                expected = phase["ops"] * cell["miss_percent"] / 100
+                tolerance = math.sqrt(phase["ops"] * math.log(2 / 1e-12) / 2)
+                require(screen["alpha"] == 1e-12 and screen["configured_miss_percent"] == cell["miss_percent"]
+                        and all(screen[k] == phase[k] for k in ["ops", "requested_present", "requested_absent"])
+                        and math.isclose(screen["expected_absent"], expected, rel_tol=1e-12)
+                        and math.isclose(screen["tolerance_requests"], tolerance, rel_tol=1e-12)
+                        and abs(phase["requested_absent"] - expected) <= tolerance, "public miss screening differs")
+            require(run["finished"] > run["started"] >=
+                    receipts["build"][cell["source"]]["builds"]["native-build"]["finished"], "public time ordering differs")
+            require(len(value["update_batch_ms"]) == 40 and len(value["checkpoint_ms"]) == 4,
+                    "public maintenance guardrail inventory differs")
+            guard = {k:value[k] for k in ["load_seconds", "initial_checkpoint_ms", "reopen_ms",
+                     "final_checkpoint_ms", "final_reopen_ms", "update_batch_ms", "checkpoint_ms"]}
+            guard.update(time_summary(raw[path + "stderr.log"].decode()))
+            require(all(guard[k] is not None for k in ["time_elapsed_seconds", "kernel_process_rss_hwm_bytes"]),
+                    "public elapsed/RSS summary missing")
+            samples = [row for row in observations if run["started"] <= row["time"] <= run["finished"]
+                       and row["exe"] == binary]
+            observed_count += len(samples)
+            observed_rss = rss_summary(samples, run, identity["binary"])
+            file_totals = {}
+            for boundary in ["initial_files", "final_files"]:
+                domains = dict.fromkeys(["dictionary", "outer_leaf", "user_value", "index", "metadata", "wal"], 0)
+                for filename, size in value[boundary].items():
+                    require(not Path(filename).is_absolute() and ".." not in Path(filename).parts
+                            and type(size) is int and size >= 0, "public file census differs")
+                    domain = ("wal" if "/wal/" in filename else "dictionary" if filename.startswith("dictdb/")
+                              else "outer_leaf" if "/leaf_vlog/" in filename else "user_value" if "/value_vlog/" in filename
+                              else "index" if filename.endswith("/index.db") else "metadata")
+                    domains[domain] += size
+                file_totals[boundary] = {"domains":domains,"apparent_excluding_wal":sum(domains.values())-domains["wal"]}
+            records.append({"repeat":repeat,"cell":cell,"command":command,"source":identity,
+                "started":run["started"],"finished":run["finished"],"load_before":run["load_before"],
+                "load_after":run["load_after"],"phases":phases,"guardrails":guard,"rss":observed_rss,
+                "runtime_apparent_files":file_totals})
+    require(len(records) == fixed["expected_rows"], "public row count differs")
+    ordered = sorted(records, key=lambda r:r["started"])
+    require(all(a["finished"] <= b["started"] for a,b in zip(ordered, ordered[1:])), "public commands overlap")
+    require(observed_count == len(observations), "unbound public RSS sample")
+    def spread(values):
+        return {"median":median(values), "min":min(values), "max":max(values)}
+    comparisons = []
+    for profile, mixture in [("durable","primary"),("fast","primary"),("durable","holdout")]:
+        sides = {s:[r for r in records if r["cell"]["source"] == s and
+                 r["cell"]["profile"] == profile and r["cell"]["mixture"] == mixture] for s in fixed["sources"]}
+        for phase_index, phase_name in enumerate(phase_names):
+            metrics = {}
+            for metric in ["ops_per_sec", "p99_us", "p999_us", "process_bytes_per_op"]:
+                vals = {s:[r["phases"][phase_index][metric] for r in rows] for s,rows in sides.items()}
+                metrics[metric] = {s:spread(v) for s,v in vals.items()}
+                metrics[metric]["candidate_over_baseline_median"] = median(vals["candidate"]) / median(vals["baseline"])
+                metrics[metric]["paired_candidate_over_baseline"] = spread([c/b for c,b in zip(vals["candidate"], vals["baseline"])])
+            comparisons.append({"profile":profile,"mixture":mixture,"phase":phase_name,"metrics":metrics})
+    return {"status":"VALIDATED_ALL", "acceptance":"PENDING", "expected_rows":18,"observed_rows":len(records),
+            "manifest_provisional":True,"sources":fixed["sources"],"environment":fixed["environment"],
+            "records":records,"comparisons":comparisons}
 
 
 def extract(contract, raw):
@@ -266,6 +429,7 @@ def extract(contract, raw):
                            "maintenance_binary_sha256": contract["treemap_binary_sha256"],
                            "maintenance_binary_binding": "post-measurement bit-identical reconstruction; original build receipt missing"},
             "fixture": baseline["config"], "storage": storage, "pending_packets": pending_packets,
+            "public_matched": public_matched(contract, raw),
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
                                "oracle_apparent_delta_bytes": storage[3]["apparent"]-after["apparent"],
@@ -283,7 +447,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "153b75b1fef01208c6b48ed6da65708abe25e9915d9de082c56512e83d3c74f9"
+REPORT_PROSE_SHA256 = "7a49969c48b913e5bd3212f4e06cb8e6af5531f5f36c1ec1d734f9ba3e118bb1"
 
 
 def report(result, template=None):
@@ -333,6 +497,45 @@ def report(result, template=None):
         [[name, packet["expected_rows"], packet["observed_rows"], "profiled structural diagnostic" if "structural" in name else
           ("profiled public pair" if packet["profiled"] else "unprofiled public pairs")]
          for name, packet in result["pending_packets"].items()])
+    public = result["public_matched"]
+    def interval(values, digits=3):
+        return f"{median(values):,.{digits}f} [{min(values):,.{digits}f}, {max(values):,.{digits}f}]"
+    def metric_interval(values, digits=3):
+        return f"{values['median']:,.{digits}f} [{values['min']:,.{digits}f}, {values['max']:,.{digits}f}]"
+    rows, tails = [], []
+    for comparison in public["comparisons"]:
+        label = comparison["profile"] + " " + comparison["mixture"]
+        phase = comparison["phase"].removeprefix("quicksilver_")
+        metric = comparison["metrics"]["ops_per_sec"]
+        ratio = metric["paired_candidate_over_baseline"]
+        rows.append([label, phase, metric_interval(metric["baseline"], 0), metric_interval(metric["candidate"], 0),
+                     f"{100*(metric['candidate_over_baseline_median']-1):+.2f}%",
+                     f"{100*(ratio['min']-1):+.2f}% to {100*(ratio['max']-1):+.2f}%"])
+        if phase in ["mixed", "concurrent"]:
+            row = [label, phase]
+            for name in ["p99_us", "p999_us"]:
+                m = comparison["metrics"][name]
+                row.extend([metric_interval(m["baseline"]), metric_interval(m["candidate"]),
+                            metric_interval(m["paired_candidate_over_baseline"])])
+            tails.append(row)
+    blocks["public_throughput"] = table(["Workload", "Phase", "Baseline ops/s", "Candidate ops/s",
+        "Ratio of medians change", "Paired repeat change range"], rows)
+    blocks["public_tails"] = table(["Workload", "Phase", "Baseline p99 us", "Candidate p99 us",
+        "Paired p99 ratio", "Baseline p999 us", "Candidate p999 us", "Paired p999 ratio"], tails)
+    rows, barriers = [], []
+    for label in [r["cell"]["label"] for r in public["records"][:6]]:
+        records = [r for r in public["records"] if r["cell"]["label"] == label]
+        rows.append([label, interval([r["guardrails"]["load_seconds"] for r in records]),
+            interval([r["guardrails"]["time_elapsed_seconds"] for r in records]),
+            interval([r["guardrails"]["kernel_process_rss_hwm_bytes"] for r in records], 0),
+            interval([r["runtime_apparent_files"]["final_files"]["apparent_excluding_wal"] for r in records], 0)])
+        barriers.append([label] + [interval([r["guardrails"][name] for r in records]) for name in
+            ["initial_checkpoint_ms", "final_checkpoint_ms", "reopen_ms", "final_reopen_ms"]] +
+            [interval([max(r["guardrails"][name]) for r in records]) for name in ["checkpoint_ms", "update_batch_ms"]])
+    blocks["public_guardrails"] = table(["Cell", "Load s", "Whole command GNU time s", "Process RSS high-water bytes",
+        "Final pre-oracle apparent bytes excluding WAL"], rows)
+    blocks["public_barriers"] = table(["Cell", "Initial checkpoint ms", "Final checkpoint ms", "Initial reopen ms",
+        "Final reopen ms", "Maximum concurrent checkpoint ms", "Maximum update batch ms"], barriers)
     names = [match[1] for match in pattern.finditer(text)]
     require(len(names) == len(blocks) and set(names) == set(blocks), "report block inventory differs")
     return pattern.sub(lambda match: "<!-- BEGIN " + match[1] + " -->\n" + blocks[match[1]] + "\n<!-- END " + match[1] + " -->", text)

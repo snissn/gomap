@@ -78,13 +78,50 @@ def main():
     checks.append(rejected("leaf diagnostic oracle count changed", lambda:
         extract.extract(contract, dict(raw, **{"leaf256/stdout.json": extract.encoded([
             dict(json.loads(raw["leaf256/stdout.json"])[0], verified_keys=2999999)])}))))
-    checks.append(rejected("pending matrix repeat count changed", lambda:
+    checks.append(rejected("imported matrix plan changed", lambda:
         extract.extract(contract, altered("pending-plans/offsets-3m-matched-plan.json", "repeats", 2))))
     pending_plan = json.loads(raw["pending-plans/offsets-3m-structural-diagnostic-plan.json"])
     pending_plan["cells"][0]["profiled"] = False
     checks.append(rejected("structural diagnostic class changed", lambda:
         extract.extract(contract, dict(raw, **{"pending-plans/offsets-3m-structural-diagnostic-plan.json":
                                                extract.encoded(pending_plan)}))))
+    public = result["public_matched"]
+    extract.require(public["status"] == "VALIDATED_ALL" and public["observed_rows"] == 18
+                    and public["acceptance"] == "PENDING" and len(public["comparisons"]) == 12,
+                    "public inventory promoted to acceptance or incomplete")
+    path = "public-matched/offsets-3m-matched/1-candidate-durable-primary/"
+    for label, field, replacement in [
+        ("public binary mismatch", "source", dict(public["sources"]["candidate"], binary_sha256="0" * 64)),
+        ("public command missing arguments", "command", public["records"][1]["command"][:-2]),
+        ("public plan binding mismatch", "plan_sha256", "0" * 64),
+        ("public collector mismatch", "collector_sha256", "0" * 64),
+        ("public GC environment changed", "env", dict(public["environment"], GOGC="off")),
+        ("public loader provenance missing", "native_resolution", {}),
+        ("public unvalidated row", "validated", False),
+        ("public miss screening omitted", "miss_ratio_validation", [])]:
+        checks.append(rejected(label, lambda field=field, replacement=replacement:
+            extract.public_matched(contract, altered(path + "run.json", field, replacement))))
+    for label, mutate in [
+        ("public oracle incomplete", lambda v:v.update(verified_keys=2999999)),
+        ("public throughput ratio changed", lambda v:v["phases"][0].update(ops_per_sec=1)),
+        ("public requested miss count changed", lambda v:v["phases"][2].update(requested_absent=0)),
+        ("public missing checkpoint guardrail", lambda v:v.update(checkpoint_ms=[]))]:
+        values = json.loads(raw[path + "stdout.json"])
+        mutate(values[0])
+        changed = dict(raw, **{path + "stdout.json": extract.encoded(values)})
+        checks.append(rejected(label, lambda changed=changed: extract.public_matched(contract, changed)))
+    missing = dict(raw)
+    missing.pop(path + "run.json")
+    checks.append(rejected("public row missing", lambda: extract.public_matched(contract, missing)))
+    checks.append(rejected("public native loader output changed", lambda: extract.public_matched(
+        contract, dict(raw, **{path + "ldd.stdout.txt": b"unresolved"}))))
+    observer_path = "public-matched/offsets-3m-matched-memory.jsonl"
+    changed = dict(raw)
+    observations = raw[observer_path].splitlines()
+    row = json.loads(observations[0])
+    row["exe"] = "/unowned-process"
+    changed[observer_path] = b"\n".join([extract.encoded(row).strip()] + observations[1:]) + b"\n"
+    checks.append(rejected("public RSS observation unbound", lambda: extract.public_matched(contract, changed)))
     prose = (extract.HERE / "REPORT.md").read_text()
     checks.append(rejected("publication prose changed", lambda:
         extract.report(result, prose.replace("Candidate acceptance and final publication remain pending.",
