@@ -324,6 +324,7 @@ func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
 			{"shadowed", true, 3, 64, false, 0, false, context.Canceled},
 			{"next-shadowed", false, 5, 64, true, 2, false, context.Canceled},
 			{"legacy-shadowed-work-cap", true, 0, 2, false, 0, true, errCollectionIndexScanWorkCap},
+			{"callback-shadowed-work-cap", true, -1, 2, false, 0, true, errCollectionIndexScanWorkCap},
 		} {
 			t.Run(fmt.Sprintf("%s/reverse=%v", tc.name, reverse), func(t *testing.T) {
 				first, second := newCollectionRunTable(1), newCollectionRunTable(1)
@@ -356,6 +357,8 @@ func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
 				if tc.cancelAt > 0 {
 					ctx := &vectorPopulationCancelContextV1{Context: context.Background(), remaining: tc.cancelAt}
 					inspectionError = ctx.Err
+				} else if tc.cancelAt < 0 {
+					inspectionError = func() error { return nil }
 				}
 				it := newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources, nil, nil, false, true, reverse, tc.maxWork, nil, inspectionError)
 				defer it.Close()

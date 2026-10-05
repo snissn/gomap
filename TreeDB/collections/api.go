@@ -9376,6 +9376,7 @@ type bufferedRootRunsIterator struct {
 	maxInspected       int
 	inspected          int
 	workCapped         bool
+	inspectionFailed   bool
 	onInspected        func(int)
 	inspectionError    func() error
 }
@@ -9531,7 +9532,7 @@ func (it *bufferedRootRunsIterator) Next() {
 }
 
 func (it *bufferedRootRunsIterator) Seek(key []byte) {
-	if it == nil || it.closed {
+	if it == nil || it.closed || it.inspectionFailed {
 		return
 	}
 	if !it.reverse && it.start != nil && bytes.Compare(key, it.start) < 0 {
@@ -9665,7 +9666,7 @@ func (it *bufferedRootRunsIterator) Len() int {
 func (it *bufferedRootRunsIterator) advance() {
 	it.valid = false
 	it.hasCur = false
-	for !it.workCapped && it.heap.Len() > 0 {
+	for !it.workCapped && !it.inspectionFailed && it.heap.Len() > 0 {
 		top := it.heap.pop()
 		key := top.key
 		if !it.reverse && it.end != nil && bytes.Compare(key, it.end) >= 0 {
@@ -9678,6 +9679,9 @@ func (it *bufferedRootRunsIterator) advance() {
 			}
 			shadowed := it.heap.pop()
 			it.advanceItem(shadowed)
+			if it.inspectionFailed {
+				return
+			}
 		}
 		if !it.includeDeleted && it.iters[top.idx].IsDeleted() {
 			it.advanceItem(top)
@@ -9737,8 +9741,12 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 
 func (it *bufferedRootRunsIterator) inspect(count int) bool {
 	if it.inspectionError != nil {
+		if it.inspectionFailed {
+			return false
+		}
 		if err := it.inspectionError(); err != nil {
 			it.firstErr = err
+			it.inspectionFailed = true
 			return false
 		}
 	}
