@@ -145,6 +145,31 @@ func TestQuicksilverRetainedRealisticVerification(t *testing.T) {
 	}
 }
 
+func TestQuicksilverRetainedBackendVerification(t *testing.T) {
+	c := quicksilverSmokeConfig()
+	c.Case = "structured256"
+	dir := t.TempDir()
+	if _, err := runQuicksilverEngine(BenchConfig{}, c, "treedb_backend", NewTreeDBBackend, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runQuicksilverSuite(BenchConfig{DBsArg: "treedb_backend", QuicksilverVerifyDir: dir}, c, ""); err != nil {
+		t.Fatal(err)
+	}
+	publicDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(publicDir, "maindb"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "maindb", "index.db"), []byte("public marker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runQuicksilverSuite(BenchConfig{DBsArg: "treedb_backend", QuicksilverVerifyDir: publicDir}, c, ""); err == nil {
+		t.Fatal("accepted a public database as a backend database")
+	}
+	if _, err := os.Stat(filepath.Join(publicDir, "index.db")); !os.IsNotExist(err) {
+		t.Fatalf("initialized the wrong layout: %v", err)
+	}
+}
+
 func TestQuicksilverOracle(t *testing.T) {
 	for _, n := range []int{1, 73, 7919, 15838} {
 		stride := quicksilverUpdateStride(n)

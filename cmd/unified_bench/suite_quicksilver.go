@@ -957,6 +957,8 @@ func verifyQuicksilverRetained(cfg BenchConfig, c quicksilverConfig, names []str
 	}
 	var marker string
 	switch {
+	case names[0] == "treedb_backend" || names[0] == "treedb_backend_command_wal":
+		marker = "index.db"
 	case strings.HasPrefix(names[0], "treedb"):
 		marker = "maindb/index.db"
 	case names[0] == "lmdb":
