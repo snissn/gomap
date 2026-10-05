@@ -164,6 +164,14 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.cache.append_only.entry_pool_drop_bytes_total",
 		"treedb.cache.append_only.entry_pool_admission_drops_total",
 		"treedb.cache.append_only.entry_pool_admission_drop_bytes_total",
+		"treedb.cache.append_only.key_arena_pool_retained_bytes_estimate",
+		"treedb.cache.append_only.key_arena_pool_retained_bytes_max_estimate",
+		"treedb.cache.append_only.key_arena_pool_gets_total",
+		"treedb.cache.append_only.key_arena_pool_puts_total",
+		"treedb.cache.append_only.key_arena_pool_drops_total",
+		"treedb.cache.append_only.key_arena_pool_drop_bytes_total",
+		"treedb.cache.append_only.key_arena_pool_admission_drops_total",
+		"treedb.cache.append_only.key_arena_pool_admission_drop_bytes_total",
 		"treedb.cache.append_only.value_arena_pool_retained_bytes_estimate",
 		"treedb.cache.append_only.value_arena_pool_retained_bytes_max_estimate",
 		"treedb.cache.append_only.value_arena_pool_gets_total",
@@ -195,6 +203,14 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.append_only.entry_pool_drop_bytes_total",
 		"treedb.process.append_only.entry_pool_admission_drops_total",
 		"treedb.process.append_only.entry_pool_admission_drop_bytes_total",
+		"treedb.process.append_only.key_arena_pool_retained_bytes_estimate",
+		"treedb.process.append_only.key_arena_pool_retained_bytes_max_estimate",
+		"treedb.process.append_only.key_arena_pool_gets_total",
+		"treedb.process.append_only.key_arena_pool_puts_total",
+		"treedb.process.append_only.key_arena_pool_drops_total",
+		"treedb.process.append_only.key_arena_pool_drop_bytes_total",
+		"treedb.process.append_only.key_arena_pool_admission_drops_total",
+		"treedb.process.append_only.key_arena_pool_admission_drop_bytes_total",
 		"treedb.process.append_only.value_arena_pool_retained_bytes_estimate",
 		"treedb.process.append_only.value_arena_pool_retained_bytes_max_estimate",
 		"treedb.process.append_only.value_arena_pool_gets_total",
@@ -274,6 +290,18 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.entry_pool_admission_drop_bytes_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_admission_drop_bytes_total") {
 		t.Fatalf("append_only entry pool admission drop bytes mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_admission_drop_bytes_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.key_arena_pool_retained_bytes_estimate"); got != mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_retained_bytes_estimate") {
+		t.Fatalf("append_only key arena pool retained mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_retained_bytes_estimate"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.key_arena_pool_drop_bytes_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_drop_bytes_total") {
+		t.Fatalf("append_only key arena pool drop bytes mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_drop_bytes_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.key_arena_pool_admission_drops_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_admission_drops_total") {
+		t.Fatalf("append_only key arena pool admission drops mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_admission_drops_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.key_arena_pool_admission_drop_bytes_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_admission_drop_bytes_total") {
+		t.Fatalf("append_only key arena pool admission drop bytes mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.key_arena_pool_admission_drop_bytes_total"))
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.value_arena_pool_retained_bytes_estimate"); got != mustStatInt64(t, stats, "treedb.cache.append_only.value_arena_pool_retained_bytes_estimate") {
 		t.Fatalf("append_only value arena pool retained mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.value_arena_pool_retained_bytes_estimate"))
