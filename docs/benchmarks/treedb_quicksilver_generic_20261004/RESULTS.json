@@ -57674,7 +57674,7 @@
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/baseline-ws1-local/source-receipt.json": "b7a3be84240b736624aaddbb42ac52d7032351cd02c339db6c62a46d9c6ba255",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/landed-source-equality-baseline.json": "7d13da144176167fd9260f8a923ba220fcff1e5367ea6f0415769838cffbb00a",
     "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
-    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/ldd.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/ldd.stdout.txt": "a9f23e67936e84aa3263afedaf85dcccf406efb4e677b0a67e4f36aa97340152",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/run.json": "77ef598ade45c11eed10ebb02d3192e13910e757d9c99ac9df99e5e8161e108f",

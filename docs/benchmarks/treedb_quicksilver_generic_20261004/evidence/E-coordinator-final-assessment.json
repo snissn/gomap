@@ -4,7 +4,7 @@
   "measured_product_sha": "87eb344543709e7752c5f5c222f8a7d42f330dac",
   "final_coverage_required": 43,
   "current_verified_coverage": 43,
-  "current_assembler_sha256": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+  "current_assembler_sha256": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3",
   "scope": "Evidence validation and publication metadata repairs, plus one existing naming-test inventory entry. No production, benchmark harness, workload, captured receipt or numeric result changes. Native 43 cells are predeclared: 13 fixed qualified reuse and 30 fresh.",
   "reuse": [
     "review-E-first25-numeric.md:25records/402hashes unchanged, numeric table applicability",
@@ -22,7 +22,7 @@
     "current E exact-head requiredCI/Codex/all paginated findings dispositions",
     "merge and authorized final cleanup/graph closure"
   ],
-  "final_result_sha256": "51f351db11b8872000b0503ab255a34bb1c9952e001e28a2a0bd1c349f0e3268",
+  "final_result_sha256": "e713c41156b9db472f856022fda44d17e7016ac3e9dd70c927626b0ea52b287c",
   "raw_hash_count": 492,
   "native_campaign": "Sole session3229 exited0 VALIDATED_ALL;30fresh completed rc0/validatedtrue/nonSKIP; native working DB inventory retains only censored baseline.",
   "accepted_at": "2026-10-05T01:44:31.492860+00:00",
@@ -48,8 +48,9 @@
   },
   "review_repair_applicability": {
     "path": "evidence/E-review-repair-applicability.json",
-    "sha256": "ad75f050a98338b576926982a1df86d7ce34eed3df497bb39a3767a602739dfb",
-    "review_sha256": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
+    "sha256": "2157287d18d079898bfbcf2afbb75b8bcbca8b47a8da56565b0df5e9223849b7",
+    "raw_inventory_review_path": "evidence/review-E-raw-inventory.md",
+    "prior_six_finding_review_sha256": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
   },
-  "updated_at": "2026-10-05T02:18:42.655856+00:00"
+  "updated_at": "2026-10-05T02:33:22.249239+00:00"
 }

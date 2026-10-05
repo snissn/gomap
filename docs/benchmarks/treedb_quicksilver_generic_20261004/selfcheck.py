@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Bounded actual-packet check: python3 [-O] selfcheck.py ABS_EVIDENCE_ROOT."""
 import copy
+import json
 import pathlib
+import shutil
 import sys
 import tempfile
 
@@ -24,6 +26,34 @@ with tempfile.TemporaryDirectory() as temporary:
             raise ValueError('mutated baseline packet/collector identity accepted')
 records = namespace['load_bundle'](root / 'baseline-primary-local', repo, namespace['BASE'], baseline, validate, collector, {}, {}, root)
 namespace['require'](len(records) == 12 and all(r['status'] == 'PASS_UNPROFILED' for r in records), 'actual accepted baseline parser')
+with tempfile.TemporaryDirectory() as temporary:
+    bundle = shutil.copytree(root / 'o2-o1-o2-treedb-durable-s24', pathlib.Path(temporary) / 'o2-o1-o2-treedb-durable-s24')
+    accepted = namespace['load_bundle'](bundle, repo, '17712b9cfcef2b90516419a34ccf3d464984d473', baseline, validate, collector, {}, {}, root)
+    namespace['require'](len(accepted) == 1 and accepted[0]['status'] == 'PASS_UNPROFILED', 'copied accepted final bundle')
+    stdout = next(bundle.glob('*/stdout.json'))
+    original_stdout = stdout.read_bytes()
+    altered = namespace['read'](stdout)
+    altered[0]['phases'][0]['seconds'] *= 2
+    altered[0]['phases'][0]['ops_per_sec'] /= 2
+    extra = bundle / 'unreviewed.txt'
+    for mutation in ('consistent timing change', 'missing file', 'extra file'):
+        if mutation == 'consistent timing change':
+            stdout.write_text(json.dumps(altered))
+        elif mutation == 'missing file':
+            stdout.unlink()
+        else:
+            extra.write_text('unreviewed')
+        try:
+            namespace['load_bundle'](bundle, repo, '17712b9cfcef2b90516419a34ccf3d464984d473', baseline,
+                                     lambda *args: namespace['fail']('validator called before raw inventory rejection'),
+                                     collector, {}, {}, root)
+        except ValueError as error:
+            namespace['require']('accepted raw bundle inventory' in str(error), 'raw inventory rejected before validator')
+        else:
+            raise ValueError('mutated raw bundle accepted: ' + mutation)
+        stdout.write_bytes(original_stdout)
+        if extra.exists():
+            extra.unlink()
 directory = pathlib.Path(records[0]['raw_directory'])
 payload = namespace['read'](directory / 'stdout.json')
 cell = records[0]['cell']
@@ -142,4 +172,4 @@ except ValueError:
     pass
 else:
     raise ValueError('changed compiled input accepted')
-print('PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O')
+print('PASS: accepted baseline packet/collector identity; 12 actual baseline packets; copied final raw bundle rejects consistent timing change/missing/extra files before validator; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O')

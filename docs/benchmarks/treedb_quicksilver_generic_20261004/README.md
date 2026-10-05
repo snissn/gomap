@@ -25,6 +25,8 @@ python3 docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py \
 
 That command emits `REPORT.md` and `RESULTS.json` with final columns `PENDING`.
 The baseline packet SHA is pinned; copied baseline capture inputs are rehashed.
+Complete relative file-hash maps are pinned to the originally reviewed publication;
+copied bundle directories must retain their original names.
 Mutable campaign amendments and later optimization diagnostics are not presented
 as new baseline inputs. To consume final frozen captures, add one `--bundle`
 for each copied capture directory and `--landed-final` with the coordinator's

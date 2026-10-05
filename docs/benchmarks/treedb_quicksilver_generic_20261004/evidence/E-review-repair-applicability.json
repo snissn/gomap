@@ -1,16 +1,16 @@
 {
-  "status": "ACCEPT_REVIEW_REPAIRS",
+  "status": "REVIEW_REPAIR_APPLICABILITY",
   "initial_publication_head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681",
   "scope": "Evidence validation and publication metadata repairs, plus one existing naming-test inventory entry. No production, benchmark harness, workload, captured receipt or numeric result changes.",
   "initial_results_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c",
   "current_files_sha256": {
-    "assemble.py": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
-    "selfcheck.py": "54696e1d381b2f55510d1c0ee20b13a0a01ad122f0a33f2bb68b699f9fb6bb23",
+    "assemble.py": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3",
+    "selfcheck.py": "a923aadd13e34ab2bba4b7fc2e5bb601e8070ba0e9f51d1647cb30c69885b85a",
     "plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
-    "RESULTS.json": "51f351db11b8872000b0503ab255a34bb1c9952e001e28a2a0bd1c349f0e3268",
+    "RESULTS.json": "e713c41156b9db472f856022fda44d17e7016ac3e9dd70c927626b0ea52b287c",
     "REPORT.md": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
     "FINAL_FINDINGS.md": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
-    "README.md": "e7fbd8fb9d0c4e732818efc9e854977b5d19a610f4baab1895776e624465b36d",
+    "README.md": "788288bc4d6a2f96f81502e498a89a7041f49b4a5b3b1e6b8833147a591189cf",
     "evidence/review-E-review-repairs.md": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
   },
   "test_file": {
@@ -50,7 +50,7 @@
       {
         "path": "/raw_file_sha256//private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
         "before": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
-        "after": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1"
+        "after": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3"
       }
     ],
     "final_records_exactly_equal": true,
@@ -60,19 +60,19 @@
   },
   "unchanged_raw_hash_bindings": 490,
   "strict_reassembly": {
-    "directory": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+    "directory": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-raw-inventory-reassembly-36gkkekf",
     "receipts_sha256": {
-      "command.json": "af643d53d6571907878ed4575b5508cddf0347484d27e63fb702d0932b3f512d",
+      "command.json": "b3f7fb5a990d3758dbcb2f39f968e953635c0e98e746fb06803efa48f01c88c9",
       "assembly.stdout.log": "c9c32288abd688cc3d4522000f4c2ba244995b171551752fc19a0710c5a9568e",
       "assembly.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "selfcheck-results.json": "83a044ad5683873430d7852a0803929c539d1df8a79bb8a0759e26f8d653ecaf",
-      "delta-check.json": "0ee990b8398dc9237a93f14af06853faaa2e16cccbc286f6adf9f5569fb09e47"
+      "selfcheck-results.json": "e6479d0797cc930191ce1b0f5bdd3ed1d72d1d632dddaae459edf32a054c8bbc",
+      "delta-check.json": "a1f6bd5ecb55a3db3670956aedae2e3ae172b88975ac1c462be003c7cb7093b3"
     },
     "command": [
       "python3",
       "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
       "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003",
-      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-raw-inventory-reassembly-36gkkekf",
       "--repo",
       "/private/tmp/gomap-qs-4983-evidence",
       "--landed-final",
@@ -115,7 +115,7 @@
           "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
         ],
         "rc": 0,
-        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; copied final raw bundle rejects consistent timing change/missing/extra files before validator; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
         "stderr": ""
       },
       {
@@ -126,7 +126,7 @@
           "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
         ],
         "rc": 0,
-        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; copied final raw bundle rejects consistent timing change/missing/extra files before validator; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
         "stderr": ""
       }
     ]
@@ -140,7 +140,7 @@
   "independent_checks_receipt": {
     "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-review-repairs-independent-checks.json",
     "sha256": "102d36c8c387de3a4b512b7291c0e1bbebbf7bab4c59978b72e56c172ffd0ec8",
-    "note": "Assessment digest in this prior receipt describes metadata before coordinator reconciliation; code, plans, report, result and naming-test digests remain current."
+    "note": "Prior receipt describes the six-finding repairs and assessment before coordinator reconciliation at ffe0. It remains historical; current raw-inventory guard/code hash changes have the separate bounded review."
   },
   "focused_native_validation": {
     "source_copy": "source-o2-o1-composed",
@@ -198,5 +198,127 @@
     "publication-head CI and Codex review",
     "all review-thread dispositions",
     "merge and authorized cleanup"
-  ]
+  ],
+  "initial_six_finding_repair_validation": {
+    "head": "ffe0fd5e2f2191038120159eccd25e8c54b84915",
+    "files_sha256": {
+      "assemble.py": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+      "selfcheck.py": "54696e1d381b2f55510d1c0ee20b13a0a01ad122f0a33f2bb68b699f9fb6bb23",
+      "plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
+      "RESULTS.json": "51f351db11b8872000b0503ab255a34bb1c9952e001e28a2a0bd1c349f0e3268",
+      "REPORT.md": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
+      "FINAL_FINDINGS.md": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+      "README.md": "e7fbd8fb9d0c4e732818efc9e854977b5d19a610f4baab1895776e624465b36d",
+      "evidence/review-E-review-repairs.md": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
+    },
+    "strict_reassembly": {
+      "directory": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+      "receipts_sha256": {
+        "command.json": "af643d53d6571907878ed4575b5508cddf0347484d27e63fb702d0932b3f512d",
+        "assembly.stdout.log": "c9c32288abd688cc3d4522000f4c2ba244995b171551752fc19a0710c5a9568e",
+        "assembly.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "selfcheck-results.json": "83a044ad5683873430d7852a0803929c539d1df8a79bb8a0759e26f8d653ecaf",
+        "delta-check.json": "0ee990b8398dc9237a93f14af06853faaa2e16cccbc286f6adf9f5569fb09e47"
+      },
+      "command": [
+        "python3",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+        "--repo",
+        "/private/tmp/gomap-qs-4983-evidence",
+        "--landed-final",
+        "17712b9cfcef2b90516419a34ccf3d464984d473",
+        "--finalize",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-historical-random4k-paged",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-holdout-s173",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s2027",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s24",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s91",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-ws1-s24",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-holdout-s173",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-holdout-s173-sync",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s2027",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s24",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s91",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-ws1-s24",
+        "--bundle",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/final-remaining30"
+      ],
+      "selfchecks": [
+        {
+          "command": [
+            "python3",
+            "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/selfcheck.py",
+            "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
+          ],
+          "rc": 0,
+          "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "python3",
+            "-O",
+            "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/selfcheck.py",
+            "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
+          ],
+          "rc": 0,
+          "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+          "stderr": ""
+        }
+      ]
+    },
+    "note": "Prior six-finding and metadata reviews cover these original bytes. The following shared raw-inventory guard has a separate bounded review."
+  },
+  "raw_inventory_repair": {
+    "prior_head": "ffe0fd5e2f2191038120159eccd25e8c54b84915",
+    "accepted_pin_source_results_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c",
+    "coverage": "Complete relative-path/hash maps for all14 final capture bundles plus baseline primary, pinned before manifest or result parsing. No new captures.",
+    "checks": "Normal and optimized selfchecks accept an unchanged copied bundle and reject consistent timing modification, missing and extra files before the structural validator.",
+    "delta_from_prior": {
+      "status": "PASS_EXACT_DELTA",
+      "baseline_head": "ffe0fd5e2f2191038120159eccd25e8c54b84915",
+      "required": 43,
+      "coverage": 43,
+      "raw_hash_count": 492,
+      "changes": [
+        {
+          "path": "/raw_file_sha256//private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
+          "before": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+          "after": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3"
+        }
+      ],
+      "final_records_exactly_equal": true,
+      "baseline_records_exactly_equal": true,
+      "matched_pairs_exactly_equal": true,
+      "report_exactly_equal": true,
+      "legacy_matching_lines": 559,
+      "legacy_occurrences": 559,
+      "sha256": {
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py": "d0608105664cc071decd28fdbcee40b3a033f45f01095c64c9761b01c186fba3",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/selfcheck.py": "a923aadd13e34ab2bba4b7fc2e5bb601e8070ba0e9f51d1647cb30c69885b85a",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/README.md": "788288bc4d6a2f96f81502e498a89a7041f49b4a5b3b1e6b8833147a591189cf",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/REPORT.md": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
+        "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/FINAL_FINDINGS.md": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+        "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-raw-inventory-reassembly-36gkkekf/RESULTS.json": "e713c41156b9db472f856022fda44d17e7016ac3e9dd70c927626b0ea52b287c"
+      }
+    },
+    "bounded_review_path": "evidence/review-E-raw-inventory.md"
+  }
 }

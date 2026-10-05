@@ -28,6 +28,25 @@ PROJECT_INVENTORIES = {
     '63794357c03898da03a37c5412770fdf197f2ce0': (2130, 'fac466bf894114fd2c55b1f1efaac7aaa67bcdb90c43fd4f5351182bd8406a36', DOC_REPAIR),
     '87eb344543709e7752c5f5c222f8a7d42f330dac': (2131, 'ae0c3e7cd61312b06f5154e1cc115c14de59c2bba0cd90b47f4b8240fa3c8f41', '17712b9cfcef2b90516419a34ccf3d464984d473'),
 }
+# Complete relative file maps from the original independently accepted publication
+# RESULTS SHA256 97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c.
+BUNDLE_INVENTORIES = {
+    'o2-o1-o2-treedb-durable-generic-compression-off': (11, '9630761a0b53e353100af1eb7fd6e2c23087281370e2a4f10fdef0611b206ceb'),
+    'o2-o1-o2-treedb-durable-historical-random4k-paged': (11, 'a9484a172ed3164b7e1fb40e3a1c1d193a90f6bc31bad094de070b5620fe2ab8'),
+    'o2-o1-o2-treedb-durable-holdout-s173': (11, '521cc1ff10f0d7628139d0b3dffeccc818b16b2cfc44421c31576349e05fbc15'),
+    'o2-o1-o2-treedb-durable-s2027': (11, 'c24989f29233d474dcf911a864d6ba29836de5046a02c4919006a1d877344c88'),
+    'o2-o1-o2-treedb-durable-s24': (11, '64ab4c78404298d146a680a6ad7bc2d1bb068c5c645e281451c1294b715bae3f'),
+    'o2-o1-o2-treedb-durable-s91': (11, '6a36a308548a2def23c940f5138ae6fe968dada2decb9ffa150f084f923f0548'),
+    'o2-o1-o2-treedb-durable-ws1-s24': (11, 'a7d8aca18024ef972ad8fbcf1bf7391ef3ab553d8be9bbd40336438738046dce'),
+    'o2-o1-o2-treedb-fast-holdout-s173': (11, 'cb57475b7eed5aed6b5939dcbbd5ce1ecaacec64a5c8092990fcc3f1b4ed143e'),
+    'o2-o1-o2-treedb-fast-holdout-s173-sync': (11, 'b9c2747efa570a7e603bcdbb539c3ae9632ecca09d135587625bf94b7f2b6af9'),
+    'o2-o1-o2-treedb-fast-s2027': (11, '3b3af7722c67cf7066a2933e5d762a26fe18de907620d1b544f49db5261aedb1'),
+    'o2-o1-o2-treedb-fast-s24': (11, 'e56060dc8dca98d75bddd60d569ab9ce36d4daddca3735f3c0d9fa4832e84377'),
+    'o2-o1-o2-treedb-fast-s91': (11, '6810388e3544743220e59a2c5908276541994066e40d3a8a6786b9b881ca57a0'),
+    'o2-o1-o2-treedb-fast-ws1-s24': (11, '0f39890bca97c344f90e3db9ae34a616129e3f52f334feb72ae3f86b629d4c25'),
+    'final-remaining30': (156, '33aa5884898a297e8373a2a1168b0e07843a8c8a77e13b35c127c5f909c0f70d'),
+    'baseline-primary-local': (66, 'b4f6301395a78203f1e754e0851c8ea6bf71c39788fe97a104dc0b4f8bc88d5a'),
+}
 README_BLOBS = {
     'cmd/benchprof/README.md': ('fc1ca832dc2f250002e4a6c6858bad977893f9d9', 'f6cd1c62a46c8a4b7a0d93befa86fb327d449ce1'),
     'cmd/unified_bench/README.md': ('309cf9c59c67967abba9256684ec67de8dc45753', '3a40d2b73cc6fd5484b1ecc7f380223c4f797ea3'),
@@ -173,9 +192,12 @@ def check_command(meta, plan, build):
 
 def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hashes, fixtures, evidence):
     directory = directory.resolve()
-    for path in sorted(directory.rglob('*')):
-        if path.is_file():
-            raw_hashes[str(path)] = digest(path.read_bytes())
+    inventory = {path.relative_to(directory).as_posix(): digest(path.read_bytes())
+                 for path in sorted(directory.rglob('*')) if path.is_file()}
+    require(BUNDLE_INVENTORIES.get(directory.name) ==
+            (len(inventory), digest(json.dumps(inventory, sort_keys=True, separators=(',', ':')).encode())),
+            'accepted raw bundle inventory ' + str(directory))
+    raw_hashes.update({str(directory / name): sha for name, sha in inventory.items()})
     manifest, plan = read(directory / 'manifest.json'), read(directory / 'plan.json')
     receipts = {}
     for name, entry in manifest['receipts'].items():
