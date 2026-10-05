@@ -34,12 +34,17 @@ python3 -m unittest discover -s scripts -p test_quicksilver_maintenance.py
 Plan: `{"output":"new-capture-dir","cells":[...]}`. Run three baseline
 characterizations first, write the immutable noise packet, then execute
 `A1/B1, B2/A2, A3/B3`. Pairs input has `calibration`, `calibration_sha256`, and
-`pairs: [{"A":"/abs/A1/run.json","B":"/abs/B1/run.json"}, ...]`.
+`pairs: [{"A":"/abs/A1/run.json","A_sha256":"...","B":"/abs/B1/run.json","B_sha256":"..."}, ...]`.
+Freeze all six expected run packet SHA256 digests in the reviewed pair bundle
+after collection; metadata changes cannot use their own raw-artifact hashes as
+acceptance authority.
 The analyzer recomputes `E=(max A-min A)/median A` and reports every pair's
 fractional reduction. Material improvement requires all three favorable signs,
 median reduction greater than `2E`, and all six policy-completed runs with equal
 truthful completion flags (exhaustive also requires byte minimization). Equally
-incomplete runs remain diagnostics even when faster.
+incomplete runs remain diagnostics even when faster. A `deferred` or `unsupported`
+phase is also nonqualifying even when the reported debt and completion flags do
+not represent it; retain the original report as diagnostic evidence.
 `peak_rss_bytes` is also supported with its own pre-comparison noise packet.
 Negative or noisy evidence leaves the parent gate open. Changed fixture contents,
 mode, fixed batch size, environment, source, harness, raw artifacts, RSS identity,

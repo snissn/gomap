@@ -332,6 +332,11 @@ def analyze(bundle_path):
     require(all(a['finished_ns'] <= b['started_ns'] for a, b in zip(bases, bases[1:])) and bases[-1]['finished_ns'] < noise['created_ns'], 'calibration order drift')
     pairs = bundle['pairs']
     require(len(pairs) == 3, 'exactly three matched pairs required')
+    for pair in pairs:
+        for role in ('A', 'B'):
+            expected = pair.get(role+'_sha256')
+            require(isinstance(expected, str) and re.fullmatch('[0-9a-f]{64}', expected) and
+                    unified.sha256(pathlib.Path(pair[role])) == expected, 'matched run digest drift: '+role)
     loaded = [(load_run(v['A']), load_run(v['B'])) for v in pairs]
     runs = [r for pair in loaded for r, _ in pair]
     all_paths = [*noise['paths'], *[str(pathlib.Path(p[k]).resolve()) for p in pairs for k in ('A', 'B')]]
@@ -345,11 +350,14 @@ def analyze(bundle_path):
     effects = [(metric(a[0], noise['metric'])-metric(b[0], noise['metric']))/metric(a[0], noise['metric']) for a, b in loaded]
     completion = [[{k: report[k] for k in ('fully_compacted', 'policy_fully_compacted', 'byte_minimized')} for _, report in pair] for pair in loaded]
     equal_completion = all(a == b for a, b in completion)
-    complete_runs = all(flags['policy_fully_compacted'] for pair in completion for flags in pair)
+    complete_phase_dispositions = all(phase.get('status', '') not in ('deferred', 'unsupported')
+                                     for pair in loaded for _, report in pair for phase in report['phases'])
+    complete_runs = all(flags['policy_fully_compacted'] for pair in completion for flags in pair) and complete_phase_dispositions
     material = all(v > 0 for v in effects) and statistics.median(effects) > 2*noise['E'] and equal_completion and complete_runs
     return dict(metric=noise['metric'], E=noise['E'], threshold=2*noise['E'], pair_effects=effects,
                 median_effect=statistics.median(effects), all_favourable=all(v > 0 for v in effects),
-                equal_completion=equal_completion, complete_runs=complete_runs, completion=completion, material=material,
+                equal_completion=equal_completion, complete_runs=complete_runs,
+                complete_phase_dispositions=complete_phase_dispositions, completion=completion, material=material,
                 conclusion='material improvement' if material else 'inconclusive or negative; parent gate remains unmet',
                 unavailable=['peak temporary disk', 'per-phase CRC/decode bytes'],
                 scope='one maintenance metric only; correctness, service-read and online-progress gates are separate')

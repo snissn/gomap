@@ -125,7 +125,9 @@ class MaintenanceTests(unittest.TestCase):
         with mock.patch.object(m.time, 'time_ns', return_value=1000000000000+80*1000000000):
             m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', root/'noise.json')
         bundle = dict(calibration=str(root/'noise.json'), calibration_sha256=m.unified.sha256(root/'noise.json'),
-                      pairs=[{k: str(paths[k+str(i)]) for k in ('A', 'B')} for i in (1, 2, 3)])
+                      pairs=[{**{k: str(paths[k+str(i)]) for k in ('A', 'B')},
+                              **{k+'_sha256': m.unified.sha256(paths[k+str(i)]) for k in ('A', 'B')}}
+                             for i in (1, 2, 3)])
         m.save(root/'bundle.json', bundle)
         return paths
 
@@ -170,6 +172,14 @@ class MaintenanceTests(unittest.TestCase):
     def change(path, mutation):
         run = json.loads(path.read_bytes()); mutation(run); m.save(path, run)
 
+    @staticmethod
+    def seal_pairs(root):
+        path = root/'bundle.json'; bundle = json.loads(path.read_bytes())
+        for pair in bundle['pairs']:
+            for role in ('A', 'B'):
+                pair[role+'_sha256'] = m.unified.sha256(pathlib.Path(pair[role]))
+        m.save(path, bundle)
+
     def test_material_and_negative_packets(self):
         for candidate, material in [(8., True), (9.8, False), (11., False)]:
             with self.subTest(candidate=candidate), tempfile.TemporaryDirectory() as temp:
@@ -202,6 +212,7 @@ class MaintenanceTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp); paths = self.make_campaign(root)
                 self.change(paths['B2'], mutation)
+                self.seal_pairs(root)
                 with self.assertRaises(ValueError):
                     m.analyze(root/'bundle.json')
 
@@ -213,9 +224,11 @@ class MaintenanceTests(unittest.TestCase):
             broken.update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
             m.save(directory/'stdout.json', broken)
             self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(directory/'stdout.json')}))
+            self.seal_pairs(root)
             result = m.analyze(root/'bundle.json')
             self.assertFalse(result['equal_completion']); self.assertFalse(result['material'])
             self.change(path, lambda r: r['rss_sampling'].update(complete=False))
+            self.seal_pairs(root)
             with self.assertRaises(ValueError):
                 m.analyze(root/'bundle.json')
 
@@ -228,9 +241,39 @@ class MaintenanceTests(unittest.TestCase):
                 incomplete.update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
                 m.save(directory/'stdout.json', incomplete)
                 self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(directory/'stdout.json')}))
+            self.seal_pairs(root)
             result = m.analyze(root/'bundle.json')
             self.assertTrue(result['equal_completion']); self.assertFalse(result['complete_runs'])
             self.assertFalse(result['material']); self.assertTrue(result['all_favourable'])
+
+    def test_every_matched_packet_requires_external_digest(self):
+        for label in ('A1', 'B1', 'B2', 'A2', 'A3', 'B3'):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp); paths = self.make_campaign(root, candidate=11.)
+                self.change(paths[label], lambda r: r.update(elapsed_seconds=8.))
+                with self.assertRaisesRegex(ValueError, 'matched run digest drift'):
+                    m.analyze(root/'bundle.json')
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); self.make_campaign(root)
+            path = root/'bundle.json'; bundle = json.loads(path.read_bytes())
+            del bundle['pairs'][0]['A_sha256']; m.save(path, bundle)
+            with self.assertRaisesRegex(ValueError, 'matched run digest drift'):
+                m.analyze(path)
+
+    def test_incomplete_phase_dispositions_cannot_qualify(self):
+        for status in ('deferred', 'unsupported'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp); paths = self.make_campaign(root)
+                for label in ('A1', 'B1', 'B2', 'A2', 'A3', 'B3'):
+                    path = paths[label]; directory = path.parent
+                    incomplete = report(); incomplete['phases'][0]['status'] = status
+                    m.save(directory/'stdout.json', incomplete)
+                    self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(directory/'stdout.json')}))
+                self.seal_pairs(root)
+                result = m.analyze(root/'bundle.json')
+                self.assertTrue(result['equal_completion']); self.assertTrue(result['all_favourable'])
+                self.assertFalse(result['complete_phase_dispositions'])
+                self.assertFalse(result['complete_runs']); self.assertFalse(result['material'])
 
 
 if __name__ == '__main__':
