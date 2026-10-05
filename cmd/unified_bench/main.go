@@ -167,9 +167,10 @@ type BenchConfig struct {
 	TestsArg      string
 	Profile       string
 
-	KeepDir  bool
-	Progress bool
-	SeedUsed int64
+	QuicksilverVerifyDir string
+	KeepDir              bool
+	Progress             bool
+	SeedUsed             int64
 
 	CPUProfile string
 	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
@@ -478,6 +479,12 @@ func main() {
 		isSet[f.Name] = true
 	})
 	explicitFlags = isSet
+	if strings.TrimSpace(*quicksilverVerifyDir) != "" && !strings.EqualFold(strings.TrimSpace(*suiteArg), "quicksilver") {
+		log.Fatal("-quicksilver-verify-dir requires -suite quicksilver")
+	}
+	if strings.TrimSpace(*quicksilverVerifyDir) != "" && strings.TrimSpace(*profileDir) != "" {
+		log.Fatal("-quicksilver-verify-dir does not accept -profile-dir")
+	}
 	if err := applyProfile(*profileArg, isSet); err != nil {
 		log.Fatalf("profile: %v", err)
 	}
@@ -514,7 +521,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Quicksilver: case=%s generation=%s mixture=%s keys=%d commit=%s seed=%d working_set=%s miss_percent=%d\n", c.Case, c.Generation, c.Mixture, c.Keys, c.CommitMode, c.Seed, c.WorkingSet, c.MissPercent)
 		fmt.Fprintf(os.Stderr, "             keys=%s values=%s contents=%s load_batch=1000\n", c.KeyDistribution, c.ValueDistribution, c.ContentDistribution)
 		fmt.Fprintf(os.Stderr, "             readers=%d aggregate_reads=%d snapshot_reads=%d updates=%d duration=%s GOMAXPROCS=%d\n", c.Workers, c.Reads, c.ReadBatch, c.Updates, c.Duration, runtime.GOMAXPROCS(0))
-		fmt.Fprintf(os.Stderr, "DBs:         %s\nPhases:      %s\n", *dbsArg, strings.Join(quicksilverPhaseNames, ","))
+		if strings.TrimSpace(*quicksilverVerifyDir) != "" {
+			fmt.Fprintf(os.Stderr, "DBs:         %s\nVerify:      %s (final value/miss oracle only)\n", *dbsArg, *quicksilverVerifyDir)
+		} else {
+			fmt.Fprintf(os.Stderr, "DBs:         %s\nPhases:      %s\n", *dbsArg, strings.Join(quicksilverPhaseNames, ","))
+		}
 	} else {
 		fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
 		fmt.Fprintf(os.Stderr, "             read_workers=%d\n", resolveReadWorkers(*readWorkers))
@@ -574,6 +585,7 @@ func main() {
 		TestsArg:                         *testArg,
 		Profile:                          *profileArg,
 		KeepDir:                          *keepDir,
+		QuicksilverVerifyDir:             strings.TrimSpace(*quicksilverVerifyDir),
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
 		CPUProfile:                       *cpuProfile,
