@@ -305,15 +305,28 @@ func TestVectorSourcePopulationRetainedJSONV1(t *testing.T) {
 			if _, err := c.Insert([]byte("id"), []byte(raw)); err != nil {
 				t.Fatal(err)
 			}
+			rows := []columnGraphRebuildInputRowV2A{{id: "id", vector: []float32{1, math.Float32frombits(0x80000000)}}}
+			recordBytes := uint64(len(raw))
+			if i == 0 {
+				// Unsorted distinct rows exercise scratch reuse in the JSON decoder.
+				rows = append(rows, columnGraphRebuildInputRowV2A{id: "a", vector: []float32{0, 1}}, columnGraphRebuildInputRowV2A{id: "z", vector: []float32{-1, 0}})
+				for _, row := range rows[1:] {
+					document := fmt.Sprintf(`{"embedding":[%g,%g]}`, row.vector[0], row.vector[1])
+					if _, err := c.Insert([]byte(row.id), []byte(document)); err != nil {
+						t.Fatal(err)
+					}
+					recordBytes += uint64(len(document))
+				}
+			}
 			meta, err := c.CreateVectorIndex(VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine})
 			if err != nil {
 				t.Fatal(err)
 			}
 			def := meta.VectorIndexes[0]
-			p := vectorPopulationTestExpectationV1([]columnGraphRebuildInputRowV2A{{id: "id", vector: []float32{1, math.Float32frombits(0x80000000)}}}, 2)
+			p := vectorPopulationTestExpectationV1(rows, 2)
 			proof, err := vectorPopulationTestProofV1(context.Background(), c, def, p)
 			if i == 0 {
-				if err != nil || proof.SourceRecordBytes != uint64(len(raw)) || proof.AssetBytes != 0 {
+				if err != nil || proof.Rows != 3 || proof.SHA256 != p.SHA256 || proof.SourceRecordBytes != recordBytes || proof.AssetBytes != 0 {
 					t.Fatalf("retained proof %+v %v", proof, err)
 				}
 				p.Limits.MaxSourceRecordBytes = uint64(len(raw))

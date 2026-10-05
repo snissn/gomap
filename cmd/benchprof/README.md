@@ -472,6 +472,25 @@ Quicksilver canonical results also produce a point-read throughput table in
 `insights.md/html` and `quicksilver_ops` rows in `insights.json`. These read
 phases remain separate from the scan-specific throughput comparisons.
 
+### Native fixed-quantum MVCC package profiles
+
+The optional `BenchmarkNativePruneFixedQ` package benchmark uses
+`scripts/mvcc_native_prune.py`, not unified-bench database adapters. Its schema 1,
+exact fixture/cap contract, source freeze, fresh-process reproduction and
+qualification limits are documented in [unified-bench's native harness section](../unified_bench/README.md#native-fixed-quantum-mvcc-package-harness).
+
+Capture with the explicit `mvcc_native_prune,treedb_test` tags requires the
+bounded API; untagged builds stay unchanged and pre-M7 tagged builds fail
+compilation. `--profiles` produces `case-N.cpu.pprof`, `case-N.allocs.pprof`,
+`case-N.mutex.pprof` and `case-N.block.pprof`, analyzed with ordinary
+`go tool pprof` and the retained `mvcc.test` binary. These whole-process profiles
+include setup/oracles/final Close; package JSON separately measures complete
+fixed-Q passes and final Close. Allocation deltas are labeled combined process
+traffic. These files are not benchprof inputs and do not change its parsers or
+`benchprof_results.json` contract. Tooling smoke and valid packets cannot qualify
+the runtime while actual sync, fence and owned retained/peak measurements remain
+missing; `validate --qualify` refuses that verdict.
+
 ## Current source-population audit microbenchmarks
 
 These standalone Go benchmarks time admitted source-vector proof work and
