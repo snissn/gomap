@@ -46,8 +46,9 @@ type maintenanceReachabilityResult struct {
 
 	// Internal evidence for collector-selection tests. These count actual
 	// expensive collector work, not merely selected collectors.
-	recordLengthLookups  uint64
-	leafFrameProjections uint64
+	recordLengthLookups      uint64
+	leafFrameProjections     uint64
+	outerLeafBodiesProjected uint64
 }
 
 func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64, projectValueLog, projectProtectedValueLog bool) ([]maintenanceRoot, int, error) {
@@ -320,6 +321,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		if len(data) != page.PageSize {
 			return fmt.Errorf("maintenance reachability: invalid outer leaf size %d for file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 		}
+		result.outerLeafBodiesProjected++
 		result.counters.PhysicalBytesRead += uint64(len(data))
 		n := node.NewNodeView(data)
 		if snap.reader.ReadChecksumEnabled() && !(state.PageChecksumVerified && state.RecordChecksumVerified) {

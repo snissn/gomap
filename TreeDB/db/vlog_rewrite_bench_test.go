@@ -16,33 +16,51 @@ import (
 )
 
 func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
-	const (
-		seg1Records = 2048
-		seg2Records = 1024
-	)
+	b.Run("Paged/N1536/B512", func(b *testing.B) { benchmarkValuePointerRewrite(b, 2048, 1024, 512, false) })
+	// Fixed B isolates repeated candidate-closure work as logical population N
+	// grows. Large cells are complete runs; invoke -benchtime=1x explicitly.
+	for _, n := range []int{30_000, 300_000, 3_000_000} {
+		b.Run(fmt.Sprintf("CompressedOuter/N%d/B8192", n), func(b *testing.B) { benchmarkValuePointerRewrite(b, n*2, n/2, 8192, true) })
+	}
+	b.Run("CompressedOuter/N30000/B256", func(b *testing.B) { benchmarkValuePointerRewrite(b, 60_000, 15_000, 256, true) })
+}
 
+func benchmarkValuePointerRewrite(b *testing.B, seg1Records, seg2Records, batchSize int, outer bool) {
 	var totalCopied int64
 	var totalBytes int64
 	var totalRefreshScans uint64
-	var totalRewriteAllocs uint64
+	var totalRewriteAllocs, totalRewriteAllocBytes uint64
+	var totalFullScans, totalLeafScans, totalPages, totalBodies, totalCRC, totalPublications uint64
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		db, sourceIDs, cleanup := setupValuePointerRewriteBench(b, seg1Records, seg2Records)
+		db, sourceIDs, cleanup := setupValuePointerRewriteBench(b, seg1Records, seg2Records, outer)
 		refreshBefore := db.valueLogManager.RefreshScanCount()
+		fullBefore := db.durableRootCandidateFullScans.Load()
+		leafBefore := db.durableRootCandidateLeafOnlyScans.Load()
+		pagesBefore := db.durableRootCandidatePagesVisited.Load()
+		bodiesBefore := db.durableRootCandidateOuterBodies.Load()
+		crcBefore := db.valueLogManager.ReadStats().RecordCRCChecks
+		seqBefore := db.currentCommitSeq()
 		var memBefore runtime.MemStats
 		runtime.ReadMemStats(&memBefore)
 		b.StartTimer()
 
 		stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 			SourceFileIDs: sourceIDs,
-			BatchSize:     512,
+			BatchSize:     batchSize,
 		})
 		b.StopTimer()
 		if err != nil {
 			cleanup()
 			b.Fatalf("ValueLogRewriteOnline: %v", err)
 		}
+		totalFullScans += db.durableRootCandidateFullScans.Load() - fullBefore
+		totalLeafScans += db.durableRootCandidateLeafOnlyScans.Load() - leafBefore
+		totalPages += db.durableRootCandidatePagesVisited.Load() - pagesBefore
+		totalBodies += db.durableRootCandidateOuterBodies.Load() - bodiesBefore
+		totalCRC += db.valueLogManager.ReadStats().RecordCRCChecks - crcBefore
+		totalPublications += db.currentCommitSeq() - seqBefore
 		totalCopied += int64(stats.ValueRecordsCopied)
 		totalBytes += stats.ValueBytesCopied
 		totalRefreshScans += db.valueLogManager.RefreshScanCount() - refreshBefore
@@ -51,18 +69,28 @@ func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
 		if memAfter.Mallocs > memBefore.Mallocs {
 			totalRewriteAllocs += memAfter.Mallocs - memBefore.Mallocs
 		}
+		if memAfter.TotalAlloc > memBefore.TotalAlloc {
+			totalRewriteAllocBytes += memAfter.TotalAlloc - memBefore.TotalAlloc
+		}
 		cleanup()
 	}
 
 	if b.N > 0 {
+		b.ReportMetric(float64(totalFullScans)/float64(b.N), "candidate_full_scans/op")
+		b.ReportMetric(float64(totalLeafScans)/float64(b.N), "candidate_leaf_scans/op")
+		b.ReportMetric(float64(totalPages)/float64(b.N), "candidate_pages/op")
+		b.ReportMetric(float64(totalBodies)/float64(b.N), "candidate_outer_bodies/op")
+		b.ReportMetric(float64(totalCRC)/float64(b.N), "record_crc_checks/op")
+		b.ReportMetric(float64(totalPublications)/float64(b.N), "publications/op")
 		b.ReportMetric(float64(totalCopied)/float64(b.N), "value_records/op")
 		b.ReportMetric(float64(totalBytes)/float64(b.N), "value_bytes/op")
 		b.ReportMetric(float64(totalRefreshScans)/float64(b.N), "refresh_scans/op")
 		b.ReportMetric(float64(totalRewriteAllocs)/float64(b.N), "rewrite_allocs/op")
+		b.ReportMetric(float64(totalRewriteAllocBytes)/float64(b.N), "rewrite_alloc_bytes/op")
 	}
 }
 
-func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) (*DB, []uint32, func()) {
+func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int, outer bool) (*DB, []uint32, func()) {
 	tb.Helper()
 	dir, err := os.MkdirTemp("", "treedb-vlog-rewrite-value-bench-*")
 	if err != nil {
@@ -70,12 +98,13 @@ func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) 
 	}
 
 	db, err := Open(Options{
-		Dir:                    dir,
-		Durability:             DurabilityWALOffRelaxed,
-		DisableBackgroundPrune: true,
-		LeafPrefixCompression:  true,
-		IndexColumnarLeaves:    true,
-		IndexPackedValuePtr:    true,
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		LeafPrefixCompression:      true,
+		IndexOuterLeavesInValueLog: outer,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -85,10 +114,21 @@ func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) 
 		tb.Fatalf("Open: %v", err)
 	}
 
+	var leafLog LeafPageLog
+	if outer {
+		leafLog, err = NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{Compression: ValueLogCompressionAuto})
+		if err != nil {
+			_ = db.Close()
+			_ = os.RemoveAll(dir)
+			tb.Fatal(err)
+		}
+		db.SetLeafPageLog(leafLog)
+	}
+
 	ptrs1 := appendPointersInNewSegmentBench(tb, dir, 0, 1, 1_000_000, seg1Records, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(i % 251)}, 768)
 	})
-	ptrs2 := appendPointersInNewSegmentBench(tb, dir, 0, 2, 2_000_000, seg2Records, func(i int) []byte {
+	ptrs2 := appendPointersInNewSegmentBench(tb, dir, 0, 2, uint64(1_000_000+seg1Records), seg2Records, func(i int) []byte {
 		return bytes.Repeat([]byte{byte((i + 7) % 251)}, 768)
 	})
 
@@ -110,6 +150,16 @@ func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) 
 			_ = os.RemoveAll(dir)
 			tb.Fatalf("SetPointer(s1): %v", err)
 		}
+	}
+	if outer {
+		if err := bt.WriteSync(); err != nil {
+			tb.Fatalf("first-generation seed: %v", err)
+		}
+		_ = bt.Close()
+		if err := leafLog.(*rewriteWriter).rotateLeaf(); err != nil {
+			tb.Fatal(err)
+		}
+		bt = db.NewBatch().(*Batch)
 	}
 	for i := range ptrs2 {
 		if err := bt.SetPointer([]byte(fmt.Sprintf("s2-live-%06d", i)), ptrs2[i]); err != nil {
@@ -136,6 +186,9 @@ func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) 
 	sourceIDs := []uint32{ptrs1[0].FileID}
 	cleanup := func() {
 		_ = db.Close()
+		if leafLog != nil {
+			_ = leafLog.(*rewriteWriter).Close()
+		}
 		_ = os.RemoveAll(dir)
 	}
 	return db, sourceIDs, cleanup

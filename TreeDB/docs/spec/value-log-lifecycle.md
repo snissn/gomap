@@ -329,6 +329,84 @@ and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
 
+A supported rewrite publication combines the matched old/new logical pointer
+count delta with the existing leaf-file-ID reachability collector in a private
+candidate snapshot. The collector walks pager topology and discovers collection
+root descriptors, but it does not project logical values from every compressed
+outer leaf. The resulting raw leaf-file and logical value-segment membership is
+exact for the candidate; rewrite explicitly replaces predecessor raw membership
+rather than using the ordinary additive publication superset. Shared logical
+pointers remain counted until their last matching reference disappears. An
+unmatched swap contributes no count change.
+
+Unknown, stale, or underflowing reference counts use the original full candidate
+scanner. Replacing collection descriptor aliases can remove pointer-backed
+system descriptor references outside the collection's local delta, so the whole
+publication currently uses that full scanner. A system descriptor rewrite also
+uses it. Exact fallback counts remain private until successful activation;
+aborts and publication conflicts cannot repair the live tracker.
+
+Ordinary COW Apply uses the installed producer's stable append APIs. Its private
+resource builder retains the exact raw handle/frontier and dictionary/template
+closure while candidate projection captures fresh registered raw membership.
+Producer dictionary/template authority then passes through the existing finalize
+resource boundary. Byte lookup alone cannot authorize publication, including on
+the full-scan fallback. An unsupported producer fails with unresolved resource
+authority before publication. This preserves installed producer rotation and
+sequence authority. The builder releases acquired resources on Apply failure;
+frozen resources release on abort/conflict, and successful publication transfers
+ownership to the existing slot/runtime resource sets. Dictionary/template proofs
+and packed-generation authority retain their existing inherited-closure rules.
+
+Exact newest-candidate membership is not deletion permission. Both recoverable
+meta slots, queued publication debt, replay references, snapshots, and identity
+pins still contribute to `RecoverableRootSet`; existing GC/rewrite deletion gates
+remain authoritative.
+
+The new `treedb.durable_root.candidate.*` counters report full scans, leaf-only
+scans, pager pages visited, outer bodies projected, and projected body bytes
+(`bodies * page.PageSize`). They cover candidate reachability collection only;
+matching, COW reads, and descriptor-discovery reads remain separate work. Body
+bytes are expanded page bytes, not compressed bytes read from disk. Existing
+value-log record CRC counters cover their actual read paths. The supported
+projection removes repeated outer value-body projection; it still walks pager
+topology and descriptor roots twice per publication. For K fixed-B publications,
+residual work is O(K*(P+D+S)), where P is visited pager topology, D is descriptor
+work, and S is registered segment/count membership. This is not an O(B) total
+publication claim.
+
+Allocation ownership is bounded by one Apply/candidate at a time: matched delta
+entries and COW leaf outputs depend on B; the logical-count copy and unioned file
+membership depend on S; the collector's visited-page and root lists depend on P
+and D. The existing candidate snapshot owns its registered set and reader until
+capture returns. Each collector result and temporary membership map is discarded
+before the candidate completes. Lane wrappers share one mutex-protected stable
+resource builder, consumed exactly once by freeze or abandon. No persistent raw
+reference tracker or new retention cache is introduced; rewrite batching, scratch
+caps, and scheduler defaults are unchanged.
+
+`BenchmarkValueLogRewriteOnline_ValuePointers` retains the pager control and adds
+compressed outer-leaf cells at fixed B=8192 for N=30k, 300k, and 3M live logical
+keys, plus N=30k/B=256 as a causal control. Two logical value segments and two raw
+producer generations seed each outer cell. Half the live keys are in the selected
+rewrite source; each timed operation runs that source rewrite to completion.
+Setup and cleanup are outside the timer. For example:
+
+```sh
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers/CompressedOuter/N30000/B8192$' \
+  -benchtime=1x -count=3 -benchmem
+```
+
+Reports include complete-run time, publications, candidate scans/pages/bodies,
+record CRC checks, process-wide rewrite mallocs and allocated bytes, copied value
+records/bytes, and refresh scans. Malloc/byte deltas include concurrent Go runtime
+work and are not peak RSS. Qualification still requires paired frozen-source
+public `ValueLogRewriteOnline` runs with real compressed outer leaves, retained
+profiles and process RSS, correctness/checksum/reopen/retention checks, and the
+N/B matrix above. No performance improvement is claimed solely from these
+mechanism counters.
+
 ### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
 
 Published leaf-generation views retain an immutable source manifest. GC prunes

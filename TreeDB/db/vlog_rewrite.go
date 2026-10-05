@@ -2505,10 +2505,19 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, systemOpts.outerLeavesInValueLog)
-	newSystemRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps, trackValueLogRefDelta)
+	newSystemRoot, retired, metrics, touched, vlogRefDelta, producerResources, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps, trackValueLogRefDelta)
 	if err != nil || !changed {
 		return err
 	}
+	// A rewritten descriptor can change the selected root set, beyond its local
+	// pointer delta. Ordinary system values retain the narrow projection.
+	for _, swap := range swaps {
+		if bytes.HasPrefix(swap.key, collectionRootDescriptorPrefixBytes) || bytes.HasPrefix(swap.key, collectionRootOverlayDescriptorPrefixBytes) {
+			vlogRefDelta.requiresCandidateProjection = true
+			break
+		}
+	}
+	defer producerResources.Release()
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2516,7 +2525,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	}()
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{durableResources: producerResources},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2599,10 +2608,11 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		return err
 	}
 	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, rootOpts.outerLeavesInValueLog)
-	newCollectionRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps, trackValueLogRefDelta)
+	newCollectionRoot, retired, metrics, touched, vlogRefDelta, producerResources, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps, trackValueLogRefDelta)
 	if err != nil || !changed {
 		return err
 	}
+	defer producerResources.Release()
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2611,7 +2621,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if newCollectionRoot == collectionRoot {
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
-			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{durableResources: producerResources},
 			baseSeq,
 			func() {
 				db.writeMu.Unlock()
@@ -2628,6 +2638,9 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		return nil
 	}
 
+	// Alias replacement may remove pointer-backed descriptors outside the local
+	// collection delta. Repair counts from the full candidate, atomically.
+	vlogRefDelta.requiresCandidateProjection = true
 	encodedRoot := encodeCollectionRootDescriptorRootID(newCollectionRoot)
 	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(target.descriptorAliases))
 	for _, aliasKey := range target.descriptorAliases {
@@ -2636,9 +2649,40 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	systemDelta.Freeze()
 	systemIter := systemDelta.NewIterator(nil, nil)
 	systemOpts := systemRootOrderedPublishOptions(db)
+	var systemLeafCapture *rewriteLeafResourceLog
+	if systemOpts.outerLeavesInValueLog {
+		systemLeafCapture, err = newRewriteLeafResourceLog(systemOpts.leafPageLog)
+		if err != nil {
+			return err
+		}
+		defer systemLeafCapture.abandon()
+		systemOpts.leafPageLog = systemLeafCapture
+	}
 	newSystemRoot, systemRetired, systemMetrics, systemTouched, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
 	if err != nil {
 		return err
+	}
+	systemResources, err := systemLeafCapture.freeze()
+	if err != nil {
+		return err
+	}
+	defer systemResources.Release()
+	if systemResources != nil {
+		builder := rootpublication.NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		if producerResources != nil {
+			if err := builder.Merge(producerResources); err != nil {
+				return err
+			}
+		}
+		if err := builder.Merge(systemResources); err != nil {
+			return err
+		}
+		producerResources, err = builder.Freeze()
+		if err != nil {
+			return err
+		}
+		defer producerResources.Release()
 	}
 	touched = append(touched, systemTouched...)
 	retired = append(retired, systemRetired...)
@@ -2646,7 +2690,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{durableResources: producerResources},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2665,10 +2709,10 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	return nil
 }
 
-func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap, trackValueLogRefDelta bool) (uint64, []uint64, adaptive.Metrics, []uint32, *valueLogRefDelta, bool, error) {
+func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap, trackValueLogRefDelta bool) (uint64, []uint64, adaptive.Metrics, []uint32, *valueLogRefDelta, *rootpublication.StableResourceSet, bool, error) {
 	var metrics adaptive.Metrics
 	if len(swaps) == 0 || rootID == 0 {
-		return rootID, nil, metrics, nil, nil, false, nil
+		return rootID, nil, metrics, nil, nil, nil, false, nil
 	}
 	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet), rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
@@ -2676,29 +2720,54 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 	b.Reserve(len(swaps))
 	vlogRefDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
-		return rootID, nil, metrics, nil, nil, false, err
+		return rootID, nil, metrics, nil, nil, nil, false, err
 	}
 	if len(b.SortedEntries()) == 0 {
 		releaseValueLogRefDelta(vlogRefDelta)
-		return rootID, nil, metrics, nil, nil, false, nil
+		return rootID, nil, metrics, nil, nil, nil, false, nil
 	}
 	noteRewriteSwapTouchedSegments(b, swaps)
 	touched := append([]uint32(nil), b.TouchedValueLogSegments()...)
 	rootZipper, err := db.orderedRootRewriteZipperForOptionsWithAllocator(idx, opts, idx.allocator, state)
 	if err != nil {
 		releaseValueLogRefDelta(vlogRefDelta)
-		return rootID, nil, metrics, nil, nil, false, err
+		return rootID, nil, metrics, nil, nil, nil, false, err
+	}
+	var leafCapture *rewriteLeafResourceLog
+	if opts.outerLeavesInValueLog {
+		leafCapture, err = newRewriteLeafResourceLog(opts.leafPageLog)
+		if err != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+			return rootID, nil, metrics, nil, nil, nil, false, err
+		}
+		defer leafCapture.abandon()
+		rootZipper.SetLeafPageLog(leafCapture)
 	}
 	newRoot, retired, metrics, err := rootZipper.Apply(rootID, b)
 	if err != nil {
 		releaseValueLogRefDelta(vlogRefDelta)
-		return rootID, nil, metrics, nil, nil, false, err
+		return rootID, nil, metrics, nil, nil, nil, false, err
 	}
-	return newRoot, retired, metrics, touched, vlogRefDelta, true, nil
+	resources, err := leafCapture.freeze()
+	if err != nil {
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, nil, false, err
+	}
+	vlogRefDelta = admitRewriteValueLogRefDelta(vlogRefDelta, trackValueLogRefDelta)
+	return newRoot, retired, metrics, touched, vlogRefDelta, resources, true, nil
 }
 
 func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValueLog bool) bool {
-	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
+	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq)
+}
+
+func admitRewriteValueLogRefDelta(delta *valueLogRefDelta, tracked bool) *valueLogRefDelta {
+	if delta == nil {
+		delta = newValueLogRefDelta()
+	}
+	delta.exactRewriteProjection = true
+	delta.requiresCandidateProjection = !tracked
+	return delta
 }
 
 func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte, preferredRoot uint64) (uint64, [][]byte, bool, error) {
@@ -2804,6 +2873,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, err
 	}
 
+	defer func() { releaseValueLogRefDelta(rewriteDelta) }()
 	entries := b.SortedEntries()
 	if len(entries) == 0 {
 		return true, nil
@@ -2814,6 +2884,15 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
+	var leafCapture *rewriteLeafResourceLog
+	if db.indexOuterLeavesInValueLog {
+		leafCapture, err = newRewriteLeafResourceLog(db.leafPageLog)
+		if err != nil {
+			return false, err
+		}
+		defer leafCapture.abandon()
+		z.SetLeafPageLog(leafCapture)
+	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	if err != nil {
 		freeErr := tracker.FreeAll()
@@ -2822,10 +2901,13 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 		return false, err
 	}
-	var vlogRefDelta *valueLogRefDelta
-	if trackValueLogRefDelta {
-		vlogRefDelta = rewriteDelta
+	producerResources, err := leafCapture.freeze()
+	if err != nil {
+		return false, errors.Join(err, tracker.FreeAll())
 	}
+	defer producerResources.Release()
+	vlogRefDelta := admitRewriteValueLogRefDelta(rewriteDelta, trackValueLogRefDelta)
+	rewriteDelta = nil
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2844,7 +2926,21 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 		return false, err
 	}
-	defer publishPrepareGuard.Release()
+	defer func() { publishPrepareGuard.Release() }()
+	if hook := db.testAfterOptimisticPublishPrepareHook; hook != nil {
+		// Match the ordinary optimistic writer's test seam: release the
+		// prepare guard before a competing publication and then reacquire it.
+		publishPrepareGuard.Release()
+		hook()
+		db.writeMu.RUnlock()
+		writeReadLocked = false
+		publishPrepareGuard, err = db.prepareFinalizeCommitDurability(sync)
+		db.writeMu.RLock()
+		writeReadLocked = true
+		if err != nil {
+			return false, errors.Join(err, tracker.FreeAll())
+		}
+	}
 
 	db.commitMu.Lock()
 	commitLocked := true
@@ -2867,6 +2963,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil,
 		finalizeCommitOptions{
+			durableResources:         producerResources,
 			skipPrePublishFlush:      true,
 			expectedBaseCommitSeq:    baseSeq,
 			hasExpectedBaseCommitSeq: true,
@@ -2944,6 +3041,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 		return err
 	}
 
+	defer func() { releaseValueLogRefDelta(rewriteDelta) }()
 	entries := b.SortedEntries()
 	if len(entries) == 0 {
 		return nil
@@ -2953,14 +3051,26 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 
 	z := idx.zipper.CloneWithAllocator(idx.allocator)
 	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
+	var leafCapture *rewriteLeafResourceLog
+	if db.indexOuterLeavesInValueLog {
+		leafCapture, err = newRewriteLeafResourceLog(db.leafPageLog)
+		if err != nil {
+			return err
+		}
+		defer leafCapture.abandon()
+		z.SetLeafPageLog(leafCapture)
+	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	if err != nil {
 		return err
 	}
-	var vlogRefDelta *valueLogRefDelta
-	if trackValueLogRefDelta {
-		vlogRefDelta = rewriteDelta
+	producerResources, err := leafCapture.freeze()
+	if err != nil {
+		return err
 	}
+	defer producerResources.Release()
+	vlogRefDelta := admitRewriteValueLogRefDelta(rewriteDelta, trackValueLogRefDelta)
+	rewriteDelta = nil
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2969,6 +3079,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{
+			durableResources: producerResources,
 			recordVacuumMutation: func() {
 				db.vacuum.RecordEntries(entries)
 			},
