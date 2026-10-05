@@ -1,0 +1,24 @@
+{
+  "copy": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-rebound-profile-copy",
+  "environment": {
+    "CGO_ENABLED": "1",
+    "GOGC": "100",
+    "GOMAXPROCS": "12",
+    "GOMEMLIMIT": "2GiB",
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES": "1073741824"
+  },
+  "interpretation": "bounded diagnostic of active copy; not throughput qualification",
+  "method_sha256": "3d39dae636e342a7f28554b020e00fa6801bd693171d7aa82535891fa21f1e4b",
+  "original": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-60936012",
+  "overlay_receipt_sha256": "0649177a0d254f2db67142d43b060fd8ab12ce317d8132255a8092f947639656",
+  "retained_original_sha256": "e977046ba4ce14122963d8677c07e8735f3153c5d2d4f0f052e5d3c67443309e",
+  "source": {
+    "binary": "unified-bench-baseline",
+    "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+    "head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+    "linkage": "dynamic"
+  }
+}

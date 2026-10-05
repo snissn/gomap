@@ -1,0 +1,43 @@
+{
+  "command": [
+    "go",
+    "build",
+    "-p",
+    "1",
+    "-buildvcs=false",
+    "-o",
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/baseline-treemap-reproducible-build/treemap-rebuilt",
+    "./TreeDB/cmd/treemap"
+  ],
+  "source_head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+  "environment": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "GOWORK": "off",
+    "GOFLAGS": "",
+    "GOENV": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/mnt/fast4tb/go-build-cache",
+    "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+    "CGO_ENABLED": "1",
+    "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+    "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+    "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu"
+  },
+  "original_binary": "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-baseline",
+  "rebuilt_binary": "/mnt/fast4tb/quicksilver-space-memory-20261005/baseline-treemap-reproducible-build/treemap-rebuilt",
+  "original_binary_sha256": "1d0f9222676a15c59fbd09214d0b158ff56ed0979bf06d50c7cfefe60cf23406",
+  "rebuilt_binary_sha256": "1d0f9222676a15c59fbd09214d0b158ff56ed0979bf06d50c7cfefe60cf23406",
+  "identical": true,
+  "seconds": 0.6068277359008789,
+  "original_build_receipt_missing": true,
+  "interpretation": "bit-identical reconstruction after measurements, not a pre-measurement build receipt",
+  "source_receipt": {
+    "path": "receipts-baseline/source.json",
+    "sha256": "fa007c693750dcf28092b07e34ba42f979add0945ea9826a34c5071f09020e3c"
+  },
+  "baseline_build_receipt": {
+    "path": "receipts-baseline/build.json",
+    "sha256": "49ed495568476d34cb010e22bb04f1e8b4c3418a4f9ad77f816f618f59f88e02"
+  }
+}

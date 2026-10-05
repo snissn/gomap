@@ -1,0 +1,850 @@
+{
+  "batch8192_input_states": [
+    {
+      "allocated": 1947697152,
+      "allocated_excluding_wal": 1947693056,
+      "apparent": 1947537066,
+      "apparent_excluding_wal": 1947537054,
+      "domains": {
+        "dictionary": {
+          "allocated": 806912,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 138416128,
+          "apparent": 138412032
+        },
+        "metadata": {
+          "allocated": 24576,
+          "apparent": 11699
+        },
+        "outer_leaf": {
+          "allocated": 468410368,
+          "apparent": 468343647
+        },
+        "user_value": {
+          "allocated": 1340035072,
+          "apparent": 1339982749
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "final-before-verify"
+    },
+    {
+      "allocated": 1849647104,
+      "allocated_excluding_wal": 1849643008,
+      "apparent": 1849486275,
+      "apparent_excluding_wal": 1849486263,
+      "domains": {
+        "dictionary": {
+          "allocated": 806912,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 40374272,
+          "apparent": 40370176
+        },
+        "metadata": {
+          "allocated": 16384,
+          "apparent": 2764
+        },
+        "outer_leaf": {
+          "allocated": 468410368,
+          "apparent": 468343647
+        },
+        "user_value": {
+          "allocated": 1340035072,
+          "apparent": 1339982749
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "before-maintenance"
+    }
+  ],
+  "diagnostic": {
+    "candidate_closure_cumulative_percent": 95.41,
+    "command": {
+      "command": [
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/diagnostic-treemap",
+        "compact",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-rebound-profile-copy",
+        "-rw",
+        "-json",
+        "-mode",
+        "exhaustive",
+        "-sync-each-phase",
+        "-leaf-pack-max-passes",
+        "64"
+      ],
+      "copy": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-rebound-profile-copy",
+      "cpu_sha256": "7fa4c30b3f100773a194d09a3b9313ed886f19dcf884cea8199100234431b271",
+      "finished": 1791181461.5789719,
+      "intentionally_terminated": true,
+      "label": "bounded-copy-cpu-diagnostic",
+      "profile_complete": true,
+      "rc": -15,
+      "started": 1791181399.5172744
+    },
+    "retained_profile": {
+      "note": "Raw CPU profile retained on native host; hashed command receipt and pprof text copied here.",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/maintenance-3m-diagnostic-rebound/rewrite-cpu.pprof",
+      "sha256": "7fa4c30b3f100773a194d09a3b9313ed886f19dcf884cea8199100234431b271"
+    },
+    "zstd_decode_cumulative_percent": 73.46
+  },
+  "failed_batch8192": {
+    "command": [
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-baseline",
+      "compact",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-batch8192-copy",
+      "-rw",
+      "-json",
+      "-mode",
+      "full",
+      "-sync-each-phase",
+      "-leaf-pack-max-passes",
+      "64",
+      "-rewrite-batch-size",
+      "8192"
+    ],
+    "disk_sample_count": 12,
+    "kernel_process_rss_hwm_bytes": 1041219584,
+    "rc": 1,
+    "readonly_oracle": {
+      "verified_keys": 3000000,
+      "verified_misses": 6040000
+    },
+    "receipt_elapsed_seconds": 12.015407800674438,
+    "sampled_disk_hwm_including_wal": {
+      "allocated": 2366685184,
+      "apparent": 2366509623
+    },
+    "status": "failed",
+    "time_elapsed_seconds": 11.39
+  },
+  "fixture": {
+    "aggregate_reads": 6000000,
+    "barrier_policy": "initial/final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters",
+    "case": "realistic",
+    "commit_mode": "ordinary",
+    "concurrent_duration_ns": 8000000000,
+    "content_distribution": "50% structured; 50% opaque (seeded independent of length)",
+    "generation": "generic-v1",
+    "key_distribution": "namespace/hostname/opaque approximately 1/3 each; variable lengths; bijective scrambled interior identity",
+    "keys": 3000000,
+    "miss_percent": 90,
+    "mixture": "primary",
+    "reads_per_snapshot": 64,
+    "seed": 24,
+    "updates": 40000,
+    "value_distribution": "80% 32..256 B; 18% 257..2048 B; 2% 2049..32768 B (seeded); equally weighted logarithmic size bands within buckets",
+    "workers": 4,
+    "working_set": "uniform"
+  },
+  "full_reduction": {
+    "apparent_excluding_wal_bytes": 1342108500,
+    "oracle_allocated_delta_bytes": 0,
+    "oracle_apparent_delta_bytes": 0,
+    "percent": 47.385644973892695
+  },
+  "inputs_sha256": "c42d1b4827ced0c4de612149a9d0c3badf7dab9998014f0870b53ba2c2e308f9",
+  "maintenance": [
+    {
+      "command": [
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-baseline",
+        "compact",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-60936012",
+        "-rw",
+        "-json",
+        "-mode",
+        "full",
+        "-sync-each-phase",
+        "-leaf-pack-max-passes",
+        "64"
+      ],
+      "disk_sample_count": 42,
+      "flags": {
+        "byte_minimized": false,
+        "fully_compacted": false,
+        "policy_fully_compacted": false
+      },
+      "kernel_process_rss_hwm_bytes": 2018893824,
+      "label": "full",
+      "leaf_gc": {
+        "BytesDeleted": 0,
+        "BytesEligible": 0,
+        "FilesDeleted": 0,
+        "GenerationsDeleted": 0,
+        "GenerationsEligible": 0,
+        "GenerationsLive": 1,
+        "GenerationsRetiring": 1,
+        "GenerationsTotal": 3,
+        "GenerationsWritable": 1
+      },
+      "phases": [
+        {
+          "name": "checkpoint",
+          "wall_time_nanos": 3653
+        },
+        {
+          "name": "value-log-rewrite",
+          "wall_time_nanos": 601065411
+        },
+        {
+          "name": "checkpoint-after-value-log-rewrite",
+          "wall_time_nanos": 5359
+        },
+        {
+          "name": "value-log-gc",
+          "wall_time_nanos": 1080797610
+        },
+        {
+          "name": "checkpoint-after-value-log-gc",
+          "wall_time_nanos": 3504
+        },
+        {
+          "name": "leaf-generation-pack-1",
+          "wall_time_nanos": 14349818239
+        },
+        {
+          "name": "checkpoint-after-leaf-generation-pack-1",
+          "wall_time_nanos": 3641
+        },
+        {
+          "name": "leaf-generation-pack-2",
+          "wall_time_nanos": 11353575630
+        },
+        {
+          "name": "checkpoint-after-leaf-generation-pack-2",
+          "wall_time_nanos": 17764834
+        },
+        {
+          "name": "leaf-generation-pack-3",
+          "skip_reason": "plan_admission:no_candidates",
+          "skipped": true,
+          "wall_time_nanos": 159588
+        },
+        {
+          "name": "leaf-generation-gc",
+          "wall_time_nanos": 125675750
+        },
+        {
+          "name": "checkpoint-after-leaf-generation-gc",
+          "wall_time_nanos": 3227
+        },
+        {
+          "name": "index-vacuum",
+          "reason": "user",
+          "required": true,
+          "status": "succeeded",
+          "wall_time_nanos": 128910428
+        },
+        {
+          "name": "checkpoint-after-index-vacuum",
+          "wall_time_nanos": 3265
+        },
+        {
+          "name": "settle-leaf-generation-gc-1",
+          "wall_time_nanos": 647480933
+        },
+        {
+          "name": "checkpoint-after-settle-leaf-generation-gc-1",
+          "wall_time_nanos": 3658
+        },
+        {
+          "name": "settle-leaf-generation-gc-2",
+          "wall_time_nanos": 107325571
+        },
+        {
+          "name": "checkpoint-after-settle-leaf-generation-gc-2",
+          "wall_time_nanos": 2929
+        },
+        {
+          "name": "settle-leaf-generation-gc-3",
+          "wall_time_nanos": 107625975
+        },
+        {
+          "name": "checkpoint-after-settle-leaf-generation-gc-3",
+          "wall_time_nanos": 2984
+        },
+        {
+          "name": "settle-leaf-generation-gc-4",
+          "wall_time_nanos": 106954272
+        },
+        {
+          "name": "checkpoint-after-settle-leaf-generation-gc-4",
+          "wall_time_nanos": 2859
+        },
+        {
+          "name": "prune-empty-value-log-files",
+          "wall_time_nanos": 158987
+        }
+      ],
+      "rc": 0,
+      "receipt_elapsed_seconds": 42.08529996871948,
+      "remaining_debt": {
+        "index_vacuum_collection_root_pages": 0,
+        "index_vacuum_collection_root_span": 0,
+        "index_vacuum_collection_root_span_ratio_ppm": 0,
+        "index_vacuum_freelist_reclaimable_pages": 0,
+        "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+        "index_vacuum_reason": "none",
+        "index_vacuum_required": false,
+        "index_vacuum_total_pages": 9734,
+        "index_vacuum_user_pages": 4860,
+        "index_vacuum_user_span": 4860,
+        "index_vacuum_user_span_ratio_ppm": 1000000,
+        "leaf_gc_bytes": 28854392,
+        "leaf_gc_generations": 1,
+        "leaf_pack_bytes": 0,
+        "leaf_pack_generations": 0,
+        "value_log_gc_bytes": 0,
+        "value_log_gc_segments": 0,
+        "value_log_rewrite_bytes": 0,
+        "value_log_rewrite_segments": 0,
+        "zero_byte_value_log_files": 0
+      },
+      "sampled_disk_hwm_including_wal": {
+        "allocated": 3497709568,
+        "apparent": 3497238380
+      },
+      "status": "completed",
+      "time_elapsed_seconds": 41.76
+    },
+    {
+      "command": [
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-baseline",
+        "compact",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-60936012",
+        "-rw",
+        "-json",
+        "-mode",
+        "exhaustive",
+        "-sync-each-phase",
+        "-leaf-pack-max-passes",
+        "64"
+      ],
+      "disk_sample_count": 1798,
+      "kernel_process_rss_hwm_bytes": null,
+      "label": "exhaustive",
+      "rc": -15,
+      "receipt_elapsed_seconds": 1800.264458656311,
+      "sampled_disk_hwm_including_wal": {
+        "allocated": 1947705344,
+        "apparent": 1947537066
+      },
+      "status": "timed_out",
+      "time_elapsed_seconds": null
+    }
+  ],
+  "memory": {
+    "harness_bytes": {
+      "distinct_tracking_bytes": 9375000,
+      "oracle_state_bytes": 3000000,
+      "sample_bytes": 8000000,
+      "trace_bytes": 0
+    },
+    "leaf256_diagnostic": {
+      "acceptance": "single profiled setting diagnostic; no matched public matrix",
+      "environment": {
+        "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+        "CGO_ENABLED": "1",
+        "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+        "GODEBUG": "",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "2GiB",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+        "GOWORK": "off",
+        "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+        "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+        "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs",
+        "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES": "268435456",
+        "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES": "1073741824"
+      },
+      "rss": {
+        "independent_sampled_component_maxima": {
+          "RssAnon": 1195593728,
+          "RssFile": 1472139264,
+          "RssShmem": 0,
+          "VmSwap": 0
+        },
+        "observed_kernel_hwm_bytes": 2351124480,
+        "peak_sample": {
+          "exe": "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+          "memory": {
+            "RssAnon": 913580032,
+            "RssFile": 1437544448,
+            "RssShmem": 0,
+            "VmHWM": 2351124480,
+            "VmRSS": 2351124480,
+            "VmSwap": 0
+          },
+          "pid": 2912924,
+          "time": 1791178516.8799818
+        },
+        "pid": 2912924,
+        "sampled_rss_peak_bytes": 2351124480,
+        "samples": 333
+      }
+    },
+    "profiled_baseline_phases": [
+      {
+        "composition_seconds": 6.758661279,
+        "name": "quicksilver_hits",
+        "ops": 6000000,
+        "process_allocated_bytes": 4104913008,
+        "process_bytes_per_op": 684.152168,
+        "process_gc_cycles": 10,
+        "process_heap_alloc_after": 732844368,
+        "process_heap_alloc_before": 350708568,
+        "process_mallocs": 11059531,
+        "reported_cache_snapshots": {
+          "stats_after": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16401",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "65604",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14529",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67106610"
+          },
+          "stats_before": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "13801",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "55204",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14362",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67105486"
+          }
+        },
+        "seconds": 6.7500760490000005
+      },
+      {
+        "composition_seconds": 3.397324733,
+        "name": "quicksilver_misses",
+        "ops": 6000000,
+        "process_allocated_bytes": 58255016,
+        "process_bytes_per_op": 9.709169333333334,
+        "process_gc_cycles": 0,
+        "process_heap_alloc_after": 513771816,
+        "process_heap_alloc_before": 455516800,
+        "process_mallocs": 190325,
+        "reported_cache_snapshots": {
+          "stats_after": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16595",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "66380",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14550",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67106041"
+          },
+          "stats_before": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16401",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "65604",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14529",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67106610"
+          }
+        },
+        "seconds": 3.391020565
+      },
+      {
+        "composition_seconds": 3.7488499749999997,
+        "name": "quicksilver_mixed",
+        "ops": 6000000,
+        "process_allocated_bytes": 441744048,
+        "process_bytes_per_op": 73.624008,
+        "process_gc_cycles": 1,
+        "process_heap_alloc_after": 475933000,
+        "process_heap_alloc_before": 456571960,
+        "process_mallocs": 1268831,
+        "reported_cache_snapshots": {
+          "stats_after": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16808",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "67232",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14563",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67107671"
+          },
+          "stats_before": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16595",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "66380",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14550",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67106041"
+          }
+        },
+        "seconds": 3.742497879
+      },
+      {
+        "composition_seconds": 26.015394596,
+        "name": "quicksilver_concurrent",
+        "ops": 5005056,
+        "process_allocated_bytes": 705703208,
+        "process_bytes_per_op": 140.99806435732188,
+        "process_gc_cycles": 1,
+        "process_heap_alloc_after": 910211824,
+        "process_heap_alloc_before": 462206744,
+        "process_mallocs": 896883,
+        "reported_cache_snapshots": {
+          "stats_after": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "55",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "220",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "6144",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "57",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "1742282",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "18462",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "73848",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "114688",
+            "treedb.vlog.grouped_frame_cache.entries": "14815",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67106083"
+          },
+          "stats_before": {
+            "treedb.cache.vlog_grouped_frame_cache.allocated_shards": "0",
+            "treedb.cache.vlog_grouped_frame_cache.allocated_slots": "0",
+            "treedb.cache.vlog_grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.cache.vlog_grouped_frame_cache.capacity": "0",
+            "treedb.cache.vlog_grouped_frame_cache.entries": "0",
+            "treedb.cache.vlog_grouped_frame_cache.retained_bytes": "0",
+            "treedb.vlog.grouped_frame_cache.allocated_shards": "16808",
+            "treedb.vlog.grouped_frame_cache.allocated_slots": "67232",
+            "treedb.vlog.grouped_frame_cache.budget_bytes": "67108864",
+            "treedb.vlog.grouped_frame_cache.capacity": "108544",
+            "treedb.vlog.grouped_frame_cache.entries": "14563",
+            "treedb.vlog.grouped_frame_cache.retained_bytes": "67107671"
+          }
+        },
+        "seconds": 8.001187411
+      }
+    ],
+    "rss": {
+      "independent_sampled_component_maxima": {
+        "RssAnon": 1217220608,
+        "RssFile": 2546954240,
+        "RssShmem": 0,
+        "VmSwap": 0
+      },
+      "observed_kernel_hwm_bytes": 3762454528,
+      "peak_sample": {
+        "exe": "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-baseline",
+        "memory": {
+          "RssAnon": 1215500288,
+          "RssFile": 2546954240,
+          "RssShmem": 0,
+          "VmHWM": 3762454528,
+          "VmRSS": 3762454528,
+          "VmSwap": 0
+        },
+        "pid": 2909940,
+        "time": 1791178329.8399773
+      },
+      "pid": 2909940,
+      "sampled_rss_peak_bytes": 3762454528,
+      "samples": 291
+    }
+  },
+  "pending": [
+    "M: three matched public durable/fast/holdout pairs, profiled primary pairs, and cache metadata distribution",
+    "C: qualified default and opt-in maintenance churn curves",
+    "R: causal restored-copy regression, production repair, and qualified post-repair maintenance",
+    "Accept the missing original maintenance build receipt as a documented reconstruction limitation",
+    "Independent artifact review, latest-head CI, mature Codex review, and final source reconciliation"
+  ],
+  "provenance": {
+    "baseline_binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+    "collector_sha256": "6ad4f116d4c0d0818094637734a054cf7c117c6700b1acdc2f7bca1ce4dbcc24",
+    "compiled_project_input_count": 2143,
+    "environment": {
+      "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+      "CGO_ENABLED": "1",
+      "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+      "GODEBUG": "",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "12",
+      "GOMEMLIMIT": "2GiB",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOWORK": "off",
+      "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+      "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+      "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs",
+      "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES": "1073741824"
+    },
+    "go_version": "go version go1.26.3 linux/amd64",
+    "landed_head": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+    "maintenance_binary_binding": "post-measurement bit-identical reconstruction; original build receipt missing",
+    "maintenance_binary_sha256": "1d0f9222676a15c59fbd09214d0b158ff56ed0979bf06d50c7cfefe60cf23406",
+    "source_head": "fb42d5ba229d2cbfba8727272af02f9544a33389"
+  },
+  "publication_status": "PROVISIONAL",
+  "raw_files": {
+    "ALGORITHM_TRACE.md": "c78275127f7b9faa097f6cbfb7a989507acf3c2e79b339a592efb6cd1baabff1",
+    "MAINTENANCE_DESIGN.md": "69aac207bdd8d3da717edef74c2b27b90c9dca586648b3a3df7a3f5b93cacb87",
+    "baseline-3m-profile-plan.json": "4ccb29dfdb248769804d7c87fe4e1dcf35718f49077c3583affcc147212ebd12",
+    "baseline-3m-profile-stdout.json.gz": "2a4e36790d97f28848d92fcca2d8f1ed8a04925a39658261dca14f347ef838e3",
+    "baseline-landed-source-equality.json": "9baacdee6683e6f6fb68aaf69d8ee25f034ea7bdf6e1827543de024c6ec80478",
+    "diagnostic-identity-projection.json": "e7757253cd429a6f2e8c4b4df0e5bdfc2a5e7ad319c4ae54289f37720c85f96e",
+    "leaf256/plan.json": "7d401c5d19ba9f379542a9f5141375d63914f16bda6c8227de8c2ee0148e5573",
+    "leaf256/qualified-manifest.json": "c9b913e1adc70134abd14af993087066f56fbc98db2f17de745fedb6c9a4fe0e",
+    "leaf256/run.json": "f2327305df029b51d1ae065d0bbc9987b1eedd66e1e69e884423b5cd06e5181f",
+    "leaf256/stderr.log": "09b78a7c76a48f806655fdbaa51f2f41b0449b172ab43a7d2a5979f18cacb880",
+    "leaf256/stdout.json.gz": "9cea726619d66899cdfa3d9e400c646b8651cc408097901fac56e7eeab5a9b26",
+    "maintenance-batch.py": "a9e125c049d1a49338d290b9cbfa4d5f92e1d688fe9a6125bd03fc1e0ee5e051",
+    "maintenance-diagnostic-rebound.py": "3d39dae636e342a7f28554b020e00fa6801bd693171d7aa82535891fa21f1e4b",
+    "maintenance-diagnostic.py": "aa1596a896b3c5da1a7b41f810d5bf84437cfb665863cceee37d0085c00264fc",
+    "maintenance.py": "cfdb2b9a89bd9929ff9d56ad1a6d0e9cf24b51e49f9f1bc4cbc69839a5d94727",
+    "maintenance/baseline-3m-profile-memory.jsonl": "789a04a787791f08a1cf4bbde911ffb6df1ebfbd517fe262199ae221120dde85",
+    "maintenance/baseline-landed-source-equality.json": "9baacdee6683e6f6fb68aaf69d8ee25f034ea7bdf6e1827543de024c6ec80478",
+    "maintenance/baseline-treemap-reconstruction.json": "77a429c252761a3878aa5f4be926823e52e62e6115b9351a6bf4750217a2e7a4",
+    "maintenance/leaf-256m-3m-profile-memory.jsonl": "02ffb961c530b91ebfd7a1d5de851774b3415fa652aabe113c1621763f07bae8",
+    "maintenance/maintenance-3m-diagnostic-rebound/build-rebind-copy-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/build-rebind-copy-stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/commands.json": "409065059357e213986f5550839af4018c59e01ef07a6be482d2c5a86ff41717",
+    "maintenance/maintenance-3m-diagnostic-rebound/cpu-cumulative-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/cpu-cumulative-stdout.txt": "80b4e0fff485114ebc783a85f4553cc7ef2964cbedb9eee9e8d6aea673cd2608",
+    "maintenance/maintenance-3m-diagnostic-rebound/cpu-top-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/cpu-top-stdout.txt": "9f7516a81da4543bb1a67466f1dda483d702ad7c2106f0000879a9c4e43bfaac",
+    "maintenance/maintenance-3m-diagnostic-rebound/physical-copy-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/physical-copy-stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/profile-stderr.txt": "80a230d541ab50a29493886f218d74a2a677177d7874c0757c0bf8af07f2fb2a",
+    "maintenance/maintenance-3m-diagnostic-rebound/profile-stdout.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/rebind-copied-snapshot-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic-rebound/rebind-copied-snapshot-stdout.txt": "80c1eb7f10fc2fe2d5bc6b1437194150c3893866c1aa4d4445fc9cc4fa64cf7a",
+    "maintenance/maintenance-3m-diagnostic-rebound/rebound-copy-readonly-full-oracle-stderr.txt.gz": "298e2770d345f54c97bdbdec2532181123fef6235cee8fcc7f44a97ea7898314",
+    "maintenance/maintenance-3m-diagnostic-rebound/rebound-copy-readonly-full-oracle-stdout.txt": "af1be80d3cfd79feebbd4f8ccbb904ed23538c871bd345dbe55e2d031b79a9a6",
+    "maintenance/maintenance-3m-diagnostic/build-readonly-oracle-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/build-readonly-oracle-stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/build-treemap-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/build-treemap-stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/commands.json": "91e989635acfa41527fcf9dcc74b00cd92bf25d9ab49c8ef1686024de100394c",
+    "maintenance/maintenance-3m-diagnostic/failed-original-readonly-full-oracle-stderr.txt.gz": "661fce3eb69baad90b5657f93077d43b7f06704b1148e3d44616b37aeb691381",
+    "maintenance/maintenance-3m-diagnostic/failed-original-readonly-full-oracle-stdout.txt": "7cee8e9968643ce210ba6b59cdba9fb26d7402634d54682d0eeb371dc8c46ad8",
+    "maintenance/maintenance-3m-diagnostic/original-unchanged.json": "1f98ea0d6db865b144662885cc37ee62179e7f2a7a647707c891b7f9f3dd65d1",
+    "maintenance/maintenance-3m-diagnostic/physical-copy-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/physical-copy-stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/profile-stderr.txt": "399743d5ee2b1de1f2aece8256e9909f5bd0a9bdd82fef811c3a64fcdc99d653",
+    "maintenance/maintenance-3m-diagnostic/profile-stdout.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-3m-diagnostic/readonly-oracle-overlay.json": "58dc439a5b87371b8d59c554fa72fbd6b57a413146abad906744ba6cec5c0ad8",
+    "maintenance/maintenance-3m-diagnostic/treemap-overlay.json": "32027159d7861d75915bf3375db4cb25f2bb3b5a52f60ce34f9589d43bdf1063",
+    "maintenance/maintenance-baseline-3m-batch8192/before-maintenance-census.json": "57ebd88f9ba23e2a5565df20eefbea465aefb7434c2cc025687f8cd54f6a53a0",
+    "maintenance/maintenance-baseline-3m-batch8192/commands.json": "21f7b4a560af5d7cc1420f4293c7160fad0b965eeaf7f9d2ba73a3a5afc65133",
+    "maintenance/maintenance-baseline-3m-batch8192/final-before-verify-census.json": "940249623ea35413593990f414166003dce71c85cbaaca52c2b75dff955ab3c9",
+    "maintenance/maintenance-baseline-3m-batch8192/full-stderr.txt": "37ed8191629d42a27de90fc02ecbf9336b87e1daf10ee57a6fbb8554c59ffcf8",
+    "maintenance/maintenance-baseline-3m-batch8192/full-stdout.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-baseline-3m-batch8192/pre-maintenance-verify-stderr.txt": "e2ffe8c757c45c8cb911d1ec0bd8693af2659ff6a4f26cbc00b86712d6250181",
+    "maintenance/maintenance-baseline-3m-batch8192/pre-maintenance-verify-stdout.json": "aba9dd97945ef572307cca3d41086910869859e62b813cf2f6630649f3085cf3",
+    "maintenance/maintenance-baseline-3m-batch8192/readonly-after-failure/receipt.json": "2146e4b6d4570922daa4809fe3284a2e7dc367d7502d1ff6bf4acc42dfd30eb3",
+    "maintenance/maintenance-baseline-3m-batch8192/readonly-after-failure/stderr.txt.gz": "d768463f16d7fe19f8f14f1e164131a97047cc27af7c1a0dee6071f698c6dd8b",
+    "maintenance/maintenance-baseline-3m-batch8192/readonly-after-failure/stdout.json": "aba9dd97945ef572307cca3d41086910869859e62b813cf2f6630649f3085cf3",
+    "maintenance/maintenance-baseline-3m/before-maintenance-census.json": "9d92f7414bf2c9d4f34ee945922ad379675d2b2515b7b30ef8eede82fa60451b",
+    "maintenance/maintenance-baseline-3m/commands.json": "02dc27ce0667ebd477193eb2db4326fb6f417ef474e01cf5fe86d916f8af47cb",
+    "maintenance/maintenance-baseline-3m/exhaustive-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-baseline-3m/exhaustive-stdout.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "maintenance/maintenance-baseline-3m/final-before-verify-census.json": "4c09073c5a9924193a663b117b1108996b5d5fe02833bc4786383f4697d37a93",
+    "maintenance/maintenance-baseline-3m/full-after-census.json": "3d6d354a0eb3d3d3beb671f5550494b26dfafdf9bd78e5f207dbb23c2b48510b",
+    "maintenance/maintenance-baseline-3m/full-before-oracle-census.json": "5087cdffacaadb79dcb2e8b337fa813c691ffb87900c7ace556a7dc045f8a700",
+    "maintenance/maintenance-baseline-3m/full-stderr.txt": "2e410f8122553063d2e27c3e7db5f58b6f8672c49da2b78eec40b583e52312eb",
+    "maintenance/maintenance-baseline-3m/full-stdout.json": "b72c62bb8ffcd185dbbbf008578c2eaa70b4df56b65068e593b43b4849cc1e34",
+    "maintenance/maintenance-baseline-3m/full-verify-stderr.txt": "9f1bb952939fc893d51cdf84f2304477acce2f5e5053169baf2c7da8b399e915",
+    "maintenance/maintenance-baseline-3m/full-verify-stdout.json": "7cee8e9968643ce210ba6b59cdba9fb26d7402634d54682d0eeb371dc8c46ad8",
+    "maintenance/maintenance-baseline-3m/pre-maintenance-verify-stderr.txt": "a02e2399a4af9b1fe0ac066397893351679164de8c70e95e0884ed267edf41a1",
+    "maintenance/maintenance-baseline-3m/pre-maintenance-verify-stdout.json": "7cee8e9968643ce210ba6b59cdba9fb26d7402634d54682d0eeb371dc8c46ad8",
+    "maintenance/qualified-manifest-baseline.json": "a94f4d476eeba445ebb208cd7cd5dd1f490e632806d72379fdfd7e34ab66cf44",
+    "maintenance/receipts-baseline/build.json": "49ed495568476d34cb010e22bb04f1e8b4c3418a4f9ad77f816f618f59f88e02",
+    "maintenance/receipts-baseline/go-list-inputs.jsonstream.gz": "be3d31ac4eb88d2a2912b5cb977841264f84a9fd669fb61410ec08210c253584",
+    "maintenance/receipts-baseline/native.json": "ac15327ddd975f93b38f86410d676c14c7dd5c2da4645abf407ee448d9d5e515",
+    "maintenance/receipts-baseline/runner.json": "cf71679e44f0b7e251ca29b2c3279b74165476a5b6cdc1417bc1b592d6684771",
+    "maintenance/receipts-baseline/source.json.gz": "44de3bc80c1458a276d1f5584c4938cbe1e264e4c47f8b83cb4a2d1efafa35c9",
+    "maintenance/run.json": "c414e41e86ff9b65f3ff38eb4e10aab703de8bfa406a7941b80e5dfcba6e89f8",
+    "measurement-plan.md": "52d5ee762dc83cac8c7167f6cc0f0ea4c0bdc2b0ec7fcc57d2b37a2ccb89e7dc",
+    "observe.py": "c9aad6466d4cb1d307067fe45662ddaf401169ee9f1a285f2ee7d720f7a08d3a",
+    "verify-failed-copy.py": "e269e870fe48caf8296ae96518876b560f3e931c779376cfcd5441024367a0ca"
+  },
+  "readonly_original_oracle": {
+    "verified_keys": 3000000,
+    "verified_misses": 6040000
+  },
+  "schema_version": 1,
+  "storage": [
+    {
+      "allocated": 2832773120,
+      "allocated_excluding_wal": 2832769024,
+      "apparent": 2832310305,
+      "apparent_excluding_wal": 2832310293,
+      "domains": {
+        "dictionary": {
+          "allocated": 811008,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 86773760,
+          "apparent": 86769664
+        },
+        "metadata": {
+          "allocated": 24576,
+          "apparent": 9097
+        },
+        "outer_leaf": {
+          "allocated": 1672167424,
+          "apparent": 1671795127
+        },
+        "user_value": {
+          "allocated": 1072992256,
+          "apparent": 1072949478
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "final-before-verify"
+    },
+    {
+      "allocated": 2832773120,
+      "allocated_excluding_wal": 2832769024,
+      "apparent": 2832310305,
+      "apparent_excluding_wal": 2832310293,
+      "domains": {
+        "dictionary": {
+          "allocated": 811008,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 86773760,
+          "apparent": 86769664
+        },
+        "metadata": {
+          "allocated": 24576,
+          "apparent": 9097
+        },
+        "outer_leaf": {
+          "allocated": 1672167424,
+          "apparent": 1671795127
+        },
+        "user_value": {
+          "allocated": 1072992256,
+          "apparent": 1072949478
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "before-maintenance"
+    },
+    {
+      "allocated": 1490341888,
+      "allocated_excluding_wal": 1490337792,
+      "apparent": 1490201805,
+      "apparent_excluding_wal": 1490201793,
+      "domains": {
+        "dictionary": {
+          "allocated": 811008,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 46141440,
+          "apparent": 46137344
+        },
+        "metadata": {
+          "allocated": 24576,
+          "apparent": 11699
+        },
+        "outer_leaf": {
+          "allocated": 370368512,
+          "apparent": 370316345
+        },
+        "user_value": {
+          "allocated": 1072992256,
+          "apparent": 1072949478
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "full-before-oracle"
+    },
+    {
+      "allocated": 1490341888,
+      "allocated_excluding_wal": 1490337792,
+      "apparent": 1490201805,
+      "apparent_excluding_wal": 1490201793,
+      "domains": {
+        "dictionary": {
+          "allocated": 811008,
+          "apparent": 786927
+        },
+        "index": {
+          "allocated": 46141440,
+          "apparent": 46137344
+        },
+        "metadata": {
+          "allocated": 24576,
+          "apparent": 11699
+        },
+        "outer_leaf": {
+          "allocated": 370368512,
+          "apparent": 370316345
+        },
+        "user_value": {
+          "allocated": 1072992256,
+          "apparent": 1072949478
+        },
+        "wal": {
+          "allocated": 4096,
+          "apparent": 12
+        }
+      },
+      "label": "full-after"
+    }
+  ]
+}

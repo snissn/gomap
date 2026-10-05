@@ -1,0 +1,9 @@
+{
+  "built_source_head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+  "landed_merge": "a6b383b6c0d6269a598390032ecce9fd619a4eac",
+  "built_tree": "47ef0a393f7107ce5255786169b83dd562160c77",
+  "landed_tree": "47ef0a393f7107ce5255786169b83dd562160c77",
+  "entire_git_tree_equal": true,
+  "ci_pr": 5007,
+  "method_review": "measurement-plan.md; independent6.1Sol source/method audit; small rehearsal oracles; ownership/pin tests pass"
+}
