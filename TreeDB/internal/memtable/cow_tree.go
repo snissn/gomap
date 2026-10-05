@@ -335,9 +335,9 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		return nil, ErrCOWClosed
 	}
 	total := c.Total()
-	if g.frozen || total > b.limits.MaxInFlightBytes-b.stats.ReservedBytes ||
-		c.History() > b.limits.MaxGenerationBytes-g.history ||
-		total > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes-b.stats.DeferredBytes ||
+	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.history, c.History()) ||
+		!b.retirementFitsLocked(total) ||
 		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
@@ -557,7 +557,7 @@ func (w *COWWriter) Freeze() error {
 	if g.frozen {
 		return nil
 	}
-	if b.stats.Sources >= b.limits.MaxSources || g.history > b.limits.MaxRetiredBytes-b.stats.RetiredBytes {
+	if b.stats.Sources >= b.limits.MaxSources || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history) {
 		return ErrCOWCapacity
 	}
 	g.frozen = true
@@ -602,6 +602,12 @@ func (r *COWRoot) Retain() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.refs == 0 {
+		return false
+	}
+	b := r.generation.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
 		return false
 	}
 	r.refs++

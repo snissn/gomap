@@ -19,6 +19,15 @@ release/resumption. `BenchmarkCOWPrepareReplace`, `BenchmarkCOWCapture` and
 `BenchmarkCOWScan` witness internal N/2N preparation/capture/output costs; the
 [capture commands and scope](cow-memtable-ownership.md) keep these distinct from
 future integrated DB lifecycle qualification.
+`TestCOWRetainCloseRace` covers shutdown refusing fresh root ownership;
+`TestCOWCursorGeometricStackWitness` and `TestCOWPointerAllocationCharge` bind
+discarded stack backings and GC allocation headers to the reservation proof.
+`TestCOWExternalAdmissionLifetimeAndRefusal` and
+`TestCOWExternalAdmissionSharesPrepareAndRetirementBounds` cover external storage
+admission before allocation, finite shared capacity, overflow, concurrent Close
+and shutdown control lifetime. `BenchmarkCOWExternalLease` reports its wrapper
+allocation/admission cost. `TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce`
+keeps deferred callbacks/storage charged through copy-safe cleanup.
 
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real
