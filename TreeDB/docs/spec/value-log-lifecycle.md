@@ -331,6 +331,11 @@ cached allocator.
 
 ### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
 
+Published leaf-generation views retain an immutable source manifest. GC prunes
+deleted generation records in a private copy and, after persisting that copy,
+publishes the final runtime view. Existing views retain their original records;
+later pack operations clone a coherent manifest with unique generation IDs.
+
 Every producer of a persistent `leaf_vlog/value-l255-*.log` child uses one
 installed-owner sequence authority. Internal lane groups reserve from their
 shared leaf-log allocator; CommandWAL's replay-inline owner reserves from its
