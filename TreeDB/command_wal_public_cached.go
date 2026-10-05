@@ -194,7 +194,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanMeasured(scanEntries func(func(b
 	return timing, err
 }
 
-func (tdb *DB) appendPublicRawKVCommandEntryScanPrepared(prepare func() error, scanEntries func(func(batch.Entry) error) error, opHint int, sync bool, publicationTicket *uint64) error {
+func (tdb *DB) appendPublicRawKVCommandEntryScanPrepared(prepare func() error, finalize db.RawKVCommandWALFinalize, scanEntries func(func(batch.Entry) error) error, opHint int, sync bool, publicationTicket *uint64) error {
 	if tdb == nil || !tdb.commandWALCached || prepare == nil || scanEntries == nil {
 		return nil
 	}
@@ -202,7 +202,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanPrepared(prepare func() error, s
 		return ErrClosed
 	}
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, nil, nil, nil, func(appendSync bool) (uint64, error) {
-		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode(prepare, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
+		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode(prepare, finalize, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 	})
 	if publicationTicket != nil {
 		*publicationTicket = result.ticket
@@ -210,7 +210,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanPrepared(prepare func() error, s
 	return err
 }
 
-func (tdb *DB) appendPublicRawKVCommandEntryScanPreparedMeasured(prepare func() error, scanEntries func(func(batch.Entry) error) error, opHint int, sync bool, publicationTicket *uint64) (db.CommandWALRequestTiming, error) {
+func (tdb *DB) appendPublicRawKVCommandEntryScanPreparedMeasured(prepare func() error, finalize db.RawKVCommandWALFinalize, scanEntries func(func(batch.Entry) error) error, opHint int, sync bool, publicationTicket *uint64) (db.CommandWALRequestTiming, error) {
 	var timing db.CommandWALRequestTiming
 	if tdb == nil || !tdb.commandWALCached || prepare == nil || scanEntries == nil {
 		return timing, nil
@@ -222,7 +222,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanPreparedMeasured(prepare func() 
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait, &timing.GroupCommitWaitObserved, func(appendSync bool) (uint64, error) {
 		var appendErr error
 		var lsn uint64
-		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndModeMeasured(prepare, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
+		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured(prepare, finalize, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 		return lsn, appendErr
 	})
 	if publicationTicket != nil {
@@ -1367,6 +1367,9 @@ func (b *commandWALPublicBatch) assignCommandWALPointRevisions() error {
 		return fmt.Errorf("treedb: command wal batch requires cached revision assignment")
 	}
 	assigner.AssignExternalCommandWALPointRevisions()
+	if preparer, ok := b.inner.(interface{ PrepareExternalCommandWALPublication() error }); ok {
+		return preparer.PrepareExternalCommandWALPublication()
+	}
 	return nil
 }
 
@@ -1380,6 +1383,15 @@ func (b *commandWALPublicBatch) finishGroupPublicationTicketHandoff(saved uint64
 	publication := publicCommandWALPublication{ticket: b.knownZeroValueLen}
 	b.knownZeroValueLen = saved
 	return publication
+}
+
+func (b *commandWALPublicBatch) commandWALFinalizer() db.RawKVCommandWALFinalize {
+	if provider, ok := b.inner.(interface {
+		ExternalCommandWALFinalizer() db.RawKVCommandWALFinalize
+	}); ok {
+		return provider.ExternalCommandWALFinalizer()
+	}
+	return nil
 }
 
 func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
@@ -1400,7 +1412,7 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	}
 	return b.db.appendPublicRawKVCommandEntryScanPrepared(func() error {
 		return b.assignCommandWALPointRevisions()
-	}, b.inner.Replay, b.opCount, sync, &b.knownZeroValueLen)
+	}, b.commandWALFinalizer(), b.inner.Replay, b.opCount, sync, &b.knownZeroValueLen)
 }
 
 func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandWALRequestTiming, error) {
@@ -1434,7 +1446,7 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
 		prepareErr := b.assignCommandWALPointRevisions()
 		preparation += time.Since(preparationStart)
 		return prepareErr
-	}, b.inner.Replay, b.opCount, sync, &b.knownZeroValueLen)
+	}, b.commandWALFinalizer(), b.inner.Replay, b.opCount, sync, &b.knownZeroValueLen)
 	timing.PublicPayloadEntryScanPreparation += preparation
 	timing.PublicPreparationObserved = true
 	return timing, err

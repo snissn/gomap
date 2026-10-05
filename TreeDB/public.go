@@ -2031,6 +2031,9 @@ func (db *DB) Set(key, value []byte) error {
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, value, true, false)
+	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -2054,6 +2057,9 @@ func (db *DB) SetSync(key, value []byte) error {
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
+	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, value, true, true)
 	}
 	// Select the route before appending any value/WAL bytes. Never retry an
 	// ambiguous point error. Construct the fallback under the admission lock
@@ -2097,6 +2103,9 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateReject.Add(1)
 		return ErrCommandWALRejected
@@ -2120,6 +2129,9 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateSyncReject.Add(1)
 		return ErrCommandWALRejected
@@ -2153,6 +2165,9 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return ErrConditionalTxnUnsupported
+	}
 	if db.cached != nil {
 		if db.commandWALCached {
 			return ErrConditionalTxnUnsupported
@@ -2210,6 +2225,9 @@ func (db *DB) Delete(key []byte) error {
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, nil, false, false)
+	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -2234,6 +2252,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		if batch.IsDeleteRangeNoop(start, end) {
 			return nil
@@ -2284,6 +2305,9 @@ func (db *DB) DeleteSync(key []byte) error {
 	key = normalizeRawKVPointKey(key)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
+	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, nil, false, true)
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
@@ -2410,7 +2434,11 @@ func (db *DB) AcquireSnapshot() Snapshot {
 		if snap := db.cached.AcquireBackendSnapshotFastPath(); snap != nil {
 			return snap
 		}
-		return db.cached.AcquireSnapshot()
+		snap := db.cached.AcquireSnapshot()
+		if snap == nil {
+			return nil
+		}
+		return snap
 	}
 	if db.backend == nil {
 		return nil
@@ -2795,4 +2823,28 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		return nil, ErrClosed
 	}
 	return db.backend.FragmentationReport()
+}
+
+// writeCOWPointAdmitted consumes the caller's public admission. Batch writes
+// acquire their own admission, so release this lock before invoking them.
+func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) error {
+	var b Batch = db.cached.NewBatchWithSize(1)
+	if db.commandWALCached {
+		b = newCommandWALPublicBatch(db, b, 1)
+	}
+	db.lifecycleMu.RUnlock()
+	var err error
+	if put {
+		err = b.Set(key, value)
+	} else {
+		err = b.Delete(key)
+	}
+	if err == nil {
+		if syncWrite {
+			err = b.WriteSync()
+		} else {
+			err = b.Write()
+		}
+	}
+	return errors.Join(err, b.Close())
 }

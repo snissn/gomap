@@ -48,12 +48,14 @@ type Snapshot struct {
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
 
-	closed     atomic.Bool
-	generation atomic.Uint64
-	finalized  atomic.Bool
-	readState  atomic.Uint64
-	iteratorMu sync.Mutex
-	iterators  map[*snapshotBoundIterator]struct{}
+	closed           atomic.Bool
+	generation       atomic.Uint64
+	finalized        atomic.Bool
+	readState        atomic.Uint64
+	iteratorMu       sync.Mutex
+	iterators        map[*snapshotBoundIterator]struct{}
+	cowIterators     *snapshotBoundIterator
+	cowIteratorCount uint64
 }
 
 type ownedReadScratch struct {
@@ -403,7 +405,7 @@ func (s *Snapshot) Close() error {
 
 func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.iteratorMu.Lock()
-	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+	if len(s.iterators) != 0 || s.cowIteratorCount != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
 		s.iteratorMu.Unlock()
 		return nil
 	}
@@ -743,6 +745,9 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, 
 // buildIteratorLocked accesses the snapshot's pinned view and backend and must
 // run while iteratorMu is held by bindNewIterator.
 func (s *Snapshot) buildIteratorLocked(start, end []byte, reverse bool) (merging.Iterator, error) {
+	if s.cowCache != nil {
+		return s.buildCOWIteratorLocked(start, end, reverse)
+	}
 	sources, err := s.iteratorSources(start, end, reverse)
 	if err != nil {
 		return nil, err

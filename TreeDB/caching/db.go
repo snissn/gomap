@@ -11054,6 +11054,9 @@ func (b *Batch) OrderedEntries() []batch.Entry {
 // encode the post-placement entries instead of its prebuilt inline payload so
 // the frame records either SetRID or SetMaterializedRID explicitly.
 func (b *Batch) ExternalCommandWALRequiresEntryScan() bool {
+	if b != nil && b.db != nil && b.db.cow != nil {
+		return true
+	}
 	if b == nil || b.db == nil || !b.db.externalCommandWAL {
 		return false
 	}
@@ -26455,6 +26458,9 @@ func (db *DB) Close() error {
 func (db *DB) Set(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if db.cow != nil {
+		return db.cowPoint(key, value, true, false)
+	}
 	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -26464,6 +26470,9 @@ func (db *DB) Set(key, value []byte) error {
 func (db *DB) SetSync(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if db.cow != nil {
+		return db.cowPoint(key, value, true, true)
+	}
 	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -26530,6 +26539,9 @@ func (db *DB) UpdateSync(key []byte, fn backenddb.UpdateFunc) error {
 }
 
 func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
@@ -27004,6 +27016,9 @@ func (db *DB) setDirectAfterCommandWALAppendWithPreparedRevision(key, value []by
 
 func (db *DB) Delete(key []byte) error {
 	key = normalizeRawKVPointKey(key)
+	if db.cow != nil {
+		return db.cowPoint(key, nil, false, false)
+	}
 	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -27151,6 +27166,9 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 }
 
 func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err error) {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	if db == nil {
 		return nil
 	}
@@ -27855,6 +27873,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 
 func (db *DB) DeleteSync(key []byte) error {
 	key = normalizeRawKVPointKey(key)
+	if db.cow != nil {
+		return db.cowPoint(key, nil, false, true)
+	}
 	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -30769,6 +30790,18 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return nil, err
+		}
+		defer s.Close()
+		v, err := s.Get(key)
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
+		return v, err
+	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
 	defer db.endForegroundRead()
@@ -30820,6 +30853,18 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 }
 
 func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return nil, 0, err
+		}
+		defer s.Close()
+		v, rev, err := s.GetVersioned(key)
+		if err == tree.ErrKeyNotFound {
+			return nil, rev, nil
+		}
+		return v, rev, err
+	}
 	key = normalizeRawKVPointKey(key)
 	scratch := getOwnedReadScratch()
 	defer putOwnedReadScratch(scratch)
@@ -30842,6 +30887,9 @@ func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 //
 // Missing keys are returned as nil entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	if db.cow != nil {
+		return db.cowGetMany(keys)
+	}
 	keys = normalizeRawKVPointKeys(keys)
 	if len(keys) == 0 {
 		return make([][]byte, 0), nil
@@ -30945,6 +30993,14 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // returns; callers must copy values they retain. Missing keys are reported with
 // found=false and value=nil.
 func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		return s.GetManyView(keys, fn)
+	}
 	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
 		return errors.New("cachingdb: GetManyView nil callback")
@@ -31015,6 +31071,14 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return dst, err
+		}
+		defer s.Close()
+		return s.GetAppend(key, dst)
+	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
 	defer db.endForegroundRead()
@@ -31035,6 +31099,14 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return dst, 0, err
+		}
+		defer s.Close()
+		return s.GetVersionedAppend(key, dst)
+	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
 	defer db.endForegroundRead()
@@ -31057,6 +31129,14 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return false, err
+		}
+		defer s.Close()
+		return s.Has(key)
+	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
 	defer db.endForegroundRead()
@@ -31087,6 +31167,14 @@ func (db *DB) Has(key []byte) (bool, error) {
 }
 
 func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return nil, err
+		}
+		defer s.Close()
+		return s.HasMany(keys)
+	}
 	keys = normalizeRawKVPointKeys(keys)
 	out := make([]bool, len(keys))
 	if len(keys) == 0 {
@@ -31132,6 +31220,14 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 }
 
 func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	if db.cow != nil {
+		snap, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return nil, err
+		}
+		defer snap.Close()
+		return snap.HasPrefixes(prefixes)
+	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -34064,6 +34160,9 @@ func (db *DB) Drain() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	if db.cow != nil {
+		return db.cowIterator(start, end)
+	}
 	iteratorDebug := iteratorDebugEnabled.Load()
 	if iteratorDebug {
 		db.iteratorCallsTotal.Add(1)
@@ -34521,6 +34620,9 @@ func (it *concatUnsafeIterator) Error() error {
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+	if db.cow != nil {
+		return nil, ErrCOWUnsupported
+	}
 	db.beginForegroundRead()
 	transferForegroundRead := func(it merging.Iterator) merging.Iterator {
 		return db.wrapForegroundIteratorLease(it)
@@ -34742,6 +34844,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
+	cowPrepared               *cowBatchPreparation
 	db                        *DB
 	entries                   []batch.Entry
 	backend                   batch.Interface
@@ -36639,6 +36742,9 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 }
 
 func (b *Batch) DeleteRange(start, end []byte) error {
+	if b.db != nil && b.db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	if b.closed {
 		return ErrBatchClosed
 	}
@@ -36918,6 +37024,9 @@ func batchCopyArenaInitCapForEntries(entries int) int {
 }
 
 func (b *Batch) maybeSwitchToStreaming() {
+	if b.db != nil && b.db.cow != nil {
+		return
+	}
 	if b.streamBypassOff || b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
@@ -37202,6 +37311,12 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpointForWrite()
+	if b.db.cow != nil {
+		if b.hasDeleteRanges || b.backend != nil {
+			return ErrCOWUnsupported
+		}
+		return b.writeRegular(sync)
+	}
 
 	if b.hasDeleteRanges {
 		return b.writeRangeBatch(sync)
@@ -37561,6 +37676,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 }
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
+	if b.db.cow != nil {
+		b.db.cow.writerMu.Lock()
+		previousUnlock := unlockWriteMu
+		unlockWriteMu = func() {
+			b.db.cow.writerMu.Unlock()
+			previousUnlock()
+		}
+	}
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
@@ -38088,6 +38211,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				return err
 			}
 		}
+	}
+
+	if b.db.cow != nil {
+		return b.writeCOWPublication(syncWrite, unlockWriteMu)
 	}
 
 	if b.commandWALAppend != nil {

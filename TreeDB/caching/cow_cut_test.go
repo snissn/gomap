@@ -8,6 +8,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -21,7 +22,7 @@ func cowCutFixture(t *testing.T) (*DB, *cowCache) {
 	if err := backend.Set([]byte("disk"), []byte("basis")); err != nil {
 		t.Fatal(err)
 	}
-	c, err := newCOWCache(backend.AcquireSnapshot(), 2, memtable.DefaultCOWLimits())
+	c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,10 @@ func cowCutPrepare(t *testing.T, c *cowCache, value string) *cowPreparedCut {
 	t.Helper()
 	groups := make([][]memtable.COWMutation, 2)
 	selector := &DB{mutableShardMask: 1, mutableShards: make([]memShard, 2)}
-	for i, key := range []string{"a", "b"} {
+	if selector.shardIndex([]byte("a")) == selector.shardIndex([]byte("d")) {
+		t.Fatal("fixture keys must cover distinct shards")
+	}
+	for i, key := range []string{"a", "d"} {
 		shard := selector.shardIndex([]byte(key))
 		groups[shard] = append(groups[shard], memtable.COWMutation{Key: []byte(key), Value: []byte(value), Flags: node.FlagInline, Revision: page.EntryRevision(11 + i)})
 	}
@@ -66,7 +70,7 @@ func TestCOWCutPrivatePrepareDoesNotBlockOrMixReaders(t *testing.T) {
 			return
 		}
 		defer s.Close()
-		for _, key := range []string{"a", "b"} {
+		for _, key := range []string{"a", "d"} {
 			v, err := s.Get([]byte(key))
 			if err != nil || string(v) != "old" {
 				done <- errors.New("private shard exposed")
@@ -89,7 +93,7 @@ func TestCOWCutPrivatePrepareDoesNotBlockOrMixReaders(t *testing.T) {
 		s     *Snapshot
 		value string
 	}{{old, "old"}, {current, "new"}} {
-		for _, key := range []string{"a", "b"} {
+		for _, key := range []string{"a", "d"} {
 			v, err := test.s.Get([]byte(key))
 			if err != nil || string(v) != test.value {
 				t.Fatalf("key=%s got=%q err=%v expected=%s", key, v, err, test.value)
@@ -222,5 +226,100 @@ func TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease(t *testing.T) 
 	stats := c.budget.Stats()
 	if stats.TotalBytes != 0 || stats.Views != 0 {
 		t.Fatalf("delayed close leaked charge: %+v", stats)
+	}
+}
+
+func TestCOWReadPressurePreservesCapacityError(t *testing.T) {
+	db, c := cowCutFixture(t)
+	var pins []*memtable.COWView
+	for {
+		pin, err := c.cut.shards[0].root.Acquire(0)
+		if err != nil {
+			if err != memtable.ErrCOWCapacity {
+				t.Fatal(err)
+			}
+			break
+		}
+		pins = append(pins, pin)
+	}
+	if _, err := db.Get([]byte("disk")); err != memtable.ErrCOWCapacity {
+		t.Fatalf("Get pressure=%v", err)
+	}
+	if _, err := db.GetMany([][]byte{[]byte("disk")}); err != memtable.ErrCOWCapacity {
+		t.Fatalf("GetMany pressure=%v", err)
+	}
+	if _, err := db.Iterator(nil, nil); err != memtable.ErrCOWCapacity {
+		t.Fatalf("Iterator pressure=%v", err)
+	}
+	if _, err := db.HasPrefixes([][]byte{[]byte("disk")}); err != memtable.ErrCOWCapacity {
+		t.Fatalf("HasPrefixes pressure=%v", err)
+	}
+	if db.AcquireSnapshot() != nil {
+		t.Fatal("errorless capture admitted despite pressure")
+	}
+	for _, pin := range pins {
+		pin.Close()
+	}
+	if value, err := db.Get([]byte("disk")); err != nil || string(value) != "basis" {
+		t.Fatalf("Get after pressure=%q err=%v", value, err)
+	}
+}
+
+func TestCOWSnapshotIteratorWrapperAdmissionAndLifetime(t *testing.T) {
+	db, c := cowCutFixture(t)
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot admission")
+	}
+	before := c.budget.Stats()
+	first, err := snap.bindNewIterator(func() (merging.Iterator, error) { return &emptyIterator{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := snap.bindNewIterator(func() (merging.Iterator, error) { return &emptyIterator{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.iterators != nil || snap.cowIteratorCount != 2 {
+		t.Fatal("COW registry allocated legacy map or lost members")
+	}
+	held := c.budget.Stats()
+	if held.ExternalLeases != before.ExternalLeases+2 || held.ExternalBytes <= before.ExternalBytes {
+		t.Fatal("iterator wrappers not charged")
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.budget.Stats(); got.ExternalBytes != held.ExternalBytes {
+		t.Fatal("snapshot close released live iterator storage")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snap.cowIteratorCount != 1 {
+		t.Fatal("first close did not unlink one member")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.budget.Stats(); got.ExternalBytes != before.ExternalBytes {
+		t.Fatalf("wrapper leases survived final close: before=%d after=%d", before.ExternalBytes, got.ExternalBytes)
+	}
+}
+
+func TestCOWCursorDeniedWrapperDoesNotAllocate(t *testing.T) {
+	_, c := cowCutFixture(t)
+	table := &c.cut.shards[0]
+	c.budget.Close()
+	if allocations := testing.AllocsPerRun(100, func() {
+		it := table.NewIterator(nil, nil)
+		if it.Error() != memtable.ErrCOWClosed || it.Valid() {
+			t.Fatal("closed cursor admitted")
+		}
+		it.Seek(nil)
+		it.Next()
+		_ = it.Close()
+	}); allocations != 0 {
+		t.Fatalf("denied wrapper allocated %g", allocations)
 	}
 }

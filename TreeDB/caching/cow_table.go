@@ -85,7 +85,7 @@ func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		memtable.COWAllocationCharge(uint64(len(start))) + memtable.COWAllocationCharge(uint64(len(end)))
 	c, err := t.root.CursorWithExtraBytes(start, end, extra)
 	if err != nil {
-		return &cowIterator{err: err}
+		return refusedCOWIterator(err)
 	}
 	it := &cowIterator{cursor: c, start: append([]byte(nil), start...), end: append([]byte(nil), end...)}
 	if start != nil && it.start == nil {
@@ -98,7 +98,7 @@ func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 func (*cowTable) NewReverseIterator(_, _ []byte) iterator.UnsafeIterator {
-	return &cowIterator{err: ErrCOWUnsupported}
+	return &cowUnsupportedIterator
 }
 
 type cowIterator struct {
@@ -201,3 +201,40 @@ func (it *cowIterator) Close() error {
 	}
 	return nil
 }
+
+// Refusal paths return immutable static carriers. They neither allocate after
+// denied admission nor mutate shared state when callers move or close them.
+type cowErrorIterator struct{ err error }
+
+var (
+	cowCapacityIterator    = cowErrorIterator{memtable.ErrCOWCapacity}
+	cowClosedIterator      = cowErrorIterator{memtable.ErrCOWClosed}
+	cowUnsupportedIterator = cowErrorIterator{ErrCOWUnsupported}
+)
+
+func refusedCOWIterator(err error) iterator.UnsafeIterator {
+	if err == memtable.ErrCOWCapacity {
+		return &cowCapacityIterator
+	}
+	if err == memtable.ErrCOWClosed {
+		return &cowClosedIterator
+	}
+	panic("unexpected COW cursor admission error")
+}
+func (*cowErrorIterator) Valid() bool                                { return false }
+func (*cowErrorIterator) Next()                                      {}
+func (*cowErrorIterator) Seek([]byte)                                {}
+func (*cowErrorIterator) UnsafeKey() []byte                          { return nil }
+func (*cowErrorIterator) UnsafeValue() []byte                        { return nil }
+func (*cowErrorIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) { return nil, page.ValuePtr{}, 0 }
+func (*cowErrorIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return nil, page.ValuePtr{}, 0, 0
+}
+func (*cowErrorIterator) Key() []byte                 { return nil }
+func (*cowErrorIterator) Value() []byte               { return nil }
+func (*cowErrorIterator) KeyCopy(dst []byte) []byte   { return dst[:0] }
+func (*cowErrorIterator) ValueCopy(dst []byte) []byte { return dst[:0] }
+func (*cowErrorIterator) IsDeleted() bool             { return false }
+func (it *cowErrorIterator) Error() error             { return it.err }
+func (*cowErrorIterator) Domain() ([]byte, []byte)    { return nil, nil }
+func (*cowErrorIterator) Close() error                { return nil }

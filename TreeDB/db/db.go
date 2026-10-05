@@ -1670,17 +1670,46 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	return snap
 }
 
-// captureSnapshotWithValueLogPublicationLockHeld is shared by fresh exported
-// handles and private one-shot reads. The caller owns the publication lock and
-// an inactive handle, and must release a successful capture with Snapshot.Close.
+// SnapshotAllocationSizes reports raw allocation capacities. Round each field
+// independently; PinRef is the raw size of one existing retained counter.
+type SnapshotAllocationSizes struct {
+	Wrapper, PinSet, Refs, IDs, PinRef uint64
+	PinRefCount                        int
+	ValueLog                           valuelog.SetRetentionSizes
+}
+
+// ErrSnapshotCapacity reports fixed reader cohort or manual leaf-pin refusal.
+// Legacy AcquireSnapshot retains its established growable registry path.
+var ErrSnapshotCapacity = errors.New("bounded snapshot capacity exhausted")
+
+// AcquireSnapshotWithAllocationAdmission captures one backend basis without
+// growing shared reader-registry or leaf-pin storage. admit receives raw sizes
+// of the new wrapper and retained existing PinSet storage before wrapper
+// allocation and pin acquisition; the caller owns its charge through Close.
+// Fixed registry storage admits at most FastReaderShardCount distinct sequence
+// cohorts; snapshots of the same sequence share a cohort.
+func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocationSizes) error) (*Snapshot, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if admit == nil {
+		return nil, errors.New("snapshot allocation admission required")
+	}
+	db.valueLogPublicationMu.RLock()
+	defer db.valueLogPublicationMu.RUnlock()
+	return db.captureSnapshotBoundedWithValueLogPublicationLockHeld(nil, admit, true)
+}
+
 func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
+	_, err := db.captureSnapshotBoundedWithValueLogPublicationLockHeld(snap, nil, false)
+	return err == nil
+}
+
+func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool) (*Snapshot, error) {
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
-		return false
-	}
-	if snap.registryShardHint == snapshotShardHintUnset {
-		snap.registryShardHint = registryHintFromSnapshot(snap)
+		return nil, ErrClosed
 	}
 	acqShard := snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
@@ -1692,21 +1721,52 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		db.snapshotAcquireRO[acqShard].Add(-1)
 	}()
 	if db.closing.Load() {
-		return false
+		return nil, ErrClosed
 	}
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		return false
+		return nil, ErrClosed
 	}
 	idx := view.idx
 	state := view.state
 	vm := view.vlogManager
+
+	if bounded && state.LeafGenerations != nil && len(state.LeafGenerations.GenerationOrder) != 0 && state.LeafGenerations.PinSet == nil {
+		// The manual-view fallback creates tracker/ref arrays during capture. COW
+		// uses only the already-published shared PinSet path.
+		return nil, ErrSnapshotCapacity
+	}
+	if admit != nil {
+		sizes := SnapshotAllocationSizes{Wrapper: uint64(unsafe.Sizeof(Snapshot{}))}
+		if state.LeafGenerations != nil && state.LeafGenerations.PinSet != nil {
+			sizes.PinSet = uint64(unsafe.Sizeof(leafGenerationPinSet{}))
+			sizes.Refs = uint64(cap(state.LeafGenerations.PinSet.refs)) * uint64(unsafe.Sizeof((*leafGenerationPinRef)(nil)))
+			sizes.IDs = uint64(cap(state.LeafGenerations.GenerationOrder)) * uint64(unsafe.Sizeof(uint64(0)))
+			// Each referenced pin counter is retained, though the backend created it.
+			sizes.PinRefCount = len(state.LeafGenerations.PinSet.refs)
+			sizes.PinRef = uint64(unsafe.Sizeof(leafGenerationPinRef{}))
+		}
+		var known bool
+		sizes.ValueLog, known = state.ValueLogSet.RetentionSizes()
+		if !known {
+			return nil, ErrSnapshotCapacity
+		}
+		if err := admit(sizes); err != nil {
+			return nil, err
+		}
+	}
+	if snap == nil {
+		snap = db.snapPool.Get()
+	}
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
 	vlogSet := state.ValueLogSet
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			return false
+			return nil, ErrClosed
 		}
 		vm.Acquire(vlogSet)
 	}
@@ -1717,9 +1777,20 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 			if vlogNeedsPin && vm != nil {
 				_ = vm.Release(vlogSet)
 			}
-			return false
+			return nil, ErrClosed
 		}
-		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+
+		if bounded {
+			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.CommitSeq, snap.registryShardHint)
+		} else {
+			registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+		}
+		if registryID == 0 {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			return nil, ErrSnapshotCapacity
+		}
 	}
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
@@ -1784,7 +1855,7 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 	snap.closed.Store(false)
 	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
-	return true
+	return snap, nil
 }
 
 // AcquireStableSnapshot pins the current index generation against online

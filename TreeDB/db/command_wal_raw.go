@@ -1487,6 +1487,22 @@ func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, fina
 	return finalize(intent.payload, intent.rawKVRIDCache.lookup)
 }
 
+// FinalizeRawKVEntryScanForCachedPublication borrows canonical metadata without
+// appending a command frame. Replay uses its existing recovery intent; WAL-off
+// cached publication uses the same pointer authority without journal effects.
+func (db *DB) FinalizeRawKVEntryScanForCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	if db == nil {
+		return ErrClosed
+	}
+	return db.finalizeRawKVEntryScanWithoutCommandWAL(prepare, finalize, scanEntries, opHint)
+}
+
+// AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured
+// reports the same phases as the prepared path while preserving its finalizer.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, true)
+}
+
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
 // diagnostic counterpart to the prepared ordered-entry scan append.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, CommandWALRequestTiming, error) {
