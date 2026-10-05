@@ -511,6 +511,9 @@ admission. Old views survive replacement, physical deletion and budget Close.
 Budget Close refuses fresh root Retain and external allocation leases. Caller
 wrappers/scratch allocated before Prepare require an external lease first;
 its full lifetime shares bounded in-flight admission and ends after cleanup.
+Estimate/refusal and immutable lookup/seek allocate no key conversions in either
+build. `treedb_safe` uses byte comparisons over rank search at O(log N * height),
+preserving admission and ownership without unsafe byte/string borrowing.
 Private cancellation has no visibility; resource callbacks run only after final
 ownership release and outside publication/admission locks. The full internal
 contract is [immutable memtable ownership](cow-memtable-ownership.md). This

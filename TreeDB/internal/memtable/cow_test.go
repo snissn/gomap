@@ -1050,3 +1050,229 @@ func TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce(t *testing.T) {
 		})
 	}
 }
+
+// Large inputs exceed the runtime's small conversion buffer and expose safe-
+// build copies that short literal keys can hide through compiler elision.
+func TestCOWLargeKeyAdmissionAndReadAllocations(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	key := make([]byte, 1<<20)
+	for i := range key {
+		key[i] = 'k'
+	}
+	end := append([]byte(nil), key...)
+	end[len(end)-1]++
+	root := cowTestPublish(t, w, []COWMutation{{Key: key, Value: []byte("old")}})
+	defer func() { cowTestRelease(root); cowTestClose(w); b.Close() }()
+	entries := []COWMutation{{Key: key, Value: []byte("new")}}
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Estimate(entries, COWPrepareOptions{}); e != nil {
+			t.Fatal(e)
+		}
+	}); a != 0 {
+		t.Errorf("large-key Estimate allocated %g", a)
+	}
+	lease, e := b.AcquireExternal(b.Limits().MaxInFlightBytes - cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if e != nil {
+		t.Fatal(e)
+	}
+	before := b.Stats()
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Prepare(entries, COWPrepareOptions{}); !errors.Is(e, ErrCOWCapacity) {
+			t.Fatalf("refusal=%v", e)
+		}
+	}); a != 0 {
+		t.Errorf("refused large-key Prepare allocated %g", a)
+	}
+	if b.Stats() != before {
+		t.Fatal("refusal changed budget")
+	}
+	missing := append([]byte(nil), key...)
+	missing[0]++
+	missingEntries := []COWMutation{{Key: missing}}
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Estimate(missingEntries, COWPrepareOptions{}); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := w.Prepare(missingEntries, COWPrepareOptions{}); !errors.Is(e, ErrCOWCapacity) {
+			t.Fatal(e)
+		}
+	}); a != 0 {
+		t.Errorf("missing large-key estimate/refusal allocated %g", a)
+	}
+	lease.Close()
+	if a := testing.AllocsPerRun(10, func() {
+		r, ok := root.Get(key)
+		if !ok || r.Value != "old" {
+			t.Fatal("Get mismatch")
+		}
+		r, ok = root.SeekGE(key, end)
+		if !ok || r.Value != "old" {
+			t.Fatal("SeekGE mismatch")
+		}
+	}); a != 0 {
+		t.Errorf("large-key read allocated %g", a)
+	}
+	cursor, e := root.Cursor(key, end)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer cursor.Close()
+	if a := testing.AllocsPerRun(10, func() {
+		if e := cursor.Seek(key); e != nil {
+			t.Fatal(e)
+		}
+		r, ok, e := cursor.Record()
+		if e != nil || !ok || r.Value != "old" {
+			t.Fatal("cursor mismatch")
+		}
+	}); a != 0 {
+		t.Errorf("large-key cursor Seek allocated %g", a)
+	}
+	// After admission, replacement reuses the existing owned large key.
+	var beforeAlloc, afterAlloc runtime.MemStats
+	runtime.ReadMemStats(&beforeAlloc)
+	p, e := w.Prepare(entries, COWPrepareOptions{})
+	runtime.ReadMemStats(&afterAlloc)
+	if e != nil {
+		t.Fatal(e)
+	}
+	actual := afterAlloc.TotalAlloc - beforeAlloc.TotalAlloc
+	t.Logf("large replacement actual=%d reserve=%d keyBytes=%d", actual, p.Charge().Total(), len(key))
+	if actual > p.Charge().Total() || actual >= uint64(len(key))/2 {
+		t.Fatal("replacement allocated an uncharged temporary key")
+	}
+	if p.Charge().Payload != cowAllocation(3) {
+		t.Fatal("replacement key copied into payload charge")
+	}
+	next := p.Publish()
+	key[0] = 'x'
+	r, ok := next.SeekGE(nil, nil)
+	if !ok || r.Key[0] != 'k' || r.Value != "new" {
+		t.Fatal("replacement borrowed key")
+	}
+	cowTestRelease(next)
+}
+
+func TestCOWByteLookupAcrossLevels(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	entries := make([]COWMutation, 4096)
+	for i := range entries {
+		entries[i] = COWMutation{Key: []byte(fmt.Sprintf("%08d", 2*i)), Value: []byte("old")}
+	}
+	root := cowTestPublish(t, w, entries)
+	if root.Height() < 3 {
+		t.Fatalf("fixture height=%d", root.Height())
+	}
+	cursor, e := root.Cursor(nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { cursor.Close(); cowTestRelease(root); cowTestClose(w); b.Close() }()
+	queries := []int{-1, 0, 1, 62, 63, 64, 2047, 2048, 4095, 8190, 8191, 9999}
+	for _, n := range queries {
+		key := []byte(fmt.Sprintf("%08d", n))
+		want := n
+		if want < 0 {
+			want = 0
+		}
+		if want%2 != 0 {
+			want++
+		}
+		found := want <= 8190
+		r, ok := root.Get(key)
+		if ok != (found && n == want) || (ok && r.Key != string(key)) {
+			t.Fatalf("Get %d: %+v/%v", n, r, ok)
+		}
+		r, ok = root.SeekGE(key, nil)
+		if ok != found || (ok && r.Key != fmt.Sprintf("%08d", want)) {
+			t.Fatalf("SeekGE %d: %+v/%v", n, r, ok)
+		}
+		if e := cursor.Seek(key); e != nil {
+			t.Fatal(e)
+		}
+		r, ok, e = cursor.Record()
+		if e != nil || ok != found || (ok && r.Key != fmt.Sprintf("%08d", want)) {
+			t.Fatalf("cursor %d: %+v/%v/%v", n, r, ok, e)
+		}
+		if ok && want < 8190 {
+			if e := cursor.Next(); e != nil {
+				t.Fatal(e)
+			}
+			r, ok, e = cursor.Record()
+			if e != nil || !ok || r.Key != fmt.Sprintf("%08d", want+2) {
+				t.Fatal("successor mismatch")
+			}
+		}
+		if _, ok := root.SeekGE(key, key); ok {
+			t.Fatal("equal bound admitted")
+		}
+	}
+	// A failed above-max seek must not leave the iterator unrecoverable.
+	if e := cursor.Seek([]byte("00000000")); e != nil {
+		t.Fatal(e)
+	}
+	if r, ok, e := cursor.Record(); e != nil || !ok || r.Key != "00000000" {
+		t.Fatal("seek recovery mismatch")
+	}
+	// Empty key, strict prefixes and lexicographic byte values remain distinct.
+	mixed := cowTestPublish(t, w, []COWMutation{{Key: nil}, {Key: []byte{'a'}}, {Key: []byte{'a', 0}}, {Key: []byte{'a', 255}}})
+	if _, ok := mixed.SeekGE(nil, []byte{}); ok {
+		t.Fatal("empty end must bound empty key")
+	}
+	emptyBound, e := mixed.Cursor(nil, []byte{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, ok, _ := emptyBound.Record(); ok {
+		t.Fatal("empty end cursor must be empty")
+	}
+	emptyBound.Close()
+	unbounded, e := mixed.Cursor(nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r, ok, e := unbounded.Record(); e != nil || !ok || r.Key != "" {
+		t.Fatal("nil end must be unbounded")
+	}
+	unbounded.Close()
+	for _, key := range [][]byte{nil, {'a'}, {'a', 0}, {'a', 255}} {
+		if r, ok := mixed.Get(key); !ok || r.Key != string(key) {
+			t.Fatal("byte ordering mismatch")
+		}
+	}
+	if _, ok := mixed.SeekGE([]byte{'a'}, []byte{'a'}); ok {
+		t.Fatal("empty range")
+	}
+	bounded, e := mixed.Cursor([]byte{'a'}, []byte{'a', 255})
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, want := range []string{"a", "a\x00"} {
+		r, ok, e := bounded.Record()
+		if e != nil || !ok || r.Key != want {
+			t.Fatal("bounded cursor mismatch")
+		}
+		if e := bounded.Next(); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, ok, _ := bounded.Record(); ok {
+		t.Fatal("cursor crossed exclusive end")
+	}
+	bounded.Close()
+	cowTestRelease(mixed)
+	next := cowTestPublish(t, w, []COWMutation{{Key: []byte("00002048"), Value: []byte("new")}, {Key: []byte("00002050"), Remove: true}, {Key: []byte("00002049"), Remove: true}})
+	if r, ok := next.Get([]byte("00002048")); !ok || r.Value != "new" {
+		t.Fatal("replacement mismatch")
+	}
+	if _, ok := next.Get([]byte("00002050")); ok {
+		t.Fatal("removal mismatch")
+	}
+	if r, ok := next.SeekGE([]byte("00002049"), nil); !ok || r.Key != "00002052" {
+		t.Fatal("removed successor mismatch")
+	}
+	if r, ok := root.Get([]byte("00002050")); !ok || r.Value != "old" {
+		t.Fatal("old owner mutated")
+	}
+	cowTestRelease(next)
+}

@@ -28,6 +28,12 @@ admission before allocation, finite shared capacity, overflow, concurrent Close
 and shutdown control lifetime. `BenchmarkCOWExternalLease` reports its wrapper
 allocation/admission cost. `TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce`
 keeps deferred callbacks/storage charged through copy-safe cleanup.
+`TestCOWLargeKeyAdmissionAndReadAllocations` and
+`TestCOWByteLookupAcrossLevels` cover conversion-free pre-admission estimation,
+refusal, owned-key replacement/removal, reads/ranges/cursor seeks and three-level
+ordering in both default and `treedb_safe` builds. `BenchmarkCOWLargeKeyLookup`
+reports the safe-build rank-search cost and zero key-conversion allocations;
+[build-tag commands and scope](cow-memtable-ownership.md) bind the comparator.
 
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real

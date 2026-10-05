@@ -141,7 +141,7 @@ func (r *COWRoot) CursorWithExtraBytes(start, end []byte, extraBytes uint64) (*C
 		return nil, err
 	}
 	c := &COWCursor{view: v, iter: r.tree.Iter(), end: string(end), bounded: end != nil}
-	c.valid = c.iter.Seek(bytesToStringNoCopy(start))
+	c.valid = cowIteratorSeek(r.tree, &c.iter, start)
 	c.checkEnd()
 	return c, nil
 }
@@ -165,7 +165,7 @@ func (c *COWCursor) Seek(key []byte) error {
 	if c.view == nil {
 		return ErrCOWClosed
 	}
-	c.valid = c.iter.Seek(bytesToStringNoCopy(key))
+	c.valid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
 	c.checkEnd()
 	return nil
 }

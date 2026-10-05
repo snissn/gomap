@@ -186,6 +186,26 @@ zero extra bytes. Independent cursors traverse concurrently. One cursor or view
 serializes its own operations against Close, and a cursor owns its own lease even
 when its creating view closes.
 
+## Safe-build lookup contract
+
+Both default and `treedb_safe` builds perform Estimate, refused Prepare, Get,
+SeekGE and repeated cursor Seek without allocating key conversions. The safe
+build does not borrow byte buffers through unsafe strings: tidwall v1.8.1 lacks
+heterogeneous byte/string search, so `cow_lookup_safe.go` binary-searches ranks
+with read-only `GetAt` and compares bytes directly with existing owned strings.
+Its search cost is O(log N * height) at fixed node degree, versus one tree-path
+search in the default build. Byte comparison also depends on the compared key
+length. This deliberately spends extra safe-build search work to preserve
+pre-allocation admission, immutable ownership and allocation-free reads.
+
+Preparation reuses an existing owned key for replacement/removal. A new key
+and value are copied only after admission under the existing Payload charge;
+no temporary conversion is needed. Cursor construction owns its charged end
+bound but searches start bytes without copying them. Repeated Seek resolves an
+existing owned successor key before iterator Seek and creates no conversion.
+The default build retains its zero-copy Get/Ascend/Delete/iterator Seek paths;
+no unsafe conversion is introduced into the safe build.
+
 ## Verification and measurement scope
 
 `cow_baseline_red_test.go` retains deliberately failing pre-C1 shallow-byte and
@@ -199,6 +219,12 @@ changing production degree-32 construction; synthetic pointer-frame appends also
 cover large-stack growth. External admission tests cover zero-allocation refusal,
 shared Prepare/retirement capacity, plateau, overflow, concurrent Close and
 shutdown control ownership. Root Retain races budget Close safely.
+`TestCOWLargeKeyAdmissionAndReadAllocations` uses 1 MiB keys to expose conversion
+allocations hidden by short-input compiler elision, including Estimate/refused
+Prepare, missing keys, reads, cursor Seek and admitted replacement reserve.
+`TestCOWByteLookupAcrossLevels` covers a three-level production tree, exact and
+missing queries, exclusive ranges, byte/prefix ordering, cursor successors and
+replacement/removal with old owners still readable. Run these in both builds.
 
 Foundation costs are measured with:
 
@@ -217,3 +243,18 @@ returned records remain explicit. Retention tests sample HeapAlloc/HeapInuse and
 post-GC pinned/drained endpoints; samples are not exact transient peak or RSS.
 These are internal mechanism witnesses, not public DB/Alpha performance or a
 substitute for C2/C4 flush/WAL/checkpoint lifecycle qualification.
+
+Safe-build affected qualification and large-key cost witness:
+
+```sh
+GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -count=1
+GOWORK=off go test -tags treedb_safe -race ./TreeDB/internal/memtable -count=1
+GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -run '^$' \
+  -bench '^BenchmarkCOWLargeKeyLookup$' -benchmem -benchtime=100x -count=3
+```
+
+Repeat without the tag for the default-build comparator. The standalone
+large-key benchmark reports Get, CursorSeek, Estimate and RefusedPrepare costs;
+fixture/cursor/external-lease setup is excluded. Its plain Go test logs are not
+benchprof profile inputs. Safe search timing is an explicit tradeoff, not a
+production speedup claim.

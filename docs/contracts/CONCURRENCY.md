@@ -31,6 +31,8 @@ their source generation and concrete resource owners alive until Close; budget
 Close denies new admissions, including root Retain and external allocation
 leases, while existing views remain valid. External leases reserve caller
 storage before allocation and close idempotently after owned cleanup.
+Both default and `treedb_safe` builds avoid key-conversion allocation during
+estimation/refusal and lookup/seek; safe rank search costs O(log N * height).
 Release callbacks
 are deferred outside publication/admission locks. It supplies no standalone
 public DB mode at this stage. See
