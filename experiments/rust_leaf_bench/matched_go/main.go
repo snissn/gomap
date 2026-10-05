@@ -32,7 +32,15 @@ const (
 type options struct {
 	prefix   bool
 	columnar bool
+	keyKind  keyKind
 }
+
+type keyKind uint8
+
+const (
+	keyKindBytes keyKind = iota
+	keyKindFixedBE8
+)
 
 type columnarEntry struct {
 	keyOff    int
@@ -114,16 +122,16 @@ func main() {
 		})
 		ran = true
 	}
-	if selectedCase == "search/columnar_fixed_be8_direct" {
-		page, queries := setupSearchColumnar(true)
-		runCase("search/columnar_fixed_be8_direct", searchIters, func() uint64 {
-			return benchSearchPreparedColumnarFixedBE8(searchIters, page, queries)
-		})
-		ran = true
-	}
 	if caseEnabled(selectedCase, "search/columnar_variable16") {
 		page, queries := setupSearchColumnar(false)
 		runCase("search/columnar_variable16", searchIters, func() uint64 {
+			return benchSearchPrepared(searchIters, page, queries)
+		})
+		ran = true
+	}
+	if caseEnabled(selectedCase, "search/columnar_variable_len") {
+		page, queries := setupSearchColumnarVariableLen()
+		runCase("search/columnar_variable_len", searchIters, func() uint64 {
 			return benchSearchPrepared(searchIters, page, queries)
 		})
 		ran = true
@@ -237,6 +245,15 @@ func be16(a, b uint64) []byte {
 	return out
 }
 
+func fillVariableLenKey(dst []byte, i int) []byte {
+	keyLen := 9 + (i % (benchKeySize - 8))
+	binary.BigEndian.PutUint64(dst[:8], uint64(i))
+	for j := 8; j < keyLen; j++ {
+		dst[j] = byte(i*31 + (j - 8))
+	}
+	return dst[:keyLen]
+}
+
 func benchBuilderPrepared(iters int, prefix bool, keys, values [][]byte) uint64 {
 	b := newBuilder(options{prefix: prefix})
 	var checksum uint64
@@ -254,7 +271,11 @@ func benchBuilderPrepared(iters int, prefix bool, keys, values [][]byte) uint64 
 }
 
 func setupSearchColumnar(fixedBE8 bool) (*page, [][]byte) {
-	b := newBuilder(options{columnar: true})
+	kind := keyKindBytes
+	if fixedBE8 {
+		kind = keyKindFixedBE8
+	}
+	b := newBuilder(options{columnar: true, keyKind: kind})
 	inserted := 0
 	for i := 0; i < benchKeyCount; i++ {
 		key := be8(uint64(i))
@@ -278,23 +299,31 @@ func setupSearchColumnar(fixedBE8 bool) (*page, [][]byte) {
 	return p, queries
 }
 
+func setupSearchColumnarVariableLen() (*page, [][]byte) {
+	b := newBuilder(options{columnar: true, keyKind: keyKindBytes})
+	inserted := 0
+	var key [benchKeySize]byte
+	for i := 0; i < benchKeyCount; i++ {
+		if !b.addLeafEntry(fillVariableLenKey(key[:], i), nil, flagPointer) {
+			break
+		}
+		inserted++
+	}
+
+	p := b.finish()
+	queries := make([][]byte, inserted)
+	for i := range queries {
+		q := make([]byte, len(fillVariableLenKey(key[:], i)))
+		copy(q, fillVariableLenKey(key[:], i))
+		queries[i] = q
+	}
+	return p, queries
+}
+
 func benchSearchPrepared(iters int, p *page, queries [][]byte) uint64 {
 	var checksum uint64
 	for i := 0; i < iters; i++ {
 		idx, found := p.searchLeaf(queries[i%len(queries)])
-		checksum += uint64(idx)
-		if found {
-			checksum++
-		}
-	}
-	return checksum
-}
-
-func benchSearchPreparedColumnarFixedBE8(iters int, p *page, queries [][]byte) uint64 {
-	var checksum uint64
-	for i := 0; i < iters; i++ {
-		target := binary.BigEndian.Uint64(queries[i%len(queries)])
-		idx, found := p.searchColumnarV2FixedBE8(target)
 		checksum += uint64(idx)
 		if found {
 			checksum++
@@ -593,6 +622,9 @@ func (p *page) searchLeaf(key []byte) (int, bool) {
 		return p.searchColumnarPrefixV2(key)
 	}
 	if p.opts.columnar {
+		if p.opts.keyKind == keyKindFixedBE8 {
+			return p.searchColumnarV2FixedBE8(key)
+		}
 		return p.searchColumnarV2(key)
 	}
 	if p.opts.prefix {
@@ -648,12 +680,13 @@ func (p *page) searchColumnarV2(key []byte) (int, bool) {
 	return lo, false
 }
 
-func (p *page) searchColumnarV2FixedBE8(target uint64) (int, bool) {
+func (p *page) searchColumnarV2FixedBE8(key []byte) (int, bool) {
+	target := binary.BigEndian.Uint64(key)
 	if p.count <= smallSearchThreshold {
 		for idx := 0; idx < p.count; idx++ {
-			cmp := p.compareColumnarFixedBE8At(idx, target)
-			if cmp >= 0 {
-				return idx, cmp == 0
+			entry := p.columnarFixedBE8At(idx)
+			if entry >= target {
+				return idx, entry == target
 			}
 		}
 		return p.count, false
@@ -661,28 +694,21 @@ func (p *page) searchColumnarV2FixedBE8(target uint64) (int, bool) {
 	lo, hi := 0, p.count
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
-		if p.compareColumnarFixedBE8At(mid, target) < 0 {
+		if p.columnarFixedBE8At(mid) < target {
 			lo = mid + 1
 		} else {
 			hi = mid
 		}
 	}
 	if lo < p.count {
-		return lo, p.compareColumnarFixedBE8At(lo, target) == 0
+		return lo, p.columnarFixedBE8At(lo) == target
 	}
 	return lo, false
 }
 
-func (p *page) compareColumnarFixedBE8At(index int, target uint64) int {
+func (p *page) columnarFixedBE8At(index int) uint64 {
 	keyStart := p.offsetAt(index)
-	entry := binary.BigEndian.Uint64(p.data[keyStart : keyStart+8])
-	if entry < target {
-		return -1
-	}
-	if entry > target {
-		return 1
-	}
-	return 0
+	return binary.BigEndian.Uint64(p.data[keyStart : keyStart+8])
 }
 
 func (p *page) columnarKeyAt(index int) []byte {
@@ -743,13 +769,13 @@ func (p *page) searchPrefixBlock(blockStart, blockEnd int, target []byte) (int, 
 		off := p.offsetAt(idx)
 		layout := parsePrefixLayout(p.data, off)
 		suffix := p.data[off+layout.keyOff : off+layout.keyOff+layout.suffixLen]
-		cmp = comparePrefixVirtualKey(prev[:prevLen], layout.prefixLen, suffix, target)
-		if cmp >= 0 {
-			return idx, cmp == 0
-		}
 		keyLen := layout.prefixLen + layout.suffixLen
 		copy(prev[layout.prefixLen:keyLen], suffix)
 		prevLen = keyLen
+		cmp = compareLeafKey(prev[:prevLen], target)
+		if cmp >= 0 {
+			return idx, cmp == 0
+		}
 	}
 	return blockEnd, false
 }
@@ -808,13 +834,13 @@ func (p *page) searchColumnarPrefixBlock(blockStart, blockEnd int, target []byte
 	for idx := blockStart + 1; idx < blockEnd; idx++ {
 		prefixLen := p.columnarPrefixLenAt(idx)
 		suffix := p.columnarPrefixSuffixAt(idx)
-		cmp = comparePrefixVirtualKey(prev[:prevLen], prefixLen, suffix, target)
-		if cmp >= 0 {
-			return idx, cmp == 0
-		}
 		keyLen := prefixLen + len(suffix)
 		copy(prev[prefixLen:keyLen], suffix)
 		prevLen = keyLen
+		cmp = compareLeafKey(prev[:prevLen], target)
+		if cmp >= 0 {
+			return idx, cmp == 0
+		}
 	}
 	return blockEnd, false
 }
@@ -925,50 +951,7 @@ func parsePrefixLayout(data []byte, off int) prefixLayout {
 }
 
 func compareLeafKey(a, b []byte) int {
-	if len(a) == 8 && len(b) == 8 {
-		av := binary.BigEndian.Uint64(a)
-		bv := binary.BigEndian.Uint64(b)
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	}
 	return bytes.Compare(a, b)
-}
-
-func comparePrefixVirtualKey(prevKey []byte, prefixLen int, suffix []byte, target []byte) int {
-	n := prefixLen
-	if len(target) < n {
-		n = len(target)
-	}
-	if n > 0 {
-		if cmp := bytes.Compare(prevKey[:n], target[:n]); cmp != 0 {
-			return cmp
-		}
-	}
-	if len(target) < prefixLen {
-		return 1
-	}
-	tail := target[prefixLen:]
-	n = len(suffix)
-	if len(tail) < n {
-		n = len(tail)
-	}
-	if n > 0 {
-		if cmp := bytes.Compare(suffix[:n], tail[:n]); cmp != 0 {
-			return cmp
-		}
-	}
-	if len(suffix) < len(tail) {
-		return -1
-	}
-	if len(suffix) > len(tail) {
-		return 1
-	}
-	return 0
 }
 
 func putU16(dst []byte, v uint16) {
