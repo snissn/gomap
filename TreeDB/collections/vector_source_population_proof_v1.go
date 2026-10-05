@@ -420,7 +420,7 @@ func (p *vectorPopulationColumnProjectionV1) vector(ctx context.Context, id []by
 		if err != nil {
 			return nil, err
 		}
-		if image.Rows != asset.Rows {
+		if image.PartID != asset.Ref.PartID || image.Rows != asset.Rows {
 			return nil, ErrVectorIndexPartitionLiveMismatchV1
 		}
 		var decodedBytes uint64

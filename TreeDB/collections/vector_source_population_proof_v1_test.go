@@ -13,6 +13,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // The test oracle sorts the known input IDs independently of the product's
@@ -51,6 +52,103 @@ func TestVectorSourcePopulationEmptyV1(t *testing.T) {
 	proof, err := vectorPopulationTestProofV1(context.Background(), c, def, p)
 	if err != nil || proof.Rows != 0 || proof.SHA256 != p.SHA256 || proof.AssetBytes != 0 || proof.SourceRecordBytes != 0 {
 		t.Fatalf("empty proof=%+v err=%v", proof, err)
+	}
+}
+
+func TestVectorSourcePopulationPartIdentityMismatchV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0}}}
+	_, db, c, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	defer db.Close()
+	expectation := vectorPopulationTestExpectationV1(rows, 2)
+	if _, err := vectorPopulationTestProofV1(context.Background(), c, def, expectation); err != nil {
+		t.Fatalf("valid population: %v", err)
+	}
+	state, err := c.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref ColumnAssetRef
+	partRecord := -1
+	for i, record := range state.records {
+		if _, _, err := decodeColumnManifestPartRecordKey(record.key); err != nil {
+			continue
+		}
+		asset, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if asset.AssetRef.Kind == ColumnAssetKindTCS1TypedColumnPart {
+			ref = asset.AssetRef
+			partRecord = i
+			break
+		}
+	}
+	if ref.PartID != typedColumnPartAssetPartID {
+		t.Fatalf("missing typed-column reference: %+v", ref)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(db.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := typedcolumn.ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild a structurally valid image with a different identity, retaining
+	// the manifest identity and vector contents. The asset writer computes a
+	// valid checksum, so checksum failure cannot satisfy this regression.
+	part.Descriptor.PartID++
+	for row, locator := range part.Locators {
+		locator.PartID = part.Descriptor.PartID
+		part.Locators[row] = locator
+	}
+	dictionaries, err := image.Dictionaries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	badImage, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{Dictionaries: dictionaries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badRef, err := writeTypedColumnPartAssetToManager(db.ColumnAssetRootDir(), state.cfg, badImage.Bytes, ref.Generation, ref.PartID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readColumnPhysicalAssetFromManager(db.ColumnAssetRootDir(), badRef); err != nil {
+		t.Fatalf("mismatch asset checksum: %v", err)
+	}
+	records := cloneColumnManifestRecords(state.records)
+	asset, err := decodeColumnManifestPartRecord(records[partRecord].value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records[partRecord].value, err = encodeColumnManifestPartRecord(ColumnPreparedAsset{Ref: badRef, Rows: asset.Rows, Bytes: badRef.Length, PublishID: asset.PublishID, GenerationID: asset.GenerationID, Reason: asset.Reason, PartRole: asset.PartRole, SortKey: columnSortKeyMatchString(asset.SortKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := columnAssetRewriteUpdatedIdentity(state, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := columnAssetRewriteUpdatedMeta(state.meta, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemRoot, roots, err := c.publishColumnAssetRewriteManifestState(state, meta, identity, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := cloneCatalogWithRootUpdates(state.catalog, meta, []string{state.rootName}, roots)
+	c.meta = meta
+	c.rememberCatalogAtSystemRoot(systemRoot, catalog)
+	c.noteWriteDomainCatalog(systemRoot, catalog)
+	proof, err := vectorPopulationTestProofV1(context.Background(), c, def, expectation)
+	if !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) || proof != (VectorSourcePopulationProofV1{}) {
+		t.Fatalf("mismatched part issued proof=%+v err=%v", proof, err)
 	}
 }
 
