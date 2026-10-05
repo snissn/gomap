@@ -779,8 +779,8 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		r.AuthorityBoundary = "all-voter current-FSM audits before any shutdown prove every declared original witness and four changed IDs; ANN absence is not source authority"
 		r.Scope = "bounded serial colocated exact-ID mutations with full canonical FP32 top10 strict reads; observational only, no capacity/host-loss/full-source population claim"
 	}
-	r.Profile = o.Profile
-	if r.Profile == mixedProfileChangingTop10 {
+	if o.Profile == mixedProfileChangingTop10 {
+		r.Profile = o.Profile
 		r.Scope = "six serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
 		if r.Originals != 0 {
 			r.Scope = "bounded serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
