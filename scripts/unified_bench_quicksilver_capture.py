@@ -15,7 +15,7 @@ ldd result. Benchmark binaries must be Linux ELF executables, not scripts.
 Raw ldd output and actual loader environment are retained per cell.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
-commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns}]. Defaults match
+commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns, churn_shape, measure_dir, rss_sample_interval_ms}]. Defaults match
 the prior 3M capture flow. Custom duration requires duration_ns and Go's canonical
 duration string. Churn pauses require matching nanoseconds and canonical text
 (`1m` is an accepted alias for `1m0s`); the pair is checked before launch.
@@ -40,6 +40,9 @@ import subprocess
 import sys
 import time
 import traceback
+
+import owned_process_rss
+from owned_process_rss import run_with_rss
 
 PHASES = ['quicksilver_hits', 'quicksilver_misses', 'quicksilver_mixed', 'quicksilver_concurrent']
 CONTRACTS = {'durable': ('command_wal_durable', 'wal_on_sync', 'durable_wal_prefix'),
@@ -107,10 +110,12 @@ def churn_pause_text(pause):
 
 
 def churn_settings(cell):
+    shape = cell.get('churn_shape', 'full-refresh')
+    assert shape in ('full-refresh', 'sparse'), 'unknown churn shape'
     rounds = cell.get('churn_rounds', 0)
     assert type(rounds) is int and 0 <= rounds <= 32, 'churn rounds must be bounded 0..32'
     if not rounds:
-        assert 'churn_pause' not in cell and 'churn_pause_ns' not in cell, 'pause requires churn rounds'
+        assert 'churn_pause' not in cell and 'churn_pause_ns' not in cell and 'churn_shape' not in cell, 'pause/shape requires churn rounds'
         return 0, 0
     assert cell['engine'] == 'treedb' and cell.get('case', 'realistic') == 'realistic', 'churn requires realistic cached TreeDB'
     pause = cell.get('churn_pause_ns', 6000000000)
@@ -120,6 +125,27 @@ def churn_settings(cell):
     canonical = churn_pause_text(pause)
     assert text == canonical or (text == '1m' and canonical == '1m0s'), 'churn pause text must match nanoseconds in canonical form (1m also accepted)'
     return rounds, pause
+
+
+def retained_settings(cell):
+    path = cell.get('measure_dir')
+    if path is None:
+        return None
+    assert isinstance(path, str) and pathlib.Path(path).is_absolute(), 'measure_dir must be absolute'
+    assert cell.get('case', 'realistic') == 'realistic' and not cell.get('churn_rounds', 0), 'retained measurement requires realistic without churn'
+    assert cell['engine'] in ('treedb', 'lmdb', 'rocksdb'), 'unsupported retained engine'
+    directory = pathlib.Path(path).resolve(strict=True)
+    assert directory.is_dir(), 'retained directory must exist'
+    marker = directory / {'treedb': 'maindb/index.db', 'lmdb': 'data.mdb', 'rocksdb': 'CURRENT'}[cell['engine']]
+    assert marker.is_file() and marker.stat().st_size > 0, 'retained fixture requires nonempty engine marker'
+    return directory
+
+
+def sampling_interval(cell):
+    interval = cell.get('rss_sample_interval_ms')
+    if interval is not None:
+        assert type(interval) is int and 1 <= interval <= 60000, 'RSS sample interval must be integer 1..60000 ms'
+    return interval
 
 
 def capture_wall_limit(cell):
@@ -147,14 +173,25 @@ def validate(reports, cell, directory, fixtures, metadata):
     assert (c['case'], c['keys'], c['aggregate_reads'], c['workers'], c['updates']) == (case, keys, reads, workers, updates)
     assert c['commit_mode'] == commit and c['reads_per_snapshot'] == 64
     assert c['concurrent_duration_ns'] == cell.get('duration_ns', 8000000000)
-    assert c['barrier_policy'] == 'initial/final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters'
+    retained = retained_settings(cell)
+    barrier = ('retained pre-oracle; final Checkpoint' if retained else 'initial/final Checkpoint')
+    assert c['barrier_policy'] == barrier + '; up to four separately timed concurrent Checkpoints at mutation-batch quarters'
+    assert c.get('final_fixture', False) == bool(retained)
+    if retained:
+        assert pathlib.Path(r['data_dir']).resolve() == retained
+        assert pathlib.Path(r['registered_cli_flags']['quicksilver-measure-dir']).resolve() == retained
+        assert r['measurement_state'] == 'retained final fixture; pre/post full oracle; no population reload or restore'
+        assert r['writer_semantics'] == 'idempotent repeated mutation schedule; insert identities already exist and are SET again'
+        assert r['load_seconds'] == r['deleted_preparation_seconds'] == r['initial_checkpoint_ms'] == r['reopen_ms'] == 0
+        metadata['retained_fixture'] = dict(directory=str(retained), oracle='pre/post complete expected bytes/misses plus live-key census',
+                                            fixture_config=c, writer_semantics=r['writer_semantics'])
     assert r['updated_keys'] == updates and len(r['update_batch_ms']) == math.ceil(updates/1000)
     assert len(r['checkpoint_ms']) == min(4, math.ceil(updates/1000))
     flags = r['registered_cli_flags']
     keep = cell.get('keep', False)
     assert isinstance(keep, bool)
     assert flags['profile'] == profile and flags['keep'] == str(keep).lower()
-    if keep:
+    if keep and not retained:
         retained = pathlib.Path(r['data_dir'])
         assert retained.is_absolute() and retained.is_dir()
         assert retained.parent.resolve() == pathlib.Path(metadata['env']['TMPDIR']).resolve()
@@ -168,29 +205,30 @@ def validate(reports, cell, directory, fixtures, metadata):
                                      inserts=(updates+1)//4, overwrite_targets=updates//4, overwrite_sets=4*(updates//4))
         assert r['mutation_commit_batches'] == sum(1+3*(min(1000, updates-off) >= 4) for off in range(0, updates, 1000))
         deleted = max(1, keys//100)
-        assert (r['initial_verified_keys'], r['initial_verified_misses']) == (keys, 2*keys+deleted)
+        assert (r['initial_verified_keys'], r['initial_verified_misses']) == ((r['verified_keys'], r['verified_misses']) if cell.get('measure_dir') else (keys, 2*keys+deleted))
         assert (r['verified_keys'], r['verified_misses']) == (keys-(updates+2)//4+(updates+1)//4, 2*keys+deleted+(updates+2)//4)
         assert r['trace_bytes'] == 0 and r['oracle_state_bytes'] == keys
         assert r['distinct_tracking_bytes'] == ((5*keys+63)//64)*8*(workers+1)
-        d, z = r['loaded_distribution'], r['compressibility']
-        assert sum(d['small_medium_large_values']) == sum(d['namespace_hostname_opaque_keys']) == keys
-        assert d['structured_values'] + d['opaque_values'] == keys
-        assert 0 < d['min_key_bytes'] <= d['max_key_bytes'] <= 128
-        assert 32 <= d['min_value_bytes'] <= d['max_value_bytes'] <= 32768
-        assert keys*d['min_key_bytes'] <= d['key_bytes'] <= keys*d['max_key_bytes']
-        assert keys*d['min_value_bytes'] <= d['value_bytes'] <= keys*d['max_value_bytes']
-        assert z['codec'] == 'stdlib DEFLATE BestSpeed'
-        assert z['basis'] == 'up to 4096 distinct loaded records, seeded coprime-stride sample; each record compressed independently including identity/generation header; setup only, not an engine codec claim'
-        assert z['total']['records'] == sum(z['sample_small_medium_large_records']) == min(4096, keys)
-        for field in ('records', 'raw_bytes', 'compressed_bytes'):
-            assert z['total'][field] == z['structured'][field] + z['opaque'][field]
-        for group in ('total', 'structured', 'opaque'):
-            g = z[group]
-            assert g['raw_bytes'] >= 0 and g['compressed_bytes'] >= 0
-            ratio = g['compressed_bytes']/g['raw_bytes'] if g['raw_bytes'] else 0
-            assert math.isclose(g['compressed_to_raw_ratio'], ratio, rel_tol=1e-9, abs_tol=1e-9)
-        fixture = (keys, seed, mixture)
-        assert fixtures.setdefault(fixture, (d, z)) == (d, z), 'fixture changed across cells'
+        if not cell.get('measure_dir'):
+            d, z = r['loaded_distribution'], r['compressibility']
+            assert sum(d['small_medium_large_values']) == sum(d['namespace_hostname_opaque_keys']) == keys
+            assert d['structured_values'] + d['opaque_values'] == keys
+            assert 0 < d['min_key_bytes'] <= d['max_key_bytes'] <= 128
+            assert 32 <= d['min_value_bytes'] <= d['max_value_bytes'] <= 32768
+            assert keys*d['min_key_bytes'] <= d['key_bytes'] <= keys*d['max_key_bytes']
+            assert keys*d['min_value_bytes'] <= d['value_bytes'] <= keys*d['max_value_bytes']
+            assert z['codec'] == 'stdlib DEFLATE BestSpeed'
+            assert z['basis'] == 'up to 4096 distinct loaded records, seeded coprime-stride sample; each record compressed independently including identity/generation header; setup only, not an engine codec claim'
+            assert z['total']['records'] == sum(z['sample_small_medium_large_records']) == min(4096, keys)
+            for field in ('records', 'raw_bytes', 'compressed_bytes'):
+                assert z['total'][field] == z['structured'][field] + z['opaque'][field]
+            for group in ('total', 'structured', 'opaque'):
+                g = z[group]
+                assert g['raw_bytes'] >= 0 and g['compressed_bytes'] >= 0
+                ratio = g['compressed_bytes']/g['raw_bytes'] if g['raw_bytes'] else 0
+                assert math.isclose(g['compressed_to_raw_ratio'], ratio, rel_tol=1e-9, abs_tol=1e-9)
+            fixture = (keys, seed, mixture)
+            assert fixtures.setdefault(fixture, (d, z)) == (d, z), 'fixture changed across cells'
     else:
         assert c['generation'] == 'legacy-v1' and c['seed'] == 24 and c['working_set'] == 'legacy-65536-trace'
         assert r['verified_keys'] == r['verified_misses'] == keys
@@ -202,11 +240,15 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert flags['quicksilver-churn-rounds'] == str(rounds)
         assert flags['quicksilver-churn-pause'] == churn_pause_text(pause)
         churn = r['maintenance_churn']
+        assert churn['shape'] == c['churn_shape'] == cell.get('churn_shape', 'full-refresh')
+        assert 'insert identities already exist' in churn['writer_semantics']
+        assert flags['quicksilver-churn-shape'] == c['churn_shape']
         assert churn['label'] == 'bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound'
         assert churn['leaf_generation_pack_maintenance_env'] == metadata['env'].get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '')
         assert len(churn['rounds']) == rounds
         for index, round in enumerate(churn['rounds'], 1):
-            assert (round['round'], round['restored_keys'], round['mutation_targets']) == (index, keys, updates)
+            assert (round['round'], round['restored_keys'], round['mutation_targets']) == (index, updates-(updates+1)//4 if c['churn_shape'] == 'sparse' else keys, updates)
+            assert round['restore_commit_batches'] == math.ceil((updates if c['churn_shape'] == 'sparse' else keys)/1000)
             assert round['mutation_commit_batches'] == r['mutation_commit_batches'] and round['mutations'] == r['mutations']
             assert (round['verified_keys'], round['verified_misses']) == (r['verified_keys'], r['verified_misses'])
             times = [round[k] for k in ('write_seconds', 'checkpoint_seconds', 'verification_seconds', 'pause_seconds')]
@@ -214,6 +256,7 @@ def validate(reports, cell, directory, fixtures, metadata):
             assert math.isfinite(round['wall_seconds']) and round['wall_seconds'] >= sum(times)
             assert round['pause_seconds'] >= pause/1e9
             for snapshot in (round['before'], round['after']):
+                assert type(snapshot['captured_at_unix_nano']) is int and snapshot['captured_at_unix_nano'] > 0
                 assert type(snapshot['process_rss_supported']) is bool
                 assert snapshot['process_heap_alloc_bytes'] > 0 and snapshot['process_rss_bytes'] >= 0
                 assert snapshot['process_rss_supported'] or snapshot['process_rss_bytes'] == 0
@@ -250,6 +293,8 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert p['distinct_accesses'] == p['distinct_present_requests'] + p['distinct_absent_requests']
         if i < 3:
             assert p['ops'] == reads and p['observed_hits'] == p['requested_present']
+        if cell.get('measure_dir'):
+            assert p['observed_hits'] == p['requested_present']
         if i == 0:
             assert p['requested_present'] == p['ops']
         if i == 1:
@@ -278,7 +323,7 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert json.loads((directory/'quicksilver_results.json').read_text()) == reports
         names = ['benchprof_results.json', 'benchprof_results.md', 'insights.json', 'insights.md', 'insights.html', 'block.pprof', 'mutex.pprof', 'trace.out']
         names += [f'{prefix}_{phase}_{cell["engine"]}.pprof' for prefix in ('cpu', 'allocs') for phase in PHASES]
-        names += [f'checkpoint_cpu_checkpoint_quicksilver_{boundary}_{cell["engine"]}.pprof' for boundary in ('initial', 'final')]
+        names += [f'checkpoint_cpu_checkpoint_quicksilver_{boundary}_{cell["engine"]}.pprof' for boundary in (('final',) if cell.get('measure_dir') else ('initial', 'final'))]
         assert all((directory/name).stat().st_size > 0 for name in names)
 
 
@@ -312,8 +357,14 @@ def main():
     (root/'working-dbs').mkdir(exist_ok=True)
     assert plan.get('repeats', 1) >= 1 and plan['cells']
     assert all(isinstance(cell.get('keep', False), bool) for cell in plan['cells']), 'keep must be boolean'
+    retained_directories = set()
     for cell in plan['cells']:
         churn_settings(cell)
+        sampling_interval(cell)
+        retained = retained_settings(cell)
+        if retained:
+            assert plan.get('repeats', 1) == 1 and retained not in retained_directories, 'retained directory may occur only once per plan; use independently prepared copies'
+            retained_directories.add(retained)
     labels = [cell['label'] for cell in plan['cells']]
     assert len(set(labels)) == len(labels) and all(pathlib.Path(v).name == v and v not in ('.', '..') for v in labels)
     fixtures = {}
@@ -335,7 +386,9 @@ def main():
                 command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
                             '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
             if cell.get('churn_rounds', 0):
-                command += ['-quicksilver-churn-rounds', str(cell['churn_rounds']), '-quicksilver-churn-pause', cell.get('churn_pause', '6s')]
+                command += ['-quicksilver-churn-rounds', str(cell['churn_rounds']), '-quicksilver-churn-pause', cell.get('churn_pause', '6s'), '-quicksilver-churn-shape', cell.get('churn_shape', 'full-refresh')]
+            if cell.get('measure_dir'):
+                command += ['-quicksilver-measure-dir', str(retained_settings(cell))]
             command += extra
             if cell.get('keep', False):
                 command += ['-keep']
@@ -344,6 +397,7 @@ def main():
             metadata = dict(cell=cell, repeat=repeat+1, command=command, source=source,
                             manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(), plan_sha256=hashlib.sha256(plan_raw).hexdigest(),
                             collector_sha256=sha256(pathlib.Path(__file__)),
+                            rss_observer_sha256=sha256(pathlib.Path(owned_process_rss.__file__)),
                             env={k: v for k, v in env.items() if k.startswith(('TREEDB_', 'LD_')) or k in
                                  ('GOROOT', 'GOWORK', 'GOGC', 'GODEBUG', 'GOMAXPROCS', 'GOMEMLIMIT', 'TMPDIR', 'LD_LIBRARY_PATH',
                                   'GLIBC_TUNABLES', 'PATH', 'CGO_ENABLED', 'GOFLAGS', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_LDFLAGS')},
@@ -360,9 +414,18 @@ def main():
                 assert source['head'] and sha256(binary) == source['binary_sha256']
                 validate_native(binary, source, manifest['libraries'], env, root, directory, metadata)
                 with (directory/'stdout.json').open('w') as stdout, (directory/'stderr.log').open('w') as stderr:
-                    result = subprocess.run(['/usr/bin/time', '-v', *command], cwd=root, env=env, stdout=stdout, stderr=stderr)
+                    interval = sampling_interval(cell)
+                    if interval is None:
+                        result = subprocess.run(['/usr/bin/time', '-v', *command], cwd=root, env=env, stdout=stdout, stderr=stderr)
+                    else:
+                        result, sampling = run_with_rss(['/usr/bin/time', '-v', *command], binary,
+                                                         directory/'rss_samples.jsonl', interval_ms=interval,
+                                                         cwd=root, env=env, stdout=stdout, stderr=stderr)
+                        metadata['rss_sampling'] = sampling
                 metadata['rc'] = result.returncode
                 assert result.returncode == 0, (directory, result.returncode)
+                if sampling_interval(cell) is not None:
+                    assert metadata['rss_sampling']['complete'] and metadata['rss_sampling']['samples'] > 0, 'incomplete owned-process RSS sampling'
                 reports = json.loads((directory/'stdout.json').read_text())
                 validate(reports, cell, directory, fixtures, metadata)
                 metadata['validated'] = True
