@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"sync"
 	"testing"
@@ -794,6 +795,13 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got, want := remaining.FileIDs[0], rawFileID2; got != want {
 		t.Fatalf("remaining generation fileID=%d, want %d", got, want)
 	}
+	runtimeManifest := db.state.Load().LeafGenerations.sourceManifest
+	if err := validateLeafGenerationManifest(runtimeManifest); err != nil {
+		t.Fatalf("GC published an invalid runtime source manifest: %v (generations=%+v)", err, runtimeManifest.Generations)
+	}
+	if !leafGenerationManifestsEqualForGC(runtimeManifest, db.leafGenerationManifest) {
+		t.Fatalf("runtime source manifest=%+v differs from final GC manifest=%+v", runtimeManifest.Generations, db.leafGenerationManifest.Generations)
+	}
 }
 
 func TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration(t *testing.T) {
@@ -1155,6 +1163,42 @@ func TestLeafGenerationGC_DoesNotZombieSharedActiveFileID(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGC_PrunePreservesPublishedManifest(t *testing.T) {
+	db := &DB{dir: t.TempDir()}
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		ManifestRevision:    7,
+		CurrentGenerationID: 4,
+		NextGenerationID:    5,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateDeleted},
+			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{202}},
+			{GenerationID: 3, State: leafGenerationStateDeleted},
+			{GenerationID: 4, State: leafGenerationStateWritable, FileIDs: []uint32{404}},
+		},
+	}
+	before := manifest.clone()
+	published := newLeafGenerationView(manifest)
+	pruned, changed, _, err := db.pruneDeletedLeafGenerationRecords(manifest, nil)
+	if err != nil {
+		t.Fatalf("pruneDeletedLeafGenerationRecords: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected early and middle deleted records to be pruned")
+	}
+	if !reflect.DeepEqual(published.sourceManifest, before) {
+		t.Fatalf("published source manifest mutated: before=%+v after=%+v", before.Generations, published.sourceManifest.Generations)
+	}
+	if err := validateLeafGenerationManifest(published.sourceManifest); err != nil {
+		t.Fatalf("published source manifest became invalid: %v", err)
+	}
+	want := before.clone()
+	want.Generations = []leafGenerationRecord{before.Generations[1], before.Generations[3]}
+	if !reflect.DeepEqual(pruned, want) {
+		t.Fatalf("pruned manifest=%+v, want %+v", pruned, want)
+	}
+}
+
 func TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
@@ -1215,6 +1259,13 @@ func TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen(t *testing.T) 
 	}
 	if gen := manifestAfter.Generations[0]; gen.State != leafGenerationStateWritable || gen.GenerationID != 2 {
 		t.Fatalf("remaining generation=%+v, want writable generation 2", gen)
+	}
+	runtimeManifest := db.state.Load().LeafGenerations.sourceManifest
+	if err := validateLeafGenerationManifest(runtimeManifest); err != nil {
+		t.Fatalf("GC published an invalid runtime source manifest: %v (generations=%+v)", err, runtimeManifest.Generations)
+	}
+	if !leafGenerationManifestsEqualForGC(runtimeManifest, db.leafGenerationManifest) {
+		t.Fatalf("runtime source manifest=%+v differs from final GC manifest=%+v", runtimeManifest.Generations, db.leafGenerationManifest.Generations)
 	}
 }
 

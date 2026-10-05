@@ -393,7 +393,7 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 		return stats, err
 	}
 	db.leafGenerationManifest = manifest
-	return stats, nil
+	return stats, db.publishLeafGenerationState(false)
 }
 
 func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView, limits LeafGenerationMaintenanceLimits) (map[uint64]struct{}, error) {
@@ -750,7 +750,8 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 	if err := db.removeLeafGenerationRecordLengthIndexes(prunedFileIDs); err != nil {
 		return manifest, false, 0, err
 	}
-	next := *manifest
+	// The input may already back a published view. Pruning must not mutate it.
+	next := manifest.clone()
 	kept := next.Generations[:0]
 	for _, gen := range next.Generations {
 		if gen.State == leafGenerationStateDeleted && leafGenerationFilesMissing(gen.FileIDs, filePaths) {
@@ -759,7 +760,7 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 		kept = append(kept, gen)
 	}
 	next.Generations = kept
-	return &next, true, filesDeleted, nil
+	return next, true, filesDeleted, nil
 }
 
 func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
