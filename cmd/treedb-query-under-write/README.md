@@ -580,7 +580,10 @@ initial/final diagnostics. Its fields are `Rows`, `Dimensions`, `SHA256` and
 `MaxInspected`). The observed proof uses encoding `id-le32-fp32-le-v1` and carries
 `Rows`, `Dimensions`, `SHA256`, `SourceRecordBytes`, `AssetBytes`, `TotalBytes`,
 `HashedBytes` and `Inspected`. It hashes stable IDs and projected FP32 vectors;
-it does not claim equality of every reconstructed document. Schema compatibility
+`SourceRecordBytes` charges materialized inline entries or fixed value-pointer
+descriptors plus the vector projection. It does not measure retained primary
+payload sizes or prove their readability or equality of reconstructed documents.
+An empty population uses `Rows: 0`. Schema compatibility
 and the driver's known-ID receipts alone are not whole-population proof.
 
 The plan is at most 524288 encoded bytes, version1, six unique original attempts,

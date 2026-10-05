@@ -110,6 +110,9 @@ func TestMixedChangingProfileSchemaV2(t *testing.T) {
 		}
 	}
 	limits := defs["populationExpectation"].(map[string]any)["properties"].(map[string]any)["Limits"].(map[string]any)["properties"].(map[string]any)
+	if defs["populationExpectation"].(map[string]any)["properties"].(map[string]any)["Rows"].(map[string]any)["minimum"].(float64) != 0 {
+		t.Fatal("empty population schema drift")
+	}
 	for _, name := range []string{"MaxRows", "MaxIDBytes", "MaxSourceRecordBytes", "MaxTotalBytes", "MaxInspected"} {
 		if limits[name] == nil {
 			t.Fatalf("missing population limit%s", name)
