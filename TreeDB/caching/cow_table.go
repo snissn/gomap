@@ -19,8 +19,9 @@ var ErrCOWUnsupported = errors.New("operation unsupported by cow_btree cache")
 // Its containing cut owns the root reference; iterators acquire independent pins.
 // This adapter must never be installed as a legacy mutable shard.
 type cowTable struct {
-	root *memtable.COWRoot
-	size int64
+	shard int
+	root  *memtable.COWRoot
+	size  int64
 }
 
 var _ memtable.Table = (*cowTable)(nil)

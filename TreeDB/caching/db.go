@@ -8922,6 +8922,7 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
+	cow                          *cowCache
 	writeWaitForCheckpointActive atomic.Int64
 
 	mu          sync.RWMutex

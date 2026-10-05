@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
@@ -33,6 +34,9 @@ import (
 // Snapshot pointers are single-use: after Close returns, callers must discard the
 // pointer and treat further use as invalid.
 type Snapshot struct {
+	cowCut          *cowReadCut
+	cowCache        *cowCache
+	cowPin          *memtable.COWView
 	db              *DB
 	view            *memtableView
 	backend         *backenddb.Snapshot
@@ -90,6 +94,8 @@ func putSnapshot(snap *Snapshot) {
 	if snap == nil {
 		return
 	}
+	snap.cowCut = nil
+	snap.cowPin = nil
 	snap.db = nil
 	snap.view = nil
 	snap.backend = nil
@@ -179,6 +185,9 @@ func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
+	if db.cow != nil {
+		return nil
+	}
 	if !db.backendReadValueLogCleanForSnapshotFastPath() {
 		return nil
 	}
@@ -212,6 +221,9 @@ func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
+	}
+	if db.cow != nil {
+		return db.acquireCOWSnapshot()
 	}
 	snapshotDebug := iteratorDebugEnabled.Load()
 	if snapshotDebug {
@@ -397,7 +409,10 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	}
 	s.iteratorMu.Unlock()
 	var err error
-	if s.backend != nil {
+	if s.cowCut != nil {
+		s.cowPin.Close()
+		s.db.cow.releaseCut(s.cowCut)
+	} else if s.backend != nil {
 		err = s.backend.Close()
 	}
 	if s.view != nil && s.db != nil {
@@ -629,6 +644,9 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
+	if reverse && s.cowCut != nil {
+		return nil, ErrCOWUnsupported
+	}
 	rootSnap := rootDomainIteratorSnapshotFromCachedSnapshot(s)
 	queue := rootSnap.immutables
 	var queueRangeSpans [][]batch.DeleteRange
@@ -777,6 +795,10 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	for it.Valid() {
 		key := it.Key()
 		value := it.Value()
+		if s.cowCache != nil {
+			key = it.KeyCopy(nil)
+			value = it.ValueCopy(nil)
+		}
 		if err := it.Error(); err != nil {
 			iterErr = err
 			break
@@ -1049,6 +1071,25 @@ func (s *Snapshot) getUnsafeOpen(key []byte) ([]byte, error) {
 // GetManyView calls fn once for each key with a read-only value view. Values
 // are valid only until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if s != nil && s.cowCache != nil {
+		if fn == nil {
+			return errors.New("caching snapshot: GetManyView nil callback")
+		}
+		values := make([][]byte, len(keys))
+		for i, key := range keys {
+			v, err := s.Get(key)
+			if err != nil && err != tree.ErrKeyNotFound {
+				return err
+			}
+			values[i] = v
+		}
+		for i, v := range values {
+			if err := fn(i, keys[i], v, v != nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if err := s.beginRead(); err != nil {
 		return err
 	}
