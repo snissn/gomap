@@ -27,6 +27,27 @@ func TestColocatedAuditPlanBoundsV1(t *testing.T) {
 	}
 }
 
+// This wire-contract test deliberately uses only the pre-existing decoder and
+// plan fields: absence of the new capability must be a decoder failure, never
+// a compiler failure or an ordinary-diagnostics fallback.
+func TestColocatedAuditPopulationOnlyDecodeV1(t *testing.T) {
+	const population = `"Population":{"Rows":1,"Dimensions":2,"SHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Limits":{"MaxRows":2,"MaxIDBytes":128,"MaxDocumentBytes":4096,"MaxTotalBytes":8192,"MaxInspected":32}}`
+	raw := `{"Version":1,"RunID":"initial-population","HighestNewCommitIndex":0,"RequiredAppliedIndex":1,"Writes":[],"Final":[],` + population + `}`
+	p, err := DecodeColocatedAuditPlanV1(context.Background(), strings.NewReader(raw))
+	if err != nil {
+		t.Fatalf("population-only diagnostics capability unavailable: %v", err)
+	}
+	if len(p.Writes) != 0 || len(p.Final) != 0 || p.HighestNewCommitIndex != 0 || p.RequiredAppliedIndex != 1 {
+		t.Fatalf("population-only plan changed its observation boundary: %+v", p)
+	}
+	for i := 1; i < 6; i++ {
+		partial := `{"Version":1,"RunID":"partial-population","HighestNewCommitIndex":0,"RequiredAppliedIndex":1,"Writes":[` + strings.Repeat(`{},`, i-1) + `{}],"Final":[],` + population + `}`
+		if _, err := DecodeColocatedAuditPlanV1(context.Background(), strings.NewReader(partial)); err == nil {
+			t.Fatalf("partial %d-outcome ledger downgraded to population-only", i)
+		}
+	}
+}
+
 func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 4, false, func(t *testing.T, parent context.Context, nodes []*FixedPeerTCPRuntimeV1) {
 		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
