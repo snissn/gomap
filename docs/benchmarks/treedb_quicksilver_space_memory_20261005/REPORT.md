@@ -1,6 +1,6 @@
 # TreeDB space, memory, and maintenance: provisional 3M evidence
 
-This packet records the baseline, 18 public matched runs, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). Candidate acceptance and final publication remain pending. The maintenance and initial memory observations use one profiled primary run; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
+This packet records the baseline, 18 public matched runs, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). Candidate acceptance and final publication remain pending. The maintenance and initial memory observations use one profiled primary run; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
 
 <!-- BEGIN summary -->
 Full reduced apparent WAL-excluded bytes by 47.39%, from 2,832,310,293 to 1,490,201,793.
@@ -45,9 +45,52 @@ Full reported leaf-GC debt of 28,854,392 bytes in 1 generation. `fully_compacted
 The failed 8192 attempt's initial writable oracle changed apparent WAL-excluded bytes from 1,947,537,054 to 1,849,486,263.
 <!-- END failed -->
 
-The restored-copy attempt failed with an incompatible duplicate dictionary stable identity; its failure time cannot be compared as a successful batch-speed result. Both the timed-out original and failed copy passed read-only full-fixture verification without census changes. R's causal regression and production repair remain pending in this packet.
+The restored-copy attempt failed with an incompatible duplicate dictionary stable identity; its failure time cannot be compared as a successful batch-speed result. Both the timed-out original and failed copy passed read-only full-fixture verification without census changes. The separate R2 repair and restored-copy measurements below preserve these historical failures.
 
 Disk observations sample owned DB files once per second, so maxima are sampled rather than exact instantaneous peaks; observation cost is included. Receipt elapsed includes polling/reaping overhead. Exhaustive emitted no completed JSON result or GNU-time summary after process-group termination; unavailable metrics remain unavailable.
+
+## Repaired restore and separate batch-8192 experiment
+
+Frozen repair source [`eaa0019ed65b2dc90d9406ca7371502cf17c53eb`](https://github.com/snissn/gomap/commit/eaa0019ed65b2dc90d9406ca7371502cf17c53eb) has whole-tree equality with landed [`723e5625f4b46945886d0696c0122db2e2c928cf`](https://github.com/snissn/gomap/commit/723e5625f4b46945886d0696c0122db2e2c928cf). The repair restores the parent namespace generation for both Dictionary and Template side stores ([production scope](https://github.com/snissn/gomap/blob/eaa0019ed65b2dc90d9406ca7371502cf17c53eb/TreeDB/db/durable_root_snapshot_rebind.go#L309)). Retained causal tests fail against the old production file and pass against this source for dictionary/template in manifest-v1/directory-v2 layouts, including both recovery slots. This supports the tested namespace-authority mechanism; it does not attribute every historical failure to that cause.
+
+A recorded owned-copy operation used an explicit helper backed by `RebindDurableRootSnapshotLayoutV1`; it was not an old CLI restore operation. Helper source, all four built binaries, frozen source/compile inputs, native receipt, commands, and causal logs are hash-bound in this packet. The inherited baseline `run.json` and stdout identify the copied input: their original profiling timestamps, profile fields, and baseline manifest are preserved. They are not new R2 profiling measurements. Actual R2 costs come from the separate maintenance command receipts and GNU-time output.
+
+The copy began from the original database after Full and a partially completed 1800-second Exhaustive attempt. After explicit restore, the read-only oracle passed all 3,000,000 keys and 6,040,000 misses in 101.984 seconds with identical before/after census metadata. The initial writable oracle then changed representation before maintenance. Each later Full/Exhaustive attempt completed, and each following writable full-fixture oracle passed. Commands used batch 8192, 64 leaf-pack passes, and sync after each phase. These are sequential measurements on evolving state, so the 193-second Exhaustive completion is not a matched speedup ratio against the old 1800-second timeout.
+
+<!-- BEGIN restored_costs -->
+| R2 attempt, batch 8192 | GNU time s | Receipt s | Process RSS high-water bytes | Sampled disk maximum including WAL, apparent / allocated | Disk samples |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| full | 23.0 | 23.031 | 1,238,499,328 | 2,366,509,625 / 2,366,672,896 | 23 |
+| exhaustive | 193.31 | 194.276 | 2,214,178,816 | 3,729,242,807 / 3,729,481,728 | 194 |
+| exhaustive-second | 191.55 | 192.279 | 1,781,620,736 | 3,523,399,125 / 3,523,661,824 | 192 |
+<!-- END restored_costs -->
+
+Domain bytes below are apparent / allocated. Pre-oracle censuses separate maintenance output from subsequent public writable verification; the sampler maxima above include WAL and can miss shorter disk peaks.
+
+<!-- BEGIN restored_storage -->
+| R2 state | Dictionary | Outer leaves | User values | Index | Metadata | WAL | Total excluding WAL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| final-before-verify | 786,927 / 806,912 | 468,343,647 / 468,406,272 | 1,339,982,749 / 1,340,026,880 | 138,412,032 / 138,416,128 | 11,699 / 24,576 | 12 / 4,096 | 1,947,537,054 / 1,947,680,768 |
+| before-maintenance | 786,927 / 806,912 | 468,343,647 / 468,406,272 | 1,339,982,749 / 1,340,026,880 | 40,370,176 / 40,374,272 | 11,723 / 24,576 | 12 / 4,096 | 1,849,495,222 / 1,849,638,912 |
+| full-before-oracle | 786,927 / 806,912 | 778,557,161 / 778,649,600 | 1,339,982,749 / 1,340,026,880 | 46,137,344 / 46,141,440 | 2,766 / 16,384 | 12 / 4,096 | 2,165,466,947 / 2,165,641,216 |
+| full-after | 786,927 / 806,912 | 778,557,161 / 778,649,600 | 1,339,982,749 / 1,340,026,880 | 46,137,344 / 46,141,440 | 2,917 / 16,384 | 12 / 4,096 | 2,165,467,098 / 2,165,641,216 |
+| exhaustive-before-oracle | 786,927 / 806,912 | 1,255,618,022 / 1,255,747,584 | 769,609,719 / 769,650,688 | 46,137,344 / 46,141,440 | 3,116 / 16,384 | 12 / 4,096 | 2,072,155,128 / 2,072,363,008 |
+| exhaustive-after | 786,927 / 806,912 | 1,255,618,022 / 1,255,747,584 | 769,609,719 / 769,650,688 | 46,137,344 / 46,141,440 | 3,116 / 16,384 | 12 / 4,096 | 2,072,155,128 / 2,072,363,008 |
+| exhaustive-second-before-oracle | 786,927 / 806,912 | 1,553,765,642 / 1,553,924,096 | 769,644,270 / 769,687,552 | 46,137,344 / 46,141,440 | 3,436 / 16,384 | 12 / 4,096 | 2,370,337,619 / 2,370,576,384 |
+| exhaustive-second-after | 786,927 / 806,912 | 1,553,765,642 / 1,553,924,096 | 769,644,270 / 769,687,552 | 46,137,344 / 46,141,440 | 3,436 / 16,384 | 12 / 4,096 | 2,370,337,619 / 2,370,576,384 |
+<!-- END restored_storage -->
+
+All three attempts preserve `fully_compacted=false`, `policy_fully_compacted=false`, and `byte_minimized=false`. Storage is not monotonic: the second Exhaustive ends larger than the first. Remaining debt and oracle deltas stay explicit; successful commands and readable values do not establish byte minimization or a hard disk bound.
+
+<!-- BEGIN restored_debt -->
+| R2 attempt | Leaf-GC debt bytes | Leaf generations | Rewrite segments | Rewrite stale bytes | Oracle apparent / allocated delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| full | 97,874,818 | 1 | 0 | 0 | 151 / 0 |
+| exhaustive | 581,726,715 | 3 | 4 | 18,684 | 0 / 0 |
+| exhaustive-second | 541,153,637 | 2 | 4 | 18,684 | 0 / 0 |
+<!-- END restored_debt -->
+
+The storage changes do not establish unchanged point-read performance after compaction. Eligible fresh auto/balanced cached user-value frames are bounded at 32KiB decoded payload, while maintenance rewrite independently regroups up to 4MiB ([frame-read contract](https://github.com/snissn/gomap/blob/723e5625f4b46945886d0696c0122db2e2c928cf/TreeDB/docs/spec/value-log-lifecycle.md#L586)). This can restore whole-frame CRC/decode amplification. These post-maintenance runs measured full-fixture correctness, not owned-read throughput, p99, or CRC bytes; those measurements are an explicit guard for [#5015](https://github.com/snissn/gomap/issues/5015), rather than an observed regression here.
 
 ## Memory observations
 
@@ -68,7 +111,7 @@ The separate 256MiB outer-leaf mapping-budget diagnostic retained 333 samples, w
 
 HeapAlloc endpoints are not peaks. Profiled StatsBefore follows explicit pre-profile GC plus setup; StatsAfter precedes post-profile GC. Concurrent allocation measurement ends at reader join and excludes the writer-only tail included in composition time. Delta inuse-space profiles are net sampled changes, not total retained cache heap. RSS has no phase markers and cannot establish phase-specific RSS peaks. RESULTS.json preserves reported cache slots, capacity, entries, and retained payload bytes at both boundaries; these statistics are not an atomic cache-manager snapshot or a complete metadata-heap measurement.
 
-Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; the matched public candidate matrix remains pending.
+Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; profiled heap/structural qualification and candidate acceptance remain pending.
 
 ## Bounded diagnosis and operation
 
@@ -93,11 +136,11 @@ These policies are separate ([rewrite constants](https://github.com/snissn/gomap
 
 The ranked algorithm target is repeated whole-closure capture during outer-leaf value rewriting: its default batch is 256 swaps, outer-leaf mode disables the simple logical-reference delta, and each successful publication can scan the reachable roots again ([batch default](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L374), [delta gate](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L2700), [closure scan](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/durable_root_runtime.go#L520)). The retained 60s diagnostic confirms dominance in that interval, while the source-derived scaling hypothesis is approximately `O(N * ceil(M/B))` for N reachable entries, M rewritten pointers, and batch B. It is not a measured full-run scaling curve.
 
-The first performance experiment after R proves restored-copy correctness is the existing `-rewrite-batch-size` option on an isolated offline copy ([CLI](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/cmd/treemap/main.go#L507)). The retained 8192 attempt failed before providing an accepted result. The writer already caps pending raw value-frame batches at 4MiB, apart from a single outlier, and limits retained decode scratch to 1MiB ([buffer caps](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L49), [pre-append flush](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L4945)). An 8192 swap batch therefore does not automatically retain 8192 one-MiB values; key, candidate, and swap lists still scale with batch size, so actual memory measurement is required. A matched default/larger-batch experiment should count successful publications and closure scans while measuring elapsed time, RSS, cancellation boundaries, temporary disk, and final pre-oracle census. Further closure reuse needs exact logical deltas and certified raw-leaf dependencies, with an exact final closure and existing fallback retained. Recovery slots, pins, dictionary identity, and namespace epochs remain correctness gates. Zero-dead packing can still recompress or consolidate live pages; the rehearsal's equal-size repack does not justify a universal skip. No larger online default, epoch clearing, or automatic pack default change is established by this packet.
+The first performance experiment after R proves restored-copy correctness is the existing `-rewrite-batch-size` option on an isolated offline copy ([CLI](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/cmd/treemap/main.go#L507)). The historical 8192 attempt failed; the later R2 experiment below completed, but its partially maintained input does not supply a matched batch-size speed comparison. The writer already caps pending raw value-frame batches at 4MiB, apart from a single outlier, and limits retained decode scratch to 1MiB ([buffer caps](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L49), [pre-append flush](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/TreeDB/db/vlog_rewrite.go#L4945)). An 8192 swap batch therefore does not automatically retain 8192 one-MiB values; key, candidate, and swap lists still scale with batch size, so actual memory measurement is required. A matched default/larger-batch experiment should count successful publications and closure scans while measuring elapsed time, RSS, cancellation boundaries, temporary disk, and final pre-oracle census. The separate planned [closure optimization follow-up #5015](https://github.com/snissn/gomap/issues/5015) is not implemented by this packet. Further closure reuse needs exact logical deltas and certified raw-leaf dependencies, with an exact final closure and existing fallback retained. Recovery slots, pins, dictionary identity, and namespace epochs remain correctness gates. Zero-dead packing can still recompress or consolidate live pages; the rehearsal's equal-size repack does not justify a universal skip. No larger online default, epoch clearing, or automatic pack default change is established by this packet.
 
 ## Public matched comparison: 18 validated runs
 
-Baseline `fb42d5ba229d2cbfba8727272af02f9544a33389` and frozen cache-offset candidate `90219d64ced3539accff5d0e50d9b5fa6424ed20` each ran three repeats of durable primary, fast primary, and durable holdout. Primary uses uniform access and 90% configured misses; holdout uses a 20% working set and 70% misses. All 18 rows passed the complete initial/final present and absent fixture oracles. Receipt `VALIDATED_ALL` describes the row inventory and correctness checks; performance acceptance remains pending. The manifest's original `provisional=true` remains unchanged. During import, all 2,143 baseline and 2,144 candidate compiled project-file entries were independently checked against their frozen Git blobs; extraction authenticates the preserved receipts and complete raw inventory.
+Baseline `fb42d5ba229d2cbfba8727272af02f9544a33389` and frozen cache-offset candidate `90219d64ced3539accff5d0e50d9b5fa6424ed20` each ran three repeats of durable primary, fast primary, and durable holdout. Primary uses uniform access and 90% configured misses; holdout uses a 20% working set and 70% misses. All 18 rows passed the complete initial/final present and absent fixture oracles. Run order was not fully counterbalanced: fast primary and holdout ran baseline first in all three repeats; durable primary reversed only repeat 2, and collection spans repeats. Receipt `VALIDATED_ALL` describes the row inventory and correctness checks; performance acceptance remains pending. The manifest's original `provisional=true` remains unchanged. During import, all 2,143 baseline and 2,144 candidate compiled project-file entries were independently checked against their frozen Git blobs; extraction authenticates the preserved receipts and complete raw inventory.
 
 Cells show median [minimum, maximum] across three repeats. Throughput changes divide candidate median by baseline median; paired ranges divide corresponding candidate/baseline repeat values. Reader concurrent throughput excludes writer completion after reader join; whole-command time includes setup, all phases, writer completion, reopen, and full verification. No significance or noise-dismissal claim is made on this shared host.
 
@@ -185,7 +228,7 @@ Raw paths and exact SHA-256 values are in inputs.json and RESULTS.json. Larger p
 <!-- BEGIN pending -->
 - M: six profiled public primary rows, two structural cache diagnostics, performance acceptance, and final source qualification
 - C: qualified default and opt-in maintenance churn curves
-- R: causal restored-copy regression, production repair, and qualified post-repair maintenance
+- R: independent acceptance of the retained production-repair and qualified restored-copy maintenance evidence
 - Accept the missing original maintenance build receipt as a documented reconstruction limitation
 - Independent artifact review, latest-head CI, mature Codex review, and final source reconciliation
 <!-- END pending -->

@@ -122,6 +122,34 @@ def main():
     row["exe"] = "/unowned-process"
     changed[observer_path] = b"\n".join([extract.encoded(row).strip()] + observations[1:]) + b"\n"
     checks.append(rejected("public RSS observation unbound", lambda: extract.public_matched(contract, changed)))
+    restored = result["restored_maintenance"]
+    extract.require(len(restored["attempts"]) == 3 and restored["status"] == "MEASURED_PROVISIONAL"
+                    and restored["input_metadata"].startswith("inherited baseline"), "restored input boundary lost")
+    r2 = "restore-r2/"
+    base = r2 + "maintenance-restore-r2-3m-batch8192/"
+    for label, path, field, replacement in [
+        ("restored source head changed", "receipts-restore-r2/source.json", "head", "0" * 40),
+        ("restored landed tree changed", "restore-r2-landed-source-equality.json", "landed_tree", "0" * 40),
+        ("restored causal red promoted", "restore-r2-causal/red-receipt.json", "rc", 0),
+        ("restored causal green failed", "restore-r2-causal/green-receipt.json", "rc", 1),
+        ("restored inherited profile time changed", "restore-r2-batch-3m-8192-input/run.json", "started", 0),
+        ("restored readonly mutation", "restore-r2-batch-3m-8192-input/readonly-after-restore/receipt.json", "unchanged", False),
+        ("restored completion promoted", "maintenance-restore-r2-3m-batch8192/exhaustive-stdout.json", "byte_minimized", True),
+        ("restored mode changed", "maintenance-restore-r2-3m-batch8192/full-stdout.json", "mode", "exhaustive"),
+        ("restored oracle incomplete", "maintenance-restore-r2-3m-batch8192/exhaustive-second-verify-stdout.json", "verified_keys", 2999999)]:
+        checks.append(rejected(label, lambda path=path, field=field, replacement=replacement:
+            extract.restored_maintenance(contract, altered(r2 + path, field, replacement))))
+    checks.append(rejected("restored helper source changed", lambda: extract.restored_maintenance(contract,
+        dict(raw, **{r2 + "maintenance-diagnostic-overlay/rebind-copy.go.txt": b"replacement"}))))
+    checks.append(rejected("restored template/layout coverage removed", lambda: extract.restored_maintenance(contract,
+        dict(raw, **{r2 + "restore-r2-causal/green-stdout.txt": raw[r2 + "restore-r2-causal/green-stdout.txt"].replace(
+            b"PASS: TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2", b"omitted")}))))
+    commands = json.loads(raw[base + "commands.json"])
+    commands[3]["command"][-1] = "256"
+    checks.append(rejected("restored rewrite batch changed", lambda: extract.restored_maintenance(contract,
+        dict(raw, **{base + "commands.json": extract.encoded(commands)}))))
+    checks.append(rejected("restored pre-oracle census boundary changed", lambda: extract.restored_maintenance(contract,
+        altered(base + "exhaustive-before-oracle-census.json", "apparent_excluding_wal", 0))))
     prose = (extract.HERE / "REPORT.md").read_text()
     checks.append(rejected("publication prose changed", lambda:
         extract.report(result, prose.replace("Candidate acceptance and final publication remain pending.",

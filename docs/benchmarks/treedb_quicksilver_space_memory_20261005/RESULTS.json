@@ -153,7 +153,7 @@
     "oracle_apparent_delta_bytes": 0,
     "percent": 47.385644973892695
   },
-  "inputs_sha256": "493763cef652bb341c2d3ab33d44447fa9638f68f9e121ff73fa01b7ff85438c",
+  "inputs_sha256": "7061d6aa63dcbb66a3de535b7c086e57427ae3ac5de7345e6e20f0d28fa8b7b9",
   "maintenance": [
     {
       "command": [
@@ -594,7 +594,7 @@
   "pending": [
     "M: six profiled public primary rows, two structural cache diagnostics, performance acceptance, and final source qualification",
     "C: qualified default and opt-in maintenance churn curves",
-    "R: causal restored-copy regression, production repair, and qualified post-repair maintenance",
+    "R: independent acceptance of the retained production-repair and qualified restored-copy maintenance evidence",
     "Accept the missing original maintenance build receipt as a documented reconstruction limitation",
     "Independent artifact review, latest-head CI, mature Codex review, and final source reconciliation"
   ],
@@ -6640,11 +6640,1633 @@
     "public-matched/receipts-offsets/native.json": "3a97d398e12cd8c780d22d596647fcb5e0119ce47d7dfce0db486684818860d4",
     "public-matched/receipts-offsets/runner.json": "554adece376ed7c7d868d55ddcb63fd363220ff901dd2fe7193449013b11004c",
     "public-matched/receipts-offsets/source.json.gz": "b977cefa6a6e2b2a280ad108fe0dbee7abebad0b6a0f1e5f4de2b32dfe01f686",
+    "restore-r2/freeze-restore-r2.py": "908d6e8fc9b2ca14a4c111db63c8b8ca9d0b9815674bb3bdb21511590b42a057",
+    "restore-r2/maintenance-diagnostic-overlay/rebind-copy.go.txt": "e95d5b2c5581f70010120556161fc6fffc3fb825fb015c13811305b7d3103905",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/before-maintenance-census.json": "b140e43cc107e12decba6f24541a7733200b72b11cdc47aa8da0de2e817b98c8",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/commands.json": "523c92c4697cfbbab2e47c15b25d41293e4638344fff33f5e48d846be58c29a0",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-after-census.json": "0040bdc1fa3e3a24915527b7da868c2ed70abcab1364732aba9174b285621382",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-before-oracle-census.json": "518705f084cce26b2df79de871a3d5a5ba223f80bce6acfcd8290fb6619a5667",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-after-census.json": "5d6f43198f2bba8d1d4c68b9bf4aca45be838e807cbbc78e06f7e93747337a81",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-before-oracle-census.json": "a9e83b43470f0641ab9cddc413732e30d62cc58fd0273c5d5fcb418d0f60d606",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-stderr.txt": "072924905497658cc769fde2da9cafd5e7905ee1e458399d6632ea16508ee69f",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-stdout.json": "429d8f9c408339b364c128465b382749d949ea33eaeed9de251c38c489479c79",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-verify-stderr.txt": "f9732942699faf18605014537062235fd132cd7b4a9b1fe8d734c5f9dc6b7636",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-second-verify-stdout.json": "6baea10cd3c3a5af4458af01a33de868633ef2dd50d3eafb2ffd0bb19d9c5bf2",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-stderr.txt": "14c2e8c49f0a728c5995bdd155350172b41a32e6fbf70e548c988e7bfac1aaa7",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-stdout.json": "34936fbff107e095477b14918cb2bccb205ec7963706fcf5a9cb8213ee04ae2e",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-verify-stderr.txt": "9b76f9a29cb71051ef83d4b5ee77fc017cd04b02b948c3222d3f975378c41cc9",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/exhaustive-verify-stdout.json": "6baea10cd3c3a5af4458af01a33de868633ef2dd50d3eafb2ffd0bb19d9c5bf2",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/final-before-verify-census.json": "b789d96831fb619b448af408c92dca99ca1080d9de4a3627f463c8061aeceb77",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-after-census.json": "c2afefb33c1396f13222b0e9ddda9ebe78b8aebc264389e15e83e982e76a7094",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-before-oracle-census.json": "45329294cf2b5f9ade88073287f8ce9f23d132edfd7895604b251cb06061d46b",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-stderr.txt": "9936473c3f24c85d8f42c0029f1e93c449cf3d614138b31ffc1d8f238e92f620",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-stdout.json.gz": "affb7c7b1bcf4dd8b7571bc4f10a175100290804424f3fc12f7e13ae3c7d66f2",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-verify-stderr.txt": "c3f4f4348db95a13ed034c65920b94aae7a6f47a0c9cd422a117c4ba1ac704bb",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/full-verify-stdout.json": "6baea10cd3c3a5af4458af01a33de868633ef2dd50d3eafb2ffd0bb19d9c5bf2",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/identity.json": "7181a7e175d30d3dbf8a80a1e9bb5caf48d970d18288999cd1c5ca96442321a1",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/pre-maintenance-verify-stderr.txt": "077ac1a62e3f2f09db644debf65bbd7905803b817bf6fac4893d4cea6438ce5b",
+    "restore-r2/maintenance-restore-r2-3m-batch8192/pre-maintenance-verify-stdout.json": "6baea10cd3c3a5af4458af01a33de868633ef2dd50d3eafb2ffd0bb19d9c5bf2",
+    "restore-r2/maintenance-restore-r2-batch.py": "6862ab5a6c4970582eaffdb0668ee181497f865b1bf0c4469b4c9bf29390fea8",
+    "restore-r2/provisional-manifest-restore-r2.json": "18dedd04a587a9e02211c7bf3ab892f3104ace36876a68564b1416163d0f75cd",
+    "restore-r2/receipts-restore-r2/build.json": "1329c54573c9169095a307b13ee50e47801ccc081dd5f8fc4597be3300bc213e",
+    "restore-r2/receipts-restore-r2/go-list-inputs.jsonstream.gz": "3404b06ec12c7cbefb94f6096256bc3738dc2ac91ddd0a4ad4f85a32c7437775",
+    "restore-r2/receipts-restore-r2/native.json": "7b33881349f2495a6488075955d948098fd00edd8dc3b002ad5f413c8d554f67",
+    "restore-r2/receipts-restore-r2/runner.json": "ba088410c243a59f0f2361aae7b52c3a33fd621075ce8d37a81a42c184de50b6",
+    "restore-r2/receipts-restore-r2/source.json.gz": "943d2f436c85d8aa99d19600fb354e1d9e76ab5c0b2ef51b98f1d3eba5abf042",
+    "restore-r2/restore-r2-batch-3m-8192-input/readonly-after-restore/receipt.json": "2d206eb2b6d3c5b2c314f1c5173e7354848088308062abb9bf5be1eb96f493d1",
+    "restore-r2/restore-r2-batch-3m-8192-input/readonly-after-restore/stderr.txt.gz": "1d6f81a49c4fa08fc925a25046a9ceb673c91803184429e14099ab3adcce45c9",
+    "restore-r2/restore-r2-batch-3m-8192-input/readonly-after-restore/stdout.json": "6baea10cd3c3a5af4458af01a33de868633ef2dd50d3eafb2ffd0bb19d9c5bf2",
+    "restore-r2/restore-r2-batch-3m-8192-input/restore-helper-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "restore-r2/restore-r2-batch-3m-8192-input/restore-helper-stdout.txt": "80c1eb7f10fc2fe2d5bc6b1437194150c3893866c1aa4d4445fc9cc4fa64cf7a",
+    "restore-r2/restore-r2-batch-3m-8192-input/run.json": "c1d838df686afe008c94d60c067eebb1ff1335ab1f80ab02cabc24d71cda4213",
+    "restore-r2/restore-r2-batch-3m-8192-input/stdout.json.gz": "e8202c628d3a37ae7b7a423ba1207b15e3d67a7ab427a8798b82a89ac39b5542",
+    "restore-r2/restore-r2-build.py": "a46c65d74b76879b4f11bf0cd6b326c392c87be722d44a5961101790483568b1",
+    "restore-r2/restore-r2-causal.py": "62591b400d74ce74f9c03129d9ecb8bbe4ea44ce6154aef7f3de6f145afb6ef7",
+    "restore-r2/restore-r2-causal/green-receipt.json": "c17e95d917782b45c366dfd611fac6712e73277095c0e487174802b1046ce8d2",
+    "restore-r2/restore-r2-causal/green-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "restore-r2/restore-r2-causal/green-stdout.txt": "51cd49c5df5623ca81ae4efcac4221de3b07699af1f91b71b58572e77cc46a6b",
+    "restore-r2/restore-r2-causal/red-overlay.json": "8c9f3871293243688ff633cb05dfd9f9340135418e0bf3c3e0aa835a18344a46",
+    "restore-r2/restore-r2-causal/red-receipt.json": "30505863f54e8fe06bef3c4b19bb7f2d0e1b5aac3aca6d0e9b2212a50b19eacd",
+    "restore-r2/restore-r2-causal/red-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "restore-r2/restore-r2-causal/red-stdout.txt": "8541d9b83e91c928f26585a8028756c00689321d1644316fe39e80a132aa7769",
+    "restore-r2/restore-r2-landed-source-equality.json": "83840ebd02704cc76ae8358c3820fbdad2ee0d2760dcb9cbfedf715424abf88f",
+    "restore-r2/restore-r2-source-inputs.json.gz": "abe2acd25e54a2139023ecdd75ee27cc73795d6c0f96e7fa6d5a1e5f774d3aab",
+    "restore-r2/run-restore-r2-batch8192.py": "c9cced3d78c0894419f3582dceb5e29ab9731309fee7bdee08dbb7aef87f36e0",
+    "restore-r2/verify-restore-r2-copy.py": "ca19ea7cccc83b2e611d67c15c60392b3b27276ae1ed9abe283397017212bd37",
     "verify-failed-copy.py": "e269e870fe48caf8296ae96518876b560f3e931c779376cfcd5441024367a0ca"
   },
   "readonly_original_oracle": {
     "verified_keys": 3000000,
     "verified_misses": 6040000
+  },
+  "restored_maintenance": {
+    "attempts": [
+      {
+        "command": [
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-restore-r2",
+          "compact",
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy",
+          "-rw",
+          "-json",
+          "-mode",
+          "full",
+          "-sync-each-phase",
+          "-leaf-pack-max-passes",
+          "64",
+          "-rewrite-batch-size",
+          "8192"
+        ],
+        "disk_sample_count": 23,
+        "flags": {
+          "byte_minimized": false,
+          "fully_compacted": false,
+          "policy_fully_compacted": false
+        },
+        "kernel_process_rss_hwm_bytes": 1238499328,
+        "label": "full",
+        "oracle_delta": {
+          "allocated": 0,
+          "apparent": 151
+        },
+        "phases": [
+          {
+            "name": "checkpoint",
+            "wall_time_nanos": 4105
+          },
+          {
+            "name": "value-log-rewrite",
+            "wall_time_nanos": 1134717272
+          },
+          {
+            "name": "checkpoint-after-value-log-rewrite",
+            "wall_time_nanos": 3843
+          },
+          {
+            "name": "value-log-gc",
+            "wall_time_nanos": 2152191988
+          },
+          {
+            "name": "checkpoint-after-value-log-gc",
+            "wall_time_nanos": 3617
+          },
+          {
+            "name": "leaf-generation-pack-1",
+            "wall_time_nanos": 6376802423
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-pack-1",
+            "wall_time_nanos": 3749
+          },
+          {
+            "name": "leaf-generation-pack-2",
+            "wall_time_nanos": 4503296542
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-pack-2",
+            "wall_time_nanos": 15383512
+          },
+          {
+            "name": "leaf-generation-pack-3",
+            "skip_reason": "plan_admission:no_candidates",
+            "skipped": true,
+            "wall_time_nanos": 29115
+          },
+          {
+            "name": "leaf-generation-gc",
+            "wall_time_nanos": 171373956
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-gc",
+            "wall_time_nanos": 3043
+          },
+          {
+            "name": "index-vacuum",
+            "reason": "leaf_generation",
+            "required": true,
+            "status": "succeeded",
+            "wall_time_nanos": 137429259
+          },
+          {
+            "name": "checkpoint-after-index-vacuum",
+            "wall_time_nanos": 2535
+          },
+          {
+            "name": "settle-leaf-generation-gc-1",
+            "wall_time_nanos": 175088395
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-1",
+            "wall_time_nanos": 3160
+          },
+          {
+            "name": "settle-leaf-generation-gc-2",
+            "wall_time_nanos": 133593123
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-2",
+            "wall_time_nanos": 3344
+          },
+          {
+            "name": "settle-leaf-generation-gc-3",
+            "wall_time_nanos": 133590255
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-3",
+            "wall_time_nanos": 3244
+          },
+          {
+            "name": "settle-leaf-generation-gc-4",
+            "wall_time_nanos": 136680754
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-4",
+            "wall_time_nanos": 4419
+          },
+          {
+            "name": "prune-empty-value-log-files",
+            "wall_time_nanos": 330330
+          }
+        ],
+        "post_oracle": {
+          "allocated": 2165645312,
+          "allocated_excluding_wal": 2165641216,
+          "apparent": 2165467110,
+          "apparent_excluding_wal": 2165467098,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 2917
+            },
+            "outer_leaf": {
+              "allocated": 778649600,
+              "apparent": 778557161
+            },
+            "user_value": {
+              "allocated": 1340026880,
+              "apparent": 1339982749
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "full-after"
+        },
+        "pre_oracle": {
+          "allocated": 2165645312,
+          "allocated_excluding_wal": 2165641216,
+          "apparent": 2165466959,
+          "apparent_excluding_wal": 2165466947,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 2766
+            },
+            "outer_leaf": {
+              "allocated": 778649600,
+              "apparent": 778557161
+            },
+            "user_value": {
+              "allocated": 1340026880,
+              "apparent": 1339982749
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "full-before-oracle"
+        },
+        "rc": 0,
+        "receipt_elapsed_seconds": 23.03148341178894,
+        "remaining_debt": {
+          "index_vacuum_collection_root_pages": 0,
+          "index_vacuum_collection_root_span": 0,
+          "index_vacuum_collection_root_span_ratio_ppm": 0,
+          "index_vacuum_freelist_reclaimable_pages": 0,
+          "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+          "index_vacuum_reason": "none",
+          "index_vacuum_required": false,
+          "index_vacuum_total_pages": 9736,
+          "index_vacuum_user_pages": 4860,
+          "index_vacuum_user_span": 4860,
+          "index_vacuum_user_span_ratio_ppm": 1000000,
+          "leaf_gc_bytes": 97874818,
+          "leaf_gc_generations": 1,
+          "leaf_pack_bytes": 0,
+          "leaf_pack_generations": 0,
+          "value_log_gc_bytes": 0,
+          "value_log_gc_segments": 0,
+          "value_log_rewrite_bytes": 0,
+          "value_log_rewrite_segments": 0,
+          "zero_byte_value_log_files": 0
+        },
+        "sampled_disk_hwm_including_wal": {
+          "allocated": 2366672896,
+          "apparent": 2366509625
+        },
+        "status": "completed",
+        "time_elapsed_seconds": 23.0
+      },
+      {
+        "command": [
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-restore-r2",
+          "compact",
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy",
+          "-rw",
+          "-json",
+          "-mode",
+          "exhaustive",
+          "-sync-each-phase",
+          "-leaf-pack-max-passes",
+          "64",
+          "-rewrite-batch-size",
+          "8192"
+        ],
+        "disk_sample_count": 194,
+        "flags": {
+          "byte_minimized": false,
+          "fully_compacted": false,
+          "policy_fully_compacted": false
+        },
+        "kernel_process_rss_hwm_bytes": 2214178816,
+        "label": "exhaustive",
+        "oracle_delta": {
+          "allocated": 0,
+          "apparent": 0
+        },
+        "phases": [
+          {
+            "name": "checkpoint",
+            "wall_time_nanos": 4049
+          },
+          {
+            "name": "value-log-rewrite",
+            "wall_time_nanos": 163867637954
+          },
+          {
+            "name": "checkpoint-after-value-log-rewrite",
+            "wall_time_nanos": 3190
+          },
+          {
+            "name": "value-log-gc",
+            "wall_time_nanos": 2883377200
+          },
+          {
+            "name": "checkpoint-after-value-log-gc",
+            "wall_time_nanos": 3521
+          },
+          {
+            "name": "seal-current-leaf-generation",
+            "wall_time_nanos": 27753061
+          },
+          {
+            "name": "leaf-generation-pack-1",
+            "wall_time_nanos": 15825795649
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-pack-1",
+            "wall_time_nanos": 4007
+          },
+          {
+            "name": "leaf-generation-pack-2",
+            "skip_reason": "plan_admission:no_candidates",
+            "skipped": true,
+            "wall_time_nanos": 17480
+          },
+          {
+            "name": "leaf-generation-gc",
+            "wall_time_nanos": 142264300
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-gc",
+            "wall_time_nanos": 3142
+          },
+          {
+            "name": "index-vacuum",
+            "reason": "leaf_generation",
+            "required": true,
+            "status": "succeeded",
+            "wall_time_nanos": 141644194
+          },
+          {
+            "name": "checkpoint-after-index-vacuum",
+            "wall_time_nanos": 2979
+          },
+          {
+            "name": "settle-value-log-gc-1",
+            "wall_time_nanos": 3312670466
+          },
+          {
+            "name": "checkpoint-after-settle-value-log-gc-1",
+            "wall_time_nanos": 3642
+          },
+          {
+            "name": "settle-leaf-generation-gc-1",
+            "wall_time_nanos": 130116057
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-1",
+            "wall_time_nanos": 3673
+          },
+          {
+            "name": "settle-leaf-generation-gc-2",
+            "wall_time_nanos": 85427032
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-2",
+            "wall_time_nanos": 2741
+          },
+          {
+            "name": "settle-leaf-generation-gc-3",
+            "wall_time_nanos": 85147138
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-3",
+            "wall_time_nanos": 2863
+          },
+          {
+            "name": "settle-leaf-generation-gc-4",
+            "wall_time_nanos": 86147317
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-4",
+            "wall_time_nanos": 2456
+          },
+          {
+            "name": "prune-empty-value-log-files",
+            "wall_time_nanos": 177050
+          }
+        ],
+        "post_oracle": {
+          "allocated": 2072367104,
+          "allocated_excluding_wal": 2072363008,
+          "apparent": 2072155140,
+          "apparent_excluding_wal": 2072155128,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 3116
+            },
+            "outer_leaf": {
+              "allocated": 1255747584,
+              "apparent": 1255618022
+            },
+            "user_value": {
+              "allocated": 769650688,
+              "apparent": 769609719
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "exhaustive-after"
+        },
+        "pre_oracle": {
+          "allocated": 2072367104,
+          "allocated_excluding_wal": 2072363008,
+          "apparent": 2072155140,
+          "apparent_excluding_wal": 2072155128,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 3116
+            },
+            "outer_leaf": {
+              "allocated": 1255747584,
+              "apparent": 1255618022
+            },
+            "user_value": {
+              "allocated": 769650688,
+              "apparent": 769609719
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "exhaustive-before-oracle"
+        },
+        "rc": 0,
+        "receipt_elapsed_seconds": 194.27615976333618,
+        "remaining_debt": {
+          "index_vacuum_collection_root_pages": 0,
+          "index_vacuum_collection_root_span": 0,
+          "index_vacuum_collection_root_span_ratio_ppm": 0,
+          "index_vacuum_freelist_reclaimable_pages": 0,
+          "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+          "index_vacuum_reason": "none",
+          "index_vacuum_required": false,
+          "index_vacuum_total_pages": 9736,
+          "index_vacuum_user_pages": 4860,
+          "index_vacuum_user_span": 4860,
+          "index_vacuum_user_span_ratio_ppm": 1000000,
+          "leaf_gc_bytes": 581726715,
+          "leaf_gc_generations": 3,
+          "leaf_pack_bytes": 0,
+          "leaf_pack_generations": 0,
+          "value_log_gc_bytes": 0,
+          "value_log_gc_segments": 0,
+          "value_log_rewrite_bytes": 18684,
+          "value_log_rewrite_segments": 4,
+          "zero_byte_value_log_files": 0
+        },
+        "sampled_disk_hwm_including_wal": {
+          "allocated": 3729481728,
+          "apparent": 3729242807
+        },
+        "status": "completed",
+        "time_elapsed_seconds": 193.31
+      },
+      {
+        "command": [
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-restore-r2",
+          "compact",
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy",
+          "-rw",
+          "-json",
+          "-mode",
+          "exhaustive",
+          "-sync-each-phase",
+          "-leaf-pack-max-passes",
+          "64",
+          "-rewrite-batch-size",
+          "8192"
+        ],
+        "disk_sample_count": 192,
+        "flags": {
+          "byte_minimized": false,
+          "fully_compacted": false,
+          "policy_fully_compacted": false
+        },
+        "kernel_process_rss_hwm_bytes": 1781620736,
+        "label": "exhaustive-second",
+        "oracle_delta": {
+          "allocated": 0,
+          "apparent": 0
+        },
+        "phases": [
+          {
+            "name": "checkpoint",
+            "wall_time_nanos": 4436
+          },
+          {
+            "name": "value-log-rewrite",
+            "wall_time_nanos": 162414248478
+          },
+          {
+            "name": "checkpoint-after-value-log-rewrite",
+            "wall_time_nanos": 3401
+          },
+          {
+            "name": "value-log-gc",
+            "wall_time_nanos": 2886592570
+          },
+          {
+            "name": "checkpoint-after-value-log-gc",
+            "wall_time_nanos": 3359
+          },
+          {
+            "name": "seal-current-leaf-generation",
+            "wall_time_nanos": 34683251
+          },
+          {
+            "name": "leaf-generation-pack-1",
+            "wall_time_nanos": 15766321045
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-pack-1",
+            "wall_time_nanos": 3594
+          },
+          {
+            "name": "leaf-generation-pack-2",
+            "skip_reason": "plan_admission:no_candidates",
+            "skipped": true,
+            "wall_time_nanos": 25356
+          },
+          {
+            "name": "leaf-generation-gc",
+            "wall_time_nanos": 159276803
+          },
+          {
+            "name": "checkpoint-after-leaf-generation-gc",
+            "wall_time_nanos": 3343
+          },
+          {
+            "name": "index-vacuum",
+            "reason": "leaf_generation",
+            "required": true,
+            "status": "succeeded",
+            "wall_time_nanos": 164544771
+          },
+          {
+            "name": "checkpoint-after-index-vacuum",
+            "wall_time_nanos": 3093
+          },
+          {
+            "name": "settle-value-log-gc-1",
+            "wall_time_nanos": 3092694326
+          },
+          {
+            "name": "checkpoint-after-settle-value-log-gc-1",
+            "wall_time_nanos": 3796
+          },
+          {
+            "name": "settle-leaf-generation-gc-1",
+            "wall_time_nanos": 157450882
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-1",
+            "wall_time_nanos": 3797
+          },
+          {
+            "name": "settle-leaf-generation-gc-2",
+            "wall_time_nanos": 84580432
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-2",
+            "wall_time_nanos": 2958
+          },
+          {
+            "name": "settle-leaf-generation-gc-3",
+            "wall_time_nanos": 84103571
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-3",
+            "wall_time_nanos": 2860
+          },
+          {
+            "name": "settle-leaf-generation-gc-4",
+            "wall_time_nanos": 85568510
+          },
+          {
+            "name": "checkpoint-after-settle-leaf-generation-gc-4",
+            "wall_time_nanos": 2953
+          },
+          {
+            "name": "prune-empty-value-log-files",
+            "wall_time_nanos": 181733
+          }
+        ],
+        "post_oracle": {
+          "allocated": 2370580480,
+          "allocated_excluding_wal": 2370576384,
+          "apparent": 2370337631,
+          "apparent_excluding_wal": 2370337619,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 3436
+            },
+            "outer_leaf": {
+              "allocated": 1553924096,
+              "apparent": 1553765642
+            },
+            "user_value": {
+              "allocated": 769687552,
+              "apparent": 769644270
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "exhaustive-second-after"
+        },
+        "pre_oracle": {
+          "allocated": 2370580480,
+          "allocated_excluding_wal": 2370576384,
+          "apparent": 2370337631,
+          "apparent_excluding_wal": 2370337619,
+          "domains": {
+            "dictionary": {
+              "allocated": 806912,
+              "apparent": 786927
+            },
+            "index": {
+              "allocated": 46141440,
+              "apparent": 46137344
+            },
+            "metadata": {
+              "allocated": 16384,
+              "apparent": 3436
+            },
+            "outer_leaf": {
+              "allocated": 1553924096,
+              "apparent": 1553765642
+            },
+            "user_value": {
+              "allocated": 769687552,
+              "apparent": 769644270
+            },
+            "wal": {
+              "allocated": 4096,
+              "apparent": 12
+            }
+          },
+          "label": "exhaustive-second-before-oracle"
+        },
+        "rc": 0,
+        "receipt_elapsed_seconds": 192.27908325195312,
+        "remaining_debt": {
+          "index_vacuum_collection_root_pages": 0,
+          "index_vacuum_collection_root_span": 0,
+          "index_vacuum_collection_root_span_ratio_ppm": 0,
+          "index_vacuum_freelist_reclaimable_pages": 0,
+          "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+          "index_vacuum_reason": "none",
+          "index_vacuum_required": false,
+          "index_vacuum_total_pages": 9736,
+          "index_vacuum_user_pages": 4860,
+          "index_vacuum_user_span": 4860,
+          "index_vacuum_user_span_ratio_ppm": 1000000,
+          "leaf_gc_bytes": 541153637,
+          "leaf_gc_generations": 2,
+          "leaf_pack_bytes": 0,
+          "leaf_pack_generations": 0,
+          "value_log_gc_bytes": 0,
+          "value_log_gc_segments": 0,
+          "value_log_rewrite_bytes": 18684,
+          "value_log_rewrite_segments": 4,
+          "zero_byte_value_log_files": 0
+        },
+        "sampled_disk_hwm_including_wal": {
+          "allocated": 3523661824,
+          "apparent": 3523399125
+        },
+        "status": "completed",
+        "time_elapsed_seconds": 191.55
+      }
+    ],
+    "binaries": {
+      "benchprof-restore-r2": "caa640fa3a4b9e5f1a3d1b60d2b2e12d66f2625adf000909707e9ac9062309fa",
+      "rebind-owned-copy-restore-r2": "ae237f6af2abc82fa9857a33e93c9c8ee64a2d7a5f350a15a1525574d5dc77c3",
+      "treemap-restore-r2": "80e3af2a9012409cd393d03d07624118635dfab8e188e5de4bf0452033b273ff",
+      "unified-bench-restore-r2": "d9e09eae0e3e0b668cda83cfe7ec2f92f7e0280475c4407d74c7229deeb134ce"
+    },
+    "causal": {
+      "green": {
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "./TreeDB/db",
+          "-run",
+          "TestRebindDurableRootSnapshot|TestDurableRootPublicLayoutDictionary",
+          "-count",
+          "1",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2",
+        "environment": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOMAXPROCS": "12",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+          "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp"
+        },
+        "finished": 1791186811.6889954,
+        "head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+        "method_sha256": "62591b400d74ce74f9c03129d9ecb8bbe4ea44ce6154aef7f3de6f145afb6ef7",
+        "overlay": null,
+        "production_sha256": "619a407aaf74760b9048a1de226064434c63fa7613659294dc07291a8469fae2",
+        "rc": 0,
+        "seconds": 26.567418098449707,
+        "started": 1791186785.1215775,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "51cd49c5df5623ca81ae4efcac4221de3b07699af1f91b71b58572e77cc46a6b",
+        "test_sha256": {
+          "TreeDB/db/durable_root_side_store_recovery_supported_test.go": "b2454a97e54f1becf86cd18c4ecc86c0a0e5aabe220098225a413a61cc167a0e",
+          "TreeDB/db/durable_root_snapshot_rebind_test.go": "3e006c7624648598344bf13bad1d2e528885756bc231c6305564b0e4b1612201"
+        }
+      },
+      "red": {
+        "command": [
+          "go",
+          "test",
+          "-p",
+          "1",
+          "-overlay",
+          "/mnt/fast4tb/quicksilver-space-memory-20261005/restore-r2-causal/red-overlay.json",
+          "./TreeDB/db",
+          "-run",
+          "^TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority$",
+          "-count",
+          "1",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline",
+        "environment": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/go-build-cache",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOMAXPROCS": "12",
+          "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+          "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+          "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp"
+        },
+        "finished": 1791186785.1212425,
+        "head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+        "method_sha256": "62591b400d74ce74f9c03129d9ecb8bbe4ea44ce6154aef7f3de6f145afb6ef7",
+        "overlay": {
+          "Replace": {
+            "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/TreeDB/db/durable_root_side_store_recovery_supported_test.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2/TreeDB/db/durable_root_side_store_recovery_supported_test.go",
+            "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/TreeDB/db/durable_root_snapshot_rebind_test.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2/TreeDB/db/durable_root_snapshot_rebind_test.go"
+          }
+        },
+        "production_sha256": "a5f0bb1f871aa1b5ac6c3325dc0d7f32da2d71c9a41f604c8dc4e1e8fd01a861",
+        "rc": 1,
+        "seconds": 20.911142110824585,
+        "started": 1791186764.2101007,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8541d9b83e91c928f26585a8028756c00689321d1644316fe39e80a132aa7769",
+        "test_sha256": {
+          "TreeDB/db/durable_root_side_store_recovery_supported_test.go": "b2454a97e54f1becf86cd18c4ecc86c0a0e5aabe220098225a413a61cc167a0e",
+          "TreeDB/db/durable_root_snapshot_rebind_test.go": "3e006c7624648598344bf13bad1d2e528885756bc231c6305564b0e4b1612201"
+        }
+      }
+    },
+    "environment": {
+      "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+      "CGO_ENABLED": "1",
+      "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+      "GODEBUG": "",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "12",
+      "GOMEMLIMIT": "2GiB",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOWORK": "off",
+      "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+      "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+      "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs",
+      "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES": "1073741824"
+    },
+    "initial_states": [
+      {
+        "allocated": 1947684864,
+        "allocated_excluding_wal": 1947680768,
+        "apparent": 1947537066,
+        "apparent_excluding_wal": 1947537054,
+        "domains": {
+          "dictionary": {
+            "allocated": 806912,
+            "apparent": 786927
+          },
+          "index": {
+            "allocated": 138416128,
+            "apparent": 138412032
+          },
+          "metadata": {
+            "allocated": 24576,
+            "apparent": 11699
+          },
+          "outer_leaf": {
+            "allocated": 468406272,
+            "apparent": 468343647
+          },
+          "user_value": {
+            "allocated": 1340026880,
+            "apparent": 1339982749
+          },
+          "wal": {
+            "allocated": 4096,
+            "apparent": 12
+          }
+        },
+        "label": "final-before-verify"
+      },
+      {
+        "allocated": 1849643008,
+        "allocated_excluding_wal": 1849638912,
+        "apparent": 1849495234,
+        "apparent_excluding_wal": 1849495222,
+        "domains": {
+          "dictionary": {
+            "allocated": 806912,
+            "apparent": 786927
+          },
+          "index": {
+            "allocated": 40374272,
+            "apparent": 40370176
+          },
+          "metadata": {
+            "allocated": 24576,
+            "apparent": 11723
+          },
+          "outer_leaf": {
+            "allocated": 468406272,
+            "apparent": 468343647
+          },
+          "user_value": {
+            "allocated": 1340026880,
+            "apparent": 1339982749
+          },
+          "wal": {
+            "allocated": 4096,
+            "apparent": 12
+          }
+        },
+        "label": "before-maintenance"
+      }
+    ],
+    "input_metadata": "inherited baseline run/stdout; not R2 profiling measurements",
+    "landed_source": {
+      "checked_utc": "2026-10-05T08:21:50.310747+00:00",
+      "equal": true,
+      "landed_head": "723e5625f4b46945886d0696c0122db2e2c928cf",
+      "landed_tree": "1193140b3d4e11ceaf696f8d041c12370ff4fb53",
+      "measured_head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+      "measured_tree": "1193140b3d4e11ceaf696f8d041c12370ff4fb53",
+      "pr": 5012
+    },
+    "readonly_restored_copy": {
+      "after": [
+        [
+          "dictdb/LOCK",
+          12,
+          8,
+          1791178990692164505
+        ],
+        [
+          "dictdb/format.json",
+          335,
+          8,
+          1791178990693164510
+        ],
+        [
+          "dictdb/index.db",
+          589824,
+          1152,
+          1791186865099881298
+        ],
+        [
+          "dictdb/value_vlog/value-l0-000001.log",
+          65584,
+          136,
+          1791178217417515163
+        ],
+        [
+          "dictdb/value_vlog/value-l0-000002.log",
+          131120,
+          264,
+          1791178305757118963
+        ],
+        [
+          "dictdb/vlog_ref_counts.meta",
+          52,
+          8,
+          1791178333033299878
+        ],
+        [
+          "maindb/LOCK",
+          12,
+          8,
+          1791178990699164542
+        ],
+        [
+          "maindb/format.json",
+          433,
+          8,
+          1791178990964165976
+        ],
+        [
+          "maindb/index.db",
+          138412032,
+          270344,
+          1791186865738884047
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000001.json",
+          253,
+          8,
+          1791178217366514806
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000002.json",
+          301,
+          8,
+          1791178219018526368
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000003.json",
+          1531,
+          8,
+          1791178225645572638
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000004.json",
+          2767,
+          8,
+          1791178238532662125
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000005.json",
+          4003,
+          8,
+          1791178244176701115
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000006.json",
+          6475,
+          16,
+          1791178248381730085
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000007.json",
+          7711,
+          16,
+          1791178254224770231
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000008.json",
+          10183,
+          24,
+          1791178259903809129
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000009.json",
+          10602,
+          24,
+          1791178260622814044
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000a.json",
+          10812,
+          24,
+          1791178307021127401
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000b.json",
+          12066,
+          24,
+          1791178323551237261
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000c.json",
+          13320,
+          32,
+          1791178326459256496
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000d.json",
+          13529,
+          32,
+          1791178328685271201
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000e.json",
+          13738,
+          32,
+          1791178844453362974
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000f.json",
+          13947,
+          32,
+          1791178855589424808
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000010.json",
+          16157,
+          32,
+          1791178866688486294
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000011.json",
+          18141,
+          40,
+          1791178870782508939
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000012.json",
+          759,
+          8,
+          1791178871305511831
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000013.json",
+          13035,
+          32,
+          1791178990971166014
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000014.json",
+          13244,
+          32,
+          1791178995759191906
+        ],
+        [
+          "maindb/leaf_vlog/manifest.json",
+          13244,
+          32,
+          1791178995785192046
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000065.log",
+          28854392,
+          56360,
+          1791178329395275888
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000065.log.lenidx",
+          113720,
+          224,
+          1791178990993166133
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000066.log",
+          315023187,
+          615288,
+          1791178844357362441
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000066.log.lenidx",
+          360024,
+          704,
+          1791178855201422656
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000067.log",
+          25822608,
+          50440,
+          1791178855574424725
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000067.log.lenidx",
+          99080,
+          200,
+          1791178995798192117
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000068.log",
+          97874818,
+          191168,
+          1791180788000302110
+        ],
+        [
+          "maindb/value_vlog/value-l0-000001.log",
+          268417011,
+          524264,
+          1791178249952740892
+        ],
+        [
+          "maindb/value_vlog/value-l0-000002.log",
+          82191690,
+          160536,
+          1791178259224804484
+        ],
+        [
+          "maindb/value_vlog/value-l0-000003.log",
+          6650546,
+          12992,
+          1791178329136274179
+        ],
+        [
+          "maindb/value_vlog/value-l1-000001.log",
+          268407096,
+          524248,
+          1791178249974741043
+        ],
+        [
+          "maindb/value_vlog/value-l1-000002.log",
+          82897039,
+          161912,
+          1791178259243804614
+        ],
+        [
+          "maindb/value_vlog/value-l1-000003.log",
+          6334889,
+          12376,
+          1791178329123274093
+        ],
+        [
+          "maindb/value_vlog/value-l2-000001.log",
+          350795381,
+          685160,
+          1791178259263804751
+        ],
+        [
+          "maindb/value_vlog/value-l2-000002.log",
+          7255826,
+          14176,
+          1791178329129274132
+        ],
+        [
+          "maindb/value_vlog/value-l254-000001.log",
+          134203987,
+          262128,
+          1791179833781532005
+        ],
+        [
+          "maindb/value_vlog/value-l254-000002.log",
+          132829284,
+          259448,
+          1791180787990302061
+        ],
+        [
+          "maindb/vlog_health.json",
+          11130,
+          24,
+          1791178840844342904
+        ],
+        [
+          "maindb/vlog_ref_counts.meta",
+          124,
+          8,
+          1791178990628164158
+        ],
+        [
+          "maindb/wal/command-wal-journal-owner.lock",
+          12,
+          8,
+          1791178990710164602
+        ],
+        [
+          "maindb/wal/commit-l0-000001.log",
+          0,
+          0,
+          1791178990710164602
+        ]
+      ],
+      "before": [
+        [
+          "dictdb/LOCK",
+          12,
+          8,
+          1791178990692164505
+        ],
+        [
+          "dictdb/format.json",
+          335,
+          8,
+          1791178990693164510
+        ],
+        [
+          "dictdb/index.db",
+          589824,
+          1152,
+          1791186865099881298
+        ],
+        [
+          "dictdb/value_vlog/value-l0-000001.log",
+          65584,
+          136,
+          1791178217417515163
+        ],
+        [
+          "dictdb/value_vlog/value-l0-000002.log",
+          131120,
+          264,
+          1791178305757118963
+        ],
+        [
+          "dictdb/vlog_ref_counts.meta",
+          52,
+          8,
+          1791178333033299878
+        ],
+        [
+          "maindb/LOCK",
+          12,
+          8,
+          1791178990699164542
+        ],
+        [
+          "maindb/format.json",
+          433,
+          8,
+          1791178990964165976
+        ],
+        [
+          "maindb/index.db",
+          138412032,
+          270344,
+          1791186865738884047
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000001.json",
+          253,
+          8,
+          1791178217366514806
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000002.json",
+          301,
+          8,
+          1791178219018526368
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000003.json",
+          1531,
+          8,
+          1791178225645572638
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000004.json",
+          2767,
+          8,
+          1791178238532662125
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000005.json",
+          4003,
+          8,
+          1791178244176701115
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000006.json",
+          6475,
+          16,
+          1791178248381730085
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000007.json",
+          7711,
+          16,
+          1791178254224770231
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000008.json",
+          10183,
+          24,
+          1791178259903809129
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000009.json",
+          10602,
+          24,
+          1791178260622814044
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000a.json",
+          10812,
+          24,
+          1791178307021127401
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000b.json",
+          12066,
+          24,
+          1791178323551237261
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000c.json",
+          13320,
+          32,
+          1791178326459256496
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000d.json",
+          13529,
+          32,
+          1791178328685271201
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000e.json",
+          13738,
+          32,
+          1791178844453362974
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.000000000000000f.json",
+          13947,
+          32,
+          1791178855589424808
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000010.json",
+          16157,
+          32,
+          1791178866688486294
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000011.json",
+          18141,
+          40,
+          1791178870782508939
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000012.json",
+          759,
+          8,
+          1791178871305511831
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000013.json",
+          13035,
+          32,
+          1791178990971166014
+        ],
+        [
+          "maindb/leaf_vlog/manifest.durable.0000000000000014.json",
+          13244,
+          32,
+          1791178995759191906
+        ],
+        [
+          "maindb/leaf_vlog/manifest.json",
+          13244,
+          32,
+          1791178995785192046
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000065.log",
+          28854392,
+          56360,
+          1791178329395275888
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000065.log.lenidx",
+          113720,
+          224,
+          1791178990993166133
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000066.log",
+          315023187,
+          615288,
+          1791178844357362441
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000066.log.lenidx",
+          360024,
+          704,
+          1791178855201422656
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000067.log",
+          25822608,
+          50440,
+          1791178855574424725
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000067.log.lenidx",
+          99080,
+          200,
+          1791178995798192117
+        ],
+        [
+          "maindb/leaf_vlog/value-l255-000068.log",
+          97874818,
+          191168,
+          1791180788000302110
+        ],
+        [
+          "maindb/value_vlog/value-l0-000001.log",
+          268417011,
+          524264,
+          1791178249952740892
+        ],
+        [
+          "maindb/value_vlog/value-l0-000002.log",
+          82191690,
+          160536,
+          1791178259224804484
+        ],
+        [
+          "maindb/value_vlog/value-l0-000003.log",
+          6650546,
+          12992,
+          1791178329136274179
+        ],
+        [
+          "maindb/value_vlog/value-l1-000001.log",
+          268407096,
+          524248,
+          1791178249974741043
+        ],
+        [
+          "maindb/value_vlog/value-l1-000002.log",
+          82897039,
+          161912,
+          1791178259243804614
+        ],
+        [
+          "maindb/value_vlog/value-l1-000003.log",
+          6334889,
+          12376,
+          1791178329123274093
+        ],
+        [
+          "maindb/value_vlog/value-l2-000001.log",
+          350795381,
+          685160,
+          1791178259263804751
+        ],
+        [
+          "maindb/value_vlog/value-l2-000002.log",
+          7255826,
+          14176,
+          1791178329129274132
+        ],
+        [
+          "maindb/value_vlog/value-l254-000001.log",
+          134203987,
+          262128,
+          1791179833781532005
+        ],
+        [
+          "maindb/value_vlog/value-l254-000002.log",
+          132829284,
+          259448,
+          1791180787990302061
+        ],
+        [
+          "maindb/vlog_health.json",
+          11130,
+          24,
+          1791178840844342904
+        ],
+        [
+          "maindb/vlog_ref_counts.meta",
+          124,
+          8,
+          1791178990628164158
+        ],
+        [
+          "maindb/wal/command-wal-journal-owner.lock",
+          12,
+          8,
+          1791178990710164602
+        ],
+        [
+          "maindb/wal/commit-l0-000001.log",
+          0,
+          0,
+          1791178990710164602
+        ]
+      ],
+      "binary_sha256": "36db3beb4cd37b8d5bacacfa7baa9931453c2862f3bfabd9231780de15724f99",
+      "command": [
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/diagnostic-readonly-oracle",
+        "-suite",
+        "quicksilver",
+        "-dbs",
+        "treedb",
+        "-profile",
+        "durable",
+        "-quicksilver-case",
+        "realistic",
+        "-keys",
+        "3000000",
+        "-read-workers",
+        "4",
+        "-quicksilver-reads",
+        "6000000",
+        "-quicksilver-updates",
+        "40000",
+        "-quicksilver-duration",
+        "8s",
+        "-quicksilver-read-batch",
+        "64",
+        "-quicksilver-commit",
+        "auto",
+        "-max-wall",
+        "30m",
+        "-seed",
+        "24",
+        "-quicksilver-mixture",
+        "primary",
+        "-quicksilver-working-set",
+        "uniform",
+        "-quicksilver-miss-percent",
+        "90",
+        "-quicksilver-verify-dir",
+        "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy"
+      ],
+      "method_sha256": "ca19ea7cccc83b2e611d67c15c60392b3b27276ae1ed9abe283397017212bd37",
+      "proof": {
+        "config": {
+          "aggregate_reads": 6000000,
+          "barrier_policy": "initial/final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters",
+          "case": "realistic",
+          "commit_mode": "ordinary",
+          "concurrent_duration_ns": 8000000000,
+          "content_distribution": "50% structured; 50% opaque (seeded independent of length)",
+          "generation": "generic-v1",
+          "key_distribution": "namespace/hostname/opaque approximately 1/3 each; variable lengths; bijective scrambled interior identity",
+          "keys": 3000000,
+          "miss_percent": 90,
+          "mixture": "primary",
+          "reads_per_snapshot": 64,
+          "seed": 24,
+          "updates": 40000,
+          "value_distribution": "80% 32..256 B; 18% 257..2048 B; 2% 2049..32768 B (seeded); equally weighted logarithmic size bands within buckets",
+          "workers": 4,
+          "working_set": "uniform"
+        },
+        "data_dir": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy",
+        "engine": "treedb",
+        "verification_only": true,
+        "verified_keys": 3000000,
+        "verified_misses": 6040000
+      },
+      "rc": 0,
+      "seconds": 101.98350811004639,
+      "unchanged": true
+    },
+    "restored_copy": {
+      "batch_size": 8192,
+      "copy": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy",
+      "original": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/bench-quicksilver-treedb-60936012",
+      "restore_helper_sha256": "ae237f6af2abc82fa9857a33e93c9c8ee64a2d7a5f350a15a1525574d5dc77c3",
+      "source_packet": "/mnt/fast4tb/quicksilver-space-memory-20261005/baseline-3m-profile/1-treedb-durable-profile"
+    },
+    "source_head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+    "status": "MEASURED_PROVISIONAL"
   },
   "schema_version": 1,
   "storage": [

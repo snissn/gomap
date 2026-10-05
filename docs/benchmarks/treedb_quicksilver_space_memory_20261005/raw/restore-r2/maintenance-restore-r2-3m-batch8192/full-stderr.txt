@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/treemap-restore-r2 compact /mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy -rw -json -mode full -sync-each-phase -leaf-pack-max-passes 64 -rewrite-batch-size 8192"
+	User time (seconds): 21.40
+	System time (seconds): 1.28
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:23.00
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1209472
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 16
+	Minor (reclaiming a frame) page faults: 117737
+	Voluntary context switches: 11417
+	Involuntary context switches: 5561
+	Swaps: 0
+	File system inputs: 24
+	File system outputs: 793544
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

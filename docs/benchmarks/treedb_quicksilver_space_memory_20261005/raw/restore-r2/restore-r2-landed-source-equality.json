@@ -1,0 +1,9 @@
+{
+  "pr": 5012,
+  "measured_head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+  "landed_head": "723e5625f4b46945886d0696c0122db2e2c928cf",
+  "measured_tree": "1193140b3d4e11ceaf696f8d041c12370ff4fb53",
+  "landed_tree": "1193140b3d4e11ceaf696f8d041c12370ff4fb53",
+  "equal": true,
+  "checked_utc": "2026-10-05T08:21:50.310747+00:00"
+}

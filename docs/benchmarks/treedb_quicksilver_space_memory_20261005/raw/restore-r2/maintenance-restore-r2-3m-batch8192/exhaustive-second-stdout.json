@@ -1,0 +1,1193 @@
+{
+  "mode": "exhaustive",
+  "dry_run": false,
+  "before": [
+    {
+      "name": "index",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/index.db",
+      "bytes": 46137344,
+      "files": 1,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "wal",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/wal",
+      "bytes": 12,
+      "files": 2,
+      "zero_byte_files": 1
+    },
+    {
+      "name": "value_vlog",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/value_vlog",
+      "bytes": 769609719,
+      "files": 9,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "leaf_vlog",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/leaf_vlog",
+      "bytes": 1255618022,
+      "files": 51,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "total",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb",
+      "bytes": 2071365097,
+      "files": 63,
+      "zero_byte_files": 1
+    }
+  ],
+  "after": [
+    {
+      "name": "index",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/index.db",
+      "bytes": 46137344,
+      "files": 1,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "wal",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/wal",
+      "bytes": 12,
+      "files": 2,
+      "zero_byte_files": 1
+    },
+    {
+      "name": "value_vlog",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/value_vlog",
+      "bytes": 769644270,
+      "files": 10,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "leaf_vlog",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb/leaf_vlog",
+      "bytes": 1553765642,
+      "files": 64,
+      "zero_byte_files": 0
+    },
+    {
+      "name": "total",
+      "path": "/mnt/fast4tb/quicksilver-space-memory-20261005/working-dbs/maintenance-3m-restore-r2-batch8192-copy/maindb",
+      "bytes": 2369547268,
+      "files": 77,
+      "zero_byte_files": 1
+    }
+  ],
+  "phases": [
+    {
+      "name": "checkpoint",
+      "wall_time_nanos": 4436
+    },
+    {
+      "name": "value-log-rewrite",
+      "wall_time_nanos": 162414248478
+    },
+    {
+      "name": "checkpoint-after-value-log-rewrite",
+      "wall_time_nanos": 3401
+    },
+    {
+      "name": "value-log-gc",
+      "wall_time_nanos": 2886592570
+    },
+    {
+      "name": "checkpoint-after-value-log-gc",
+      "wall_time_nanos": 3359
+    },
+    {
+      "name": "seal-current-leaf-generation",
+      "wall_time_nanos": 34683251
+    },
+    {
+      "name": "leaf-generation-pack-1",
+      "wall_time_nanos": 15766321045
+    },
+    {
+      "name": "checkpoint-after-leaf-generation-pack-1",
+      "wall_time_nanos": 3594
+    },
+    {
+      "name": "leaf-generation-pack-2",
+      "skipped": true,
+      "skip_reason": "plan_admission:no_candidates",
+      "wall_time_nanos": 25356
+    },
+    {
+      "name": "leaf-generation-gc",
+      "wall_time_nanos": 159276803
+    },
+    {
+      "name": "checkpoint-after-leaf-generation-gc",
+      "wall_time_nanos": 3343
+    },
+    {
+      "name": "index-vacuum",
+      "status": "succeeded",
+      "required": true,
+      "reason": "leaf_generation",
+      "wall_time_nanos": 164544771
+    },
+    {
+      "name": "checkpoint-after-index-vacuum",
+      "wall_time_nanos": 3093
+    },
+    {
+      "name": "settle-value-log-gc-1",
+      "wall_time_nanos": 3092694326
+    },
+    {
+      "name": "checkpoint-after-settle-value-log-gc-1",
+      "wall_time_nanos": 3796
+    },
+    {
+      "name": "settle-leaf-generation-gc-1",
+      "wall_time_nanos": 157450882
+    },
+    {
+      "name": "checkpoint-after-settle-leaf-generation-gc-1",
+      "wall_time_nanos": 3797
+    },
+    {
+      "name": "settle-leaf-generation-gc-2",
+      "wall_time_nanos": 84580432
+    },
+    {
+      "name": "checkpoint-after-settle-leaf-generation-gc-2",
+      "wall_time_nanos": 2958
+    },
+    {
+      "name": "settle-leaf-generation-gc-3",
+      "wall_time_nanos": 84103571
+    },
+    {
+      "name": "checkpoint-after-settle-leaf-generation-gc-3",
+      "wall_time_nanos": 2860
+    },
+    {
+      "name": "settle-leaf-generation-gc-4",
+      "wall_time_nanos": 85568510
+    },
+    {
+      "name": "checkpoint-after-settle-leaf-generation-gc-4",
+      "wall_time_nanos": 2953
+    },
+    {
+      "name": "prune-empty-value-log-files",
+      "wall_time_nanos": 181733
+    }
+  ],
+  "audit": {
+    "shared_scans": 6,
+    "structural_reuse_hits": 0,
+    "structural_reuse_misses": 6,
+    "revalidation_retries": 0,
+    "root_sets": 12,
+    "pages_visited": 29166,
+    "memo_hits": 0,
+    "pointer_projections": 2521092,
+    "grouped_record_dedupe_hits": 2478733,
+    "physical_bytes_read": 7391940052,
+    "last_structural_reuse_miss_reason": "cold"
+  },
+  "value_log_rewrite_plan": {
+    "SourceFileIDs": [
+      4261412865,
+      4261412866,
+      4261412867,
+      4261412868
+    ],
+    "SelectedSegments": [
+      {
+        "FileID": 4261412865,
+        "BytesTotal": 134216667,
+        "BytesLive": 134212027,
+        "BytesStale": 4640,
+        "StaleRatio": 0.00003457096725550486
+      },
+      {
+        "FileID": 4261412866,
+        "BytesTotal": 134217317,
+        "BytesLive": 134212681,
+        "BytesStale": 4636,
+        "StaleRatio": 0.00003454099741838827
+      },
+      {
+        "FileID": 4261412867,
+        "BytesTotal": 134216088,
+        "BytesLive": 134211352,
+        "BytesStale": 4736,
+        "StaleRatio": 0.000035286380869631664
+      },
+      {
+        "FileID": 4261412868,
+        "BytesTotal": 134212644,
+        "BytesLive": 134207972,
+        "BytesStale": 4672,
+        "StaleRatio": 0.00003481043112450717
+      }
+    ],
+    "SegmentsTotal": 10,
+    "SegmentsSelected": 4,
+    "BytesTotal": 769644270,
+    "BytesLive": 761660989,
+    "BytesStale": 7983281,
+    "SelectedBytesTotal": 536862716,
+    "SelectedBytesLive": 536844032,
+    "SelectedBytesStale": 18684,
+    "AgeBlockedSegments": 0,
+    "AgeBlockedBytesTotal": 0,
+    "AgeBlockedBytesLive": 0,
+    "AgeBlockedBytesStale": 0,
+    "AgeBlockedMinRemainingAge": 0
+  },
+  "value_log_rewrite": {
+    "SegmentsBefore": 9,
+    "SegmentsAfter": 11,
+    "BytesBefore": 769609719,
+    "BytesAfter": 903861557,
+    "RecordsCopied": 298099,
+    "ValueRecordsCopied": 298099,
+    "ValueBytesCopied": 785510545,
+    "SourceSegmentsRequested": 4,
+    "SourceChunksRequested": 0,
+    "SourceSegmentsStillReferenced": 0,
+    "SourceSegmentsUnreferenced": 4,
+    "SourceBytesRequested": 536865439,
+    "SourceBytesStillReferenced": 0,
+    "SourceBytesUnreferenced": 536865439,
+    "SourceBytesProcessed": 0,
+    "SourceFileIDsStillReferenced": null,
+    "SourceFileIDsUnreferenced": [
+      4269801473,
+      4269801474,
+      4269801475,
+      4269801476
+    ],
+    "SourceSegmentsReclaimed": 0,
+    "SourceBytesReclaimed": 0,
+    "SourceSegmentsRetainedRecoverableRootStale": 0,
+    "SourceBytesRetainedRecoverableRootStale": 0,
+    "LeafGenerationCleanupRetainedRecoverableRootStale": false,
+    "TemplateRecordsAttempted": 0,
+    "TemplateRecordsKept": 0,
+    "TemplateInputBytes": 0,
+    "TemplateOutputBytes": 0,
+    "TemplatePointerRecordsAttempted": 0,
+    "TemplatePointerRecordsKept": 0,
+    "TemplatePointerInputBytes": 0,
+    "TemplatePointerOutputBytes": 0,
+    "TemplatePointerReasons": null,
+    "TemplateOuterLeafRecordsAttempted": 0,
+    "TemplateOuterLeafRecordsKept": 0,
+    "TemplateOuterLeafInputBytes": 0,
+    "TemplateOuterLeafOutputBytes": 0,
+    "TemplateOuterLeafReasons": null
+  },
+  "value_log_gc": {
+    "SegmentsTotal": 11,
+    "SegmentsReferenced": 10,
+    "SegmentsActive": 0,
+    "SegmentsProtected": 0,
+    "SegmentsProtectedInUse": 0,
+    "SegmentsProtectedRetained": 0,
+    "SegmentsProtectedOverlap": 0,
+    "SegmentsProtectedOther": 0,
+    "SegmentsEligible": 1,
+    "SegmentsDeleted": 1,
+    "SegmentsPending": 0,
+    "BytesTotal": 903861557,
+    "BytesReferenced": 769644270,
+    "BytesActive": 0,
+    "BytesProtected": 0,
+    "BytesProtectedInUse": 0,
+    "BytesProtectedRetained": 0,
+    "BytesProtectedOverlap": 0,
+    "BytesProtectedOther": 0,
+    "BytesEligible": 134217287,
+    "BytesDeleted": 134217287,
+    "BytesPending": 0,
+    "ObservedSourceSegments": 0,
+    "ObservedSourceSegmentsReferenced": 0,
+    "ObservedSourceSegmentsActive": 0,
+    "ObservedSourceSegmentsProtected": 0,
+    "ObservedSourceSegmentsProtectedInUse": 0,
+    "ObservedSourceSegmentsProtectedRetained": 0,
+    "ObservedSourceSegmentsProtectedOverlap": 0,
+    "ObservedSourceSegmentsProtectedOther": 0,
+    "ObservedSourceSegmentsEligible": 0,
+    "ObservedSourceSegmentsDeleted": 0,
+    "ObservedSourceSegmentsPending": 0,
+    "ObservedSourceBytes": 0,
+    "ObservedSourceBytesReferenced": 0,
+    "ObservedSourceBytesActive": 0,
+    "ObservedSourceBytesProtected": 0,
+    "ObservedSourceBytesProtectedInUse": 0,
+    "ObservedSourceBytesProtectedRetained": 0,
+    "ObservedSourceBytesProtectedOverlap": 0,
+    "ObservedSourceBytesProtectedOther": 0,
+    "ObservedSourceBytesEligible": 0,
+    "ObservedSourceBytesDeleted": 0,
+    "ObservedSourceBytesPending": 0
+  },
+  "leaf_generation_plan": {
+    "CurrentCommitSeq": 701,
+    "CurrentGenerationID": 74,
+    "Generations": [
+      {
+        "GenerationID": 66,
+        "State": "deleted",
+        "FileIDs": [
+          2139095106
+        ],
+        "FileCount": 1,
+        "BytesTotal": 315023187,
+        "BytesLive": 0,
+        "BytesDead": 315023187,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 669,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "deleted_generation"
+      },
+      {
+        "GenerationID": 67,
+        "State": "deleted",
+        "FileIDs": [
+          2139095107
+        ],
+        "FileCount": 1,
+        "BytesTotal": 25822608,
+        "BytesLive": 0,
+        "BytesDead": 25822608,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 88,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "deleted_generation"
+      },
+      {
+        "GenerationID": 69,
+        "State": "deleted",
+        "FileIDs": [
+          2139095109
+        ],
+        "FileCount": 1,
+        "BytesTotal": 247225828,
+        "BytesLive": 0,
+        "BytesDead": 247225828,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 86,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "deleted_generation"
+      },
+      {
+        "GenerationID": 70,
+        "State": "deleted",
+        "FileIDs": [
+          2139095110
+        ],
+        "FileCount": 1,
+        "BytesTotal": 91293946,
+        "BytesLive": 0,
+        "BytesDead": 91293946,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 83,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "deleted_generation"
+      },
+      {
+        "GenerationID": 72,
+        "State": "retiring",
+        "FileIDs": [
+          2139095113
+        ],
+        "FileCount": 1,
+        "BytesTotal": 330164811,
+        "BytesLive": 0,
+        "BytesDead": 330164811,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 38,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "retiring_generation"
+      },
+      {
+        "GenerationID": 73,
+        "State": "retiring",
+        "FileIDs": [
+          2139095114
+        ],
+        "FileCount": 1,
+        "BytesTotal": 210988826,
+        "BytesLive": 0,
+        "BytesDead": 210988826,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "AgeCommits": 2,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 1000000,
+        "LiveRatioPPM": 0,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "retiring_generation"
+      },
+      {
+        "GenerationID": 74,
+        "State": "writable",
+        "FileIDs": [
+          2139095116
+        ],
+        "FileCount": 1,
+        "BytesTotal": 330173538,
+        "BytesLive": 330173538,
+        "BytesDead": 0,
+        "BytesToCopy": 330173538,
+        "LivePages": 295886,
+        "AgeCommits": 1,
+        "PinnedCount": 0,
+        "DeadRatioPPM": 0,
+        "LiveRatioPPM": 1000000,
+        "WholeGenerationGCEligible": false,
+        "Eligible": false,
+        "SkipReason": "writable_generation"
+      }
+    ],
+    "Candidates": [],
+    "CandidateGenerationIDs": [],
+    "CandidateBytesTotal": 0,
+    "CandidateBytesLive": 0,
+    "CandidateBytesDead": 0,
+    "CandidateBytesToCopy": 0,
+    "CandidateLivePages": 0,
+    "ExpectedReclaimBytes": 0,
+    "ExpectedReclaimRatioPPM": 0,
+    "ExpectedReclaimPerByteCopiedPPM": 0,
+    "Admission": "no_candidates"
+  },
+  "leaf_generation_packs": [
+    {
+      "Plan": {
+        "CurrentCommitSeq": 699,
+        "CurrentGenerationID": 74,
+        "Generations": [
+          {
+            "GenerationID": 66,
+            "State": "deleted",
+            "FileIDs": [
+              2139095106
+            ],
+            "FileCount": 1,
+            "BytesTotal": 315023187,
+            "BytesLive": 0,
+            "BytesDead": 315023187,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 667,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "deleted_generation"
+          },
+          {
+            "GenerationID": 67,
+            "State": "deleted",
+            "FileIDs": [
+              2139095107
+            ],
+            "FileCount": 1,
+            "BytesTotal": 25822608,
+            "BytesLive": 0,
+            "BytesDead": 25822608,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 86,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "deleted_generation"
+          },
+          {
+            "GenerationID": 69,
+            "State": "retiring",
+            "FileIDs": [
+              2139095109
+            ],
+            "FileCount": 1,
+            "BytesTotal": 247225828,
+            "BytesLive": 0,
+            "BytesDead": 247225828,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 84,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 70,
+            "State": "retiring",
+            "FileIDs": [
+              2139095110
+            ],
+            "FileCount": 1,
+            "BytesTotal": 91293946,
+            "BytesLive": 0,
+            "BytesDead": 91293946,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 81,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 71,
+            "State": "retiring",
+            "FileIDs": [
+              2139095111
+            ],
+            "FileCount": 1,
+            "BytesTotal": 243206941,
+            "BytesLive": 0,
+            "BytesDead": 243206941,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 40,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 72,
+            "State": "sealed",
+            "FileIDs": [
+              2139095113
+            ],
+            "FileCount": 1,
+            "BytesTotal": 330164811,
+            "BytesLive": 137868216,
+            "BytesDead": 192296595,
+            "BytesToCopy": 137868216,
+            "LivePages": 164355,
+            "AgeCommits": 36,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 582426,
+            "LiveRatioPPM": 417573,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          },
+          {
+            "GenerationID": 73,
+            "State": "sealed",
+            "FileIDs": [
+              2139095114
+            ],
+            "FileCount": 1,
+            "BytesTotal": 210988826,
+            "BytesLive": 210948378,
+            "BytesDead": 40448,
+            "BytesToCopy": 210948378,
+            "LivePages": 131531,
+            "AgeCommits": 0,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 191,
+            "LiveRatioPPM": 999808,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          },
+          {
+            "GenerationID": 74,
+            "State": "writable",
+            "FileIDs": null,
+            "FileCount": 0,
+            "BytesTotal": 0,
+            "BytesLive": 0,
+            "BytesDead": 0,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 0,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 0,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "writable_generation"
+          }
+        ],
+        "Candidates": [
+          {
+            "GenerationID": 72,
+            "State": "sealed",
+            "FileIDs": [
+              2139095113
+            ],
+            "FileCount": 1,
+            "BytesTotal": 330164811,
+            "BytesLive": 137868216,
+            "BytesDead": 192296595,
+            "BytesToCopy": 137868216,
+            "LivePages": 164355,
+            "AgeCommits": 36,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 582426,
+            "LiveRatioPPM": 417573,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          },
+          {
+            "GenerationID": 73,
+            "State": "sealed",
+            "FileIDs": [
+              2139095114
+            ],
+            "FileCount": 1,
+            "BytesTotal": 210988826,
+            "BytesLive": 210948378,
+            "BytesDead": 40448,
+            "BytesToCopy": 210948378,
+            "LivePages": 131531,
+            "AgeCommits": 0,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 191,
+            "LiveRatioPPM": 999808,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          }
+        ],
+        "CandidateGenerationIDs": [
+          72,
+          73
+        ],
+        "CandidateBytesTotal": 541153637,
+        "CandidateBytesLive": 348816594,
+        "CandidateBytesDead": 192337043,
+        "CandidateBytesToCopy": 348816594,
+        "CandidateLivePages": 295886,
+        "ExpectedReclaimBytes": 192337043,
+        "ExpectedReclaimRatioPPM": 355420,
+        "ExpectedReclaimPerByteCopiedPPM": 551398,
+        "Admission": "eligible"
+      },
+      "Selection": {
+        "GenerationIDs": [
+          72,
+          73
+        ],
+        "Generations": [
+          {
+            "GenerationID": 72,
+            "State": "sealed",
+            "FileIDs": [
+              2139095113
+            ],
+            "FileCount": 1,
+            "BytesTotal": 330164811,
+            "BytesLive": 137868216,
+            "BytesDead": 192296595,
+            "BytesToCopy": 137868216,
+            "LivePages": 164355,
+            "AgeCommits": 36,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 582426,
+            "LiveRatioPPM": 417573,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          },
+          {
+            "GenerationID": 73,
+            "State": "sealed",
+            "FileIDs": [
+              2139095114
+            ],
+            "FileCount": 1,
+            "BytesTotal": 210988826,
+            "BytesLive": 210948378,
+            "BytesDead": 40448,
+            "BytesToCopy": 210948378,
+            "LivePages": 131531,
+            "AgeCommits": 0,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 191,
+            "LiveRatioPPM": 999808,
+            "WholeGenerationGCEligible": false,
+            "Eligible": true,
+            "SkipReason": ""
+          }
+        ],
+        "BytesTotal": 541153637,
+        "BytesLive": 348816594,
+        "BytesDead": 192337043,
+        "BytesToCopy": 348816594,
+        "LivePages": 295886,
+        "ExpectedReclaimBytes": 192337043,
+        "ExpectedReclaimRatioPPM": 355420,
+        "ExpectedReclaimPerByteCopiedPPM": 551398
+      },
+      "Pack": {
+        "GenerationsRequested": 2,
+        "GenerationsMatched": 2,
+        "SourceGenerationIDs": [
+          72,
+          73
+        ],
+        "SourceFilesRequested": 2,
+        "SourceFileIDs": [
+          2139095113,
+          2139095114
+        ],
+        "SourceBytesTotal": 541153637,
+        "SourceBytesLive": 348816594,
+        "SourceBytesDead": 192337043,
+        "SourceBytesToCopy": 348816594,
+        "ExpectedReclaimBytes": 192337043,
+        "ExpectedReclaimRatioPPM": 355420,
+        "ExpectedReclaimPerByteCopiedPPM": 551398,
+        "LeafPagesCopied": 295886,
+        "BytesCopied": 1211949056,
+        "LeafFramesWritten": 20632,
+        "MaxLeafFrameK": 16,
+        "InternalPagesVisited": 4860,
+        "SubtreesPruned": 1,
+        "CreatedFileIDs": [
+          2139095116
+        ],
+        "CopyAttempts": 1,
+        "CopyAborts": 0,
+        "RetryCopyTimeNanos": 0,
+        "CopyTimeNanos": 4663660736,
+        "PublishWaitNanos": 206,
+        "PublishHoldNanos": 10772551966,
+        "PrivatePagesAllocated": 4860,
+        "PrivatePagesDiscarded": 0,
+        "ApplyStages": {
+          "SetupTimeNanos": 9113768,
+          "TreeRewriteTimeNanos": 4535911847,
+          "LeafSyncTimeNanos": 118754968,
+          "CopyCloseTimeNanos": 8993673,
+          "RevalidateTimeNanos": 1432,
+          "PromotionTimeNanos": 7152087,
+          "RelocationTimeNanos": 20729147,
+          "PageSyncTimeNanos": 0,
+          "DirectorySyncTimeNanos": 7098862,
+          "DirectorySyncWaitTimeNanos": 0,
+          "RegistrationTimeNanos": 48249,
+          "CollectionPublishTimeNanos": 121,
+          "FinalizeTimeNanos": 10785741949,
+          "PostWorkTimeNanos": 36806725,
+          "CleanupTimeNanos": 48737
+        },
+        "RetryApplyStages": {
+          "SetupTimeNanos": 0,
+          "TreeRewriteTimeNanos": 0,
+          "LeafSyncTimeNanos": 0,
+          "CopyCloseTimeNanos": 0,
+          "RevalidateTimeNanos": 0,
+          "PromotionTimeNanos": 0,
+          "RelocationTimeNanos": 0,
+          "PageSyncTimeNanos": 0,
+          "DirectorySyncTimeNanos": 0,
+          "DirectorySyncWaitTimeNanos": 0,
+          "RegistrationTimeNanos": 0,
+          "CollectionPublishTimeNanos": 0,
+          "FinalizeTimeNanos": 0,
+          "PostWorkTimeNanos": 0,
+          "CleanupTimeNanos": 0
+        },
+        "WallTimeNanos": 15540504633
+      },
+      "Ran": true,
+      "SkipReason": ""
+    },
+    {
+      "Plan": {
+        "CurrentCommitSeq": 700,
+        "CurrentGenerationID": 74,
+        "Generations": [
+          {
+            "GenerationID": 66,
+            "State": "deleted",
+            "FileIDs": [
+              2139095106
+            ],
+            "FileCount": 1,
+            "BytesTotal": 315023187,
+            "BytesLive": 0,
+            "BytesDead": 315023187,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 668,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "deleted_generation"
+          },
+          {
+            "GenerationID": 67,
+            "State": "deleted",
+            "FileIDs": [
+              2139095107
+            ],
+            "FileCount": 1,
+            "BytesTotal": 25822608,
+            "BytesLive": 0,
+            "BytesDead": 25822608,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 87,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "deleted_generation"
+          },
+          {
+            "GenerationID": 69,
+            "State": "retiring",
+            "FileIDs": [
+              2139095109
+            ],
+            "FileCount": 1,
+            "BytesTotal": 247225828,
+            "BytesLive": 0,
+            "BytesDead": 247225828,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 85,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 70,
+            "State": "retiring",
+            "FileIDs": [
+              2139095110
+            ],
+            "FileCount": 1,
+            "BytesTotal": 91293946,
+            "BytesLive": 0,
+            "BytesDead": 91293946,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 82,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 71,
+            "State": "retiring",
+            "FileIDs": [
+              2139095111
+            ],
+            "FileCount": 1,
+            "BytesTotal": 243206941,
+            "BytesLive": 0,
+            "BytesDead": 243206941,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 41,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "retiring_generation"
+          },
+          {
+            "GenerationID": 72,
+            "State": "sealed",
+            "FileIDs": [
+              2139095113
+            ],
+            "FileCount": 1,
+            "BytesTotal": 330164811,
+            "BytesLive": 0,
+            "BytesDead": 330164811,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 37,
+            "PinnedCount": 1,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "whole_generation_gc_candidate"
+          },
+          {
+            "GenerationID": 73,
+            "State": "sealed",
+            "FileIDs": [
+              2139095114
+            ],
+            "FileCount": 1,
+            "BytesTotal": 210988826,
+            "BytesLive": 0,
+            "BytesDead": 210988826,
+            "BytesToCopy": 0,
+            "LivePages": 0,
+            "AgeCommits": 1,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 1000000,
+            "LiveRatioPPM": 0,
+            "WholeGenerationGCEligible": true,
+            "Eligible": false,
+            "SkipReason": "whole_generation_gc_candidate"
+          },
+          {
+            "GenerationID": 74,
+            "State": "writable",
+            "FileIDs": [
+              2139095116
+            ],
+            "FileCount": 1,
+            "BytesTotal": 330173538,
+            "BytesLive": 330173538,
+            "BytesDead": 0,
+            "BytesToCopy": 330173538,
+            "LivePages": 1,
+            "AgeCommits": 0,
+            "PinnedCount": 0,
+            "DeadRatioPPM": 0,
+            "LiveRatioPPM": 1000000,
+            "WholeGenerationGCEligible": false,
+            "Eligible": false,
+            "SkipReason": "writable_generation"
+          }
+        ],
+        "Candidates": [],
+        "CandidateGenerationIDs": [],
+        "CandidateBytesTotal": 0,
+        "CandidateBytesLive": 0,
+        "CandidateBytesDead": 0,
+        "CandidateBytesToCopy": 0,
+        "CandidateLivePages": 0,
+        "ExpectedReclaimBytes": 0,
+        "ExpectedReclaimRatioPPM": 0,
+        "ExpectedReclaimPerByteCopiedPPM": 0,
+        "Admission": "no_candidates"
+      },
+      "Selection": {
+        "GenerationIDs": null,
+        "Generations": null,
+        "BytesTotal": 0,
+        "BytesLive": 0,
+        "BytesDead": 0,
+        "BytesToCopy": 0,
+        "LivePages": 0,
+        "ExpectedReclaimBytes": 0,
+        "ExpectedReclaimRatioPPM": 0,
+        "ExpectedReclaimPerByteCopiedPPM": 0
+      },
+      "Pack": {
+        "GenerationsRequested": 0,
+        "GenerationsMatched": 0,
+        "SourceGenerationIDs": null,
+        "SourceFilesRequested": 0,
+        "SourceFileIDs": null,
+        "SourceBytesTotal": 0,
+        "SourceBytesLive": 0,
+        "SourceBytesDead": 0,
+        "SourceBytesToCopy": 0,
+        "ExpectedReclaimBytes": 0,
+        "ExpectedReclaimRatioPPM": 0,
+        "ExpectedReclaimPerByteCopiedPPM": 0,
+        "LeafPagesCopied": 0,
+        "BytesCopied": 0,
+        "LeafFramesWritten": 0,
+        "MaxLeafFrameK": 0,
+        "InternalPagesVisited": 0,
+        "SubtreesPruned": 0,
+        "CreatedFileIDs": null,
+        "CopyAttempts": 0,
+        "CopyAborts": 0,
+        "RetryCopyTimeNanos": 0,
+        "CopyTimeNanos": 0,
+        "PublishWaitNanos": 0,
+        "PublishHoldNanos": 0,
+        "PrivatePagesAllocated": 0,
+        "PrivatePagesDiscarded": 0,
+        "ApplyStages": {
+          "SetupTimeNanos": 0,
+          "TreeRewriteTimeNanos": 0,
+          "LeafSyncTimeNanos": 0,
+          "CopyCloseTimeNanos": 0,
+          "RevalidateTimeNanos": 0,
+          "PromotionTimeNanos": 0,
+          "RelocationTimeNanos": 0,
+          "PageSyncTimeNanos": 0,
+          "DirectorySyncTimeNanos": 0,
+          "DirectorySyncWaitTimeNanos": 0,
+          "RegistrationTimeNanos": 0,
+          "CollectionPublishTimeNanos": 0,
+          "FinalizeTimeNanos": 0,
+          "PostWorkTimeNanos": 0,
+          "CleanupTimeNanos": 0
+        },
+        "RetryApplyStages": {
+          "SetupTimeNanos": 0,
+          "TreeRewriteTimeNanos": 0,
+          "LeafSyncTimeNanos": 0,
+          "CopyCloseTimeNanos": 0,
+          "RevalidateTimeNanos": 0,
+          "PromotionTimeNanos": 0,
+          "RelocationTimeNanos": 0,
+          "PageSyncTimeNanos": 0,
+          "DirectorySyncTimeNanos": 0,
+          "DirectorySyncWaitTimeNanos": 0,
+          "RegistrationTimeNanos": 0,
+          "CollectionPublishTimeNanos": 0,
+          "FinalizeTimeNanos": 0,
+          "PostWorkTimeNanos": 0,
+          "CleanupTimeNanos": 0
+        },
+        "WallTimeNanos": 0
+      },
+      "Ran": false,
+      "SkipReason": "plan_admission:no_candidates"
+    }
+  ],
+  "leaf_generation_gc": {
+    "GenerationsTotal": 7,
+    "GenerationsWritable": 1,
+    "GenerationsLive": 0,
+    "GenerationsRetiring": 2,
+    "GenerationsEligible": 0,
+    "GenerationsDeleted": 0,
+    "FilesDeleted": 0,
+    "BytesEligible": 0,
+    "BytesDeleted": 0
+  },
+  "index_vacuum": {
+    "AttemptID": 1,
+    "Phase": "rebuild",
+    "TotalDuration": 164479962,
+    "UserTreeDuration": 22801874,
+    "SystemReserveDuration": 586,
+    "CollectionBasisDuration": 15940,
+    "PreflushDuration": 40752218,
+    "CutoverDuration": 20115542,
+    "SystemTreeDuration": 21021,
+    "FinalPagerSyncDuration": 57335382,
+    "SwapPublishDuration": 13007803,
+    "MaxWriterPause": 77451442,
+    "PrecloneTraversalPages": 0,
+    "RecloneTraversalPages": 0,
+    "CutoverCloneTraversalPages": 0,
+    "DirtyDescriptors": 0,
+    "UserTailMutations": 0,
+    "UserTailPointMutations": 0,
+    "UserTailRangeMutations": 0,
+    "DeferredCutovers": 0,
+    "ConcurrentMutationAborts": 0,
+    "RecoverableSetCaptureDuration": 205854,
+    "RecoverableSetCaptureAttempts": 1,
+    "RecoverableSetCaptures": 1,
+    "RecoverableSetRecaptureAttempts": 0,
+    "RecoverableSetRecaptures": 0,
+    "RecoverableRoots": 2,
+    "OlderRootRebuildDuration": 23137983,
+    "OlderRootRebuilds": 1,
+    "OlderRootDurableResourceCaptureDuration": 28075,
+    "OlderRootDurableResourceCaptures": 1,
+    "OlderRootDurableResourceDescriptors": 19,
+    "OlderRootDurableResourceBytes": 1990886102,
+    "OlderRootExactCandidateScans": 0,
+    "OlderRootProjections": 1,
+    "OlderRootProjectionFallbacks": 0,
+    "OlderRootProjectionFallbackReason": "",
+    "OlderRootReusedNonValueLogDescriptors": 0,
+    "OlderRootUniqueExternalSegments": 0,
+    "DurableResourceCaptureDuration": 24381,
+    "DurableResourceCaptures": 1,
+    "DurableResourceDescriptors": 19,
+    "DurableResourceBytes": 2110071160,
+    "DurableResourceExactCandidateScans": 0,
+    "DurableResourceProjections": 1,
+    "DurableResourceProjectionFallbacks": 0,
+    "DurableResourceProjectionFallbackReason": "",
+    "OlderRootRebuiltPages": 4861,
+    "ReplacementPagerPages": 9736,
+    "ExactCandidateScan": false,
+    "ReusedNonValueLogDescriptors": 0,
+    "UniqueExternalSegments": 0,
+    "WorkCompleted": true,
+    "Canceled": false
+  },
+  "remaining_debt": {
+    "value_log_rewrite_segments": 4,
+    "value_log_rewrite_bytes": 18684,
+    "value_log_gc_segments": 0,
+    "value_log_gc_bytes": 0,
+    "leaf_pack_generations": 0,
+    "leaf_pack_bytes": 0,
+    "leaf_gc_generations": 2,
+    "leaf_gc_bytes": 541153637,
+    "zero_byte_value_log_files": 0,
+    "index_vacuum_required": false,
+    "index_vacuum_reason": "none",
+    "index_vacuum_total_pages": 9736,
+    "index_vacuum_user_pages": 4860,
+    "index_vacuum_user_span": 4860,
+    "index_vacuum_user_span_ratio_ppm": 1000000,
+    "index_vacuum_freelist_reclaimable_pages": 0,
+    "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+    "index_vacuum_collection_root_pages": 0,
+    "index_vacuum_collection_root_span": 0,
+    "index_vacuum_collection_root_span_ratio_ppm": 0
+  },
+  "fully_compacted": false,
+  "policy_fully_compacted": false,
+  "byte_minimized": false
+}

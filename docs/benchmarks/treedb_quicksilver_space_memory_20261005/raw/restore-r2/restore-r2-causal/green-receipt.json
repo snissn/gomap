@@ -1,0 +1,42 @@
+{
+  "head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+  "command": [
+    "go",
+    "test",
+    "-p",
+    "1",
+    "./TreeDB/db",
+    "-run",
+    "TestRebindDurableRootSnapshot|TestDurableRootPublicLayoutDictionary",
+    "-count",
+    "1",
+    "-v"
+  ],
+  "cwd": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2",
+  "started": 1791186785.1215775,
+  "finished": 1791186811.6889954,
+  "seconds": 26.567418098449707,
+  "rc": 0,
+  "environment": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "GOWORK": "off",
+    "GOFLAGS": "",
+    "GOENV": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/mnt/fast4tb/go-build-cache",
+    "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+    "GOMAXPROCS": "12",
+    "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp",
+    "CGO_ENABLED": "1"
+  },
+  "method_sha256": "62591b400d74ce74f9c03129d9ecb8bbe4ea44ce6154aef7f3de6f145afb6ef7",
+  "overlay": null,
+  "production_sha256": "619a407aaf74760b9048a1de226064434c63fa7613659294dc07291a8469fae2",
+  "test_sha256": {
+    "TreeDB/db/durable_root_side_store_recovery_supported_test.go": "b2454a97e54f1becf86cd18c4ecc86c0a0e5aabe220098225a413a61cc167a0e",
+    "TreeDB/db/durable_root_snapshot_rebind_test.go": "3e006c7624648598344bf13bad1d2e528885756bc231c6305564b0e4b1612201"
+  },
+  "stdout_sha256": "51cd49c5df5623ca81ae4efcac4221de3b07699af1f91b71b58572e77cc46a6b",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

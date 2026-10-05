@@ -1,0 +1,30 @@
+package main
+
+import (
+	"fmt"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	if len(os.Args) != 2 {
+		panic("expected exclusively-owned copied DB root")
+	}
+	root := os.Args[1]
+	for _, name := range []string{"dictdb", "templatedb"} {
+		side := filepath.Join(root, name)
+		if _, err := os.Stat(filepath.Join(side, "index.db")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			panic(err)
+		}
+		if err := backenddb.RebindDurableRootSnapshotLayoutV1(side, ""); err != nil {
+			panic(err)
+		}
+	}
+	if err := backenddb.RebindDurableRootSnapshotLayoutV1(filepath.Join(root, "maindb"), root); err != nil {
+		panic(err)
+	}
+	fmt.Println("COPIED_SNAPSHOT_REBOUND")
+}

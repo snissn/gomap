@@ -10,7 +10,7 @@ import re
 from statistics import median
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "493763cef652bb341c2d3ab33d44447fa9638f68f9e121ff73fa01b7ff85438c"
+INPUTS_SHA256 = "7061d6aa63dcbb66a3de535b7c086e57427ae3ac5de7345e6e20f0d28fa8b7b9"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -302,6 +302,126 @@ def public_matched(contract, raw):
             "records":records,"comparisons":comparisons}
 
 
+def restored_maintenance(contract, raw):
+    prefix = "restore-r2/"
+    read = lambda name: json.loads(raw[prefix + name])
+    fixed = contract["restore_r2"]
+    manifest = read("provisional-manifest-restore-r2.json")
+    require(manifest["provisional"] is True and manifest["sources"]["restore_r"]["head"] == fixed["head"],
+            "restored maintenance source identity differs")
+    for receipt in manifest["receipts"].values():
+        require(sha(raw[prefix + receipt["path"]]) == receipt["sha256"], "restored receipt binding differs")
+    source = read("receipts-restore-r2/source.json")
+    build = read("receipts-restore-r2/build.json")
+    native = read("receipts-restore-r2/native.json")
+    source_inputs = read("restore-r2-source-inputs.json")
+    equality = read("restore-r2-landed-source-equality.json")
+    require(equality["measured_head"] == fixed["head"] and equality["landed_head"] == fixed["landed_head"]
+            and equality["equal"] is True and equality["measured_tree"] == equality["landed_tree"] == fixed["tree"],
+            "restored landed source differs")
+    require(source["head"] == build["head"] == source_inputs["head"] == fixed["head"]
+            and source["files"] == source_inputs["files"] and source["compiled_project_inputs"]
+            and all(source["files"].get(p) == digest for p,digest in source["compiled_project_inputs"].items())
+            and source["go_list_sha256"] == sha(raw[prefix + "receipts-restore-r2/go-list-inputs.jsonstream"])
+            and source["freeze_script_sha256"] == sha(raw[prefix + "freeze-restore-r2.py"])
+            and source["producer_script_sha256"] == source["files"]["scripts/unified_bench_quicksilver_capture.py"],
+            "restored frozen compile inputs differ")
+    require({name:value["binary_sha256"] for name,value in build["binaries"].items()} == fixed["binaries"]
+            and all(step["rc"] == 0 and step["head"] == fixed["head"] for step in build["builds"].values())
+            and native["libraries"] == manifest["libraries"]
+            and build["restore_helper_source_sha256"] == fixed["restore_helper_source_sha256"]
+            == sha(raw[prefix + "maintenance-diagnostic-overlay/rebind-copy.go.txt"]), "restored build/helper differs")
+    causal = {}
+    for label in ["red", "green"]:
+        receipt = read("restore-r2-causal/" + label + "-receipt.json")
+        require(receipt["head"] == fixed["head"] and receipt["rc"] == (1 if label == "red" else 0)
+                and receipt["method_sha256"] == sha(raw[prefix + "restore-r2-causal.py"])
+                and receipt["finished"] > receipt["started"], "restored causal receipt differs")
+        for channel in ["stdout", "stderr"]:
+            require(receipt[channel + "_sha256"] == sha(raw[prefix + "restore-r2-causal/" + label + "-" + channel + ".txt"]),
+                    "restored causal log binding differs")
+        require(all(source["files"][name] == digest for name,digest in receipt["test_sha256"].items()),
+                "restored causal tests differ")
+        expected_overlay = read("restore-r2-causal/red-overlay.json") if label == "red" else None
+        require(receipt["overlay"] == expected_overlay, "restored causal overlay differs")
+        production = "TreeDB/db/durable_root_snapshot_rebind.go"
+        expected_production = (json.loads(raw["maintenance/receipts-baseline/source.json"])["files"][production]
+                               if label == "red" else source["files"][production])
+        require(receipt["production_sha256"] == expected_production, "restored causal production differs")
+        text = raw[prefix + "restore-r2-causal/" + label + "-stdout.txt"].decode()
+        for kind in ["dictionary", "template"]:
+            for layout in ["manifest-v1", "directory-v2"]:
+                require(("FAIL" if label == "red" else "PASS") +
+                        ": TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/" + kind + "/" + layout in text,
+                        "restored causal coverage incomplete")
+        causal[label] = receipt
+    packet = "restore-r2-batch-3m-8192-input/"
+    derived = read(packet + "run.json")
+    identity = read("maintenance-restore-r2-3m-batch8192/identity.json")
+    copy = derived["derived_copy"]
+    require(derived["source"] == identity["source"] == "restore_r" and copy["batch_size"] == 8192
+            and copy["copy"] == identity["database"] and derived["env"] == identity["environment"]
+            and identity["method_sha256"] == sha(raw[prefix + "maintenance-restore-r2-batch.py"])
+            and identity["treemap_sha256"] == fixed["binaries"]["treemap-restore-r2"]
+            and copy["restore_helper_sha256"] == fixed["binaries"]["rebind-owned-copy-restore-r2"]
+            and derived["candidate_manifest"]["sha256"] == sha(raw[prefix + "provisional-manifest-restore-r2.json"]),
+            "restored copy provenance differs")
+    # This is inherited baseline metadata, not a newly timed R2 profiling run.
+    original = json.loads(raw["maintenance/run.json"])
+    inherited = {k:v for k,v in derived.items() if k not in ["candidate_manifest", "derived_copy", "source", "command"]}
+    require(inherited == {k:v for k,v in original.items() if k not in ["source", "command"]}
+            and derived["command"][1:] == original["command"][1:], "inherited baseline metadata differs")
+    before_profile = json.loads(raw["baseline-3m-profile-stdout.json"])[0]
+    inherited_profile = read(packet + "stdout.json")[0]
+    require(inherited_profile["data_dir"] == copy["copy"] and before_profile["data_dir"] == copy["original"]
+            and {k:v for k,v in inherited_profile.items() if k != "data_dir"}
+            == {k:v for k,v in before_profile.items() if k != "data_dir"}, "inherited baseline stdout differs")
+    readonly = read(packet + "readonly-after-restore/receipt.json")
+    require(readonly["rc"] == 0 and readonly["unchanged"] is True and readonly["before"] == readonly["after"]
+            and readonly["binary_sha256"] == fixed["readonly_binary_sha256"]
+            and readonly["method_sha256"] == sha(raw[prefix + "verify-restore-r2-copy.py"]), "restored readonly proof differs")
+    require(readonly["proof"] == read(packet + "readonly-after-restore/stdout.json"), "restored readonly output differs")
+    oracle(readonly["proof"], contract)
+    base = "maintenance-restore-r2-3m-batch8192/"
+    commands = read(base + "commands.json")
+    labels = ["pre-maintenance-verify", "full", "full-verify", "exhaustive", "exhaustive-verify",
+              "exhaustive-second", "exhaustive-second-verify"]
+    require([c["label"] for c in commands] == labels and
+            all(c["rc"] == 0 and c["timed_out"] is False for c in commands)
+            and all(a["finished"] <= b["started"] for a,b in zip(commands,commands[1:])), "restored command order/status differs")
+    binary_root = "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/"
+    verify_command = [binary_root + "unified-bench-restore-r2"] + original["command"][1:-3] + ["-quicksilver-verify-dir", copy["copy"]]
+    attempts = []
+    for command in commands:
+        label = command["label"]
+        require(command["started"] >= max(b["finished"] for b in build["builds"].values()), "restored command predates build")
+        if label.endswith("verify"):
+            require(command["command"] == verify_command, "restored oracle command differs")
+            oracle(read(base + label + "-stdout.json"), contract)
+            continue
+        compact = read(base + label + "-stdout.json")
+        mode = label.split("-")[0]
+        expected = [binary_root + "treemap-restore-r2", "compact", copy["copy"], "-rw", "-json", "-mode", mode,
+                    "-sync-each-phase", "-leaf-pack-max-passes", "64", "-rewrite-batch-size", "8192"]
+        require(command["command"] == expected and compact["mode"] == mode and compact["dry_run"] is False,
+                "restored compact command/mode differs")
+        flags = {k:compact[k] for k in ["fully_compacted", "policy_fully_compacted", "byte_minimized"]}
+        require(all(v is False for v in flags.values()), "restored minimum/completion flags changed")
+        cost = command_summary(command, raw[prefix + base + label + "-stderr.txt"].decode())
+        require(cost["time_elapsed_seconds"] is not None and cost["kernel_process_rss_hwm_bytes"] is not None,
+                "restored cost measurement missing")
+        pre = census(read(base + label + "-before-oracle-census.json"))
+        post = census(read(base + label + "-after-census.json"))
+        attempts.append(dict(label=label, **cost, flags=flags, remaining_debt=compact["remaining_debt"],
+                             phases=compact["phases"], pre_oracle=pre, post_oracle=post,
+                             oracle_delta={key:post[key]-pre[key] for key in ["apparent","allocated"]}))
+    return {"status":"MEASURED_PROVISIONAL", "source_head":fixed["head"], "landed_source":equality, "binaries":fixed["binaries"],
+            "environment":identity["environment"], "causal":causal,"restored_copy":copy,
+            "input_metadata":"inherited baseline run/stdout; not R2 profiling measurements",
+            "readonly_restored_copy":readonly, "initial_states":[census(read(base + name + "-census.json"))
+                for name in ["final-before-verify", "before-maintenance"]], "attempts":attempts}
+
+
 def extract(contract, raw):
     def read(name):
         return json.loads(raw[name])
@@ -430,6 +550,7 @@ def extract(contract, raw):
                            "maintenance_binary_binding": "post-measurement bit-identical reconstruction; original build receipt missing"},
             "fixture": baseline["config"], "storage": storage, "pending_packets": pending_packets,
             "public_matched": public_matched(contract, raw),
+            "restored_maintenance": restored_maintenance(contract, raw),
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
                                "oracle_apparent_delta_bytes": storage[3]["apparent"]-after["apparent"],
@@ -447,7 +568,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "7a49969c48b913e5bd3212f4e06cb8e6af5531f5f36c1ec1d734f9ba3e118bb1"
+REPORT_PROSE_SHA256 = "cc009ea60320b2386b251f0aa8e15ab34f08b149610c8fca768da14d4ebb3c92"
 
 
 def report(result, template=None):
@@ -497,6 +618,21 @@ def report(result, template=None):
         [[name, packet["expected_rows"], packet["observed_rows"], "profiled structural diagnostic" if "structural" in name else
           ("profiled public pair" if packet["profiled"] else "unprofiled public pairs")]
          for name, packet in result["pending_packets"].items()])
+    restored = result["restored_maintenance"]
+    rows = [[item["label"], item["time_elapsed_seconds"], f"{item['receipt_elapsed_seconds']:.3f}",
+             item["kernel_process_rss_hwm_bytes"],
+             f"{item['sampled_disk_hwm_including_wal']['apparent']:,} / {item['sampled_disk_hwm_including_wal']['allocated']:,}",
+             item["disk_sample_count"]] for item in restored["attempts"]]
+    blocks["restored_costs"] = table(["R2 attempt, batch 8192", "GNU time s", "Receipt s", "Process RSS high-water bytes",
+                                    "Sampled disk maximum including WAL, apparent / allocated", "Disk samples"], rows)
+    states = restored["initial_states"] + [state for item in restored["attempts"] for state in [item["pre_oracle"], item["post_oracle"]]]
+    blocks["restored_storage"] = table(["R2 state", "Dictionary", "Outer leaves", "User values", "Index", "Metadata", "WAL", "Total excluding WAL"],
+        [[s["label"]] + [f"{s['domains'][n]['apparent']:,} / {s['domains'][n]['allocated']:,}" for n in domains] +
+         [f"{s['apparent_excluding_wal']:,} / {s['allocated_excluding_wal']:,}"] for s in states])
+    blocks["restored_debt"] = table(["R2 attempt", "Leaf-GC debt bytes", "Leaf generations", "Rewrite segments", "Rewrite stale bytes", "Oracle apparent / allocated delta"],
+        [[item["label"], item["remaining_debt"]["leaf_gc_bytes"], item["remaining_debt"]["leaf_gc_generations"],
+          item["remaining_debt"]["value_log_rewrite_segments"], item["remaining_debt"]["value_log_rewrite_bytes"],
+          f"{item['oracle_delta']['apparent']:,} / {item['oracle_delta']['allocated']:,}"] for item in restored["attempts"]])
     public = result["public_matched"]
     def interval(values, digits=3):
         return f"{median(values):,.{digits}f} [{min(values):,.{digits}f}, {max(values):,.{digits}f}]"

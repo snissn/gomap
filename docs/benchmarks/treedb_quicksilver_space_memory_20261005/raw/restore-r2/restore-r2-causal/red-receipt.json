@@ -1,0 +1,49 @@
+{
+  "head": "eaa0019ed65b2dc90d9406ca7371502cf17c53eb",
+  "command": [
+    "go",
+    "test",
+    "-p",
+    "1",
+    "-overlay",
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/restore-r2-causal/red-overlay.json",
+    "./TreeDB/db",
+    "-run",
+    "^TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority$",
+    "-count",
+    "1",
+    "-v"
+  ],
+  "cwd": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline",
+  "started": 1791186764.2101007,
+  "finished": 1791186785.1212425,
+  "seconds": 20.911142110824585,
+  "rc": 1,
+  "environment": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "GOWORK": "off",
+    "GOFLAGS": "",
+    "GOENV": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/mnt/fast4tb/go-build-cache",
+    "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+    "GOMAXPROCS": "12",
+    "TMPDIR": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp",
+    "CGO_ENABLED": "1"
+  },
+  "method_sha256": "62591b400d74ce74f9c03129d9ecb8bbe4ea44ce6154aef7f3de6f145afb6ef7",
+  "overlay": {
+    "Replace": {
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/TreeDB/db/durable_root_side_store_recovery_supported_test.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2/TreeDB/db/durable_root_side_store_recovery_supported_test.go",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/TreeDB/db/durable_root_snapshot_rebind_test.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/source-restore-r2/TreeDB/db/durable_root_snapshot_rebind_test.go"
+    }
+  },
+  "production_sha256": "a5f0bb1f871aa1b5ac6c3325dc0d7f32da2d71c9a41f604c8dc4e1e8fd01a861",
+  "test_sha256": {
+    "TreeDB/db/durable_root_side_store_recovery_supported_test.go": "b2454a97e54f1becf86cd18c4ecc86c0a0e5aabe220098225a413a61cc167a0e",
+    "TreeDB/db/durable_root_snapshot_rebind_test.go": "3e006c7624648598344bf13bad1d2e528885756bc231c6305564b0e4b1612201"
+  },
+  "stdout_sha256": "8541d9b83e91c928f26585a8028756c00689321d1644316fe39e80a132aa7769",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
