@@ -207,8 +207,15 @@ func mixedTruthForProfile(ctx context.Context, in *recallInput, baseline recallR
 	}
 	p := mixedPrefix{Prefix: prefix, PopulationRows: r.PopulationRows, PopulationSHA256: r.PopulationSHA256}
 	for i, q := range r.Queries {
-		if profile != mixedProfileChangingTop10 && !pacedSameTruth(q.Truth, baseline.Queries[i].Truth) {
+		same := pacedSameTruth(q.Truth, baseline.Queries[i].Truth)
+		if profile != mixedProfileChangingTop10 && !same {
 			return r, p, fmt.Errorf("query%s canonical top10 changes at mixed prefix%d", q.QueryID, prefix)
+		}
+		if same {
+			// Full canonical ID/score equality was just proved. Reuse the
+			// immutable admitted row so validation can recognize identical truth.
+			q.Truth = baseline.Queries[i].Truth
+			r.Queries[i].Truth = q.Truth
 		}
 		p.Truth = append(p.Truth, q.Truth)
 	}
@@ -426,6 +433,8 @@ func mixedValidatePrefixProof(q *recallQuery, response public.SearchResponseV1, 
 		}
 	}
 	minimumHits := 10
+	var countedTruth []public.NeighborV1
+	countedHits := 0
 	for prefix := lower; prefix <= upper; prefix++ {
 		p := &r.Prefixes[prefix]
 		if qi >= len(p.Changed) || qi >= len(p.Truth) || len(p.Truth[qi]) != 10 || len(p.Changed[qi]) != len(changed) {
@@ -455,14 +464,19 @@ func mixedValidatePrefixProof(q *recallQuery, response public.SearchResponseV1, 
 			proof.Matched = prefix
 		}
 		proof.CompatibleMask |= 1 << uint(prefix)
-		hits := 0
-		for _, n := range response.Neighbors {
-			for _, want := range p.Truth[qi] {
-				if n.ID == want.ID {
-					hits++
-					break
+		truth := p.Truth[qi] // both rows have the already-checked length ten
+		hits := countedHits
+		if countedTruth == nil || &countedTruth[0] != &truth[0] {
+			hits = 0
+			for _, n := range response.Neighbors {
+				for _, want := range truth {
+					if n.ID == want.ID {
+						hits++
+						break
+					}
 				}
 			}
+			countedTruth, countedHits = truth, hits
 		}
 		minimumHits = min(minimumHits, hits)
 	}

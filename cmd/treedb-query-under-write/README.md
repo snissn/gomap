@@ -672,8 +672,12 @@ setup work, excluded from measured read latency/QPS. Changed-prefix planning and
 quiescent checks reuse the sixteen admitted canonical scorers; ordinary exported
 baseline admission still prepares and verifies them independently. The measured
 validator uses prepared scorers, ten-neighbor duplicate/order checks, four
-changed-ID entries and at most seven truth rows. It constructs no per-read maps,
-truth slices or population copies. Existing response byte encoding and private
+changed-ID entries and at most seven truth rows. After full canonical ID/score
+bit equality is proved, prefix planning reuses immutable admitted truth rows.
+Validation reuses a previous compatible row's hit count only for the same slice
+identity; distinct truths still contribute independently to the minimum,
+regardless of the profile label. It constructs no per-read maps, truth slices
+or population copies. Existing response byte encoding and private
 retention remain included in the timed read call. Post-join revalidation borrows
 those retained responses and updates existing recall scalars. It allocates the
 bounded prefix receipt array and encodes one attempt at a time to recompute final

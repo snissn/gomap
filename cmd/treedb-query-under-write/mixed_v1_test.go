@@ -105,6 +105,11 @@ func TestMixedFullPrefixTruthAndSupersessionV1(t *testing.T) {
 		if p.Top10SHA256 != r.Prefixes[0].Top10SHA256 {
 			t.Fatal("planned top10 changed")
 		}
+		for qi, truth := range p.Truth {
+			if &truth[0] != &admission.Queries[qi].Truth[0] {
+				t.Fatal("proved invariant truth did not reuse immutable admission row")
+			}
+		}
 	}
 	changed := r.Writes[0]
 	copyRequest := *changed.Replace
@@ -255,6 +260,9 @@ func mixedAmbiguousFixtureV2(t testing.TB) (recallInput, mixedReport, public.Sea
 	}
 	if pacedSameTruth(r.Prefixes[0].Truth[0], r.Prefixes[1].Truth[0]) {
 		t.Fatal("fixture failed to change full canonical top10")
+	}
+	if r.Profile != "" || &r.Prefixes[0].Truth[0][0] == &r.Prefixes[1].Truth[0][0] {
+		t.Fatal("distinct changed truth must bypass reuse even with omitted profile")
 	}
 	return in, r, response, state
 }
