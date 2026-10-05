@@ -949,13 +949,27 @@ the error; successful DBs are removed unless `-keep` is supplied.
 
 Optional `-quicksilver-churn-rounds 2` adds bounded write/automatic-maintenance
 characterization after the ordinary measured phases and final reopen proof.
-It reuses one cached public TreeDB owner across rounds: restore generic records,
-repeat the existing mutations/deleted-key preparation, checkpoint, pause
-(default `-quicksilver-churn-pause 6s`), and run the full oracle each round.
+It reuses one cached public TreeDB owner across rounds. The default
+`-quicksilver-churn-shape full-refresh` restores the whole original population
+and repeats deleted-key preparation, retaining the existing stress workload.
+`-quicksilver-churn-shape sparse` restores only original update/delete/overwrite
+targets before the same mutation sequence; it excludes insert targets and leaves
+setup deletes absent. Inserts repeat existing disjoint identities in both shapes.
+Each round checkpoints, pauses (default `-quicksilver-churn-pause 6s`), and runs
+the full oracle. No automatic maintenance is forced.
 Only realistic cached public TreeDB supports it; rounds are bounded to 1..32
 and pauses to positive durations up to 1m, checked before loading. The additive
 `maintenance_churn` result separates write/checkpoint/pause/proof wall time,
 engine stats, Go heap, supported RSS and exact final files after clean close.
+It labels the shape and repeated insert semantics, counts restored keys/commits,
+and timestamps existing memory snapshots with `captured_at_unix_nano`.
+Each round also records `pause_started_unix_nano` and `pause_finished_unix_nano`
+at the actual pause boundaries; `pause_seconds` retains the monotonic elapsed
+duration. The collector rejects unordered/out-of-round boundaries or a wall
+versus monotonic duration difference above 1 millisecond. These stamps identify
+the quiet interval for co-timed RSS observations; apply the frozen boundary
+exclusion and require actual interior samples before claiming quiet residency.
+They add no maintenance work and do not change phase/profile names.
 Ordinary `final_files` remains the census before the ordinary final reopen;
 timed reads, report fields and phase artifact names keep their existing meaning.
 Whole-process HWM, block/mutex and trace include enabled rounds. This is a
@@ -978,6 +992,43 @@ The ordinary suite and its profile artifact names remain unchanged.
 The native capture script also accepts an optional boolean `keep` per cell
 (default false), validating that the retained database is under its recorded
 working database directory.
+
+Use `-quicksilver-measure-dir <retained-data-dir>` to measure the operator-selected
+final fixture after maintenance without loading or restoring it. Supply one
+supported engine, the original realistic fixture flags, and the same format,
+profile, compression and CRC settings. A nonempty marker is required before
+open; full expected value bytes/misses and a live-key census must pass before
+any workload writes. The same oracle runs after the final checkpoint/reopen.
+The JSON labels this retained state and the **idempotent repeated writer**:
+insert identities already exist and are SET again, so its insert count describes
+scheduled mutations rather than newly inserted data. Deleted original hit targets
+advance to surviving originals; the deleted miss class includes both setup and
+mutation deletes. Actual hit/miss and distinct counts reflect those identities.
+The existing owned `Get`, snapshot batching, paced writer and ACK behavior apply.
+The supplied directory survives success, cancellation and failure even without
+`-keep`. Churn and verification-only modes cannot be combined with measurement.
+An initial checkpoint/load/reopen is absent and reports zero; canonical read and
+final checkpoint profile filenames remain unchanged. Explicitly requesting an
+initial checkpoint profile in this mode fails. Use separate profile output paths.
+
+The native capture plan accepts `churn_shape` with enabled churn and an absolute
+`measure_dir` for retained measurement. Each retained directory may appear once
+per plan (one repeat); prepare independent copies for separate cells. Validation
+binds its canonical path, registered flags, effective fixture, oracle counts and
+zero setup timings, and requires hits to match present requests in all retained
+phases. It expects no initial checkpoint profile for this mode.
+
+Optional per-cell `rss_sample_interval_ms` (integer 1..60000) records co-timed Linux
+`/proc` RSS, anonymous, file and shared-memory bytes in `rss_samples.jsonl`, with
+absolute start/end timestamps and a sampling summary. Keep the same interval for
+comparisons. The small `scripts/owned_process_rss.py` helper also accepts a
+caller-validated native `treemap` command directly; callers retain responsibility
+for source/binary attestation. It samples only its owned binary or the direct
+`/usr/bin/time -v` child matching that binary's inode/device, and reaps the owned
+launch on cancellation/failure. No unrelated process is sampled. Zero samples or
+observation errors fail capture validation and retain artifacts. Sample maxima
+are not process HWM: raw `/usr/bin/time -v` stderr remains separate. Observation
+work belongs to capture overhead, not a product improvement claim.
 
 The suite prints its effective settings banner on stderr and a JSON array on
 stdout. With `-profile-dir`, benchprof prints artifact notices on stderr and

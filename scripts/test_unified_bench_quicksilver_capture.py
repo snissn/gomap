@@ -63,22 +63,32 @@ class CaptureRehearsal(unittest.TestCase):
                 capture.churn_settings(cell)
         packet = report()
         cell = dict(engine='treedb', keys=40000, reads=10000, churn_rounds=2)
-        packet['config'].update(churn_rounds=2, churn_pause_ns=6000000000)
-        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '2', 'quicksilver-churn-pause': '6s', 'max-wall': '30m12s'})
-        snapshot = dict(process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
+        packet['config'].update(churn_rounds=2, churn_pause_ns=6000000000,churn_shape="full-refresh")
+        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '2', 'quicksilver-churn-pause': '6s', 'max-wall': '30m12s', 'quicksilver-churn-shape':'full-refresh'})
+        snapshot = dict(captured_at_unix_nano=1,process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
                         engine_stats=packet['final_stats'])
-        round = dict(round=1, restored_keys=40000, mutation_targets=40000, mutation_commit_batches=160,
+        round = dict(round=1, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                      mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                      wall_seconds=10., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                     pause_seconds=6., before=snapshot, after=snapshot)
-        packet['maintenance_churn'] = dict(label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
-                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2)],
+                     pause_seconds=6., pause_started_unix_nano=1000000001, pause_finished_unix_nano=7000000001,
+                     before=snapshot, after=dict(snapshot, captured_at_unix_nano=8000000001))
+        packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
+                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2, pause_started_unix_nano=11000000001, pause_finished_unix_nano=17000000001,
+                                                              before=dict(snapshot, captured_at_unix_nano=10000000001),
+                                                              after=dict(snapshot, captured_at_unix_nano=18000000001))],
                                           final_files_after_close={'maindb/index.db': 4096})
         metadata = dict(env={'TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE': '1'})
         with tempfile.TemporaryDirectory() as temp:
             capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
             for section, field, value in ((round, 'verified_keys', 1), (round, 'round', 2),
                                            (round, 'pause_seconds', 5.), (round, 'mutation_commit_batches', 1),
+                                           (round, 'pause_started_unix_nano', True), (round, 'pause_started_unix_nano', 0),
+                                           (round, 'pause_finished_unix_nano', float('inf')),
+                                           (round, 'pause_finished_unix_nano', 2**63),
+                                           (round, 'pause_finished_unix_nano', 999999999),
+                                           (round, 'pause_finished_unix_nano', 7002000001),
+                                           (round, 'pause_started_unix_nano', -1),
+                                           (snapshot, 'captured_at_unix_nano', 1000000002),
                                            (snapshot, 'process_rss_supported', False),
                                            (packet['maintenance_churn'], 'leaf_generation_pack_maintenance_env', '')):
                 original = section[field]
@@ -86,6 +96,25 @@ class CaptureRehearsal(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
                 section[field] = original
+            end = round['pause_finished_unix_nano']
+            round['pause_finished_unix_nano'] = end+500000
+            capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['pause_finished_unix_nano'] = end
+            after = round['after']['captured_at_unix_nano']
+            round['after']['captured_at_unix_nano'] = round['pause_finished_unix_nano']-1
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['after']['captured_at_unix_nano'] = after
+            second = packet['maintenance_churn']['rounds'][1]
+            second_start = second['pause_started_unix_nano']
+            second['pause_started_unix_nano'] = round['pause_started_unix_nano']
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            second['pause_started_unix_nano'] = second_start
+            marker = round.pop('pause_started_unix_nano')
+            with self.assertRaises(KeyError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['pause_started_unix_nano'] = marker
             original = packet['registered_cli_flags']['max-wall']
             packet['registered_cli_flags']['max-wall'] = '30m0s'
             with self.assertRaises(AssertionError):
@@ -94,6 +123,38 @@ class CaptureRehearsal(unittest.TestCase):
             packet['maintenance_churn']['rounds'].pop()
             with self.assertRaises(AssertionError):
                 capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+
+    def test_sparse_and_retained_settings(self):
+        self.assertEqual(capture.churn_settings(dict(engine='treedb',churn_rounds=2,churn_shape='sparse')), (2,6000000000))
+        for cell in (dict(engine='treedb',churn_shape='sparse'), dict(engine='treedb',churn_rounds=2,churn_shape='wrong')):
+            with self.assertRaises(AssertionError):
+                capture.churn_settings(cell)
+        for interval in (0,True,60001,'100'):
+            with self.assertRaises(AssertionError):
+                capture.sampling_interval(dict(rss_sample_interval_ms=interval))
+        with tempfile.TemporaryDirectory() as temp:
+            retained=pathlib.Path(temp)/'fixture'
+            retained.mkdir()
+            cell=dict(engine='treedb',keys=40000,reads=10000,measure_dir=str(retained))
+            with self.assertRaises(AssertionError):
+                capture.retained_settings(cell)
+            (retained/'maindb').mkdir()
+            (retained/'maindb/index.db').write_bytes(b'marker')
+            packet=report()
+            packet['config'].update(final_fixture=True,barrier_policy='retained pre-oracle; final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters')
+            packet.update(data_dir=str(retained),measurement_state='retained final fixture; pre/post full oracle; no population reload or restore',
+                          writer_semantics='idempotent repeated mutation schedule; insert identities already exist and are SET again',
+                          load_seconds=0,deleted_preparation_seconds=0,initial_checkpoint_ms=0,reopen_ms=0,initial_verified_misses=90400)
+            packet['registered_cli_flags']['quicksilver-measure-dir']=str(retained)
+            metadata=dict(env={})
+            capture.validate([packet],cell,pathlib.Path(temp),{},metadata)
+            self.assertEqual(metadata['retained_fixture']['directory'],str(retained.resolve()))
+            packet['initial_verified_misses']=80400
+            with self.assertRaises(AssertionError):
+                capture.validate([packet],cell,pathlib.Path(temp),{},metadata)
+            for bad in (dict(cell,churn_rounds=1),dict(cell,case='structured256'),dict(cell,measure_dir='relative')):
+                with self.assertRaises(AssertionError):
+                    capture.retained_settings(bad)
 
     def test_churn_pause_pair_preflight(self):
         for text, ns in (('6s', 6000000000), ('1m', 60000000000), ('1m0s', 60000000000),
@@ -135,16 +196,19 @@ class CaptureRehearsal(unittest.TestCase):
                     churn_pause='1m0s', churn_pause_ns=60000000000)
         self.assertEqual(capture.capture_wall_limit(cell), '1h2m0s')
         packet = report()
-        packet['config'].update(churn_rounds=32, churn_pause_ns=60000000000)
+        packet['config'].update(churn_rounds=32, churn_pause_ns=60000000000,churn_shape="full-refresh")
         packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '32',
-                                               'quicksilver-churn-pause': '1m0s', 'max-wall': '1h2m0s'})
-        snapshot = dict(process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
+                                               'quicksilver-churn-pause': '1m0s', 'max-wall': '1h2m0s', 'quicksilver-churn-shape':'full-refresh'})
+        snapshot = dict(captured_at_unix_nano=1,process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
                         engine_stats=packet['final_stats'])
-        rounds = [dict(round=i, restored_keys=40000, mutation_targets=40000, mutation_commit_batches=160,
+        rounds = [dict(round=i, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                        mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                        wall_seconds=64., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                       pause_seconds=60., before=snapshot, after=snapshot) for i in range(1, 33)]
-        packet['maintenance_churn'] = dict(label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
+                       pause_seconds=60., pause_started_unix_nano=(i-1)*70000000000+1000000001,
+                       pause_finished_unix_nano=(i-1)*70000000000+61000000001,
+                       before=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+1),
+                       after=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+62000000001)) for i in range(1, 33)]
+        packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
                                           leaf_generation_pack_maintenance_env='', rounds=rounds,
                                           final_files_after_close={'maindb/index.db': 4096})
         with tempfile.TemporaryDirectory() as temp:
@@ -173,6 +237,8 @@ class CaptureRehearsal(unittest.TestCase):
 
     def test_process_capture_rejects_wrong_contract_and_native_identity_keeps_raw(self):
         real_run = subprocess.run
+        controls = dict(GOMEMLIMIT='off', GOGC='100', GOMAXPROCS='12',
+                        TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824')
 
         def timed_run(command, **kwargs):
             if command[0] == '/usr/bin/ldd':
@@ -186,11 +252,21 @@ class CaptureRehearsal(unittest.TestCase):
                     library.write_bytes(b'changed after manifest preflight')
                 kwargs['stdout'].write(f'linux-vdso.so.1 (0x1234)\nlibc.so.6 => {resolved} (0x2345)\n{loader} (0x3456)\n')
                 return subprocess.CompletedProcess(command, 0)
+            self.assertEqual({k: kwargs['env'][k] for k in controls}, controls)
             self.assertEqual(command[:3], ['/usr/bin/time', '-v', str(root/'bin'/'fake-bench')])
             # Controlled ELF/ldd fixture avoids a native build. Execute its output
             # producer in a fresh real Python process; no claim of native timing.
             kwargs['env'] = {k: v for k, v in kwargs['env'].items() if not k.startswith('LD_')}
             return real_run([sys.executable, str(root/'fake-engine.py'), *command[3:]], **kwargs)
+
+        def sampled_run(command,expected_executable,sample_path,interval_ms,**kwargs):
+            self.assertEqual(expected_executable,binary)
+            self.assertEqual(interval_ms,100)
+            result=timed_run(command,**kwargs)
+            sample_path.write_text('{"fake_rehearsal_only":true}\n')
+            summary=dict(complete=scenario!='sampling-error',samples=1,interval_ms=interval_ms)
+            pathlib.Path(str(sample_path)+'.summary.json').write_text(json.dumps(summary))
+            return result,summary
 
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -204,15 +280,19 @@ class CaptureRehearsal(unittest.TestCase):
             other.write_bytes(b'unapproved runtime')
             receipt = root/'receipt.json'
             receipt.write_text('{"scope":"fake-process rehearsal only"}')
-            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root)}, libraries={},
+            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root), 'GOMEMLIMIT': '2GiB',
+                                       'GOGC': '25', 'TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES': '77'}, libraries={},
                             sources={'fake': dict(head='0'*40, binary='fake-bench', binary_sha256=capture.sha256(binary))},
                             receipts={role: dict(path='receipt.json', sha256=capture.sha256(receipt)) for role in ('source', 'build', 'native', 'runner')})
             manifest_path, plan_path = root/'manifest.json', root/'plan.json'
             cell = dict(label='fake', source='fake', engine='treedb', keys=40000)
             ratio_scenarios = ('ratio-mixed', 'ratio-concurrent', 'zero', 'full')
-            for scenario in ('dynamic', 'static', 'tiny', 'commits', *ratio_scenarios, 'wrong-path', 'wrong-hash', 'ambient-preload', 'manifest-audit', 'script'):
+            for scenario in ('dynamic', 'static', 'tiny', 'sampling', 'sampling-error', 'commits', *ratio_scenarios, 'wrong-path', 'wrong-hash', 'ambient-preload', 'manifest-audit', 'script'):
                 commits = 40 if scenario == 'commits' else 160
-                accepted = scenario in ('dynamic', 'static', 'tiny')
+                accepted = scenario in ('dynamic', 'static', 'tiny', 'sampling')
+                cell.pop('rss_sample_interval_ms',None)
+                if scenario.startswith('sampling'):
+                    cell['rss_sample_interval_ms']=100
                 binary.write_bytes(b'#!/bin/sh\n' if scenario == 'script' else b'\x7fELFcontrolled test placeholder')
                 manifest['sources']['fake'].update(linkage='static' if scenario in ('static', 'script') else 'dynamic', binary_sha256=capture.sha256(binary))
                 library.write_bytes(b'approved runtime')
@@ -232,8 +312,9 @@ class CaptureRehearsal(unittest.TestCase):
                 (root/'payload.json').write_text(json.dumps([packet]))
                 plan_path.write_text(json.dumps(dict(output=scenario, cells=[cell])))
                 clean_loader = {k: '' for k in os.environ if k.startswith('LD_')}
+                clean_loader.update(GOMEMLIMIT='512MiB', GOGC='50')
                 clean_loader['LD_PRELOAD'] = '/injected.so' if scenario == 'ambient-preload' else ''
-                with mock.patch.dict(os.environ, clean_loader), mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run):
+                with mock.patch.dict(os.environ, clean_loader), mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run), mock.patch.object(capture, 'run_with_rss', sampled_run):
                     if accepted:
                         capture.main()
                     else:
@@ -242,8 +323,9 @@ class CaptureRehearsal(unittest.TestCase):
                 directory = root/scenario/'1-fake'
                 metadata = json.loads((directory/'run.json').read_text())
                 self.assertEqual(metadata.get('validated', False), accepted)
+                self.assertEqual({k: metadata['env'][k] for k in controls}, controls)
                 self.assertEqual(metadata['plan_sha256'], hashlib.sha256(plan_path.read_bytes()).hexdigest())
-                if accepted or scenario == 'commits' or scenario in ratio_scenarios:
+                if accepted or scenario in ('commits','sampling-error') or scenario in ratio_scenarios:
                     self.assertEqual(metadata['rc'], 0)
                     self.assertEqual(json.loads((directory/'stdout.json').read_text())[0]['mutation_commit_batches'], commits)
                     self.assertIn('fake raw stderr', (directory/'stderr.log').read_text())
@@ -258,6 +340,14 @@ class CaptureRehearsal(unittest.TestCase):
                     self.assertNotIn('rc', metadata)
                     self.assertEqual((directory/'stdout.json').read_text(), '')
                     self.assertIn('error', metadata)
+                self.assertEqual(metadata['rss_observer_sha256'],capture.sha256(pathlib.Path(capture.owned_process_rss.__file__)))
+                if scenario.startswith('sampling'):
+                    self.assertEqual(metadata['rss_sampling']['complete'],accepted)
+                    self.assertEqual(metadata['rss_sampling']['samples'],1)
+                    self.assertTrue((directory/'rss_samples.jsonl').is_file())
+                    self.assertTrue((directory/'rss_samples.jsonl.summary.json').is_file())
+                    if not accepted:
+                        self.assertIn('incomplete owned-process RSS sampling',metadata['error'])
                 resolution = metadata['native_resolution']
                 self.assertEqual(resolution['loader_env']['LD_LIBRARY_PATH'], str(root))
                 if scenario in ('ambient-preload', 'manifest-audit', 'script'):
