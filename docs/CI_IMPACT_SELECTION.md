@@ -118,23 +118,41 @@ retention bound its lifetime.
 
 ## Refresh and qualification
 
-After reviewing changed consumers, workflow commands, contexts, or membership:
+After reviewing changed consumers, workflow commands, contexts, or membership,
+stage only the intended source and workflow paths with `git add -- <paths>`,
+including intended additions/deletions and edits to the maintenance scripts.
+Review `git diff --cached` before refreshing. Use an isolated worktree when the
+primary checkout contains unrelated work; the command never stages or resets it.
+
+Then refresh and check the intended change:
 
 ```sh
 uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py
+uv run --with pyyaml python .github/scripts/test_refresh_ci_impact_inventory.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_ci_impact.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_windows_core_headroom.py
+git add -- .github/ci/ci_impact.json
 ```
 
 The maintenance command deterministically refreshes source bindings, compact
-entrypoint inventories, and original members from current files. It preserves
-reviewed ownership rules and flags new owners as `UNREVIEWED`. It does not accept
-new consumers or activate authority. Runtime qualification rejects unresolved
+entrypoint inventories, and original members from one immutable `git write-tree`
+snapshot of the index. Both source blob fingerprints and workflow names/bytes
+come from that same tree. Untracked files and unstaged edits are excluded, so a
+partially staged file uses its staged bytes; staged additions/deletions are
+included. An unmerged or unsupported index is rejected before writing the
+manifest. Reviewed ownership/rules remain the explicit working-manifest input;
+the command preserves them and flags new owners as `UNREVIEWED`. It does not
+accept new consumers or activate authority. Runtime qualification rejects unresolved
 owners and selectors that name no inventoried workflow/job. Both `.yml` and
 `.yaml` workflows are discovered. Review the changed footprint rules,
 dynamic-reader inventory, variants, owners, source fingerprint, and known gaps
-alongside the diff; commit the reviewed manifest in the same PR. PyYAML is only a
+alongside the staged diff; resolve owners/rules and rerun before committing the
+reviewed manifest in the same PR. If any intended source/workflow bytes are staged
+after refresh, rerun it before staging the final manifest. A commit containing
+the refreshed index and manifest then has the matching discovery fingerprint.
+Run checks from a checkout of the intended tree when unrelated unstaged workflow
+edits would affect existing worktree-based contract tests. PyYAML is only a
 maintenance dependency; the runtime planner uses the Python standard library.
 
 The [parent tracker](https://github.com/snissn/gomap/issues/5049) requires the

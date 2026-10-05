@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Refresh source bindings in the reviewed advisory manifest; never accept policy.
 
-Run: uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py
+Stage intended source/workflow edits first, then run:
+  uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py
 Review the resulting manifest and ownership rules before committing it.
 PyYAML is only needed by this maintenance command, not the workflow planner.
 """
-import hashlib
 import itertools
 import json
 from pathlib import Path
@@ -19,17 +19,27 @@ def mapping(node):
 
 
 def refresh(root):
+    # One immutable intended commit snapshot, including staged additions and
+    # deletions. Untracked/unstaged bytes never define executable inputs. An
+    # unmerged or unsupported index fails before any manifest write.
+    snapshot = ci_impact.git(root, 'write-tree').decode().strip()
+    inputs, _ = ci_impact.tree_inventory(root, snapshot)
     manifest = root / ci_impact.POLICY
+    # Reviewed owners/rules are the explicit editable policy input; refreshing
+    # executable bindings does not stage files or accept these policy choices.
     policy = json.loads(manifest.read_text())
     previous = {m['id']: m for m in policy['members']}
     workflows = {}
     members = []
-    for path in sorted(p for p in (root / '.github/workflows').iterdir() if p.suffix in ('.yml', '.yaml')):
-        raw = path.read_bytes()
+    for name in sorted(inputs):
+        path = Path(name)
+        if path.parent != Path('.github/workflows') or path.suffix not in ('.yml', '.yaml'):
+            continue
+        raw = ci_impact.git(root, 'cat-file', 'blob', inputs[name])
         source = yaml.safe_load(raw)
         nodes = mapping(mapping(yaml.compose(raw))['jobs'])
         workflows[path.name] = {'sha256': ci_impact.digest(raw),
-                                'git_blob': hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest(),
+                                'git_blob': inputs[name],
                                 'events': source.get('on', source.get(True)),
                                 'coverage': 'existing execution only; triggers/path filters are unchanged', 'jobs': {}}
         for name, job in source['jobs'].items():
@@ -71,15 +81,6 @@ def refresh(root):
                                 'owner': previous.get(member_id, {}).get('owner', 'UNREVIEWED: assign affected owner')})
     policy['workflows'] = workflows
     policy['members'] = members
-    # Include pending source edits/additions/deletions so this describes the
-    # actual candidate to be committed, rather than refreshing from old HEAD.
-    names = sorted(set(ci_impact.path_text(p) for p in ci_impact.nul_fields(
-        ci_impact.git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'))))
-    inputs = {}
-    for name in names:
-        if ci_impact.is_discovery_source(name) and (root / name).is_file():
-            data = (root / name).read_bytes()
-            inputs[name] = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
     policy['discovery_source_sha256'] = ci_impact.discovery_digest(inputs)
     # Newly discovered members remain visibly unresolved in the output. Runtime
     # qualification rejects this marker until a reviewer assigns an owner.

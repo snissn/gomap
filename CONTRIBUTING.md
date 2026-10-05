@@ -45,7 +45,8 @@ executes; the success-only required gate is unchanged. See
 [CI impact receipts](docs/CI_IMPACT_SELECTION.md) for event/merge identity,
 input ownership, complete fallback behavior, artifacts, replay, and qualification.
 When changing CI commands, member inventories, dynamic consumers, or source
-footprints, review the manifest and run its documented refresh/contract commands.
+footprints, review the manifest, stage the intended source/workflow inputs, then
+run its documented refresh/contract commands and stage the reviewed manifest.
 A refreshed candidate policy cannot authorize its own omissions.
 
 ## Code Guidelines
