@@ -2,7 +2,7 @@ from source_paths import source_path, isolate_paths
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454'
+PLAN_SHA='94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()
@@ -15,6 +15,8 @@ def main():
  frozen=json.loads(pm.read(planroot/'plan-preparation.json'));assert frozen['config_sha256']==configs and frozen['source_head']==a['head'] and frozen['source_tree']==a['tree']
  assert frozen['manifest_sha256']==hashlib.sha256(pm.read(planroot/'manifest.json')).hexdigest()
  assert frozen['pins_sha256']==hashlib.sha256(pm.read(args.pins)).hexdigest()
+ pm.preparation_tuple(frozen,a)
+ assert frozen['product']==a['product']
  wt=a['source_worktree']
  assert subprocess.check_output(['git','-C',wt,'rev-parse','HEAD'],text=True).strip()==a['head']
  assert subprocess.check_output(['git','-C',wt,'rev-parse','HEAD^{tree}'],text=True).strip()==a['tree']
@@ -25,7 +27,7 @@ def main():
  v=os.statvfs(volume);assert v.f_bavail*v.f_frsize>=2*1024**3
  assert not (volume/'bootstrap-root-v1').exists() and not (volume/'mixed-window-root-v1').exists()
  p=pathlib.Path(args.out);assert p.is_absolute() and p.name.startswith(pm.PREFIX+'-bootstrap-precollection-root-v') and not p.exists()
- isolate_paths([p,volume/'bootstrap-root-v1'],pm.protected_inputs(a,args.pins)+[planroot])
+ isolate_paths([p,volume/'bootstrap-root-v1'],pm.protected_inputs(a,args.pins)+[planroot]+list(pm.preparation_paths(frozen).values()))
  p.mkdir()
  remote=r'''
 import json,pathlib,subprocess,sys,time,os
@@ -49,6 +51,6 @@ print(json.dumps({'host':host,'image':image,'root_absent':True,'names_absent':Tr
   argv=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','mikers@'+host,shlex.join(['python3','-c',remote,host,manifest['image'][host],str(a['credential_not_before_unix']),str(a['credential_not_after_unix'])])]
   start=time.time();r=subprocess.run(argv,capture_output=True,text=True,timeout=30)
   rec={'argv':argv,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr,'started_unix':start,'finished_unix':time.time()};(p/(host+'.json')).write_text(json.dumps(rec,indent=2)+'\n');assert r.returncode==0,r.stderr;receipts[host]=json.loads(r.stdout)
- proof={'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':a['head'],'runtime_source_tree':a['tree'],'build_source_head':a['head'],'daemon_sha256':manifest['binary_sha256'],'qualification_source_sha256':a['qualification_source_sha256'],'launcher_sha256':pm.LAUNCHER_SHA,'manifest_sha256':hashlib.sha256(pm.read(planroot/'manifest.json')).hexdigest(),'plan_preparation_sha256':hashlib.sha256(pm.read(planroot/'plan-preparation.json')).hexdigest(),'build_receipt_sha256':a['build_sha256'],'images_receipt_sha256':a['images_sha256'],'source_review_sha256':a['source_acceptance_sha256'],'dataset':dataset,'hosts':receipts,'credential_validation':a['credential_validation'],'root_executor':True,'no_workload_retry':True,'final_close_required':True,'bootstrap_only_not_mixed_qualification':True,'artifact_volume':str(volume),'pins_sha256':hashlib.sha256(pm.read(args.pins)).hexdigest()}
+ proof={'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':a['head'],'runtime_source_tree':a['tree'],'build_source_head':a['head'],'daemon_sha256':manifest['binary_sha256'],'qualification_source_sha256':a['qualification_source_sha256'],'launcher_sha256':pm.LAUNCHER_SHA,'manifest_sha256':hashlib.sha256(pm.read(planroot/'manifest.json')).hexdigest(),'plan_preparation_sha256':hashlib.sha256(pm.read(planroot/'plan-preparation.json')).hexdigest(),'build_receipt_sha256':a['build_sha256'],'images_receipt_sha256':a['images_sha256'],'source_review_sha256':a['source_acceptance_sha256'],'source_inventory_sha256':'__ROOT_FROZEN_INVENTORY_SHA__','driver_sha256':a['product']['driver_sha256'],'server_images':a['product']['server_images'],'driver_image':a['product']['driver_image'],'dataset':dataset,'hosts':receipts,'credential_validation':a['credential_validation'],'root_executor':True,'no_workload_retry':True,'final_close_required':True,'bootstrap_only_not_mixed_qualification':True,'artifact_volume':str(volume),'pins_sha256':hashlib.sha256(pm.read(args.pins)).hexdigest()}
  (p/'proof.json').write_text(json.dumps(proof,indent=2)+'\n');print(proof['state'])
 if __name__=='__main__':main()

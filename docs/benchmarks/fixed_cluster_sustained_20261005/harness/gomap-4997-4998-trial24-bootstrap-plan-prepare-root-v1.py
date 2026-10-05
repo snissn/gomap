@@ -10,6 +10,58 @@ def read(path,digest=None):
  raw=p.read_bytes();assert digest is None or hashlib.sha256(raw).hexdigest()==digest
  return raw
 
+PRODUCT_PATHS={'build':'__ROOT_FROZEN_BUILD_PATH__','images':'__ROOT_FROZEN_IMAGES_PATH__','source_acceptance':'__ROOT_FROZEN_ACCEPTANCE_PATH__'}
+PRODUCT_SHA={'build':'__ROOT_FROZEN_BUILD_SHA__','images':'__ROOT_FROZEN_IMAGES_SHA__','source_acceptance':'__ROOT_FROZEN_ACCEPTANCE_SHA__'}
+def product_tuple(buildraw,imagesraw,acceptanceraw):
+ assert hashlib.sha256(buildraw).hexdigest()==PRODUCT_SHA['build']
+ assert hashlib.sha256(imagesraw).hexdigest()==PRODUCT_SHA['images']
+ assert hashlib.sha256(acceptanceraw).hexdigest()==PRODUCT_SHA['source_acceptance']
+ build=json.loads(buildraw);images=json.loads(imagesraw);accept=json.loads(acceptanceraw)
+ assert build['state']=='VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME' and build['source_verified_before_after'] is True
+ assert build['head']==images['head']==accept['candidate_head']=='__ROOT_FROZEN_HEAD__'
+ assert build['tree']==images['tree']==accept['candidate_tree']=='__ROOT_FROZEN_TREE__'
+ assert build['source_inventory_sha256']==images['source_inventory_sha256']==accept['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
+ assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME' and images['build_proof_sha256']==PRODUCT_SHA['build']
+ assert accept['outcome']=='ACCEPT' and accept['landed_source_verified'] is True and accept['required_ci_passed'] is True and len(accept['underlying_reviews'])>=2
+ server=build['ELFs']['treedb-fixed-peer']['sha256'];driver=build['ELFs']['treedb-query-under-write']['sha256']
+ assert server=='__ROOT_FROZEN_SERVER_SHA__' and driver=='__ROOT_FROZEN_DRIVER_SHA__'
+ assert set(images['images'])=={'111','185'}
+ hosts={}
+ for host in ('111','185'):
+  row=images['images'][host]
+  assert row['host']=='192.168.0.'+host and row['state']=='SOURCE_VERIFIED_ELFS_PACKAGED_NO_CLUSTER_QUALIFICATION'
+  assert row['head']==build['head'] and row['tree']==build['tree'] and row['source_inventory_sha256']==build['source_inventory_sha256']
+  assert row['ELFs']==build['ELFs'] and row['parent_unchanged'] is True and row['stores_mounted'] is False
+  hosts[host]=row['image']
+ assert hosts=={'111':'__ROOT_FROZEN_IMAGE111__','185':'__ROOT_FROZEN_IMAGE185__'}
+ return {'state':'VERIFIED_BUILD_FROM_FROZEN_SOURCE','head':build['head'],'tree':build['tree'],'source_inventory_sha256':build['source_inventory_sha256'],'server_sha256':server,'driver_sha256':driver,'server_images':{'node-a':hosts['111'],'node-b':hosts['111'],'node-c':hosts['185'],'node-d':hosts['185']},'driver_image':hosts['185'],'source_verified_before_after':True}
+def frozen_product(paths=None):
+ paths=PRODUCT_PATHS if paths is None else paths
+ assert set(paths)==set(PRODUCT_PATHS)
+ return product_tuple(*[read(paths[k],PRODUCT_SHA[k]) for k in ('build','images','source_acceptance')])
+def normalized_product(raw,acceptanceraw,expected):
+ # Normalized bytes have their own later SHA and schema, never the build proof SHA.
+ value=json.loads(raw)
+ assert set(value)==set(expected) and value==expected and value['source_verified_before_after'] is True
+ assert hashlib.sha256(acceptanceraw).hexdigest()==PRODUCT_SHA['source_acceptance']
+ return value
+def preparation_paths(frozen):
+ return {k:frozen[field] for k,field in (('build','build_receipt'),('images','image_receipt'),('source_acceptance','source_acceptance'))}
+def preparation_tuple(frozen,a):
+ assert frozen['source_head']==a['head']=='__ROOT_FROZEN_HEAD__' and frozen['source_tree']==a['tree']=='__ROOT_FROZEN_TREE__'
+ assert frozen['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
+ for key,field in (('build','build_receipt_sha256'),('images','images_receipt_sha256'),('source_acceptance','source_review_sha256')):
+  assert frozen[field]==a[key+'_sha256']==PRODUCT_SHA[key]
+ assert frozen['product']==frozen_product(preparation_paths(frozen))
+def preflight_tuple(proof,frozen,a):
+ preparation_tuple(frozen,a)
+ assert proof['runtime_source_head']==a['head'] and proof['runtime_source_tree']==a['tree']
+ assert proof['source_inventory_sha256']==frozen['source_inventory_sha256']
+ for field in ('build_receipt_sha256','images_receipt_sha256','source_review_sha256'):
+  assert proof[field]==frozen[field]
+ assert proof['daemon_sha256']=='__ROOT_FROZEN_SERVER_SHA__' and proof['driver_sha256']=='__ROOT_FROZEN_DRIVER_SHA__'
+ assert proof['server_images']==frozen['product']['server_images'] and proof['driver_image']==frozen['product']['driver_image']
+
 def protected_inputs(a,pinfile):
  return [a['source_worktree'],pathlib.Path(__file__).resolve().parent,pinfile,a['dataset'],a['build'],a['images'],a['source_acceptance'],a['credential_provenance']]+[v['path'] for v in a['configs'].values()]
 
@@ -17,14 +69,16 @@ def context(pinfile):
  assert __debug__
  a=json.loads(read(pinfile));assert a['RootAcceptedFinalSourceAndInputs'] is True
  for k in ('head','tree'):assert re.fullmatch('[0-9a-f]{40}',a[k])
- for k in ('build','images','source_acceptance'):assert re.fullmatch('[0-9a-f]{64}',a[k+'_sha256'])
+ for k in ('build','images','source_acceptance'):assert a[k+'_sha256']==PRODUCT_SHA[k]
+ product=frozen_product({k:a[k] for k in PRODUCT_PATHS})
  build=json.loads(read(a['build'],a['build_sha256']));images=json.loads(read(a['images'],a['images_sha256']));accept=json.loads(read(a['source_acceptance'],a['source_acceptance_sha256']))
+ a['product']=product
  assert build['state']=='VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME' and build['source_verified_before_after'] is True
  assert a['build_sha256']=='__ROOT_FROZEN_BUILD_SHA__' and build['ELFs']['treedb-fixed-peer']['sha256']=='__ROOT_FROZEN_SERVER_SHA__'
  assert a['head']=='__ROOT_FROZEN_HEAD__' and a['tree']=='__ROOT_FROZEN_TREE__'
  assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME' and images['build_proof_sha256']==a['build_sha256']
  assert all(x['head']==a['head'] and x['tree']==a['tree'] for x in (build,images))
- assert images['source_inventory_sha256']==build['source_inventory_sha256']
+ assert images['source_inventory_sha256']==build['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
  assert accept['outcome']=='ACCEPT' and accept['candidate_head']==a['head'] and accept['candidate_tree']==a['tree']
  assert accept['landed_source_verified'] is True and accept['required_ci_passed'] is True and len(accept['underlying_reviews'])>=2
  assert hashlib.sha256(read(LAUNCHER)).hexdigest()==LAUNCHER_SHA
@@ -83,6 +137,6 @@ def main():
  root.mkdir();(root/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  planned={'provisional':True,'workflow':['inspect4','serve4','initialize','stop4','start4','qualify'],'image':manifest['image'],'binary_sha256':manifest['binary_sha256'],'nodes':[{k:n[k] for k in ('host','image','node','root','name')} for n in m.plan(manifest,CAMPAIGN,dataset)],'driver_node':'node-c','planned_source_rows':10003,'planned_total_documents':10004,'dataset':dataset,'operation_timeout_seconds':600}
  (root/'plan.json').write_text(json.dumps(planned,indent=2)+'\n')
- receipt={'build_receipt':a['build'],'build_receipt_sha256':a['build_sha256'],'config_sha256':configs,'manifest_sha256':hashlib.sha256(read(root/'manifest.json')).hexdigest(),'source_head':a['head'],'source_tree':a['tree'],'image_receipt':a['images'],'plan':planned,'state':'PREPARATION_ONLY_NOT_BOOTSTRAP_ACCEPTANCE','pins_sha256':hashlib.sha256(read(args.pins)).hexdigest(),'launcher_sha256':LAUNCHER_SHA}
+ receipt={'build_receipt':a['build'],'build_receipt_sha256':a['build_sha256'],'config_sha256':configs,'manifest_sha256':hashlib.sha256(read(root/'manifest.json')).hexdigest(),'source_head':a['head'],'source_tree':a['tree'],'image_receipt':a['images'],'images_receipt_sha256':a['images_sha256'],'source_acceptance':a['source_acceptance'],'source_review_sha256':a['source_acceptance_sha256'],'source_inventory_sha256':'__ROOT_FROZEN_INVENTORY_SHA__','product':a['product'],'plan':planned,'state':'PREPARATION_ONLY_NOT_BOOTSTRAP_ACCEPTANCE','pins_sha256':hashlib.sha256(read(args.pins)).hexdigest(),'launcher_sha256':LAUNCHER_SHA}
  (root/'plan-preparation.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt))
 if __name__=='__main__':main()

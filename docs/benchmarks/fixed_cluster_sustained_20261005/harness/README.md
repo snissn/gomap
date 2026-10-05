@@ -41,7 +41,7 @@ permission and native-oracle archive validators. The directory-prefixed form
 and mismatched payload digests are rejected; transport and campaign paths are
 not executed by this fixture.
 
-All 160 prior controls remain; negative checks cover each packaged host's
+All 291 prior controls remain; negative checks cover each packaged host's
 identity, source, ELF hash/positive bytes, packaging state, unchanged parent and
 unmounted stores, and all three native frozen-inventory count joins. No network,
 Go build, native oracle execution, Docker, campaign, or workload replay occurs.
@@ -129,3 +129,53 @@ Single-writer ownership remains required; no adversarial symlink-race guarantee
 or actual remote filesystem acceptance is claimed.
 
 The prefix helper protects the staged helper, collector and resolver files individually, along with product sources, frozen inputs and pinned proof files. This permits the native runner's intended sibling `oracle-preparation` directory while rejecting output overlap with any immutable staged file. Pure checks derive the helper arguments from the assembled remote caller and execute the actual guard and first mkdir in an owned synthetic layout; they do not execute full preparation or qualify a remote filesystem.
+
+
+The declaration's `source_prereview` pins a stronger bootstrap-compatible final
+product acceptance envelope. No real envelope is present in this packet. Root
+must supply actual `outcome: ACCEPT`, final `candidate_head/candidate_tree`,
+`source_inventory_sha256`, `landed_source_verified: true`,
+`required_ci_passed: true`, at least two distinct `underlying_reviews`, and
+`landing_evidence` and `ci_evidence`. Each evidence reference is exactly
+`{path, sha256}`; instantiation reads and checks its immutable raw bytes.
+
+Independent review receipts must record ACCEPT (decision, outcome or disposition),
+no material findings and only explicitly nonblocking notes, and their own
+candidate head/tree (the existing source_head/source_tree or head/tree names
+are also accepted). A head-only retained review needs the explicit original tree
+in the equality evidence below. Reviews of a prior candidate require a hash-pinned
+`review_source_equality` receipt with state
+`REVIEWED_SOURCE_BLOBS_EQUAL_FINAL_SOURCE`, `final_head/final_tree`, a nonempty
+`reviewed_blobs` map from reviewed implementation paths to actual final Git
+blob IDs, and a `reviews` map from each applicable raw review SHA-256 to its
+original `{candidate_head, candidate_tree}`. Root must independently establish
+the reviewed scope and actual source equality behind that receipt. Whole-tree
+identity with a prior reviewed candidate is not required or claimed.
+
+Landing evidence records `LANDED_SOURCE_TREE_VERIFIED`, final
+`runtime_head/runtime_tree`, `merge_commit` and `source_inventory_sha256`.
+CI evidence records final `head`, `required_ci_passed: true`, and concrete
+`checks` with name, SUCCESS conclusion and GitHub details_url. These are
+retained evidence requirements, not network checks performed by this packet.
+
+Instantiation freezes the original build, both-host image packaging and final
+product acceptance raw SHA-256s, both ELF hashes and both host image identities.
+The existing bootstrap-plan module derives one normalized product tuple and
+provides the small joins reused by preflight, lifecycle, freezer, growth and
+post constructors. Plan preparation and precollection proofs retain the full
+tuple. Each later normalized build summary has its own raw SHA-256 and exactly
+the existing collector schema; its decoded head/tree/inventory/server/driver,
+host images and source verification must equal the original frozen tuple.
+The final product review bytes must equal the original acceptance envelope.
+Generated-growth source review remains a separate later gate.
+
+Receipt paths are locators. Caller-provided paths or explicit staging mappings
+may point to byte-identical copies, with every original frozen raw SHA checked;
+string equality between local and staged remote paths is not required. Newly
+read original and normalized receipts are protected before output creation.
+Additional pure controls execute actual bootstrap context/plan production,
+preflight admission and proof construction, lifecycle admission through its
+first owned mkdir, freezer joins, and both source constructors. Dataset/TLS
+dependencies and acceptance receipts in these controls are explicitly synthetic.
+They prove source-only joins and no-mutation rejection, not product acceptance,
+remote filesystem qualification, CI, certificates, datasets or workload results.

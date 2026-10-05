@@ -123,7 +123,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py",
-        "sha256": "464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454"
+        "sha256": "94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -136,7 +136,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-preflight-prepare-root-v1.py",
-        "sha256": "f3aea1a3bf64a44ad4a672163afd52330cea7e3bed6360172cbd017f0e28f369"
+        "sha256": "a25e448fd9a705ad555e647b23886569bb71b26d31288a6e9c3b0f5d37f62d04"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -149,7 +149,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "7c84cf51f58894339a635bb6e73fc8ae9b3eb8bdc06f37eac2c8f78cdc4dce0b"
+        "sha256": "0bdc5f59753d325e05f1ec9a40a54853a360581712776db3eae0a57a207dcc8b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -162,7 +162,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "b59bfed10f3bf33e7e1c354b63d4c3081f7e2ab243bfc923148264a07fdd059b"
+        "sha256": "48ba071878ecc91b20bd3bc84724214cda5d3f08d18c8761c2cdcefb9440d379"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -176,7 +176,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "b0cab0ee7d01dee22106ae3e61a3c8e9b2b77c6b389984a98287641025da38ad"
+        "sha256": "dcbd2f86db98a307071ed17c3f3d43190f5040ce874b055dd190841e0290b1ab"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -190,7 +190,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "0b5894795d5f5d8c03c69059804307071aefcabaab0dae188d3be2ea533e507c"
+        "sha256": "22f8d2764f502f044f5c9375f1522d0ac909db65b2f2f938d34bf23b722413e2"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -410,7 +410,8 @@
   },
   "repair_disposition": {
     "H1": "shared final frozen inventory row count, propagated remote/prepare/capture",
-    "H2": "exact packaging receipt contract with actual pinned build/host/source/ELF equality"
+    "H2": "exact packaging receipt contract with actual pinned build/host/source/ELF equality",
+    "receipt_closure": "Freeze original build/images/final acceptance; derive one strict normalized product tuple and close actual bootstrap/lifecycle/freezer/growth/post joins"
   },
   "portability": "All executed imports and AST source reads resolve to packet-local source copies; original source provenance references are historical only. No old evidence or credentials copied.",
   "root_owned_adapters": {

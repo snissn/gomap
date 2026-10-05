@@ -3,7 +3,7 @@ from source_paths import source_path, isolate_paths
 import hashlib,json,pathlib,re,shlex,subprocess,time
 CAMPAIGN='rf4trial24mixedchangingc1'
 IMAGES=None
-PLAN_SHA='464c678eaa8bacd4c67ed49cb8597136d46ca4e335753087833bda1a97e68454'
+PLAN_SHA='94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b'
 
 def owned(x,node,cid):
  assert x['Id']==cid and x['Name']=='/treedb-4250-'+CAMPAIGN+'-'+node
@@ -43,6 +43,8 @@ def main():
  assert proof['pins_sha256']==hashlib.sha256(pm.read(args.pins)).hexdigest()
  frozen=json.loads(plan.read_bytes())
  for name,h in frozen['config_sha256'].items():assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()==h
+ isolate_paths([ROOT,OUTPUT],pm.protected_inputs(a,args.pins)+[args.plan,args.preflight]+list(pm.preparation_paths(frozen).values()))
+ pm.preflight_tuple(proof,frozen,a)
  assert proof['build_receipt_sha256']==a['build_sha256'] and proof['daemon_sha256']==expected['binary_sha256']
  ROOT.mkdir()
  (ROOT/'precollection-proof.json').write_bytes(proofraw);(ROOT/'source.py').write_bytes(pathlib.Path(__file__).read_bytes())

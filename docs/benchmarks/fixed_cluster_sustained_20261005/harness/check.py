@@ -12,6 +12,11 @@ def bad(name,f):
  except (AssertionError,ValueError,TypeError,KeyError,IndexError):checks.append(name);return
  raise AssertionError('accepted invalid fixture '+name)
 def load(path,name):
+ # Emitted modules must import their own packet resolver in this interpreter,
+ # just as the retained fresh-interpreter portable import control does.
+ resolver=Path(path).parent/'source_paths.py'
+ if resolver.is_file():
+  rspec=importlib.util.spec_from_file_location('source_paths',resolver);rm=importlib.util.module_from_spec(rspec);rspec.loader.exec_module(rm);sys.modules['source_paths']=rm
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 m=json.loads((R/'packet.json').read_bytes())
 for role,row in m['roles'].items():
@@ -95,6 +100,10 @@ d['build']=fixture('build',objects['build'])
 objects['images'].update(state='BOTH_HOSTS_PACKAGED_NOT_RUNTIME',build_proof_sha256=d['build']['sha256'],images={})
 for host in ('111','185'):
  objects['images']['images'][host]={'state':'SOURCE_VERIFIED_ELFS_PACKAGED_NO_CLUSTER_QUALIFICATION','host':'192.168.0.'+host,'image':'sha256:'+'7'*64,'parent_unchanged':True,'stores_mounted':False,'ELFs':copy.deepcopy(objects['build']['ELFs']),'head':head,'tree':tree,'source_inventory_sha256':d['source_inventory']['sha256']}
+reviews=[fixture('synthetic-independent-review-'+str(i),{'synthetic_only':True,'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree,'findings':[],'reviewer':'synthetic-independent-'+str(i)}) for i in range(2)]
+landing=fixture('synthetic-landing',{'synthetic_only':True,'state':'LANDED_SOURCE_TREE_VERIFIED','runtime_head':head,'runtime_tree':tree,'merge_commit':'9'*40,'source_inventory_sha256':d['source_inventory']['sha256']})
+ci=fixture('synthetic-ci',{'synthetic_only':True,'head':head,'required_ci_passed':True,'checks':[{'name':'synthetic-required','conclusion':'SUCCESS','details_url':'https://github.com/synthetic-only/fixtures/actions/runs/1'}]})
+objects['source_prereview']={'synthetic_only':True,'outcome':'ACCEPT','candidate_head':head,'candidate_tree':tree,'source_inventory_sha256':d['source_inventory']['sha256'],'landed_source_verified':True,'required_ci_passed':True,'underlying_reviews':reviews,'landing_evidence':landing,'ci_evidence':ci}
 for k in ('images','source_prereview'):d[k]=fixture(k,objects[k])
 x.declaration(d,m);checks.append('explicit_final_pin_validator_synthetic_only')
 z=copy.deepcopy(d);z['source_head']='6'*40;bad('final_source_head_mismatch',lambda:x.declaration(z,m))
@@ -234,6 +243,13 @@ hash_literals-={gp.TEMPLATE_SHA256[k] for k in ('query','lifecycle','exact-valid
 literal_bindings={v:('sha256:' if v.startswith('sha256:') else '')+sha(('synthetic-only-'+v).encode())[:40 if len(v)==40 else 64] for v in hash_literals}
 literal_bindings['b625421c06ae6f9398c384686f3c50ce2389ac21']=head
 literal_bindings['223df16137b4d11565a4a5ed033973c40ffa7556']=tree
+normalized={'state':'VERIFIED_BUILD_FROM_FROZEN_SOURCE','head':head,'tree':tree,'source_inventory_sha256':d['source_inventory']['sha256'],'server_sha256':objects['build']['ELFs']['treedb-fixed-peer']['sha256'],'driver_sha256':objects['build']['ELFs']['treedb-query-under-write']['sha256'],'server_images':{n:objects['images']['images']['111' if n in ('node-a','node-b') else '185']['image'] for n in ('node-a','node-b','node-c','node-d')},'driver_image':objects['images']['images']['185']['image'],'source_verified_before_after':True}
+artifact_root=fixtures/'trial24-artifacts';binding_root=artifact_root/'binding-receipts-root-v1';binding_root.mkdir(parents=True)
+normalized_path=binding_root/'build.json';normalized_raw=json.dumps(normalized,indent=2).encode();normalized_path.write_bytes(normalized_raw)
+product_copy=binding_root/'source-prereview.json';product_copy.write_bytes(Path(d['source_prereview']['path']).read_bytes())
+assert sha(normalized_raw)!=d['build']['sha256']
+old_product={'b625421c06ae6f9398c384686f3c50ce2389ac21':head,'223df16137b4d11565a4a5ed033973c40ffa7556':tree,'7ec5f0ed4f36ca69e355abc8c8c0d44920808bdce1c864482544a462b8453e04':normalized['source_inventory_sha256'],'701c02e0688ac0e923ceaff239c764ee2678fc993a12db086ce5deec7677744a':normalized['driver_sha256'],'64877e9d0163bed36494442c1c1799150babc21f54fc322e760e70c08fd8427f':normalized['server_sha256'],'sha256:718a79a455321acc6409436db4de44414ed8c4dd42e5ca684e9abf0a664889f8':normalized['driver_image'],'sha256:5071d652bdb56e152ca9cdba581e88b00bf513e1b17ed9e3439e0cfb8ffcf9a5':normalized['server_images']['node-a'],'2c9b6e24ab9cca255ff4d36bc3b989bf3b60bafa74192c6518b0d1e854701da3':d['source_prereview']['sha256'],'c31d6cb04c845616618c37d9d70d3af4b322b2b926cadcb1cfb98c37c53ed7ed':sha(normalized_raw)}
+literal_bindings.update(old_product)
 growth_pins={'source_pr':5032,'predecessor_pr':4995,'campaign':gp.CAMPAIGN,'remote_root':'/home/mikers/gomap-4250-twohost-'+gp.CAMPAIGN,'source_head':head,'source_tree':tree,'literal_bindings':literal_bindings,'qualification_prefix':1,'artifact_root':str(fixtures/'trial24-artifacts'),'reviewed_path_bindings':{path:str(fixtures/('trial24-reviewed-'+str(i))) for i,path in enumerate(sorted(required_paths))}}
 def generated(role,pins,label):
  output=fixtures/('trial24-'+label)
@@ -275,6 +291,7 @@ required_constants={'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROB
 pathkeys={'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ARTIFACT_REVIEW_PATH','BOOT_REVIEW','LANDED','BUILD','SOURCE_REVIEW','SOURCE_INV'}
 constants={key:str(fixtures/('trial24-sealed-'+key)) if key in pathkeys else sha(('synthetic-only-'+key).encode()) for key in required_constants}
 constants.update(OUT=c.LOCAL_INPUT_ROOT,HEAD=head,TREE=tree,CIDS={n:sha(n.encode()) for n in ('node-a','node-b','node-c','node-d')},FINAL_INSPECT_WRAPPERS={n:{'path':str(fixtures/('trial24-inspect-'+n+'.json')),'sha256':sha(n.encode())} for n in ('node-a','node-b','node-c','node-d')})
+constants.update(GO_SHA=normalized['source_inventory_sha256'],DRIVER_SHA=normalized['driver_sha256'],SERVER_SHA=normalized['server_sha256'],BUILD=str(normalized_path),BUILD_SHA=sha(normalized_raw),SOURCE_REVIEW=str(product_copy),SOURCE_REVIEW_SHA=d['source_prereview']['sha256'],SOURCE_INV=d['source_inventory']['path'])
 post_pins={'constants':constants,'source_head':head,'source_tree':tree,'pre_input_count':1,'source_pr':5032,'predecessor_pr':4995}
 for key in ('SOURCE_INV','ARTIFACT_REVIEW_PATH','FINAL_INSPECT_WRAPPERS'):
  pins=copy.deepcopy(post_pins);pins['constants'].pop(key)
@@ -338,16 +355,19 @@ for name,row in archive_receipts.items():
 freezer=load(portable_sources['pre_input_freezer'],'trial24_provenance_checks')
 server=objects['build']['ELFs']['treedb-fixed-peer']['sha256']
 assert server!='74f77485ace57056f6bd8244b467dd5fe136322ba1c2244010ebf6ae0af06042'
-plan={'nodes':[{'node':'synthetic-only'}],'binary_sha256':server}
-manifest={'binary_sha256':server}
+product_plan=load(portable_sources['bootstrap_plan'],'trial24_freezer_product_checks')
+product=product_plan.frozen_product()
+host_images={'192.168.0.111':product['server_images']['node-a'],'192.168.0.185':product['server_images']['node-c']}
+plan={'nodes':[{'node':n,'image':image} for n,image in product['server_images'].items()],'binary_sha256':server,'image':host_images}
+manifest={'binary_sha256':server,'image':host_images}
 def encoded(obj):return json.dumps(obj).encode()
-frozen={'source_head':head,'source_tree':tree,'build_receipt_sha256':d['build']['sha256'],'manifest_sha256':sha(encoded(manifest)),'pins_sha256':'a'*64,'plan':copy.deepcopy(plan)}
-proof={'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':head,'runtime_source_tree':tree,'build_source_head':head,'build_receipt_sha256':d['build']['sha256'],'plan_preparation_sha256':sha(encoded(frozen)),'manifest_sha256':sha(encoded(manifest)),'pins_sha256':frozen['pins_sha256'],'daemon_sha256':server,'qualification_source_sha256':'b'*64}
-base=[encoded(plan),encoded(frozen),encoded(manifest),encoded(proof),Path(d['build']['path']).read_bytes()]
+frozen={'product':product,'source_inventory_sha256':d['source_inventory']['sha256'],'build_receipt':d['build']['path'],'image_receipt':d['images']['path'],'source_acceptance':d['source_prereview']['path'],'images_receipt_sha256':d['images']['sha256'],'source_review_sha256':d['source_prereview']['sha256'],'source_head':head,'source_tree':tree,'build_receipt_sha256':d['build']['sha256'],'manifest_sha256':sha(encoded(manifest)),'pins_sha256':'a'*64,'plan':copy.deepcopy(plan)}
+proof={'synthetic_only':True,'source_inventory_sha256':d['source_inventory']['sha256'],'images_receipt_sha256':d['images']['sha256'],'source_review_sha256':d['source_prereview']['sha256'],'driver_sha256':product['driver_sha256'],'server_images':product['server_images'],'driver_image':product['driver_image'],'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':head,'runtime_source_tree':tree,'build_source_head':head,'build_receipt_sha256':d['build']['sha256'],'plan_preparation_sha256':sha(encoded(frozen)),'manifest_sha256':sha(encoded(manifest)),'pins_sha256':frozen['pins_sha256'],'daemon_sha256':server,'qualification_source_sha256':'b'*64}
+base=[encoded(plan),encoded(frozen),encoded(manifest),encoded(proof),Path(d['build']['path']).read_bytes(),Path(d['images']['path']).read_bytes(),Path(d['source_prereview']['path']).read_bytes()]
 assert freezer.bootstrap_provenance(*base)==(server,'b'*64)
 checks.append('actual_freezer_nonhistorical_accepted_ELF_all_raw_proof_joins')
 changed=copy.deepcopy(proof);changed['qualification_source_sha256']='c'*64
-assert freezer.bootstrap_provenance(*base[:3],encoded(changed),base[4])==(server,'c'*64)
+assert freezer.bootstrap_provenance(*base[:3],encoded(changed),*base[4:])==(server,'c'*64)
 checks.append('actual_freezer_qualification_source_actual_proof_hash_propagates')
 for label,index,key,value in [('historical_server',0,'binary_sha256','74f77485ace57056f6bd8244b467dd5fe136322ba1c2244010ebf6ae0af06042'),('current_plan',0,'nodes',[]),('frozen_plan',1,'plan',{'nodes':[],'binary_sha256':server}),('manifest',2,'binary_sha256','d'*64),('head',3,'runtime_source_head','d'*40),('tree',3,'runtime_source_tree','d'*40),('build_head',3,'build_source_head','d'*40),('build_digest',3,'build_receipt_sha256','d'*64),('plan_preparation_digest',3,'plan_preparation_sha256','d'*64),('manifest_digest',3,'manifest_sha256','d'*64),('pins_digest',3,'pins_sha256','d'*64),('daemon_digest',3,'daemon_sha256','d'*64),('qualification_zero',3,'qualification_source_sha256','0'*64),('qualification_shape',3,'qualification_source_sha256','bad'),('build_inventory',4,'source_inventory_sha256','d'*64)]:
  rows=list(base);obj=json.loads(rows[index]);obj[key]=value;rows[index]=encoded(obj)
@@ -355,7 +375,7 @@ for label,index,key,value in [('historical_server',0,'binary_sha256','74f77485ac
 # Re-pin changed frozen bytes in proof to reach the independent identity/ELF joins.
 for label,key,value in [('source_head','source_head','d'*40),('source_tree','source_tree','d'*40),('server','plan',{'nodes':plan['nodes'],'binary_sha256':'d'*64})]:
  f=copy.deepcopy(frozen);f[key]=value;q=copy.deepcopy(proof);q['plan_preparation_sha256']=sha(encoded(f))
- bad('actual_freezer_frozen_repin_rejects_'+label,lambda f=f,q=q:freezer.bootstrap_provenance(base[0],encoded(f),base[2],encoded(q),base[4]))
+ bad('actual_freezer_frozen_repin_rejects_'+label,lambda f=f,q=q:freezer.bootstrap_provenance(base[0],encoded(f),base[2],encoded(q),*base[4:]))
 plan_source=Path(portable_sources['bootstrap_plan']).read_text()
 assert server in plan_source and d['build']['sha256'] in plan_source
 checks.append('actual_generated_bootstrap_plan_and_freezer_same_accepted_build_ELF_macros')
@@ -413,7 +433,7 @@ for site,node in sites.items():
   # Native remote protects SOURCE and retained runner/template sources. Frozen
   # inputs are only created under its new root, so no external input root exists.
   if site=='native_remote' and kind in ('input_pollution','packet_descendant'):continue
-  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
+  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path'],'image_receipt':pin_fixture['path'],'source_acceptance':pin_fixture['path']},'product_paths':{'build':pin_fixture['path'],'product':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
   # Prefix accepts its intentional source symlink as a read root.
   if site=='oracle_helper':
    ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path']);ns['COLLECTOR']=portable_sources['collector']
@@ -511,5 +531,7 @@ for label,target in cases:
  layout_receipts.append({'case':label,'output':str(target),'rejected_before_write':denied,'protected_bytes_unchanged':True})
  checks.append('actual_remote_layout_'+label+'_no_protected_mutation')
 (fixtures/'native-remote-layout-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_REMOTE_LAYOUT_PREWRITE_CHECKS_ONLY','actual_helper_arguments':[str(p) for p in actual_args],'staged_files':{role:{'path':str(path),'sha256':sha(path.read_bytes())} for role,path in staged.items()},'cases':layout_receipts,'intentional_source_alias_preserved':True,'runtime_started':False,'network_calls':0,'Go_started':False,'limitations':['Actual caller arguments, helper guard and first mkdir only; full population preparation and remote activation are unexecuted.']},indent=2)+'\n')
+
+exec(compile((R/'receipt_closure_checks.py').read_bytes(),'receipt_closure_checks.py','exec'))
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

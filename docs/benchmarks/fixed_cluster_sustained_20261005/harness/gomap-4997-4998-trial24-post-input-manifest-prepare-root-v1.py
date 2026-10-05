@@ -11,6 +11,22 @@ def collector():
     spec = importlib.util.spec_from_file_location('trial24_inert_collector', COLLECTOR)
     c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c); return c
 
+PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
+PLAN_SHA='94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b'
+def product_module():
+ assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
+ spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)
+ pm=importlib.util.module_from_spec(spec);spec.loader.exec_module(pm);return pm
+def post_product(constants,pins):
+ pm=product_module();product=pm.frozen_product()
+ expected={'HEAD':product['head'],'TREE':product['tree'],'GO_SHA':product['source_inventory_sha256'],'SERVER_SHA':product['server_sha256'],'DRIVER_SHA':product['driver_sha256'],'SOURCE_REVIEW_SHA':pm.PRODUCT_SHA['source_acceptance']}
+ for key,value in expected.items():assert constants[key]==value,('frozen product constant',key)
+ assert pins['source_head']==product['head'] and pins['source_tree']==product['tree']
+ raw=pm.read(constants['BUILD'],constants['BUILD_SHA']);review=pm.read(constants['SOURCE_REVIEW'],constants['SOURCE_REVIEW_SHA'])
+ pm.normalized_product(raw,review,product)
+ assert sha(pm.read(constants['SOURCE_INV']))==product['source_inventory_sha256']
+ return pm,product
+
 def main():
     if not __debug__: raise RuntimeError('assertions required')
     ap = argparse.ArgumentParser(); ap.add_argument('--pins', required=True); ap.add_argument('--output', required=True); ap.add_argument('--finalize-pending')
@@ -28,6 +44,9 @@ def main():
         assert not set(m['local_pins']) & set(pins['additional_local_pins'])
         m['receipts'].update(pins['receipts']); m['local_pins'].update(pins['additional_local_pins'])
         m['population_limits'] = pins['population_limits']; m['server_cli_path'] = '/treedb-fixed-peer'
+        pm=product_module();product=pm.frozen_product()
+        isolate_paths([out],protected+list(pm.PRODUCT_PATHS.values())+[m['receipts']['build'],m['receipts']['source_prereview']])
+        pm.normalized_product(pm.read(m['receipts']['build'],m['local_pins'][m['receipts']['build']]),pm.read(m['receipts']['source_prereview'],m['local_pins'][m['receipts']['source_prereview']]),product)
         # Validate the eventual schema locally; grant no flags and run no network.
         schema = dict(m); schema.update({k: True for k in c.FLAGS})
         c.validate_manifest(schema, COLLECTOR_SHA256); c.prepare_local(m)
@@ -71,6 +90,12 @@ def main():
     text = text.replace('PREPARED_LOCAL_INPUTS_INACTIVE_MANIFEST','SEALED_INPUTS_PENDING_NATIVE_PREFIX_ORACLE_AND_FINALIZATION')
     assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',text), 'unreplaced historical artifact path'
     assert 'rf4trial14mixedc1' not in text
+    pm,product=post_product(constants,pins)
+    protected+=list(pm.PRODUCT_PATHS.values())
+    isolate_paths([out],protected)
+    marker='    build = load(BUILD, BUILD_SHA)'
+    assert marker in text
+    text=text.replace(marker,marker+'\n    assert build == '+repr(product),1)
     guard=ast.unparse(next(n for n in ast.parse(pathlib.Path(__file__).with_name('source_paths.py').read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='isolate_paths'))
     marker='    OUT.mkdir()';assert marker in text
     text=text.replace(marker, "    isolate_paths([OUT,ARCHIVE,MANIFEST,PROMOTION_PROOF],["+repr('__ROOT_FROZEN_SOURCE_ROOT__')+",Path("+repr(str(pathlib.Path(__file__).resolve().parent))+"),PRE,PROBE,PROOF,LIFECYCLE,BOOT_REVIEW,LANDED,BUILD,SOURCE_REVIEW,SOURCE_INV,ARTIFACT_REVIEW_PATH])\n"+marker,1)

@@ -31,8 +31,22 @@ def byte_list(raw):
  for n in lens:out.append(raw[pos:pos+n]);assert len(out[-1])==n;pos+=n
  assert pos==len(raw);return out
 
-def bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,buildraw):
+PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
+PLAN_SHA='94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b'
+def plan_module():
+ assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
+ spec=importlib.util.spec_from_file_location('frozen_trial24_product',PLAN_MODULE)
+ pm=importlib.util.module_from_spec(spec);spec.loader.exec_module(pm);return pm
+
+def bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,buildraw,imagesraw,acceptanceraw):
  plan=json.loads(planraw);frozen=json.loads(frozenraw);manifest=json.loads(manifestraw);proof=json.loads(proofraw);build=json.loads(buildraw)
+ pm=plan_module();product=pm.product_tuple(buildraw,imagesraw,acceptanceraw)
+ a={'head':'__ROOT_FROZEN_HEAD__','tree':'__ROOT_FROZEN_TREE__',**{k+'_sha256':v for k,v in pm.PRODUCT_SHA.items()}}
+ pm.preflight_tuple(proof,frozen,a)
+ assert frozen['product']==product
+ host_images={'192.168.0.111':product['server_images']['node-a'],'192.168.0.185':product['server_images']['node-c']}
+ assert plan['image']==manifest['image']==frozen['plan']['image']==host_images
+ assert {n['node']:n['image'] for n in plan['nodes']}==product['server_images']
  assert proof['state']=='FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED'
  assert proof['runtime_source_head']==frozen['source_head']==build['head']=='__ROOT_FROZEN_HEAD__'
  assert proof['runtime_source_tree']==frozen['source_tree']==build['tree']=='__ROOT_FROZEN_TREE__'
@@ -54,8 +68,8 @@ def main():
  planroot=P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1'
  frozenraw=(planroot/'plan-preparation.json').read_bytes();frozen=json.loads(frozenraw)
  proofraw=(L/'precollection-proof.json').read_bytes();planraw=(B/'plan.json').read_bytes()
- isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt']])
- server,qualification=bootstrap_provenance(planraw,frozenraw,(planroot/'manifest.json').read_bytes(),proofraw,pathlib.Path(frozen['build_receipt']).read_bytes())
+ isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt'],frozen['image_receipt'],frozen['source_acceptance']])
+ server,qualification=bootstrap_provenance(planraw,frozenraw,(planroot/'manifest.json').read_bytes(),proofraw,pathlib.Path(frozen['build_receipt']).read_bytes(),pathlib.Path(frozen['image_receipt']).read_bytes(),pathlib.Path(frozen['source_acceptance']).read_bytes())
  final=load(L/'result.json');assert final['precollection_proof_sha256']==sha(proofraw)
  assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and len(final['stopped'])==4 and not final['errors']
  R.mkdir()
@@ -115,6 +129,6 @@ def main():
  with tarfile.open(archive,'x:gz') as t:
   for path in sorted(O.rglob('*')):
    if path.is_file():t.add(path,arcname=str(path.relative_to(O)),recursive=False)
- seal=dict(state='FRESH_PRE_INPUTS_FROZEN_NO_RECALL_EXECUTED',campaign=RUN,input_root=str(O),input_inventory_sha256=sha((O/'input-inventory.json').read_bytes()),files=len(files),archive=str(archive),archive_sha256=sha(archive.read_bytes()),qualification_prefix=prefix,bootstrap_sha256=sha(bootraw),config_sha256=sha(configraw),plan_sha256=sha(planraw),voters=voters,build_source_head=prov['RuntimeSourceHead'],product_applicability_head=None,candidate_source_tree='__ROOT_FROZEN_TREE__',candidate_pending_merge=False)
+ seal=dict(state='FRESH_PRE_INPUTS_FROZEN_NO_RECALL_EXECUTED',campaign=RUN,input_root=str(O),input_inventory_sha256=sha((O/'input-inventory.json').read_bytes()),files=len(files),archive=str(archive),archive_sha256=sha(archive.read_bytes()),qualification_prefix=prefix,bootstrap_sha256=sha(bootraw),config_sha256=sha(configraw),plan_sha256=sha(planraw),voters=voters,build_source_head=prov['RuntimeSourceHead'],build_receipt_sha256=frozen['build_receipt_sha256'],images_receipt_sha256=frozen['images_receipt_sha256'],source_review_sha256=frozen['source_review_sha256'],source_inventory_sha256=frozen['source_inventory_sha256'],product_applicability_head=None,candidate_source_tree='__ROOT_FROZEN_TREE__',candidate_pending_merge=False)
  (R/'seal.json').write_text(json.dumps(seal,indent=2)+'\n');print(json.dumps(seal))
 if __name__=='__main__':main()
