@@ -266,7 +266,7 @@ func TestRecallProbeRefusesUnknownIncompleteOrForgedLedger(t *testing.T) {
 		t.Fatal("accepted trailing event")
 	}
 }
-func recallTestQueries(t *testing.T) (recallInput, recallReport) {
+func recallTestQueries(t testing.TB) (recallInput, recallReport) {
 	t.Helper()
 	in, r := recallTestInput()
 	in.vectors = map[string][]float32{}

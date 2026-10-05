@@ -1,0 +1,25 @@
+{
+  "captured_head": "63794357c03898da03a37c5412770fdf197f2ce0",
+  "candidate_repair_head": "8229183f61d5d93e612e9adb79ace3514fddd50c",
+  "documentation_repair_sha": "8229183f61d5d93e612e9adb79ace3514fddd50c",
+  "readme_entries": {
+    "cmd/benchprof/README.md": {
+      "captured": "100644 blob fc1ca832dc2f250002e4a6c6858bad977893f9d9",
+      "candidate_repair": "100644 blob f6cd1c62a46c8a4b7a0d93befa86fb327d449ce1"
+    },
+    "cmd/unified_bench/README.md": {
+      "captured": "100644 blob 309cf9c59c67967abba9256684ec67de8dc45753",
+      "candidate_repair": "100644 blob 3a40d2b73cc6fd5484b1ecc7f380223c4f797ea3"
+    }
+  },
+  "compiled_project_input_count": 2130,
+  "point_lookup_helper_captured_sha256": "9545b94e274b701070f93b2297790be1c60432a2358a1751cab636a74cbfcdb2",
+  "point_lookup_helper_role": "standalone diagnostic, not this capture producer",
+  "schema": "quicksilver-readme-applicability-v1",
+  "status": "CANDIDATE_DOCUMENTATION_APPLICABILITY_ONLY",
+  "final_landed_main_authority": "COORDINATOR_REQUIRED",
+  "captured_source_receipt": "o1-o1-composed-durable91-pair1/source-receipt.json",
+  "captured_source_receipt_sha256": "0d6556523798ad86ae5ffa73d659f9b7406be1397a5ef8dbb806e0d14a6bfcd3",
+  "whole_treedb_entry": "040000 tree 0f14eb61f370b79cbc5c37b9dbec701fbc24cfa3\tTreeDB",
+  "strict_harness_entry_count": 61
+}
