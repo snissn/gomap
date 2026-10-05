@@ -795,6 +795,13 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got, want := remaining.FileIDs[0], rawFileID2; got != want {
 		t.Fatalf("remaining generation fileID=%d, want %d", got, want)
 	}
+	runtimeManifest := db.state.Load().LeafGenerations.sourceManifest
+	if err := validateLeafGenerationManifest(runtimeManifest); err != nil {
+		t.Fatalf("GC published an invalid runtime source manifest: %v (generations=%+v)", err, runtimeManifest.Generations)
+	}
+	if !leafGenerationManifestsEqualForGC(runtimeManifest, db.leafGenerationManifest) {
+		t.Fatalf("runtime source manifest=%+v differs from final GC manifest=%+v", runtimeManifest.Generations, db.leafGenerationManifest.Generations)
+	}
 }
 
 func TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration(t *testing.T) {
