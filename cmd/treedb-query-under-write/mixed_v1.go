@@ -365,8 +365,12 @@ func mixedValidate(o mixedOptions) error {
 	if o.Window.Warmup != 64 || o.Interval < time.Second || o.Interval > 8*time.Second {
 		return errors.New("mixed-window requires warmup64,window1s..300s,interval1s..8s")
 	}
-	if time.Duration(originals-1)*o.Interval+2*o.Window.Admission.RPCTimeout >= o.Window.Duration {
-		return errors.New("mixed-window final slot must leave positive headroom after write and visibility RPC budgets")
+	// Each serial writer iteration includes both the write and its visibility
+	// probe. Slow pairs accumulate delay when their budgets exceed the spacing.
+	pairBudget := 2 * o.Window.Admission.RPCTimeout
+	serialStep := max(o.Interval, pairBudget)
+	if time.Duration(originals-1)*serialStep+pairBudget >= o.Window.Duration {
+		return errors.New("mixed-window final slot must leave positive headroom after cumulative serial write and visibility RPC budgets")
 	}
 	return nil
 }

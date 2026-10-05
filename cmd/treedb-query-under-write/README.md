@@ -488,9 +488,15 @@ The two replacement directions must differ when extra originals are requested. A
 corpus IDs outside every query's baseline and exported-corpus canonical top10
 when `-mixed-profile` is omitted.
 The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s).
-Admission requires `(originals-1)*interval + 2*rpc-timeout < read-window`, leaving positive
-headroom for the final write and its visibility check. Both full write and
-untimed visibility RPC budgets must fit before the cutoff.
+Admission requires `(originals-1)*max(interval,2*rpc-timeout) + 2*rpc-timeout < read-window`,
+leaving positive headroom after every serial write and visibility RPC budget.
+The next write cannot start before the previous visibility probe completes;
+slow pairs accumulate delay when their two RPC budgets exceed the interval.
+Both full budgets must also fit at actual dispatch. Local work and scheduling
+can consume headroom, so admission is not a completion guarantee.
+The six-original/60s defaults remain, but the shared 10s RPC default is not
+feasible for mixed mode (six pairs need120s). Specify a feasible per-call budget,
+as in the six/60s/3s example below; other modes and the global RPC default are unchanged.
 Warmup is 64 calls; read concurrency/caps use existing read-window limits.
 
 ```sh
@@ -734,10 +740,14 @@ minimum recall across all compatible truths, tightened after join. Validate all
 attempts, UNKNOWN and partial outcomes. A final population hash cannot replace
 any original witness.
 
-A proposed five-minute C1 qualification uses `-mixed-originals 58`,
-`-read-window 300s`, `-mixed-interval 5s`, `-rpc-timeout 3s`, 64 warmups,
+The revised five-minute C1 qualification uses `-mixed-originals 48`,
+`-read-window 300s`, `-mixed-interval 6s`, `-rpc-timeout 3s`, 64 warmups,
 65536 attempts and 128MiB output, with a whole-checkpoint timeout leaving room for
-setup and final checks. These are planned limits, not a measured ACK rate or
+setup and final checks. The original58/300s/5s/3s proposal is superseded:
+its cumulative serial RPC budget is348s. The revised48/300s/6s/3s budget is288s,
+leaving12s arithmetic headroom, with ideal write starts spanning282s. Require
+all48 original witnesses and49 native prefix truths; the smaller count waives
+no correctness, resource or one-shot gate. These are planned limits, not a measured ACK rate or
 proof that caps will fit. Original dispatch still requires complete write and
 visibility budgets before cutoff; reaching any cap consumes the run. Freeze
 new collector/oracle/read/resource validators and all native prefix truths
@@ -768,7 +778,7 @@ costs, not request-attributed server allocations. Pair unchanged six-original
 `BenchmarkWindowRetainedCallGuardV1` and
 `BenchmarkPopulationLegacyColocatedPlanGuardV1/{validate,decode}` on exact
 base/candidate using identical fixtures/toolchain/GOMAXPROCS, balanced repeats,
-B/op and allocs/op. Measure 58-original setup, compatible-prefix validation and
+B/op and allocs/op. Retain 58-original synthetic setup, compatible-prefix validation and
 plan/witness costs separately; retain timings, allocations, memory limits and raw
 receipts. Investigate material regressions before accepting the qualification.
 
@@ -777,7 +787,9 @@ Extended local cost selectors are `BenchmarkMixedSustained58V1/plan`,
 `BenchmarkMixedSustained58V1/validate-all-compatible` and
 `BenchmarkColocatedAuditSustained58V1/{validate,decode}`. Planning uses the small
 128D unit fixture and native scorer; audit costs use a clearly synthetic
-58-outcome extension with production request/token encoding. These isolate
+58-outcome extension with production request/token encoding. Those source-cost
+guardrails are conservative for the revised48-original runtime; they are not
+48-write serving evidence. These isolate
 setup and local validation, excluding RPC, current-FSM witness lookup and
 population scans; the fresh qualification retains those actual costs separately.
 The serial timestamp ledger retains the six-slot default buffers and allocates

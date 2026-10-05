@@ -3765,9 +3765,13 @@ allocation boundaries and the optional external population attachment distinctio
 
 ### Bounded sustained mixed harness and complete outcome audit (#5021)
 
-`TestMixedSustainedAdmissionV1` retains semantic admission red cases for the
-58-original/300s proposal and maximum63 count; default six admission and the
-ordinary 60s read-window ceiling remain controls.
+`TestMixedSustainedAdmissionV1` rejects the superseded58/300s/5s/3s proposal
+and admits the revised48/300s/6s/3s declaration and feasible maximum63 count.
+`TestMixedCumulativeRPCBudgetV1` checks every serial write-plus-visibility
+budget, strict equality, both spacing-dominant and RPC-dominant schedules, and
+refusal before input/network access. Six/60s with3s RPCs remains feasible;
+omitted or explicit six with the shared10s RPC default correctly refuses.
+The ordinary60s read-window ceiling remains a separate control.
 `TestMixedSustainedMaximumPlanV1` independently reconstructs all64 native
 canonical prefixes, checks distinct original keys and alternating changed
 replacements of surviving A, and preserves the original six operations.
@@ -3801,6 +3805,8 @@ the documented small128D fixture; it is not a10K serving benchmark.
 58-outcome encoded ledger/token validation, excluding authenticated transport,
 current-FSM witness lookup and source scans. Exact tooling, fixture/source
 identity, commands, isolation and raw results must accompany measured claims.
-Actual 58-outcome audit/resource costs remain a fresh qualification obligation.
+These58-outcome synthetic costs remain conservative source guardrails, not
+relabelled48-write runtime evidence. Actual48-outcome audit/resource costs and
+all49 native truths remain fresh qualification obligations.
 See command README for allocation ownership and planned operational bounds;
 source controls alone establish no sustained service result.

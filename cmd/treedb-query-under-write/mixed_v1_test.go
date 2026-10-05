@@ -343,7 +343,7 @@ func TestMixedFinalSlotHeadroomV1(t *testing.T) {
 	for _, tc := range []struct {
 		interval, rpc time.Duration
 		wantOK        bool
-	}{{5 * time.Second, 10 * time.Second, true}, {8 * time.Second, 9 * time.Second, true}, {8 * time.Second, 10 * time.Second, false}, {8 * time.Second, 11 * time.Second, false}, {5 * time.Second, 17500 * time.Millisecond, false}} {
+	}{{5 * time.Second, 3 * time.Second, true}, {8 * time.Second, 3 * time.Second, true}, {5 * time.Second, 10 * time.Second, false}, {8 * time.Second, 9 * time.Second, false}, {8 * time.Second, 10 * time.Second, false}, {8 * time.Second, 11 * time.Second, false}, {5 * time.Second, 17500 * time.Millisecond, false}} {
 		o := base
 		o.Interval, o.Window.Admission.RPCTimeout = tc.interval, tc.rpc
 		if err := mixedValidate(o); (err == nil) != tc.wantOK {

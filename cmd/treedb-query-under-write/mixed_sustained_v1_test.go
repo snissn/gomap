@@ -26,7 +26,8 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 		rpc       time.Duration
 		want      bool
 	}{
-		{"planned-58", 58, 300 * time.Second, 3 * time.Second, true},
+		{"superseded-58", 58, 300 * time.Second, 3 * time.Second, false},
+		{"planned-48", 48, 300 * time.Second, 3 * time.Second, true},
 		{"maximum-63", 63, 300 * time.Second, time.Second, true},
 		{"default-six", 6, time.Minute, 3 * time.Second, true},
 		{"too-few", 5, time.Minute, 3 * time.Second, false},
@@ -38,7 +39,9 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := base
 			o.Window.Duration, o.Window.Admission.RPCTimeout = tc.duration, tc.rpc
-			if tc.name == "maximum-63" {
+			if tc.name == "planned-48" {
+				o.Interval = 6 * time.Second
+			} else if tc.name == "maximum-63" {
 				o.Interval = 4 * time.Second
 			}
 			if err := json.Unmarshal([]byte(fmt.Sprintf(`{"Originals":%d}`, tc.originals)), &o); err != nil {
@@ -67,6 +70,7 @@ func TestMixedCumulativeRPCBudgetV1(t *testing.T) {
 	}{
 		{"superseded-58-needs348s", 58, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
 		{"revised-48-leaves12s", 48, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
+		{"revised-48-interval6s", 48, 300 * time.Second, 6 * time.Second, 3 * time.Second, true},
 		{"49-leaves6s", 49, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
 		{"50-has-no-headroom", 50, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
 		{"48-at-cumulative-equality", 48, 288 * time.Second, 5 * time.Second, 3 * time.Second, false},

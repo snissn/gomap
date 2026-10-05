@@ -1050,7 +1050,12 @@ baseline is represented as an observed red.
 
 The mixed-window driver retains the six-original/60-second default. Explicit
 `-mixed-originals` admits 6..63 declared originals and a bounded mixed window of
-up to 300 seconds when the pacing, RPC and output budgets fit. Before networking,
+up to 300 seconds when the pacing, RPC and output budgets fit. Cumulative
+serial admission requires `(N-1)*max(interval,2*rpc-timeout)+2*rpc-timeout < window`;
+write and visibility are separate serial RPCs. The six/60s defaults require an
+explicit feasible RPC budget (3s fits, the shared10s default does not).
+Actual dispatch still requires both full budgets before cutoff; arithmetic
+headroom does not guarantee completion under scheduling/local-work delays. Before networking,
 it precomputes full-population canonical FP32 truth for all `count+1` planned
 prefixes (at most 64); its uint64 mask includes bit 63. Omitted profile rejects
 changing top10 ID/score bits;
