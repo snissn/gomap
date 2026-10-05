@@ -10,8 +10,9 @@ import (
 	"github.com/tidwall/btree"
 )
 
-// COWMutation borrows input only during Prepare. Remove is a physical delete;
-// a logical deletion is a normal entry with FlagTombstone and its revision.
+// COWMutation borrows input only during Prepare. Remove erases the physical key;
+// FlagTombstone stores a cached physical-key deletion marker and its revision.
+// MVCC logical tombstones remain separately encoded in ordinary value bytes.
 type COWMutation struct {
 	Key, Value []byte
 	Ptr        page.ValuePtr

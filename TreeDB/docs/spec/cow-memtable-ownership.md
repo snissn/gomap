@@ -13,8 +13,10 @@ changes here.
 generation. `Prepare` first validates and reserves the complete allocation
 charge, then forks that private header, copies accepted keys/values into owned
 immutable strings and applies the batch. `Remove` physically deletes a key;
-a normal entry carrying `FlagTombstone` preserves a logical deletion and its
-revision. Pointer/revision/flags metadata is stored verbatim.
+a normal entry carrying `FlagTombstone` preserves a cached physical-key deletion
+marker and its revision. This is distinct from an MVCC logical tombstone, whose
+existing codec remains in ordinary value bytes. Pointer/revision/flags metadata
+is stored verbatim.
 Replacing an existing key reuses its already owned immutable string; only its
 new value is copied. Get/successor/cursor records share immutable strings and
 create no intermediate payload copy.
@@ -90,6 +92,13 @@ views/cursors, 64 generations, 32 frozen/pinned sources, 256 distinct resources
 per generation, 64 MiB generation history, 512 MiB total charge, 512 MiB retirement
 capacity and 64 MiB in-flight reservations. They are internal starting limits,
 not public production tuning or an RSS quota.
+
+The source-bound mixed-operation charge remains intentionally conservative.
+The measured 1,024-operation mixed witness reserves about 45.5 MiB and fits the
+default in-flight limit; its 4,096-operation counterpart reserves about 182 MiB
+and is refused under those defaults. Callers must admit the complete command
+before its WAL frame, use validated larger finite limits when needed, or return
+capacity refusal. A batch must not be split after acceptance to evade admission.
 
 The retirement limit reserves potential retirement of *all* current generation
 history, in-flight preparations and cancelled deferred owners. This
