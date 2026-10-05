@@ -287,6 +287,14 @@ func testFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T, originals int) 
 			})
 		})
 		t.Run("UntouchedCurrentPopulation", func(t *testing.T) {
+			// Begin this planned population phase with a fresh caller-owned socket.
+			// The preceding complete audits can exceed the server's idle timeout;
+			// this is setup before a new mutation, never a retry after ambiguity.
+			client, err := DialContext(ctx, "tcp", node.config.VectorInitialization.PublicAddresses[node.config.NodeID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
 			originalY, err := node.vector.collection.Get([]byte("base-minus-y"))
 			if err != nil {
 				t.Fatal(err)
