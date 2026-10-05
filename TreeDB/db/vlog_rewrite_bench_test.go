@@ -93,8 +93,8 @@ func benchmarkValuePointerRewrite(b *testing.B, seg1Records, seg2Records, batchS
 
 func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int, outer bool) (*DB, []uint32, func()) {
 	tb.Helper()
-	if outer && !rootpublication.StableRelativeNamespaceSupported() {
-		tb.Skip("rotated producer creation requires stable relative namespace authority")
+	if outer && !rootpublication.StableNamespaceCreationSupported() {
+		tb.Skip("rotated producer creation requires stable creation authority")
 	}
 	dir, err := os.MkdirTemp("", "treedb-vlog-rewrite-value-bench-*")
 	if err != nil {

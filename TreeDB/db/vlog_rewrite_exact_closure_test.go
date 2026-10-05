@@ -22,8 +22,8 @@ import (
 // This fixture exercises compressed physical outer leaves containing logical
 // value pointers. Paged-leaf rewrite fixtures cannot expose candidate decoding.
 func TestRewriteCompressedOuterLeavesExactClosure(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("rotated producer creation requires stable relative namespace authority")
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("rotated producer creation requires stable creation authority")
 	}
 	const count, batchSize = 2048, 64
 	for _, serialized := range []bool{false, true} {
@@ -458,8 +458,8 @@ func TestRewriteExactClosureOptimisticConflict(t *testing.T) {
 }
 
 func TestRewriteExactClosureInvalidNewestReopensOlderRawGeneration(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("rotated producer creation requires stable relative namespace authority")
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("rotated producer creation requires stable creation authority")
 	}
 	db, writer, old, fresh := setupExactRewritePair(t)
 	beforeSeq := db.currentCommitSeq()
