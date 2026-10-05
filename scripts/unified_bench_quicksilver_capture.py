@@ -15,7 +15,7 @@ ldd result. Benchmark binaries must be Linux ELF executables, not scripts.
 Raw ldd output and actual loader environment are retained per cell.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
-commit, seed, mixture, working_set, miss_percent, profiled, flags}]. Defaults match
+commit, seed, mixture, working_set, miss_percent, profiled, keep, flags}]. Defaults match
 the prior 3M capture flow. Custom duration requires duration_ns and Go's canonical
 duration string. Extra flags must be -<engine>-<name>=<value>. Profiles are durable,
 fast, wal_on_fast; auto commit resolves ordinary for realistic, sync for history.
@@ -112,7 +112,13 @@ def validate(reports, cell, directory, fixtures, metadata):
     assert r['updated_keys'] == updates and len(r['update_batch_ms']) == math.ceil(updates/1000)
     assert len(r['checkpoint_ms']) == min(4, math.ceil(updates/1000))
     flags = r['registered_cli_flags']
-    assert flags['profile'] == profile and flags['keep'] == 'false'
+    keep = cell.get('keep', False)
+    assert isinstance(keep, bool)
+    assert flags['profile'] == profile and flags['keep'] == str(keep).lower()
+    if keep:
+        retained = pathlib.Path(r['data_dir'])
+        assert retained.is_absolute() and retained.is_dir()
+        assert retained.parent.resolve() == pathlib.Path(metadata['env']['TMPDIR']).resolve()
     assert flags['quicksilver-duration'] == cell.get('duration', '8s')
     if case == 'realistic':
         seed, mixture = cell.get('seed', 24), cell.get('mixture', 'primary')
@@ -239,6 +245,7 @@ def main():
                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
     (root/'working-dbs').mkdir(exist_ok=True)
     assert plan.get('repeats', 1) >= 1 and plan['cells']
+    assert all(isinstance(cell.get('keep', False), bool) for cell in plan['cells']), 'keep must be boolean'
     labels = [cell['label'] for cell in plan['cells']]
     assert len(set(labels)) == len(labels) and all(pathlib.Path(v).name == v and v not in ('.', '..') for v in labels)
     fixtures = {}
@@ -260,6 +267,8 @@ def main():
                 command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
                             '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
             command += extra
+            if cell.get('keep', False):
+                command += ['-keep']
             if cell.get('profiled', False):
                 command += ['-profile-dir', str(directory)]
             metadata = dict(cell=cell, repeat=repeat+1, command=command, source=source,

@@ -52,6 +52,22 @@ def report(reads=10000):
 
 
 class CaptureRehearsal(unittest.TestCase):
+    def test_retained_database_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)/'evidence'/'capture'/'1-treedb'
+            directory.mkdir(parents=True)
+            retained = pathlib.Path(temp)/'working-dbs'/'bench-quicksilver-treedb-test'
+            retained.mkdir(parents=True)
+            packet = report()
+            packet['registered_cli_flags']['keep'] = 'true'
+            packet['data_dir'] = str(retained)
+            cell = dict(engine='treedb', keys=40000, reads=10000, keep=True)
+            metadata = {'env': {'TMPDIR': str(retained.parent)}}
+            capture.validate([packet], cell, directory, {}, metadata)
+            packet['data_dir'] = str(directory)
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, directory, {}, metadata)
+
     def test_process_capture_rejects_wrong_contract_and_native_identity_keeps_raw(self):
         real_run = subprocess.run
 

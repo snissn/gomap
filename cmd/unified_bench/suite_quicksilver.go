@@ -23,6 +23,7 @@ import (
 )
 
 var (
+	quicksilverVerifyDir   = flag.String("quicksilver-verify-dir", "", "Verify an existing final Quicksilver database without rerunning the workload (one DB, same fixture flags)")
 	quicksilverCase        = flag.String("quicksilver-case", "realistic", "quicksilver fixture: realistic (3M keys), random4k (100k keys), structured256 (250k keys)")
 	quicksilverReads       = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
 	quicksilverReadBatch   = flag.Int("quicksilver-read-batch", 64, "quicksilver reads per owned-read snapshot; 1 uses ordinary Get")
@@ -941,6 +942,57 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 	return
 }
 
+type quicksilverVerificationResult struct {
+	VerificationOnly bool              `json:"verification_only"`
+	Engine           string            `json:"engine"`
+	DataDir          string            `json:"data_dir"`
+	Config           quicksilverConfig `json:"config"`
+	VerifiedKeys     int               `json:"verified_keys"`
+	VerifiedMisses   int               `json:"verified_misses"`
+}
+
+func verifyQuicksilverRetained(cfg BenchConfig, c quicksilverConfig, names []string, profileDir string) (out string, err error) {
+	if len(names) != 1 || profileDir != "" || benchConfigHasAnyProfileOutput(cfg) {
+		return "", errors.New("quicksilver verification requires one DB and no profiling outputs")
+	}
+	var marker string
+	switch {
+	case names[0] == "treedb_backend" || names[0] == "treedb_backend_command_wal":
+		marker = "index.db"
+	case strings.HasPrefix(names[0], "treedb"):
+		marker = "maindb/index.db"
+	case names[0] == "lmdb":
+		marker = "data.mdb"
+	case names[0] == "rocksdb":
+		marker = "CURRENT"
+	default:
+		return "", errors.New("quicksilver verification supports TreeDB, LMDB and RocksDB")
+	}
+	info, err := os.Stat(filepath.Join(cfg.QuicksilverVerifyDir, marker))
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return "", errors.New("quicksilver verification requires an existing nonempty database marker")
+	}
+	open, err := GetDBFactory(names[0])
+	if err != nil {
+		return "", err
+	}
+	db, err := open(cfg.QuicksilverVerifyDir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	report := quicksilverVerificationResult{VerificationOnly: true, Engine: names[0], DataDir: cfg.QuicksilverVerifyDir, Config: c}
+	report.VerifiedKeys, report.VerifiedMisses, err = quicksilverVerify(db, c, quicksilverUpdateStride(c.Keys), newBenchGuard(cfg))
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.MarshalIndent(report, "", "  ")
+	return string(raw), err
+}
+
 func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string) (out string, err error) {
 	c = c.resolved()
 	if err := c.validate(); err != nil {
@@ -963,6 +1015,9 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 	}
 	if len(names) == 0 {
 		return "", errors.New("quicksilver: no DBs selected")
+	}
+	if cfg.QuicksilverVerifyDir != "" {
+		return verifyQuicksilverRetained(cfg, c, names, profileDir)
 	}
 	// These adapters checkpoint by replacing a live handle, which is unsafe
 	// during the suite's concurrent readers. Reject the whole selection early.
