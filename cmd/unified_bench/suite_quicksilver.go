@@ -23,6 +23,8 @@ import (
 )
 
 var (
+	quicksilverChurnShape  = flag.String("quicksilver-churn-shape", "full-refresh", "quicksilver churn: full-refresh stress or sparse original mutation-target restore")
+	quicksilverMeasureDir  = flag.String("quicksilver-measure-dir", "", "Measure an existing final realistic Quicksilver fixture without reloading it (one DB, same fixture flags; idempotent repeated writer)")
 	quicksilverChurnRounds = flag.Int("quicksilver-churn-rounds", 0, "quicksilver realistic cached TreeDB: bounded maintenance characterization rounds after measured reads (0 disables, maximum 32)")
 	quicksilverChurnPause  = flag.Duration("quicksilver-churn-pause", 6*time.Second, "quicksilver characterization pause per round (positive, maximum 1m; only with churn rounds)")
 	quicksilverVerifyDir   = flag.String("quicksilver-verify-dir", "", "Verify an existing final Quicksilver database without rerunning the workload (one DB, same fixture flags)")
@@ -43,6 +45,8 @@ const quicksilverSampleLimit = 1000000
 var quicksilverPhaseNames = []string{"quicksilver_hits", "quicksilver_misses", "quicksilver_mixed", "quicksilver_concurrent"}
 
 type quicksilverConfig struct {
+	ChurnShape          string        `json:"churn_shape,omitempty"`
+	FinalFixture        bool          `json:"final_fixture,omitempty"`
 	ChurnRounds         int           `json:"churn_rounds,omitempty"`
 	ChurnPause          time.Duration `json:"churn_pause_ns,omitempty"`
 	Case                string        `json:"case"`
@@ -71,6 +75,16 @@ func (c quicksilverConfig) valueSize() int {
 	return 256
 }
 func (c quicksilverConfig) validate() error {
+	if c.ChurnShape != "" && c.ChurnShape != "full-refresh" && c.ChurnShape != "sparse" {
+		return fmt.Errorf("quicksilver: unknown churn shape %q", c.ChurnShape)
+	}
+	if c.ChurnShape != "" && c.ChurnRounds == 0 {
+		return errors.New("quicksilver: explicit churn shape requires churn rounds")
+	}
+	if c.FinalFixture && (c.Case != "realistic" || c.ChurnRounds != 0) {
+		return errors.New("quicksilver: retained measurement requires realistic and no churn rounds")
+	}
+
 	if c.ChurnRounds < 0 || c.ChurnRounds > 32 || c.ChurnPause < 0 || c.ChurnPause > time.Minute || (c.ChurnRounds == 0 && c.ChurnPause != 0) || (c.ChurnRounds > 0 && (c.Case != "realistic" || c.ChurnPause <= 0)) {
 		return fmt.Errorf("quicksilver: churn requires realistic, 1..32 rounds and a positive pause up to 1m (or both zero to disable)")
 	}
@@ -94,6 +108,10 @@ func (c quicksilverConfig) validate() error {
 func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksilverConfig, error) {
 	c := quicksilverConfig{Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates, Seed: 24, CommitMode: *quicksilverCommit, WorkingSet: *quicksilverWorkingSet, MissPercent: *quicksilverMissPercent, Mixture: *quicksilverMixture}
 	c.ChurnRounds = *quicksilverChurnRounds
+	if c.ChurnRounds > 0 || isSet["quicksilver-churn-shape"] {
+		c.ChurnShape = *quicksilverChurnShape
+	}
+	c.FinalFixture = base.QuicksilverMeasureDir != ""
 	if c.ChurnRounds != 0 || isSet["quicksilver-churn-pause"] {
 		c.ChurnPause = *quicksilverChurnPause
 	}
@@ -172,6 +190,8 @@ type quicksilverPhase struct {
 	StatsAfter              map[string]string `json:"stats_after,omitempty"`
 }
 type quicksilverResult struct {
+	MeasurementState          string                  `json:"measurement_state,omitempty"`
+	WriterSemantics           string                  `json:"writer_semantics,omitempty"`
 	Churn                     *quicksilverChurnResult `json:"maintenance_churn,omitempty"`
 	wrapper                   kvstore.DB
 	Engine                    string                     `json:"engine"`
@@ -467,6 +487,9 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 				kind := 0
 				if c.Case == "realistic" {
 					id, absent, kind, distinctIndex = quicksilverAccess(&c, rng, mode, i+w, readStride, readOffset)
+					if c.FinalFixture {
+						id, distinctIndex = quicksilverFinalAccess(c, f, id, absent, kind, i+w, distinctIndex)
+					}
 					key = quicksilverLookupKey(keyScratch[:0], id, c.Seed, c.Mixture, absent && kind == 0)
 				} else {
 					global := i*c.Workers + w
@@ -522,7 +545,7 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 				ns := time.Since(t).Nanoseconds()
 				if e == nil {
 					state := uint8(0)
-					if c.Case == "realistic" && mode == 3 && !absent {
+					if c.Case == "realistic" && (mode == 3 || c.FinalFixture) && !absent {
 						if id/2 >= uint64(2*c.Keys) {
 							state = 5
 						} else {
@@ -617,6 +640,16 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	for j, word := range f.distinct {
 		p.DistinctAccesses += bits.OnesCount64(word)
 		p.DistinctPresentRequests += bits.OnesCount64(word & presentMasks[j%5])
+	}
+	if c.FinalFixture {
+		// Original-key slot 0 becomes absent after a mutation delete. Setup delete
+		// slot 3 and inserted-key slot 4 keep their existing classifications.
+		for i, state := range f.states {
+			bit := i * 5
+			if state == 255 && f.distinct[bit/64]&(uint64(1)<<uint(bit%64)) != 0 {
+				p.DistinctPresentRequests--
+			}
+		}
 	}
 	p.DistinctAbsentRequests = p.DistinctAccesses - p.DistinctPresentRequests
 
@@ -755,6 +788,11 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 	if err = quicksilverValidateChurnEngine(c, engine); err != nil {
 		return
 	}
+	if c.FinalFixture {
+		if err = quicksilverRetainedMarker(engine, dir); err != nil {
+			return
+		}
+	}
 	res = quicksilverResult{Correctness: "owned read identity/length/generation; full bytes and all miss classes after durable checkpoint/reopen", DistinctTrackingBytes: ((c.Keys*5 + 63) / 64) * 8 * (c.Workers + 1), Engine: engine, Config: c, GOMAXPROCS: runtime.GOMAXPROCS(0), Profiled: benchConfigHasAnyProfileOutput(cfg), UpdateStride: quicksilverUpdateStride(c.Keys), TraceBytes: quicksilverTraceLength * (64 + 8), SampleCapacity: quicksilverSampleLimit, SampleBytes: quicksilverSampleLimit * 8}
 	res.AccessGeneration = "historical repeated 65536-entry trace"
 	if c.Case == "realistic" {
@@ -790,53 +828,74 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		}
 	}
 	t := time.Now()
-	for i := 0; i < c.Keys; i += 1000 {
-		if err = guard.Checkpoint(); err != nil {
-			return
-		}
-		if err = quicksilverWrite(db, c, i, min(1000, c.Keys-i), res.UpdateStride, false); err != nil {
-			return
-		}
-	}
-	res.LoadSeconds = time.Since(t).Seconds()
-	if c.Case == "realistic" {
-		t = time.Now()
-		if err = quicksilverPrepareDeleted(db, c, guard); err != nil {
-			return
-		}
-		res.DeletedPreparationSeconds = time.Since(t).Seconds()
-		t = time.Now()
-		res.Fixture = quicksilverLoadedDistribution(c)
-		if res.Compressibility, err = quicksilverMeasureCompressibility(c); err != nil {
-			return
-		}
-		res.FixtureAnalysisSeconds = time.Since(t).Seconds()
-	}
-	elapsed, e := quicksilverCheckpoint(db, cfg, engine, "quicksilver_initial")
-	if e != nil {
-		return res, e
-	}
-	res.InitialCheckpointMS = float64(elapsed) / float64(time.Millisecond)
-	res.InitialStats = quicksilverStats(db)
-	if err = db.Close(); err != nil {
-		db = nil
-		return
-	}
-	db = nil
-	if res.InitialFiles, err = quicksilverFiles(dir); err != nil {
-		return
-	}
-	t = time.Now()
-	db, err = open(dir)
-	res.ReopenMS = float64(time.Since(t)) / float64(time.Millisecond)
-	if err != nil {
-		return
-	}
-	if c.Case == "realistic" {
-		res.InitialVerifiedKeys, res.InitialVerifiedMisses, err = quicksilverRealisticVerify(db, c, res.UpdateStride, guard, false)
+	var elapsed time.Duration
+	var e error
+	if c.FinalFixture {
+		res.MeasurementState = "retained final fixture; pre/post full oracle; no population reload or restore"
+		res.WriterSemantics = "idempotent repeated mutation schedule; insert identities already exist and are SET again"
+		res.InitialFiles, err = quicksilverFiles(dir)
 		if err != nil {
 			return
 		}
+		res.InitialStats = quicksilverStats(db)
+		res.InitialVerifiedKeys, res.InitialVerifiedMisses, err = quicksilverVerifyFinalFixture(db, c, res.UpdateStride, guard)
+		if err != nil {
+			return
+		}
+	} else {
+		t = time.Now()
+		for i := 0; i < c.Keys; i += 1000 {
+			if err = guard.Checkpoint(); err != nil {
+				return
+			}
+			if err = quicksilverWrite(db, c, i, min(1000, c.Keys-i), res.UpdateStride, false); err != nil {
+				return
+			}
+		}
+		res.LoadSeconds = time.Since(t).Seconds()
+		if c.Case == "realistic" {
+			t = time.Now()
+			if err = quicksilverPrepareDeleted(db, c, guard); err != nil {
+				return
+			}
+			res.DeletedPreparationSeconds = time.Since(t).Seconds()
+			t = time.Now()
+			res.Fixture = quicksilverLoadedDistribution(c)
+			if res.Compressibility, err = quicksilverMeasureCompressibility(c); err != nil {
+				return
+			}
+			res.FixtureAnalysisSeconds = time.Since(t).Seconds()
+		}
+		elapsed, e = quicksilverCheckpoint(db, cfg, engine, "quicksilver_initial")
+		if e != nil {
+			return res, e
+		}
+		res.InitialCheckpointMS = float64(elapsed) / float64(time.Millisecond)
+		res.InitialStats = quicksilverStats(db)
+		if err = db.Close(); err != nil {
+			db = nil
+			return
+		}
+		db = nil
+		if res.InitialFiles, err = quicksilverFiles(dir); err != nil {
+			return
+		}
+		t = time.Now()
+		db, err = open(dir)
+		res.ReopenMS = float64(time.Since(t)) / float64(time.Millisecond)
+		if err != nil {
+			return
+		}
+		if c.Case == "realistic" {
+			res.InitialVerifiedKeys, res.InitialVerifiedMisses, err = quicksilverRealisticVerify(db, c, res.UpdateStride, guard, false)
+			if err != nil {
+				return
+			}
+		}
+	}
+	var fixture *quicksilverFixture
+	if c.FinalFixture {
+		fixture = newQuicksilverFixture(c)
 	}
 	// Identical deterministic untimed warmup; no cold-device claim.
 	warmRNG := rand.New(rand.NewPCG(uint64(c.Seed), 91))
@@ -849,10 +908,21 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		}
 		if c.Case == "realistic" {
 			id, absent, kind, _ := quicksilverAccess(&c, warmRNG, 2, i, res.UpdateStride, int(quicksilverMix(uint64(c.Seed))%uint64(c.Keys)))
+			if c.FinalFixture {
+				id, _ = quicksilverFinalAccess(c, fixture, id, absent, kind, i, 0)
+			}
 			k := quicksilverLookupKey(warmKey[:0], id, c.Seed, c.Mixture, absent && kind == 0)
 			v, e := quicksilverGet(db.Get, k)
 			if e == nil {
-				e = quicksilverCheckRead(&c, id, v, absent, false, 0)
+				state := uint8(0)
+				if c.FinalFixture && !absent {
+					if id/2 >= uint64(2*c.Keys) {
+						state = 5
+					} else {
+						state = fixture.states[id/2]
+					}
+				}
+				e = quicksilverCheckRead(&c, id, v, absent, false, state)
 			}
 			if e != nil {
 				return res, e
@@ -873,7 +943,9 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 			return
 		}
 	}
-	fixture := newQuicksilverFixture(c)
+	if fixture == nil {
+		fixture = newQuicksilverFixture(c)
+	}
 	defer installAllocsProfileRateForEnabled(cfg.AllocsProfile != "", cfg.AllocsProfileRate)()
 	for mode := 0; mode < 3; mode++ {
 		p, e := quicksilverProfilePhase(cfg, quicksilverPhaseNames[mode], engine, func(stop func()) (quicksilverPhase, error) {
@@ -953,7 +1025,11 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 	if err != nil {
 		return
 	}
-	res.VerifiedKeys, res.VerifiedMisses, err = quicksilverVerify(db, c, res.UpdateStride, guard)
+	if c.FinalFixture {
+		res.VerifiedKeys, res.VerifiedMisses, err = quicksilverVerifyFinalFixture(db, c, res.UpdateStride, guard)
+	} else {
+		res.VerifiedKeys, res.VerifiedMisses, err = quicksilverVerify(db, c, res.UpdateStride, guard)
+	}
 	if err != nil || c.ChurnRounds == 0 {
 		return
 	}
@@ -980,29 +1056,36 @@ type quicksilverVerificationResult struct {
 	VerifiedMisses   int               `json:"verified_misses"`
 }
 
+func quicksilverRetainedMarker(engine, dir string) error {
+	var marker string
+	switch {
+	case engine == "treedb_backend" || engine == "treedb_backend_command_wal":
+		marker = "index.db"
+	case strings.HasPrefix(engine, "treedb"):
+		marker = "maindb/index.db"
+	case engine == "lmdb":
+		marker = "data.mdb"
+	case engine == "rocksdb":
+		marker = "CURRENT"
+	default:
+		return errors.New("quicksilver verification supports TreeDB, LMDB and RocksDB")
+	}
+	info, err := os.Stat(filepath.Join(dir, marker))
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.New("quicksilver verification requires an existing nonempty database marker")
+	}
+	return nil
+}
+
 func verifyQuicksilverRetained(cfg BenchConfig, c quicksilverConfig, names []string, profileDir string) (out string, err error) {
 	if len(names) != 1 || profileDir != "" || benchConfigHasAnyProfileOutput(cfg) {
 		return "", errors.New("quicksilver verification requires one DB and no profiling outputs")
 	}
-	var marker string
-	switch {
-	case names[0] == "treedb_backend" || names[0] == "treedb_backend_command_wal":
-		marker = "index.db"
-	case strings.HasPrefix(names[0], "treedb"):
-		marker = "maindb/index.db"
-	case names[0] == "lmdb":
-		marker = "data.mdb"
-	case names[0] == "rocksdb":
-		marker = "CURRENT"
-	default:
-		return "", errors.New("quicksilver verification supports TreeDB, LMDB and RocksDB")
-	}
-	info, err := os.Stat(filepath.Join(cfg.QuicksilverVerifyDir, marker))
-	if err != nil {
+	if err := quicksilverRetainedMarker(names[0], cfg.QuicksilverVerifyDir); err != nil {
 		return "", err
-	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return "", errors.New("quicksilver verification requires an existing nonempty database marker")
 	}
 	open, err := GetDBFactory(names[0])
 	if err != nil {
@@ -1050,6 +1133,17 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 			return "", err
 		}
 	}
+	if c.FinalFixture && cfg.QuicksilverMeasureDir == "" {
+		return "", errors.New("quicksilver: retained measurement requires measure-dir")
+	}
+	if cfg.QuicksilverMeasureDir != "" {
+		if len(names) != 1 || cfg.QuicksilverVerifyDir != "" || !c.FinalFixture {
+			return "", errors.New("quicksilver: retained measurement requires one DB and cannot combine verify-dir")
+		}
+		if err := quicksilverRetainedMarker(names[0], cfg.QuicksilverMeasureDir); err != nil {
+			return "", err
+		}
+	}
 	if cfg.QuicksilverVerifyDir != "" && c.ChurnRounds > 0 {
 		return "", errors.New("quicksilver: retained verification does not accept churn rounds")
 	}
@@ -1077,6 +1171,9 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		}
 	}
 	for name := range cfg.CheckpointCPUProfileTests {
+		if c.FinalFixture && name == "quicksilver_initial" {
+			return "", errors.New("quicksilver: retained measurement has no initial checkpoint to profile")
+		}
 		if name != "quicksilver_initial" && name != "quicksilver_final" {
 			return "", fmt.Errorf("quicksilver: unsupported checkpoint profile phase %q", name)
 		}
@@ -1096,7 +1193,10 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		if e != nil {
 			return "", e
 		}
-		dir, e := os.MkdirTemp("", "bench-quicksilver-"+name+"-")
+		dir := cfg.QuicksilverMeasureDir
+		if dir == "" {
+			dir, e = os.MkdirTemp("", "bench-quicksilver-"+name+"-")
+		}
 		if e != nil {
 			return "", e
 		}
@@ -1105,7 +1205,7 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 			return "", fmt.Errorf("quicksilver %s (failed DB retained at %s): %w", name, dir, e)
 		}
 		report.Flags = flags
-		if cfg.KeepDir {
+		if cfg.KeepDir || c.FinalFixture {
 			report.DataDir = dir
 		} else {
 			if e = os.RemoveAll(dir); e != nil {

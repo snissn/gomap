@@ -167,10 +167,11 @@ type BenchConfig struct {
 	TestsArg      string
 	Profile       string
 
-	QuicksilverVerifyDir string
-	KeepDir              bool
-	Progress             bool
-	SeedUsed             int64
+	QuicksilverMeasureDir string
+	QuicksilverVerifyDir  string
+	KeepDir               bool
+	Progress              bool
+	SeedUsed              int64
 
 	CPUProfile string
 	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
@@ -479,6 +480,9 @@ func main() {
 		isSet[f.Name] = true
 	})
 	explicitFlags = isSet
+	if strings.TrimSpace(*quicksilverMeasureDir) != "" && strings.ToLower(strings.TrimSpace(*suiteArg)) != "quicksilver" {
+		log.Fatal("-quicksilver-measure-dir requires -suite quicksilver")
+	}
 	if strings.TrimSpace(*quicksilverVerifyDir) != "" && !strings.EqualFold(strings.TrimSpace(*suiteArg), "quicksilver") {
 		log.Fatal("-quicksilver-verify-dir requires -suite quicksilver")
 	}
@@ -585,6 +589,7 @@ func main() {
 		TestsArg:                         *testArg,
 		Profile:                          *profileArg,
 		KeepDir:                          *keepDir,
+		QuicksilverMeasureDir:            strings.TrimSpace(*quicksilverMeasureDir),
 		QuicksilverVerifyDir:             strings.TrimSpace(*quicksilverVerifyDir),
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
