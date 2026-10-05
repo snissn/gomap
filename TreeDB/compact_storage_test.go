@@ -3,14 +3,19 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/snissn/compress/zstd"
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrapper(t *testing.T) {
@@ -155,6 +160,171 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	if closeErr != nil {
 		t.Fatalf("close reopened: %v", closeErr)
 	}
+}
+
+func TestCompactStorageFullRestoredDictionaryAuthority(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "source")
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = bytes.Repeat([]byte(fmt.Sprintf("k%08d/value-for-restored-leaf-dictionary|", i)), 128)
+	}
+	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID: 1, Contents: samples, History: samples[0], Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := dictdb.Open(filepath.Join(source, "dictdb"), backenddb.Options{DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dictID, err := store.PutDictBytes(ctx, dictionary)
+	if err == nil {
+		err = store.SetCurrentForClass(ctx, "outer_leaf", dictID)
+	}
+	if err == nil {
+		err = store.SetLeafPayloadMode(ctx, dictID, false)
+	}
+	closeErr := store.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("seed dictionary: operation=%v close=%v", err, closeErr)
+	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, source)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.DictTrain.TrainBytes = -1
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 64 << 10
+	opts.ValueLog.Generational.WarmSegmentTargetBytes = 64 << 10
+	opts.ValueLog.Generational.ColdSegmentTargetBytes = 64 << 10
+	database, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.SetMaintenancePhase(treedb.MaintenancePhaseRestore)
+	const keyCount = 20000
+	writeLeafGenerationChurnWorkload(t, database, keyCount, 5000, 4, 96)
+	want := make([][]byte, keyCount)
+	for i := range want {
+		want[i], err = database.Get([]byte(fmt.Sprintf("k%08d", i)))
+		if err != nil || len(want[i]) == 0 {
+			_ = database.Close()
+			t.Fatalf("source value %d: length=%d err=%v", i, len(want[i]), err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertDictionaryFrames := func(paths []string) {
+		t.Helper()
+		found := false
+		for _, path := range paths {
+			payload, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(payload) == 0 {
+				continue
+			}
+			if len(payload) < valuelog.HeaderSize {
+				t.Fatalf("short leaf frame header: %s", path)
+			}
+			length := uint64(binary.LittleEndian.Uint32(payload[16:20]))
+			if length > uint64(len(payload)-valuelog.HeaderSize) {
+				t.Fatalf("short leaf frame body: %s", path)
+			}
+			header, _, _, _, err := valuelog.DecodeFrame(payload[valuelog.HeaderSize : uint64(valuelog.HeaderSize)+length])
+			if err != nil {
+				t.Fatal(err)
+			}
+			found = found || header.DictID == dictID
+		}
+		if !found {
+			t.Fatalf("no leaf frame uses real dictionary %d in %v", dictID, paths)
+		}
+	}
+	leafPaths, err := filepath.Glob(filepath.Join(source, "maindb", "leaf_vlog", "*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDictionaryFrames(leafPaths)
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.CopyFS(target, os.DirFS(source)); err != nil {
+		t.Fatal(err)
+	}
+	// Side-store indexes are replaced by rebind, so they must precede maindb.
+	for _, name := range []string{"dictdb", "templatedb"} {
+		if err := backenddb.RebindDurableRootSnapshotLayoutV1(filepath.Join(target, name), ""); err != nil {
+			t.Fatalf("rebind %s: %v", name, err)
+		}
+	}
+	if err := backenddb.RebindDurableRootSnapshotLayoutV1(filepath.Join(target, "maindb"), target); err != nil {
+		t.Fatal(err)
+	}
+	opts.Dir = target
+	backend, cleanup, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cleanup != nil {
+			_ = cleanup()
+		}
+	}()
+	verify := func(database *backenddb.DB) {
+		t.Helper()
+		for i, value := range want {
+			key := []byte(fmt.Sprintf("k%08d", i))
+			got, err := database.Get(key)
+			if err != nil || !bytes.Equal(got, value) {
+				t.Fatalf("restored value %d: got=%x want=%x err=%v", i, got, value, err)
+			}
+		}
+		if got, err := database.Get([]byte("missing-restored-key")); err != nil || got != nil {
+			t.Fatalf("restored miss: got=%x err=%v", got, err)
+		}
+	}
+	verify(backend)
+	compactOpts := treedb.CompactStorageOptions{
+		Mode: treedb.CompactStorageFull, SyncEachPhase: true,
+		LeafPackMinExpectedReclaimBytes: 1, LeafPackMinReclaimPerCopyPPM: 1,
+	}
+	plan, err := backend.CompactStoragePlan(ctx, compactOpts)
+	if err != nil || plan.RemainingDebt.LeafPackGenerations == 0 {
+		t.Fatalf("restored fixture lacks leaf-pack debt: plan=%+v err=%v", plan, err)
+	}
+	stats, err := backend.CompactStorage(ctx, compactOpts)
+	if err != nil {
+		t.Fatalf("restored dictionary Full compaction: %v", err)
+	}
+	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran || stats.LeafGenerationPacks[0].LeafPagesCopied == 0 {
+		t.Fatalf("restored dictionary maintenance did not pack: %+v", stats.LeafGenerationPacks)
+	}
+	var packedPaths []string
+	for _, pack := range stats.LeafGenerationPacks {
+		for _, fileID := range pack.CreatedFileIDs {
+			lane, seq := valuelog.DecodeFileID(fileID)
+			packedPaths = append(packedPaths, filepath.Join(target, "maindb", "leaf_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq)))
+		}
+	}
+	assertDictionaryFrames(packedPaths)
+	verify(backend)
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	cleanup = nil
+	opts.ReadOnly = true
+	backend, closeReopened, err := treedb.OpenBackend(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeReopened()
+	verify(backend)
 }
 
 func TestCompactStorageCachedRefreshesProtectedPathsAcrossPhases(t *testing.T) {
