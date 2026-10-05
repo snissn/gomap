@@ -1,0 +1,68 @@
+from source_paths import source_path
+"""Inert local-only derivation: seal fresh inputs, native Go oracle, finalize inactive manifest."""
+import argparse, ast, hashlib, importlib.util, json, pathlib
+TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
+TEMPLATE_SHA256 = 'e486d6ef8059e75958ae85be621784904c8a0bd949693f90452cf13e55a3bdcc'
+COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
+COLLECTOR_SHA256 = '32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70'
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def collector():
+    assert sha(pathlib.Path(COLLECTOR).read_bytes()) == COLLECTOR_SHA256
+    spec = importlib.util.spec_from_file_location('trial24_inert_collector', COLLECTOR)
+    c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c); return c
+
+def main():
+    if not __debug__: raise RuntimeError('assertions required')
+    ap = argparse.ArgumentParser(); ap.add_argument('--pins', required=True); ap.add_argument('--output', required=True); ap.add_argument('--finalize-pending')
+    a = ap.parse_args(); c = collector(); pins = c.strict_json(pathlib.Path(a.pins).read_bytes()); out = pathlib.Path(a.output)
+    assert not out.exists() and not out.is_symlink()
+    if a.finalize_pending:
+        raw = pathlib.Path(a.finalize_pending).read_bytes(); assert sha(raw) == pins['pending_manifest_sha256']
+        m = c.strict_json(raw); assert all(m[k] is False for k in c.FLAGS)
+        assert m['collector_sha256'] == COLLECTOR_SHA256
+        assert set(pins['receipts']) == set(c.RECEIPTS) - set(m['receipts'])
+        assert not set(m['local_pins']) & set(pins['additional_local_pins'])
+        m['receipts'].update(pins['receipts']); m['local_pins'].update(pins['additional_local_pins'])
+        m['population_limits'] = pins['population_limits']; m['server_cli_path'] = '/treedb-fixed-peer'
+        # Validate the eventual schema locally; grant no flags and run no network.
+        schema = dict(m); schema.update({k: True for k in c.FLAGS})
+        c.validate_manifest(schema, COLLECTOR_SHA256); c.prepare_local(m)
+        assert all(m[k] is False for k in c.FLAGS)
+        out.write_text(json.dumps(m, indent=2)+'\n')
+        print(json.dumps(dict(state='FINALIZED_INACTIVE_MANIFEST_NOT_RUNTIME_ACCEPTANCE', path=str(out), sha256=sha(out.read_bytes())))); return
+    raw = pathlib.Path(TEMPLATE).read_bytes(); assert sha(raw) == TEMPLATE_SHA256
+    text = raw.decode().replace('rf4trial14mixedc1', 'rf4trial24mixedchangingc1')
+    constants = pins['constants']
+    required = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
+    assert set(constants) == required
+    assert constants['OUT'] == c.LOCAL_INPUT_ROOT and constants['HEAD'] == pins['source_head'] and constants['TREE'] == pins['source_tree']
+    assert type(pins['pre_input_count']) is int and pins['pre_input_count'] > 0
+    assert type(pins['source_pr']) is int and pins['source_pr']>0 and type(pins['predecessor_pr']) is int and pins['predecessor_pr']>0
+    pathkeys = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','BOOT_REVIEW','LANDED','BUILD','SOURCE_REVIEW','SOURCE_INV','COLLECTOR'}
+    replacements = dict(constants, COLLECTOR=COLLECTOR, COLLECTOR_SHA256=COLLECTOR_SHA256)
+    class Replace(ast.NodeTransformer):
+        def visit_Assign(self, node):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in replacements:
+                key = node.targets[0].id; value = repr(replacements[key])
+                node.value = ast.parse('Path('+value+')' if key in pathkeys else value, mode='eval').body
+            return node
+    text = ast.unparse(ast.fix_missing_locations(Replace().visit(ast.parse(text))))+'\n'
+    text = text.replace('assert len(inv) == 74', 'assert len(inv) == '+str(pins['pre_input_count']))
+    # Seal-before-oracle stage retains all source binding checks. Finalization
+    # itself is checked only after sealing, native Go oracle generation and review.
+    original = ast.parse(pathlib.Path(COLLECTOR).read_text())
+    fn = next(x for x in original.body if isinstance(x, ast.FunctionDef) and x.name == 'validate_source_bindings')
+    fn.name = 'validate_sealing_source_bindings'
+    fn.body = [x for x in fn.body if not (isinstance(x, ast.Expr) and isinstance(x.value, ast.Call) and isinstance(x.value.func, ast.Name) and x.value.func.id == 'validate_finalization')]
+    helper = ast.unparse(fn)
+    for name in ('strict_json','input_name','digest_valid'): helper = helper.replace(name+'(', 'c.'+name+'(')
+    helper = helper.replace('set(HOSTS)', 'set(c.HOSTS)')
+    marker = '    c.validate_source_bindings(manifest, '; assert marker in text
+    text = text.replace(marker, '    '+helper.replace('\n','\n    ')+'\n    validate_sealing_source_bindings(manifest, ', 1)
+    assert 'c.prepare_local(manifest)' in text
+    text = text.replace('c.prepare_local(manifest)', "assert c.population_identity(c.build_initial_population(files, boot, baseline), 128)['SHA256'] == baseline['PopulationSHA256']")
+    text = text.replace('PREPARED_LOCAL_INPUTS_INACTIVE_MANIFEST','SEALED_INPUTS_PENDING_NATIVE_PREFIX_ORACLE_AND_FINALIZATION')
+    assert 'rf4trial14mixedc1' not in text
+    ast.parse(text, str(out)); out.write_text(text)
+    print(json.dumps(dict(state='UNEXECUTED_SEALER_REQUIRES_INDEPENDENT_SOURCE_REVIEW', source=str(out), sha256=sha(out.read_bytes()), template_sha256=TEMPLATE_SHA256, collector_sha256=COLLECTOR_SHA256)))
+if __name__ == '__main__': main()

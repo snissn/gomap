@@ -1,0 +1,96 @@
+from source_paths import source_path
+"""Inert source-only derivation. Root reviews/pins generated sources before any run."""
+import argparse, ast, hashlib, json, pathlib, re
+TEMPLATES = {'admission': '/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py', 'query': '/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py', 'lifecycle': '/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py', 'exact-validate': '/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py', 'artifact-verify': '/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py'}
+TEMPLATE_SHA256 = {'admission': '9fde2650d5b2336c51fb1cf89828f49ee4a3e39b0f024b15e13093b04fce3af2', 'query': '9cf5cfd4012da653780c32ec8eacde075a6979ffd14b31c6f8df4db4590717f4', 'lifecycle': '36deaea97ae5f61a01709cb05c43c99bceded843cda23cb3adb1e50a6cb84440', 'exact-validate': 'd9cd3dfbbbc76badf18e77740fb7d0763d66be03b1324402b56f24c4ea136af6', 'artifact-verify': '41a011660d88d8809b80ead55102ffbcf45f34dc570f9188562f960d0bc366e3'}
+CAMPAIGN = 'rf4trial24mixedchangingc1'
+PREFIX = 'gomap-4997-4998-trial24-growth-'
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def main():
+    if not __debug__: raise RuntimeError('assertions required')
+    ap=argparse.ArgumentParser();ap.add_argument('--pins',required=True);ap.add_argument('--output-root',required=True)
+    a=ap.parse_args(); pins=json.loads(pathlib.Path(a.pins).read_bytes()); out=pathlib.Path(a.output_root)
+    assert type(pins['source_pr']) is int and pins['source_pr']>0 and type(pins['predecessor_pr']) is int and pins['predecessor_pr']>0
+    assert pins['campaign']==CAMPAIGN and pins['remote_root']=='/home/mikers/gomap-4250-twohost-'+CAMPAIGN
+    assert all(re.fullmatch('[0-9a-f]{40}',pins[k]) for k in ('source_head','source_tree'))
+    # Root binds every old provenance literal to actual fresh evidence. This map
+    # changes constants only; executable assertions and workload math remain intact.
+    bindings=pins['literal_bindings']; assert isinstance(bindings,dict)
+    assert all(re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64}',k) and isinstance(v,str) and re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64}',v) for k,v in bindings.items())
+    assert isinstance(pins['qualification_prefix'],int) and pins['qualification_prefix']>0
+    assert set(pins['reviewed_path_bindings']) and all(isinstance(k,str) and k.startswith('/') and isinstance(v,str) and v.startswith('/') for k,v in pins['reviewed_path_bindings'].items())
+    texts={}
+    for role,path in TEMPLATES.items():
+        raw=pathlib.Path(source_path(path)).read_bytes();assert sha(raw)==TEMPLATE_SHA256[role]
+        text=raw.decode()
+        if role=='admission':
+            for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
+                text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
+        texts[role]=text
+    old_source_hashes={TEMPLATE_SHA256[k] for k in ('query','lifecycle','exact-validate')}
+    required=set()
+    for text in texts.values():
+        required.update(re.findall(r'(?<![0-9a-f])(?:sha256:)?[0-9a-f]{64}(?![0-9a-f])|(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])',text))
+    assert not (old_source_hashes & set(bindings)), 'generated source hashes must be computed, not supplied'
+    assert required-old_source_hashes<=set(bindings), 'all source/image/CID/evidence literals require actual root bindings'
+    assert bindings['b625421c06ae6f9398c384686f3c50ce2389ac21']==pins['source_head']
+    assert bindings['223df16137b4d11565a4a5ed033973c40ffa7556']==pins['source_tree']
+    destinations={role:out/(PREFIX+role+'-root-v1.py') for role in texts}
+    sources={};generated_hashes={}
+    # Exact validator has no dependency; source hashes are computed before they
+    # are installed in admission/artifact validation, never guessed.
+    for role in ('exact-validate','query','lifecycle','admission','artifact-verify'):
+        text=texts[role]
+        for old,new in sorted(pins['reviewed_path_bindings'].items(),key=lambda x:-len(x[0])): text=text.replace(old,new)
+        for oldrole,oldpath in TEMPLATES.items(): text=text.replace(oldpath,str(destinations[oldrole]))
+        text=text.replace('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1',pins['artifact_root'])
+        text=text.replace('rf4trial14mixedc1',CAMPAIGN).replace('gomap-4994-trial14mixedc1-growth-',PREFIX).replace('trial14mixedc1','trial24mixedchangingc1').replace('/growth-query-root-v2','/growth-query-root-v1').replace('/growth-lifecycle-root-v2','/growth-lifecycle-root-v1')
+        for old,new in sorted(bindings.items(),key=lambda x:-len(x[0])): text=text.replace(old,new)
+        for dependent in ('query','lifecycle','exact-validate'):
+            if dependent in generated_hashes: text=text.replace(TEMPLATE_SHA256[dependent],generated_hashes[dependent])
+        if role=='artifact-verify':
+            # The retained verifier uses split T/basename expressions, not
+            # absolute source paths. Bind every read (including proof hashes)
+            # directly to the emitted path; keep T's unrelated meaning intact.
+            for dependent in ('exact-validate','query','lifecycle'):
+                split_path='T/'+repr(PREFIX+dependent+'-root-v2.py')
+                assert text.count(split_path)==2, (dependent,'retained source-read shape drift')
+                text=text.replace(split_path,'Path('+repr(str(destinations[dependent]))+')')
+            reads={str(destinations[k]):0 for k in ('exact-validate','query','lifecycle')}
+            checked={}
+            def source_read(node):
+                if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Attribute) or node.func.attr not in ('read_bytes','read_text'): return None
+                receiver=node.func.value
+                if not isinstance(receiver,ast.Call) or not isinstance(receiver.func,ast.Name) or receiver.func.id!='Path' or len(receiver.args)!=1 or not isinstance(receiver.args[0],ast.Constant): return None
+                return receiver.args[0].value
+            verifier=ast.parse(text)
+            for node in ast.walk(verifier):
+                path=source_read(node)
+                if isinstance(path,str) and path.endswith('.py'):
+                    assert path in reads, ('unexpected source read',path)
+                    reads[path]+=1
+                if isinstance(node,ast.Assert) and isinstance(node.test,ast.Compare):
+                    compare=node.test;left=compare.left
+                    if isinstance(left,ast.Call) and isinstance(left.func,ast.Name) and left.func.id=='sha' and len(left.args)==1:
+                        path=source_read(left.args[0])
+                        if path in reads:
+                            assert len(compare.ops)==len(compare.comparators)==1 and isinstance(compare.ops[0],ast.Eq) and isinstance(compare.comparators[0],ast.Constant)
+                            checked[path]=compare.comparators[0].value
+            assert all(count==2 for count in reads.values()), reads
+            assert checked=={str(destinations[k]):generated_hashes[k] for k in ('exact-validate','query','lifecycle')}, 'source hashes must match emitted bytes'
+        if role=='admission':
+            text=text.replace("landed['pr']==4995", "landed['pr']=="+str(pins['source_pr']))
+            text=text.replace("chain['qualification_prefix']==88", "chain['qualification_prefix']=="+str(pins['qualification_prefix']))
+            # No approval/pre-review is known when constructing this packet.
+            # Separate actual root admission/source review pins are supplied at
+            # execution; all prior admit() semantic assertions are retained.
+            text='import os\n'+text
+            for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
+                text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
+        assert 'rf4trial14mixedc1' not in text and 'landed[\'pr\']==4995' not in text
+        ast.parse(text,str(destinations[role]));sources[role]=text;generated_hashes[role]=sha(text.encode())
+    assert not out.exists();out.mkdir()
+    for role,text in sources.items(): destinations[role].write_text(text)
+    receipt=dict(state='PREPARED_UNEXECUTED_REQUIRES_INDEPENDENT_SOURCE_REVIEW_AND_ACTUAL_ADMISSION',campaign=CAMPAIGN,source_head=pins['source_head'],source_tree=pins['source_tree'],pins_sha256=sha(pathlib.Path(a.pins).read_bytes()),sources={str(destinations[k]):v for k,v in generated_hashes.items()},templates=TEMPLATE_SHA256,workload=dict(operations=70,mutation_attempts=2,searches=68,fresh_ids=1,post_rows=10005),limits=['Source AST checks only; not executed or accepted runtime evidence','Root must verify each supplied literal/path binding against retained actual raw provenance','Derived growth-landed receipt remains separate from collector final landed receipt; both raw provenance must be retained','No automatic replay, store deletion or lifecycle change'])
+    (out/'preparation.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt))
+if __name__=='__main__': main()
