@@ -97,3 +97,43 @@ func TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend(t *testing
 		t.Fatalf("dependency leaked: pins=%d baseline=%d", got, baselinePins)
 	}
 }
+
+func TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	appender, err := newReplayInlineAppender(d, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appender.close()
+	d.SetValueLogAppender(appender)
+	defer d.SetValueLogAppender(nil)
+	entry := appendCommandWALPointerEntry(t, d, []byte("no-wal"), bytes.Repeat([]byte("v"), 256))
+	entry.Value = nil
+	baselinePins := d.valueLogIdentityPins.ActivePins()
+	called := false
+	lsn, err := d.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode(
+		func() error { entry.Revision = 50; return nil },
+		func(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error {
+			called = true
+			ops, err := commitlog.DecodeRawKVBatchPayload(payload)
+			if err != nil {
+				return err
+			}
+			rid, found := lookup(entry.ValuePtr)
+			if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetRID || ops[0].Revision != 50 || !found || rid == 0 || ops[0].RID != rid {
+				t.Fatalf("no-WAL identity lost: ops=%+v rid=%d found=%v", ops, rid, found)
+			}
+			return nil
+		},
+		func(emit func(batchpkg.Entry) error) error { return emit(entry) }, 1, RawKVCommandWALAppendRelaxed)
+	if err != nil || !called || lsn != 0 || d.commandJournal != nil {
+		t.Fatalf("no-WAL finalization: called=%v lsn=%d journal=%v err=%v", called, lsn, d.commandJournal != nil, err)
+	}
+	if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		t.Fatalf("temporary no-WAL dependency leaked: pins=%d baseline=%d", got, baselinePins)
+	}
+}

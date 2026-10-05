@@ -1439,9 +1439,52 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode(prepa
 // final canonical metadata validation and independently owned live leases to
 // the existing prepared entry path. All fallible installation work belongs in
 // prepare/finalize; publication after a successful append cannot rebuild it.
+// With command WAL disabled it uses the same canonical metadata authority and
+// live-lease finalization without appending a journal frame, returning LSN zero.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if db == nil {
+		return 0, ErrClosed
+	}
+	if !db.commandWAL {
+		return 0, db.finalizeRawKVEntryScanWithoutCommandWAL(prepare, finalize, scanEntries, opHint)
+	}
 	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, false)
 	return lsn, err
+}
+
+func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	// Command-WAL barrier admission is a no-op for this profile. Pin teardown
+	// explicitly; the cache's writer owner serializes preparation/publication.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if prepare == nil || finalize == nil || scanEntries == nil {
+		return fmt.Errorf("prepared cached publication requires prepare, finalizer and entry scan")
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint, false)
+	if intent == nil || err != nil {
+		return err
+	}
+	defer releaseUnassignedCommandWALIntent(intent)
+	intent.rawKVFinalize = finalize
+	intent.payload, err = commitlog.EncodeRawKVBatchPayloadPlanned(intent.rawKVPlan, intent.rawKVScan)
+	if err != nil {
+		return err
+	}
+	if _, err := db.captureCommandWALExternalDependencies(intent); err != nil {
+		return err
+	}
+	// This exact lookup includes registered producer pointers. It neither
+	// independently reads unflushed pointers nor allocates a second RID registry.
+	return finalize(intent.payload, intent.rawKVRIDCache.lookup)
 }
 
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
