@@ -613,3 +613,23 @@ The bound applies to eligible fresh cached ingestion, not every persisted frame:
 previously written files remain readable and maintenance rewrite independently
 groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
 an ingestion improvement alone is not a global post-maintenance size guarantee.
+
+### Decoded grouped-frame cache memory
+
+The decoded grouped-frame cache's byte budget accounts for retained raw payloads.
+Slot structures and offset metadata are additional Go heap allocations. Shards
+allocate slots on their first admitted frame; each filled slot allocates only
+`K+1` offsets. Ordinary eviction retains that backing for replacement, so a slot
+can retain the largest admitted offset table until clear, reconfiguration, or
+file close releases it. Empty slots that have never admitted a frame allocate no
+offset backing. A maximum-K table still contains 256 offsets, and a slice header
+adds metadata overhead; savings depend on the admitted group-size distribution.
+
+Offset tables remain private to the cache and are compared completely with the
+current frame's K, raw length, start, and checksum-verification identity under
+the slot read lock. Payload copies complete before eviction can recycle raw
+bytes. Cache hits still follow source-frame integrity checks, and misses retain
+the existing decode path. This metadata representation changes no persistent
+frame format, pointer lifetime, checksum policy, raw-payload budget, or mmap
+budget. Cache metadata, decoded payloads, Go heap, mapped lengths and process
+RSS must be reported separately when evaluating memory changes.

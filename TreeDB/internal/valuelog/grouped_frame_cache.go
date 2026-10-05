@@ -141,7 +141,9 @@ type groupedFrameCacheSlot struct {
 	verifyCRC bool
 	k         int
 	rawLen    uint32
-	offsets   [MaxFrameK + 1]uint32
+	// Allocate only on admission. Eviction retains backing for replacement;
+	// clear drops it. Readers access the complete table under mu.RLock.
+	offsets   []uint32
 	raw       []byte
 	rawPooled bool
 	used      uint64
@@ -291,12 +293,12 @@ func validateGroupedFrameCacheState(k int, offsets *[MaxFrameK + 1]uint32, rawLe
 	return uint32(rawLen) == offsets[k]
 }
 
-func groupedFrameOffsetsEqual(a, b *[MaxFrameK + 1]uint32, k int) bool {
-	if k < 0 || k > MaxFrameK {
+func groupedFrameOffsetsEqual(a []uint32, b *[MaxFrameK + 1]uint32, k int) bool {
+	if k < 0 || k > MaxFrameK || len(a) != k+1 {
 		return false
 	}
-	for i := 0; i < k+1; i++ {
-		if a[i] != b[i] {
+	for i, offset := range a {
+		if offset != b[i] {
 			return false
 		}
 	}
@@ -351,7 +353,7 @@ func (c *groupedFrameCache) readAppendTo(start int64, verifyCRC bool, expectedK 
 			continue
 		}
 		slot.mu.RLock()
-		if slot.fp.Load() != wantFP || !slot.valid || slot.start != start || slot.verifyCRC != verifyCRC || slot.k != expectedK || slot.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(&slot.offsets, expectedOffsets, expectedK) {
+		if slot.fp.Load() != wantFP || !slot.valid || slot.start != start || slot.verifyCRC != verifyCRC || slot.k != expectedK || slot.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(slot.offsets, expectedOffsets, expectedK) {
 			slot.mu.RUnlock()
 			continue
 		}
@@ -487,7 +489,12 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	slot.verifyCRC = verifyCRC
 	slot.k = k
 	slot.rawLen = uint32(len(raw))
-	slot.offsets = offsets
+	if cap(slot.offsets) < k+1 {
+		slot.offsets = make([]uint32, k+1)
+	} else {
+		slot.offsets = slot.offsets[:k+1]
+	}
+	copy(slot.offsets, offsets[:k+1])
 	slot.raw = raw
 	slot.rawPooled = pooled
 	slot.used = s.clock
@@ -542,7 +549,7 @@ func (s *groupedFrameCacheShard) evictSlotLocked(c *groupedFrameCache, idx int) 
 	slot.verifyCRC = false
 	slot.k = 0
 	slot.rawLen = 0
-	slot.offsets = [MaxFrameK + 1]uint32{}
+	slot.offsets = slot.offsets[:0]
 	slot.raw = nil
 	slot.rawPooled = false
 	slot.used = 0
@@ -561,6 +568,11 @@ func (c *groupedFrameCache) clear() {
 		s.mu.Lock()
 		for j := range s.slots {
 			s.evictSlotLocked(c, j)
+			// Empty slots can retain backing from an earlier eviction. Keep the
+			// published slots stable for lock-free readers, but release metadata.
+			s.slots[j].mu.Lock()
+			s.slots[j].offsets = nil
+			s.slots[j].mu.Unlock()
 		}
 		s.clock = 0
 		s.mu.Unlock()

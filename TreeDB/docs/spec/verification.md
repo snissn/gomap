@@ -2,6 +2,28 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Decoded grouped-frame cache offset retention is covered by
+`TestGroupedFrameCache_OffsetBackingLifecycle` (small admissions, untouched
+slots, larger/smaller K replacement, backing reuse, eviction and clear) and
+`TestGroupedFrameCache_OffsetBackingCloseAndMaxK` (maximum-K last-value access
+and release on file close). Existing `TestGroupedFrameCache_StateIsolationAndSubValues`
+and `TestGroupedFrameCache_CorruptNonHitPathsFailClosed` retain full shape,
+terminal-offset and descending-offset rejection coverage.
+`TestGroupedFrameCache_InvalidOffsetAdmissionPreservesEntry` rejects malformed
+replacement tables without changing the existing entry, backing or raw budget.
+`TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVerifyRead`
+checks source integrity after a warm verified hit;
+`TestGroupedFrameCache_ConcurrentReadsAndEvictions` and
+`TestGroupedFrameCache_ReadAppendOwnershipAndTemplateUnlock` exercise concurrent
+eviction and owned output across raw recycling/template callbacks.
+`BenchmarkGroupedFrameCacheOffsets` compares fixed-capacity hit, miss, warm
+replacement and cold admission for K=1, 4, 32 and 255. Its structural metadata
+metric includes slot structures and offset backing capacity, excludes allocator
+rounding, and does not substitute for phase live-heap or process RSS evidence.
+Public workload acceptance additionally requires the current retained K/capacity
+distribution and paired throughput, tail latency, allocation, load/checkpoint,
+storage and memory measurements under unchanged cache and mmap budgets.
+
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real
 within-apply rotations and an empty current lane. It requires zero fresh-load
