@@ -197,6 +197,7 @@ func TestCompactStorageFullRestoredDictionaryAuthority(t *testing.T) {
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
 	opts.ValueLog.DictTrain.TrainBytes = -1
+	opts.ValueLog.DictClassMode = treedb.ValueLogDictClassSplitOuterLeaf
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.HotSegmentTargetBytes = 64 << 10
