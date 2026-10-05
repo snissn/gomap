@@ -48,10 +48,21 @@ type cowNodeLayout struct {
 }
 
 // COWRetirement is a bounded ownership transfer, not a background queue.
-// The caller drains it exactly once outside publication/admission locks.
-type COWRetirement struct{ owners []cowResourceOwner }
+// Drain runs outside publication/admission locks. Copies share a once-only
+// cleanup claim; allocation/resource charges remain until callbacks complete.
+type COWRetirement struct {
+	generation *cowGeneration
+	prepared   *COWPrepared
+}
 
-func (r *COWRetirement) Drain() { owners := r.owners; r.owners = nil; cowReleaseOwners(owners) }
+func (r *COWRetirement) Drain() {
+	if r.generation != nil {
+		r.generation.drain()
+	}
+	if r.prepared != nil {
+		r.prepared.drain()
+	}
+}
 
 // COWWriter is deliberately not Table: Reset, arena borrowing/stealing, mutable
 // iterators and legacy mode dispatch cannot accidentally reach this capability.
@@ -283,13 +294,16 @@ func (w *COWWriter) Estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 }
 
 type COWPrepared struct {
-	writer     *COWWriter
-	private    *btree.Map[string, cowValue]
-	root       *COWRoot
-	charge     COWCharge
-	ids        []COWResourceID
-	owners     []cowResourceOwner
-	maxEntries int
+	writer         *COWWriter
+	private        *btree.Map[string, cowValue]
+	root           *COWRoot
+	charge         COWCharge
+	ids            []COWResourceID
+	owners         []cowResourceOwner
+	maxEntries     int
+	deferredBudget *COWBudget
+	deferredCharge uint64
+	drainClaimed   bool
 }
 
 func (p *COWPrepared) Charge() COWCharge { return p.charge }
@@ -322,7 +336,7 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	total := c.Total()
 	if g.frozen || total > b.limits.MaxInFlightBytes-b.stats.ReservedBytes ||
 		c.History() > b.limits.MaxGenerationBytes-g.history ||
-		total > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes ||
+		total > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes-b.stats.DeferredBytes ||
 		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
@@ -478,16 +492,47 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	b.mu.Lock()
 	g.pending -= p.charge.Total()
 	b.stats.ReservedBytes -= p.charge.Total()
-	b.stats.TotalBytes -= p.charge.Total()
+	deferred := uint64(0)
+	if len(p.owners) != 0 {
+		// The prepared wrapper is also the shared cleanup claim. Retain its
+		// full staging charge and resource owners until callbacks finish.
+		deferred = p.charge.Temporary + p.charge.Resources
+		p.deferredBudget = b
+		p.deferredCharge = deferred
+		b.stats.DeferredBytes += deferred
+		b.stats.RetiredBytes += deferred
+	}
+	b.stats.TotalBytes -= p.charge.Total() - deferred
 	b.mu.Unlock()
 	w.pending = nil
-	r := COWRetirement{owners: p.owners}
+	r := COWRetirement{}
+	if deferred != 0 {
+		r.prepared = p
+	}
 	p.writer = nil
 	p.private = nil
 	p.root = nil
 	p.ids = nil
-	p.owners = nil
 	return r
+}
+
+func (p *COWPrepared) drain() {
+	b := p.deferredBudget
+	b.mu.Lock()
+	if p.drainClaimed {
+		b.mu.Unlock()
+		return
+	}
+	p.drainClaimed = true
+	b.mu.Unlock()
+	cowReleaseOwners(p.owners)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stats.TotalBytes -= p.deferredCharge
+	b.stats.DeferredBytes -= p.deferredCharge
+	b.stats.RetiredBytes -= p.deferredCharge
+	p.owners = nil
+	b.releaseControlLocked()
 }
 
 // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
@@ -538,7 +583,7 @@ func (w *COWWriter) Close() COWRetirement {
 		b.stats.RetiredBytes += g.history
 	}
 	b.mu.Unlock()
-	return COWRetirement{owners: g.release()}
+	return g.release()
 }
 
 // COWRoot is one immutable read header. Retain/Release are source/cut ownership,
@@ -569,7 +614,7 @@ func (r *COWRoot) Release() COWRetirement {
 	if r.refs != 0 {
 		return COWRetirement{}
 	}
-	return COWRetirement{owners: r.generation.release()}
+	return r.generation.release()
 }
 func (r *COWRoot) Len() int    { return r.tree.Len() }
 func (r *COWRoot) Height() int { return r.tree.Height() }

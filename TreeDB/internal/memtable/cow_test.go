@@ -740,3 +740,84 @@ func TestCOWSuccessorAndChargedCursorAdapter(t *testing.T) {
 		t.Fatal(b.Stats())
 	}
 }
+
+func TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", cancel), func(t *testing.T) {
+			l := DefaultCOWLimits()
+			l.MaxGenerations = 1
+			l.MaxSources = 1
+			b, w := cowTestWriter(t, l)
+			old := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+			baseline := b.Stats()
+			entered, resume := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			p, err := w.Prepare(nil, COWPrepareOptions{ResourceSlots: 1, ResourceBytes: 1024})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = p.AttachResources([]COWResourceID{{Kind: 1, ID: 1}}, func() {
+				calls.Add(1)
+				_ = b.Stats() // Callback must run outside the budget lock.
+				close(entered)
+				<-resume
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retirement COWRetirement
+			if cancel {
+				retirement = p.Cancel()
+				if b.Stats().DeferredBytes < 1024 {
+					t.Fatal("cancel refunded live owners")
+				}
+			} else {
+				root := p.Publish()
+				cowTestRelease(root)
+				cowTestClose(w)
+				retirement = old.Release()
+				if b.Stats().Generations != 1 {
+					t.Fatal("generation refunded before cleanup")
+				}
+			}
+			charged := b.Stats()
+			copy := retirement
+			done := make(chan struct{})
+			go func() { retirement.Drain(); close(done) }()
+			<-entered
+			copy.Drain() // Shared claim must also be safe while original pauses.
+			if got := b.Stats(); got != charged {
+				t.Fatalf("early refund: %+v want %+v", got, charged)
+			}
+			if _, err := NewCOWWriter(b); !errors.Is(err, ErrCOWCapacity) {
+				t.Fatalf("admitted charged generation: %v", err)
+			}
+			if cancel {
+				got, ok := old.Get([]byte("key"))
+				if !ok || got.Value != "old" {
+					t.Fatal("paused cleanup blocked live reader")
+				}
+			}
+			close(resume)
+			<-done
+			copy.Drain()
+			retirement.Drain()
+			if calls.Load() != 1 {
+				t.Fatal("copied descriptor repeated callback")
+			}
+			if cancel {
+				if got := b.Stats(); got.TotalBytes != baseline.TotalBytes || got.DeferredBytes != 0 {
+					t.Fatalf("cancel cleanup leak: %+v", got)
+				}
+				cowTestRelease(old)
+				cowTestClose(w)
+			} else if b.Stats().HistoryBytes != 0 {
+				t.Fatal("generation not refunded after cleanup")
+			}
+			b.Close()
+			if got := b.Stats(); got.TotalBytes != 0 {
+				t.Fatal(got)
+			}
+		})
+	}
+}

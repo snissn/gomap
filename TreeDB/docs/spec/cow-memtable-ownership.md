@@ -42,7 +42,7 @@ The writer, each distinct immutable root and independently pinned views/cursors
 keep their generation alive. Multiple cuts retain the same root with
 `Retain`/`Release`; the root keeps one generation reference until its last source
 reference releases. Cumulative node/payload/wrapper history is released only
-after the writer and every root owner are gone. Replacements therefore consume
+after the writer and every root owner are gone and deferred cleanup completes. Replacements therefore consume
 generation history even when the logical table size stays constant.
 
 `COWPrepareOptions.ResourceSlots` reserves bounded distinct resource identity
@@ -63,9 +63,14 @@ in this package. Caching retains its existing concrete value-log manager and
 stable dictionary/template authorities, independently of WAL debt ownership.
 
 Cancellation and final source release return a bounded `COWRetirement` ownership
-transfer. Drain it once outside publication/admission locks. Each accepted
-callback runs exactly once, after every generation owner releases. The budget
-lock never runs callbacks or IO. The installer reserves its retirement queue
+transfer. Drain it outside publication/admission locks. Copied descriptors share
+a cleanup claim, so repeated or concurrent drains cannot repeat callbacks or
+refunds. Published callbacks run after every generation owner releases;
+cancelled preparations release only their privately attached owners. Generation
+history, resource identities and wrapper charges remain until all callbacks
+finish. Cancelled callback/staging storage remains in `DeferredBytes` and
+`RetiredBytes` until cleanup finishes. The budget lock never runs callbacks or
+IO. The installer reserves its retirement queue
 descriptor/capacity before accepting a frame; C1 creates no unbounded queue.
 
 `Freeze` admits a write-triggered source rollover without walking records; it
@@ -85,10 +90,11 @@ capacity and 64 MiB in-flight reservations. They are internal starting limits,
 not public production tuning or an RSS quota.
 
 The retirement limit reserves potential retirement of *all* current generation
-history and in-flight preparations as well as already retired generations. This
+history, in-flight preparations and cancelled deferred owners. This
 conservative precharge guarantees a later Close/Freeze does not depend on an old
 reader releasing capacity. `MaxSources` counts frozen generations until their
-last old source lease is gone, including flushed generations pinned by readers.
+last old source lease is gone and cleanup finishes, including flushed
+generations pinned by readers.
 `MaxGenerations` covers writable, frozen and pinned generations together. Views
 and cursors consume the same view limit. Total charge includes budget control,
 generation history, pending preparations and active view/iterator wrappers.

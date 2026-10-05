@@ -43,8 +43,8 @@ func (l COWLimits) Validate() error {
 }
 
 type COWStats struct {
-	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes uint64
-	Views, Generations, Sources                                                    int
+	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes, DeferredBytes uint64
+	Views, Generations, Sources                                                                   int
 }
 
 // COWBudget is shared by the fixed shard vector and its frozen generations.
@@ -79,7 +79,7 @@ func (b *COWBudget) Close() {
 	b.releaseControlLocked()
 }
 func (b *COWBudget) releaseControlLocked() {
-	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 {
+	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 {
 		b.stats.TotalBytes -= b.stats.ControlBytes
 		b.stats.ControlBytes = 0
 	}
@@ -142,6 +142,7 @@ type cowGeneration struct {
 	refs             int
 	history, pending uint64
 	frozen, retired  bool
+	drainClaimed     bool
 	ids              []COWResourceID
 	owners           []cowResourceOwner
 }
@@ -155,7 +156,7 @@ func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
 		return nil, ErrCOWClosed
 	}
 	if b.stats.Generations >= b.limits.MaxGenerations || base > b.limits.MaxGenerationBytes ||
-		base > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes || !b.addLocked(base) {
+		base > b.limits.MaxRetiredBytes-b.stats.HistoryBytes-b.stats.ReservedBytes-b.stats.DeferredBytes || !b.addLocked(base) {
 		return nil, ErrCOWCapacity
 	}
 	b.stats.Generations++
@@ -168,17 +169,34 @@ func (g *cowGeneration) retain() { g.budget.mu.Lock(); g.refs++; g.budget.mu.Unl
 
 // Returns callbacks to the releasing owner. It must call them outside its
 // publication latch and writer admission locks. No IO runs under budget.mu.
-func (g *cowGeneration) release() []cowResourceOwner {
+func (g *cowGeneration) release() COWRetirement {
 	b := g.budget
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	g.refs--
 	if g.refs != 0 {
-		return nil
+		return COWRetirement{}
 	}
 	if g.pending != 0 {
 		panic("COW generation released with pending reservation")
 	}
+	return COWRetirement{generation: g}
+}
+
+// Claim under the budget lock, run callbacks outside it, then refund storage.
+// A copied retirement descriptor shares this claim and cannot double-drain.
+func (g *cowGeneration) drain() {
+	b := g.budget
+	b.mu.Lock()
+	if g.drainClaimed {
+		b.mu.Unlock()
+		return
+	}
+	g.drainClaimed = true
+	b.mu.Unlock()
+	cowReleaseOwners(g.owners)
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.stats.TotalBytes -= g.history
 	b.stats.HistoryBytes -= g.history
 	b.stats.Generations--
@@ -189,10 +207,8 @@ func (g *cowGeneration) release() []cowResourceOwner {
 		b.stats.RetiredBytes -= g.history
 	}
 	b.releaseControlLocked()
-	owners := g.owners
 	g.owners = nil
 	g.ids = nil
-	return owners
 }
 
 func cowReleaseOwners(owners []cowResourceOwner) {
