@@ -120,6 +120,11 @@ work before a visible callback exists. `TestPeerPopulationAuditPreMarshalBoundV1
 checks conservative encoded accounting and oversized/partial-plan refusal.
 Existing `TestBufferedRootRunsIterator*`, `TestTypedColumnPoint*` and
 `TestVectorFromJSONFieldMissingAndInvalid` remain affected helper controls.
+`BenchmarkPopulationLegacyColocatedPlanGuardV1/{validate,decode}` uses the
+retained six-original-outcome/four-ID plan with no population attachment; it
+guards only existing admission/decoding work, while the real-Raft legacy audit
+control above covers authenticated current-FSM behavior.
+
 `BenchmarkVectorSourcePopulationProofV1/{512x128,10000x128}` reports scan time,
 B/op, allocs/op, charged source/asset bytes and physical inspection units.
 This is explicitly untimed diagnostic overhead, not serving speedup or capacity
