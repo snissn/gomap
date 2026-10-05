@@ -317,4 +317,49 @@ func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
 			t.Fatalf("consumer changed result: %+v", row)
 		}
 	}
+	t.Run("retained-final", func(t *testing.T) {
+		c := quicksilverRealisticSmokeConfig()
+		c.Keys, c.Updates = 17, 13
+		fixtureDir := t.TempDir()
+		if _, err := runQuicksilverEngine(BenchConfig{}, c, "treedb", NewTreeDBPublicCommandWAL, fixtureDir); err != nil {
+			t.Fatal(err)
+		}
+		outputDir := t.TempDir()
+		args := []string{"-suite=quicksilver", "-dbs=treedb", "-profile=durable", "-seed=24", "-keys=17", "-read-workers=2", "-quicksilver-reads=41", "-quicksilver-updates=13", "-quicksilver-duration=10ms", "-quicksilver-measure-dir=" + fixtureDir, "-profile-dir=" + outputDir}
+		cmd := exec.Command(binaryPath, args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		raw, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("retained CLI: %v %s", err, stderr.String())
+		}
+		var reports []quicksilverResult
+		if err := json.Unmarshal(raw, &reports); err != nil || len(reports) != 1 {
+			t.Fatalf("retained JSON: %v", err)
+		}
+		r := reports[0]
+		if !r.Config.FinalFixture || r.DataDir != fixtureDir || r.LoadSeconds != 0 || r.InitialCheckpointMS != 0 || r.InitialVerifiedMisses != r.VerifiedMisses {
+			t.Fatal("retained state/setup mismatch")
+		}
+		for _, phase := range quicksilverPhaseNames {
+			for _, prefix := range []string{"cpu", "allocs"} {
+				if info, err := os.Stat(filepath.Join(outputDir, prefix+"_"+phase+"_treedb.pprof")); err != nil || info.Size() == 0 {
+					t.Fatalf("retained read profile %s/%s: %v", prefix, phase, err)
+				}
+			}
+		}
+		if _, err := os.Stat(filepath.Join(outputDir, "checkpoint_cpu_checkpoint_quicksilver_initial_treedb.pprof")); !os.IsNotExist(err) {
+			t.Fatal("retained mode fabricated initial checkpoint profile")
+		}
+		for _, name := range []string{"checkpoint_cpu_checkpoint_quicksilver_final_treedb.pprof", "quicksilver_results.json", "benchprof_results.json", "insights.json"} {
+			if info, err := os.Stat(filepath.Join(outputDir, name)); err != nil || info.Size() == 0 {
+				t.Fatalf("retained artifact %s: %v", name, err)
+			}
+		}
+		bad := append(append([]string{}, args...), "-checkpoint-cpuprofile-tests=quicksilver_initial")
+		if out, err := exec.Command(binaryPath, bad...).CombinedOutput(); err == nil || !strings.Contains(string(out), "no initial checkpoint") {
+			t.Fatalf("retained initial-profile rejection: %v %s", err, out)
+		}
+	})
+
 }
