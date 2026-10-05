@@ -242,9 +242,8 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	writerDone := make(chan struct{})
 	readerDone := make(chan struct{})
 	postWriterRead := make(chan struct{})
+	writerStarted := make(chan struct{})
 	errCh := make(chan error, 2)
-	active.Store(true)
-	writerStart := time.Now()
 	wg.Add(2)
 	defer func() {
 		stopReads.Store(true)
@@ -254,6 +253,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		defer wg.Done()
 		defer close(writerDone)
 		defer active.Store(false)
+		writerStart := time.Now()
 		defer func() { r.WriterDurationNS = uint64(time.Since(writerStart)) }()
 		limit := uint64(256)
 		if mode == "burst" {
@@ -270,6 +270,10 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			writeInCall.Store(true)
 			overlap := inQuantum.Load()
 			start := time.Now()
+			if i == 1 {
+				active.Store(true)
+				close(writerStarted)
+			}
 			e := s.CommitAt(ts, []Mutation{{Key: writer, Value: foregroundPayload(i)}}, CommitRelaxed)
 			r.WriteLatency.add(time.Since(start))
 			overlap = overlap || inQuantum.Load()
@@ -298,6 +302,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.WriterStopReason = "finite-burst"
 		}
 	}()
+	<-writerStarted
 	go func() {
 		defer wg.Done()
 		defer close(readerDone)

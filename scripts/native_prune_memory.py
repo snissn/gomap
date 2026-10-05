@@ -116,6 +116,13 @@ def validate_case(x, n, mode, pinned):
     require(cuts[-1]['name']=='directory_cleanup','final DB Close/cleanup allocations excluded')
     return x
 
+def summarize(receipt, results):
+    summary=[]
+    for c,x in zip(receipt['cases'],results):
+        cuts={s['name']:s for s in x['cuts']};start=cuts['process_start'];baseline=cuts['fixture_baseline'];last=cuts['directory_cleanup'];terminal=cuts.get('finish',cuts.get('cancel_drained'))
+        summary.append({'n':c['n'],'mode':c['mode'],'pinned':c['pinned'],'calls':x['Calls'],'source_retirement_cells_pre_eof':x['MaxSourceRetirementCells'],'producer_retirement_logical_payload_lower_bound_bytes':8*x['MaxRetirementCells'],'max_window':x['MaxWindow'],'max_flat_retirement_capacity':x['MaxFlatRetiredCap'],'aggregate_forced_gc_heap_alloc_cut_max':max(s['HeapAlloc'] for s in x['cuts']),'sampled_maintenance_rss_peak':x['SampledMaintenanceRSSPeak'],'whole_process_hwm_includes_fixture':max(s['ProcessHWM'] for s in x['cuts']),'process_total_alloc_through_directory_cleanup':last['TotalAlloc']-start['TotalAlloc'],'fixture_total_alloc':baseline['TotalAlloc']-start['TotalAlloc'],'maintenance_through_final_cleanup_total_alloc':last['TotalAlloc']-baseline['TotalAlloc'],'maintenance_through_finish_or_cancel_total_alloc':terminal['TotalAlloc']-baseline['TotalAlloc'],'close_reopen_final_cleanup_total_alloc':last['TotalAlloc']-terminal['TotalAlloc'],'process_mallocs_through_directory_cleanup':last['Mallocs']-start['Mallocs']})
+    return {'labels':receipt['labels'],'cases':summary}
+
 def validate_packet(out, root=None):
     receipt=json.loads((out/'receipt.json').read_text())
     source=json.loads((out/'source-bindings.json').read_text())
@@ -138,6 +145,7 @@ def validate_packet(out, root=None):
     for c in cases:
         require(type(c['n']) is int and type(c['mode']) is str and type(c['pinned']) is bool and type(c['exit_code']) is int,'invalid case identity/process types')
     require(len(cases)==len(expected) and {(c['n'],c['mode'],c['pinned']) for c in cases}==expected,'missing/duplicate lifecycle cases')
+    results=[]
     for c in cases:
         require(pathlib.Path(c['raw']).name==c['raw'] and pathlib.Path(c['result']).name==c['result'],'invalid artifact path')
         raw=out/c['raw'];require(raw.is_file() and hashlib.sha256(raw.read_bytes()).hexdigest()==c['raw_sha256'],'missing/drifted raw log')
@@ -148,8 +156,10 @@ def validate_packet(out, root=None):
         command=json.loads((out/c['command']).read_text())
         require(command['cwd']==build['cwd'] and command['argv']==[str(capture/'native-memory.test'),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v'],'case invocation')
         require(command['env']==dict(env,MVCC_MEMORY_RESULT=str(capture/c['result']),MVCC_MEMORY_N=str(c['n']),MVCC_MEMORY_MODE=c['mode'],MVCC_MEMORY_PINNED=str(int(c['pinned']))),'case environment')
-        validate_case(json.loads(result.read_text()),c['n'],c['mode'],c['pinned'])
+        results.append(validate_case(json.loads(result.read_text()),c['n'],c['mode'],c['pinned']))
     require(len({c['result'] for c in cases})==len(cases),'case overwritten')
+    summary=json.loads((out/'summary.json').read_text())
+    require(digest(summary)==digest(summarize(receipt,results)),'missing/drifted derived summary')
     return receipt
 
 def self_test(out):
@@ -185,11 +195,12 @@ def self_test(out):
     # Parser fixtures copy the complete real packet; measurements stay untouched.
     with tempfile.TemporaryDirectory(prefix='native-memory-validator-') as tmp:
         tmp=pathlib.Path(tmp)
-        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
+        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log','summary.json'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type'):
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type','summary-missing','summary-malformed','summary-value','summary-case','summary-label','summary-type','summary-extra'):
+            shutil.copyfile(out/'summary.json',tmp/'summary.json')
             original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
             shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
             shutil.copyfile(out/witness_case['command'],tmp/witness_case['command']);shutil.copyfile(out/'build-command.json',tmp/'build-command.json')
@@ -199,6 +210,17 @@ def self_test(out):
                 (tmp/case['result']).write_text('{');case['result_sha256']=hashlib.sha256(b'{').hexdigest()
             elif fault=='raw-drift':(tmp/case['raw']).write_bytes(b'changed raw witness')
             elif fault=='source-drift':(tmp/'source-bindings.json').write_text('{}')
+            elif fault.startswith('summary-'):
+                if fault=='summary-missing':(tmp/'summary.json').unlink()
+                elif fault=='summary-malformed':(tmp/'summary.json').write_text('{')
+                else:
+                    altered=json.loads((out/'summary.json').read_text())
+                    if fault=='summary-value':altered['cases'][0]['sampled_maintenance_rss_peak']+=1
+                    elif fault=='summary-case':altered['cases'].pop()
+                    elif fault=='summary-label':altered['labels']['rss']='changed scope'
+                    elif fault=='summary-type':altered['cases'][0]['calls']=float(altered['cases'][0]['calls'])
+                    else:altered['unbound']='extra'
+                    (tmp/'summary.json').write_text(json.dumps(altered))
             elif fault=='missing-case':test_receipt['cases'].pop()
             elif fault=='duplicate-case':test_receipt['cases'].append(dict(case))
             elif fault=='replacement-duplicate':test_receipt['cases'][-1]=dict(test_receipt['cases'][0])
@@ -296,12 +318,10 @@ def run(args):
             errors.append(str(e));break
         print(name+' PASS',flush=True)
     receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':sha(out/'build-command.json'),'build_log_sha256':sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':{'heap':'aggregate forced-GC Go runtime, instrumentation included','rss':'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta','hwm':'whole-process VmHWM includes fixture','retirement_bytes':'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP','allocations':'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline','reader':'pinned cases read an actually deleted old physical version before release; unpinned cases close their real baseline reader','output':'fixed three surviving records; actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count','control':'same source shape, no discard floor; retains input history'}}
-    (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');validate_packet(out,root);self_test(out)
-    summary=[]
-    for c in cases:
-        x=json.loads((out/c['result']).read_text());cuts={s['name']:s for s in x['cuts']};start=cuts['process_start'];baseline=cuts['fixture_baseline'];last=cuts['directory_cleanup'];terminal=cuts.get('finish',cuts.get('cancel_drained'))
-        summary.append({'n':c['n'],'mode':c['mode'],'pinned':c['pinned'],'calls':x['Calls'],'source_retirement_cells_pre_eof':x['MaxSourceRetirementCells'],'producer_retirement_logical_payload_lower_bound_bytes':8*x['MaxRetirementCells'],'max_window':x['MaxWindow'],'max_flat_retirement_capacity':x['MaxFlatRetiredCap'],'aggregate_forced_gc_heap_alloc_cut_max':max(s['HeapAlloc'] for s in x['cuts']),'sampled_maintenance_rss_peak':x['SampledMaintenanceRSSPeak'],'whole_process_hwm_includes_fixture':max(s['ProcessHWM'] for s in x['cuts']),'process_total_alloc_through_directory_cleanup':last['TotalAlloc']-start['TotalAlloc'],'fixture_total_alloc':baseline['TotalAlloc']-start['TotalAlloc'],'maintenance_through_final_cleanup_total_alloc':last['TotalAlloc']-baseline['TotalAlloc'],'maintenance_through_finish_or_cancel_total_alloc':terminal['TotalAlloc']-baseline['TotalAlloc'],'close_reopen_final_cleanup_total_alloc':last['TotalAlloc']-terminal['TotalAlloc'],'process_mallocs_through_directory_cleanup':last['Mallocs']-start['Mallocs']})
-    (out/'summary.json').write_text(json.dumps({'labels':receipt['labels'],'cases':summary},indent=2)+'\n')
+    (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+    results=[json.loads((out/c['result']).read_text()) for c in cases]
+    (out/'summary.json').write_text(json.dumps(summarize(receipt,results),indent=2)+'\n')
+    validate_packet(out,root);self_test(out)
 
 if __name__=='__main__':
     a=argparse.ArgumentParser(description=__doc__);a.add_argument('--root',type=pathlib.Path,default=pathlib.Path(__file__).resolve().parents[1]);a.add_argument('--out',type=pathlib.Path,required=True);a.add_argument('--n',type=int,default=512);a.add_argument('--go',default='go');a.add_argument('--smoke',action='store_true');a.add_argument('--race',action='store_true');a.add_argument('--validate',action='store_true');a.add_argument('--self-test',action='store_true');args=a.parse_args()

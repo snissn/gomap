@@ -1207,6 +1207,9 @@ Periodic samples run every 128 maintenance calls; the recorded sample count
 must match that schedule, and missing periodic Linux RSS fails closed.
 The maximum includes terminal maintenance and custody cleanup cuts, even after
 native ownership is released. It remains aggregate process RSS.
+Validation also recomputes `summary.json` from the validated case results and
+receipt labels, refusing missing, malformed, changed or contradictory summaries.
+
 Earlier v2 results without these periodic witness fields remain historical and
 fail the current validator; missing samples are never reconstructed.
 
@@ -1243,7 +1246,9 @@ packet is a benchprof input. Reviewed tooling landing and exact product source
 freeze precede expensive qualification collection.
 
 Foreground ACK and completion attribution samples writer activity immediately
-at the public prune return, before counter bookkeeping.
+at the public prune return, before counter bookkeeping. The reader and prune loop
+start only after the writer enters its first measured write interval; writer
+duration begins inside the writer goroutine.
 
 ## Current source-population audit microbenchmarks
 

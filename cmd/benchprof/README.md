@@ -505,6 +505,9 @@ The reported sampled maintenance RSS maximum must equal the maximum of
 eligible named cuts and the retained periodic RSS/call witness; periodic
 sample count and call alignment are validated.
 
+Validation recomputes `summary.json` from validated results and receipt labels;
+missing, malformed or inconsistent summaries fail closed.
+
 Memory v2 retains two fixed-size scalar peak witnesses for retirement cells,
 including the observing call and custody phase. Validators bind reported maxima
 to these witnesses and reject v1 packets for current acceptance. Zero maxima
@@ -524,7 +527,9 @@ packets are not benchprof inputs. The fail-closed validator checks eight unique
 continuing-reader cases with completed post-writer reads, real data oracles, caps and executable/source bindings.
 
 Foreground ACK and completion attribution samples writer activity immediately
-at the public prune return, before counter bookkeeping.
+at the public prune return, before counter bookkeeping. The reader and prune loop
+start only after the writer enters its first measured write interval; writer
+duration begins inside the writer goroutine.
 
 ## Current source-population audit microbenchmarks
 
