@@ -1084,3 +1084,77 @@ GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkSnapshotPublishe
 go tool pprof -top /tmp/cached_owned.test /tmp/cached_owned_cpu.pprof
 go tool pprof -top -alloc_space /tmp/cached_owned.test /tmp/cached_owned_allocs.pprof
 ```
+
+### Native fixed-quantum MVCC package harness
+
+`BenchmarkNativePruneFixedQ` in `TreeDB/mvcc/native_prune_bench_test.go` is an
+optional package benchmark (`mvcc_native_prune,treedb_test` tags), separate from
+unified-bench. Untagged builds do not compile it. Explicit tagged builds on a
+runtime without the bounded pruning API fail compilation; there is no fallback.
+
+The stdlib-only `scripts/mvcc_native_prune.py` freezes expected source identities,
+captures one fresh process per subcase, and validates `packet.json` schema 1.
+Use separate, immutable runtime and harness checkouts; output must be outside
+both. Full capture requires clean committed sources and Go 1.26.4 with CGO.
+Review the expected identity file before capture. Expensive capture requires
+landed reviewed tooling and a separately qualified exact runtime.
+
+```sh
+export GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=1 GOFLAGS=-p=2
+unset GOROOT
+python3 scripts/mvcc_native_prune.py self-test
+python3 scripts/mvcc_native_prune.py freeze --runtime "$RUNTIME" \
+  --harness "$HARNESS" --go "$GO" --scope full --out "$EXPECTED"
+python3 scripts/mvcc_native_prune.py capture --runtime "$RUNTIME" \
+  --harness "$HARNESS" --go "$GO" --expected "$EXPECTED" --out "$OUT"
+python3 scripts/mvcc_native_prune.py validate "$OUT/packet.json" --expected "$EXPECTED"
+```
+
+The capture uses a Go source overlay to compile the harness against the exact
+runtime without editing it. `--scope smoke` freezes only an 8-version ascending
+case. An extracted frozen runtime requires `--runtime-commit BASE_COMMIT
+--archive SOURCE_TAR_GZ` on freeze and capture; these record the declared snapshot
+base and archive SHA256, with a null actual runtime commit. Smoke validates
+instrumentation only, never the original matrix or runtime qualification.
+
+Schema 1 stores before/after runtime source SHA256 maps, exact actual runtime and
+harness commits (null for uncommitted snapshot smoke), harness file hashes,
+archive identity where applicable, Go version/environment, fixed options, build
+status, and one result per case. The full serial matrix preserves original
+shuffled (`(i*2053)%history+1`) and ascending 512/1024 inline histories under
+`command_wal_durable`, plus pointer-backed queued pairwise producers with 1024
+obsolete versions and 512/4096 future versions under `command_wal_durable` and
+`no_wal_fast`. All prune calls use CommitDurable, Q32/1MiB and BatchSize1.
+The ordinary call cap is history*16, record cap history*512 and doubling cap 3x;
+queued call caps are 24,576/81,920. No existing fixture or raw-path gate changes.
+
+Each result records actual calls, Records/Bytes, Visited, SetupRecords,
+CleanupRecords, Deletes/Batches, maximum per-Q records/bytes/time, setup, cold
+open, complete-pass time, first-ACK Close/Open time, final cursor close and DB
+Close time, Go allocation bytes/counts, completion and exact logical/physical
+remaining-value oracles. Queued passes immediately Close/Open at the first real
+ACK; that recovery interval is included in PassNS and separately recorded.
+SetupNS includes cold open; allocation deltas cover the whole combined process
+only during the timed pass, including background work and recovery. Final Close
+is separate. Concurrency is not selected by this serial harness.
+
+Missing/duplicate cases, wrong fixtures/options/toolchain, source drift,
+unclassified errors, missing oracles/completion, invalid counters and original
+caps fail validation. Failed logs/packets are retained, and existing output
+paths are never replaced. Each case has its raw Go benchmark log and JSON row;
+commands, build log and test binary are retained for inspection.
+
+`--profiles` adds `case-N.cpu.pprof`, `case-N.allocs.pprof`,
+`case-N.mutex.pprof` and `case-N.block.pprof`. These ordinary Go package profiles
+cover the process including setup/oracles/Close, unlike the timed pass allocation
+delta. Analyze them with `go tool pprof`, using `sample_index=alloc_space` or
+`alloc_objects` for allocation profiles. They are **not benchprof inputs** and
+have no `benchprof_results.json` contract; unified-bench/benchprof parsers are
+unchanged.
+
+The explicit mandatory runtime gaps are `storage_sync_count`,
+`fence_wait_max_ns`, `fence_hold_max_ns`, `owned_retained_bytes` and
+`owned_peak_bytes`. Schema 1 emits only `tooling_only`; `validate --qualify`
+always refuses while these actual owner-boundary measurements are unavailable.
+It does not accept zeros, outer-call latency, profiles or process heap as
+substitutes. A valid tooling packet makes no performance or qualification claim.
