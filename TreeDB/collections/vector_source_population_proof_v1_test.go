@@ -307,6 +307,65 @@ func TestVectorPopulationPhysicalIteratorCancellationV1(t *testing.T) {
 	}
 }
 
+func TestVectorPopulationQueuedIteratorCancellationV1(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		for _, tc := range []struct {
+			name       string
+			sameKey    bool
+			cancelAt   int
+			maxWork    int
+			next       bool
+			wantErr    error
+		}{
+			{"initialization", false, 2, 64, false, context.Canceled},
+			{"next", false, 3, 64, true, context.Canceled},
+			{"shadowed", true, 3, 64, false, context.Canceled},
+			{"shadowed-work-cap", true, 0, 2, false, errCollectionIndexScanWorkCap},
+		} {
+			t.Run(fmt.Sprintf("%s/reverse=%v", tc.name, reverse), func(t *testing.T) {
+				first, second := newCollectionRunTable(1), newCollectionRunTable(1)
+				defer resetCollectionRunTable(first)
+				defer resetCollectionRunTable(second)
+				setCollectionRunValue(first, []byte("a"), []byte("new"))
+				key := "b"
+				if tc.sameKey {
+					key = "a"
+				}
+				setCollectionRunValue(second, []byte(key), []byte("old"))
+				first.Freeze()
+				second.Freeze()
+				sources := []bufferedRootRunIteratorSource{{iter: first.NewIterator(nil, nil)}, {iter: second.NewIterator(nil, nil), priority: 1}}
+				if reverse {
+					_ = sources[0].iter.Close()
+					_ = sources[1].iter.Close()
+					sources[0].iter = first.NewReverseIterator(nil, nil)
+					sources[1].iter = second.NewReverseIterator(nil, nil)
+				}
+				var inspectionError func() error
+				if tc.cancelAt > 0 {
+					ctx := &vectorPopulationCancelContextV1{Context: context.Background(), remaining: tc.cancelAt}
+					inspectionError = ctx.Err
+				}
+				it := newBufferedRootRunIteratorSourcesIteratorWithInspectionError(sources, nil, nil, false, true, reverse, tc.maxWork, nil, inspectionError)
+				defer it.Close()
+				if tc.next {
+					if !it.Valid() {
+						t.Fatal("missing row before cancellation")
+					}
+					it.Next()
+				}
+				if it.Valid() || !errors.Is(it.Error(), tc.wantErr) {
+					t.Fatalf("queued row after failure: valid=%v err=%v want %v", it.Valid(), it.Error(), tc.wantErr)
+				}
+				it.Seek([]byte("a"))
+				if it.Valid() {
+					t.Fatal("seek revived a failed iterator")
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkVectorSourcePopulationProofV1(b *testing.B) {
 	for _, count := range []int{512, 10000} {
 		b.Run(fmt.Sprintf("%dx128", count), func(b *testing.B) {
