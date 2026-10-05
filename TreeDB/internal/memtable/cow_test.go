@@ -670,6 +670,13 @@ func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
 	if root.Retain() {
 		t.Fatal("budget close admitted another root owner")
 	}
+	beforeFreeze := b.Stats()
+	if e = w.Freeze(); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal("budget close admitted a source rollover", e)
+	}
+	if after := b.Stats(); after != beforeFreeze {
+		t.Fatalf("refused rollover changed accounting: before=%+v after=%+v", beforeFreeze, after)
+	}
 	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWClosed) {
 		t.Fatal(e)
 	}
@@ -862,6 +869,47 @@ func TestCOWRetainCloseRace(t *testing.T) {
 	cowTestClose(w)
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWFreezeCloseRace(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		root := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+		start := make(chan struct{})
+		result := make(chan error, 1)
+		go func() {
+			<-start
+			result <- w.Freeze()
+		}()
+		close(start)
+		b.Close()
+		err := <-result
+		stats := b.Stats()
+		switch {
+		case err == nil:
+			if stats.Sources != 1 || stats.RetiredBytes != stats.HistoryBytes {
+				t.Fatalf("admitted rollover lost accounting: %+v", stats)
+			}
+			// A repeated freeze changes no ownership and remains idempotent.
+			if err = w.Freeze(); err != nil || b.Stats() != stats {
+				t.Fatal("existing frozen source changed after close", err, b.Stats())
+			}
+		case errors.Is(err, ErrCOWClosed):
+			if stats.Sources != 0 || stats.RetiredBytes != 0 {
+				t.Fatalf("refused rollover consumed retention: %+v", stats)
+			}
+		default:
+			t.Fatal(err)
+		}
+		if got, ok := root.Get([]byte("key")); !ok || got.Value != "old" {
+			t.Fatal("close/freeze race invalidated admitted root")
+		}
+		cowTestClose(w)
+		cowTestRelease(root)
+		if stats := b.Stats(); stats.TotalBytes != 0 || stats.Sources != 0 || stats.Generations != 0 {
+			t.Fatalf("close/freeze race leaked ownership: %+v", stats)
+		}
 	}
 }
 

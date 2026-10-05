@@ -550,6 +550,9 @@ func (w *COWWriter) Freeze() error {
 	if g.frozen {
 		return nil
 	}
+	if b.closed {
+		return ErrCOWClosed
+	}
 	if b.stats.Sources >= b.limits.MaxSources || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history) {
 		return ErrCOWCapacity
 	}
