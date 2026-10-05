@@ -675,8 +675,12 @@ validator uses prepared scorers, ten-neighbor duplicate/order checks, four
 changed-ID entries and at most seven truth rows. It constructs no per-read maps,
 truth slices or population copies. Existing response byte encoding and private
 retention remain included in the timed read call. Post-join revalidation borrows
-those retained responses, updates existing recall scalars and allocates only the
-bounded prefix receipt array; a synthetic missing scalar may allocate one value.
+those retained responses and updates existing recall scalars. It allocates the
+bounded prefix receipt array and encodes one attempt at a time to recompute final
+`RetainedAttemptBytes`, including warmup. Collection-time byte charges remain
+conservative and are not refunded by shorter final recall encodings; complete
+pair encoding still enforces the cap. A synthetic missing scalar may allocate
+one value.
 The byte budget reserves `128 * read-max-attempts` additional bytes for prefix
 receipts within the existing output cap; complete planned/result encoding remains
 the final byte authority. No per-request server allocation attribution follows

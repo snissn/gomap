@@ -481,28 +481,65 @@ func TestMixedChangingTop10ProfilePlanV2(t *testing.T) {
 
 func TestMixedChangingTop10PostJoinRecallV2(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		start, end int64
-		want       float64
-		mask       uint8
-	}{{"ACK-before-call", 30, 40, .9, 2}, {"not-yet-invoked", 1, 5, 1, 1}, {"overlapping", 15, 25, .9, 3}} {
+		name         string
+		start, end   int64
+		online, want float64
+		mask         uint8
+	}{{"ACK-before-call", 30, 40, 1, .9, 2}, {"not-yet-invoked", 1, 5, .9, 1, 1}, {"overlapping", 15, 25, .9, .9, 3}} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, r, response, _ := mixedAmbiguousFixtureV2(t)
 			r.Writes = r.Writes[:1]
 			r.Writes[0].Invoked, r.Writes[0].Outcome = true, "succeeded"
 			r.Writes[0].StartNS, r.Writes[0].EndNS = 10, 20
-			online := .9
-			r.Attempts = []windowAttempt{{Ordinal: 0, Phase: "measured", StartNS: tc.start, EndNS: tc.end, Response: &response, Outcome: "succeeded", RecallAt10: &online}}
+			online, warmRecall := tc.online, 1.0
+			r.Attempts = []windowAttempt{
+				{Ordinal: 0, Phase: "warmup", Response: &response, Outcome: "succeeded", RecallAt10: &warmRecall},
+				{Ordinal: 0, Phase: "measured", StartNS: tc.start, EndNS: tc.end, Response: &response, Outcome: "succeeded", RecallAt10: &online},
+			}
+			encodedBytes := func() int {
+				total := 0
+				for _, attempt := range r.Attempts {
+					raw, err := json.Marshal(attempt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					total += len(raw) + 1
+				}
+				return total
+			}
+			r.RetainedAttemptBytes = encodedBytes()
+			collectionBytes := r.RetainedAttemptBytes
 			r.Counts.Succeeded = 1
 			if err := mixedRecheck(context.Background(), &in, &r); err != nil {
 				t.Fatal(err)
 			}
 			windowSummarize(&r.windowReport)
-			if r.Attempts[0].RecallAt10 != &online || online != tc.want || r.MeanRecallAt10 == nil || *r.MeanRecallAt10 != tc.want || r.MeasuredQuerySucceeded[0] != 1 {
+			if r.Attempts[1].RecallAt10 != &online || online != tc.want || r.MeanRecallAt10 == nil || *r.MeanRecallAt10 != tc.want || r.MeasuredQuerySucceeded[0] != 1 {
 				t.Fatalf("final recall not reaccounted: %+v", r.windowReport)
 			}
 			if len(r.ReadPrefixes) != 1 || r.ReadPrefixes[0].CompatibleMask != tc.mask || r.ReadPrefixes[0].RecallAt10 != tc.want {
 				t.Fatalf("exact compatible mask: %+v", r.ReadPrefixes)
+			}
+			if r.RetainedAttemptBytes != encodedBytes() || warmRecall != 1 {
+				t.Fatalf("final encoded attempt accounting: got%d want%d warmup%v", r.RetainedAttemptBytes, encodedBytes(), warmRecall)
+			}
+			wantDelta := 0
+			if tc.online == 1 && tc.want == .9 {
+				wantDelta = 2
+			}
+			if tc.online == .9 && tc.want == 1 {
+				wantDelta = -2
+			}
+			if r.RetainedAttemptBytes-collectionBytes != wantDelta {
+				t.Fatalf("recall encoding delta: got%d want%d", r.RetainedAttemptBytes-collectionBytes, wantDelta)
+			}
+			// A later invalid attempt must still fail, retain all evidence, and
+			// account an earlier scalar update performed before that refusal.
+			online = tc.online
+			r.Attempts = append(r.Attempts, windowAttempt{Ordinal: 1, Phase: "measured", Outcome: "failed"})
+			r.RetainedAttemptBytes = encodedBytes()
+			if err := mixedRecheck(context.Background(), &in, &r); err == nil || len(r.Attempts) != 3 || r.Attempts[2].Outcome != "failed" || r.RetainedAttemptBytes != encodedBytes() {
+				t.Fatalf("failed recheck evidence/accounting: %v bytes%d want%d", err, r.RetainedAttemptBytes, encodedBytes())
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()

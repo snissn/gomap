@@ -604,10 +604,25 @@ func mixedMeasured(parent context.Context, readers []ownedVectorClient, writer m
 
 // Exact call boundaries after writer/reader join narrow the online ledger range.
 // Reuse retained recall scalars; no response copies or favorable-prefix choice.
-func mixedRecheck(ctx context.Context, in *recallInput, r *mixedReport) error {
+func mixedRecheck(ctx context.Context, in *recallInput, r *mixedReport) (runErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Collection charged the online encoding conservatively. Corrected recall
+	// can change its size; report the final actual encoding without refunding
+	// that collection budget. Also account partial updates on a failed recheck.
+	defer func() {
+		retainedBytes := 0
+		for _, a := range r.Attempts {
+			encoded, err := json.Marshal(a)
+			if err != nil {
+				runErr = errors.Join(runErr, err)
+				return
+			}
+			retainedBytes += len(encoded) + 1
+		}
+		r.RetainedAttemptBytes = retainedBytes
+	}()
 	r.ReadPrefixes = make([]mixedReadPrefix, 0, len(r.Attempts))
 	for i := range r.Attempts {
 		if err := ctx.Err(); err != nil {
