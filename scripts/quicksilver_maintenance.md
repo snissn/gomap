@@ -12,6 +12,11 @@ build, native-library and runner receipts; hash validation does not establish
 their truth. Freeze exact product and landed harness/observer identities before
 collection. A baseline may contain the identical landed instrumentation overlay;
 record that composition in the source/build receipts.
+Every comparison shares identical source, build, native-library and runner
+receipt digests. Source/build receipts inventory all frozen product variants,
+so A/B product entries differ within one common campaign inventory. Separate
+capture directories may share this inventory; separately valid campaigns with
+different runner or build receipts cannot be combined into one qualification.
 
 The manifest also names `snapshot_restore`, a fixed source entry for
 `cmd/quicksilver_snapshot_restore`. Build it from the frozen baseline plus landed
@@ -38,6 +43,10 @@ characterizations first, write the immutable noise packet, then execute
 Freeze all six expected run packet SHA256 digests in the reviewed pair bundle
 after collection; metadata changes cannot use their own raw-artifact hashes as
 acceptance authority.
+All three characterizations must be policy-completed with no `deferred` or
+`unsupported` phase before a noise packet can be written. Analysis revalidates
+their completion too; incomplete baselines cannot define the qualifying noise
+threshold even when all subsequent pairs complete.
 The analyzer recomputes `E=(max A-min A)/median A` and reports every pair's
 fractional reduction. Material improvement requires all three favorable signs,
 median reduction greater than `2E`, and all six policy-completed runs with equal

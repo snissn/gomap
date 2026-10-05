@@ -266,8 +266,12 @@ def load_run(path):
     require(unified.sha256(parent/'manifest.json') == run['manifest_sha256'] and unified.sha256(parent/'plan.json') == run['plan_sha256'], 'manifest/plan drift')
     manifest, plan = json.loads((parent/'manifest.json').read_bytes()), json.loads((parent/'plan.json').read_bytes())
     require(run['cell'] in plan['cells'] and run['source'] == manifest['sources'][run['cell']['source']], 'source/cell binding drift')
+    require(set(manifest['receipts']) == {'source', 'build', 'native', 'runner'}, 'missing campaign receipts')
     for role, receipt in manifest['receipts'].items():
         require(unified.sha256(parent/(role+'-receipt.json')) == receipt['sha256'], 'source receipt drift: '+role)
+    # Derive common identities from the validated manifest, not run metadata.
+    # Source/build receipts inventory every frozen A/B variant in the campaign.
+    run['comparison_receipts'] = {role: receipt['sha256'] for role, receipt in manifest['receipts'].items()}
     require(run['command'] == compact_command(run['command'][0], path.parent/'db', run['cell']), 'CLI flag drift')
     require(pathlib.Path(run['command'][0]).name == run['source']['binary'], 'compact binary basename drift')
     restore = run['snapshot_restore']
@@ -295,7 +299,13 @@ def contract(run):
     return dict(fixture=run['fixture'], mode=run['cell']['mode'], batch_size=run['cell']['batch_size'],
                 timeout_seconds=run['cell'].get('timeout_seconds', 1800), harness=run['harness'], env=run['env'],
                 loader=run['native_resolution']['libraries'], interval=run['rss_sampling']['interval_ms'],
-                restore=run['snapshot_restore']['source'], restore_loader=run['snapshot_restore']['native'])
+                restore=run['snapshot_restore']['source'], restore_loader=run['snapshot_restore']['native'],
+                campaign_receipts=run['comparison_receipts'])
+
+
+def policy_complete(report):
+    return report['policy_fully_compacted'] and all(phase.get('status', '') not in ('deferred', 'unsupported')
+                                                   for phase in report['phases'])
 
 
 def metric(run, name):
@@ -305,7 +315,9 @@ def metric(run, name):
 
 def calibrate(paths, name, output):
     require(len(paths) == 3, 'exactly three baseline characterizations required')
-    runs = [load_run(p)[0] for p in paths]
+    loaded = [load_run(p) for p in paths]
+    require(all(policy_complete(report) for _, report in loaded), 'incomplete calibration run')
+    runs = [run for run, _ in loaded]
     require(all(contract(v) == contract(runs[0]) and v['source'] == runs[0]['source'] for v in runs), 'calibration contract/source drift')
     require(all(a['finished_ns'] <= b['started_ns'] for a, b in zip(runs, runs[1:])), 'overlapping/reordered calibration')
     values = [metric(v, name) for v in runs]
@@ -325,7 +337,9 @@ def analyze(bundle_path):
     require(len(noise['paths']) == 3 and len(noise['hashes']) == 3, 'missing baseline characterizations')
     for path, expected in zip(noise['paths'], noise['hashes']):
         require(unified.sha256(pathlib.Path(path)) == expected, 'calibration run drift')
-    bases = [load_run(v)[0] for v in noise['paths']]
+    calibration = [load_run(v) for v in noise['paths']]
+    require(all(policy_complete(report) for _, report in calibration), 'incomplete calibration run')
+    bases = [run for run, _ in calibration]
     require(all(contract(v) == noise['contract'] and v['source'] == noise['baseline_source'] for v in bases), 'calibration identity drift')
     values = [metric(v, noise['metric']) for v in bases]
     require(values == noise['values'] and noise['E'] == (max(values)-min(values))/statistics.median(values), 'noise calibration drift')
@@ -352,7 +366,7 @@ def analyze(bundle_path):
     equal_completion = all(a == b for a, b in completion)
     complete_phase_dispositions = all(phase.get('status', '') not in ('deferred', 'unsupported')
                                      for pair in loaded for _, report in pair for phase in report['phases'])
-    complete_runs = all(flags['policy_fully_compacted'] for pair in completion for flags in pair) and complete_phase_dispositions
+    complete_runs = all(policy_complete(report) for pair in loaded for _, report in pair)
     material = all(v > 0 for v in effects) and statistics.median(effects) > 2*noise['E'] and equal_completion and complete_runs
     return dict(metric=noise['metric'], E=noise['E'], threshold=2*noise['E'], pair_effects=effects,
                 median_effect=statistics.median(effects), all_favourable=all(v > 0 for v in effects),

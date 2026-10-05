@@ -275,6 +275,71 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertFalse(result['complete_phase_dispositions'])
                 self.assertFalse(result['complete_runs']); self.assertFalse(result['material'])
 
+    def test_separate_capture_directories_require_common_campaign_receipts(self):
+        for role in (None, 'source', 'build', 'native', 'runner'):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp).resolve(); self.make_campaign(root)
+                other = root/'other'; m.shutil.copytree(root/'out', other)
+                manifest = json.loads((other/'manifest.json').read_bytes())
+                if role is not None:
+                    receipt = other/(role+'-receipt.json')
+                    m.save(receipt, {'reviewed': role, 'different_campaign': True})
+                    manifest['receipts'][role]['sha256'] = m.unified.sha256(receipt)
+                    m.save(other/'manifest.json', manifest)
+                alternative = other/'B2'/'run.json'
+                self.change(alternative, lambda r: r.update(
+                    manifest_sha256=m.unified.sha256(other/'manifest.json'),
+                    command=m.compact_command('/bin/B', alternative.parent/'db', r['cell'])))
+                self.change(alternative, lambda r: r['snapshot_restore'].update(
+                    command=['/bin/restore', str(alternative.parent/'db')]))
+                # Each alternate packet is valid on its own, with independently
+                # hashed manifest/receipts. The comparison is the failed gate.
+                m.load_run(alternative)
+                bundle_path = root/'bundle.json'; bundle = json.loads(bundle_path.read_bytes())
+                bundle['pairs'][1].update(B=str(alternative), B_sha256=m.unified.sha256(alternative))
+                m.save(bundle_path, bundle)
+                if role is None:
+                    self.assertTrue(m.analyze(bundle_path)['material'])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'matched workload/environment/harness drift'):
+                        m.analyze(bundle_path)
+
+    def make_calibration_incomplete(self, path, status):
+        incomplete = report()
+        if status == 'policy_debt':
+            incomplete['remaining_debt']['value_log_gc_bytes'] = 1
+            incomplete.update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
+        else:
+            incomplete['phases'][0]['status'] = status
+        m.save(path.parent/'stdout.json', incomplete)
+        self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+        m.load_run(path)  # Truthful incomplete reports remain valid diagnostics.
+
+    def test_calibration_rejects_every_incomplete_characterization_before_write(self):
+        for label in ('C1', 'C2', 'C3'):
+            for status in ('deferred', 'unsupported', 'policy_debt'):
+                with self.subTest(label=label, status=status), tempfile.TemporaryDirectory() as temp:
+                    root = pathlib.Path(temp); paths = self.make_campaign(root)
+                    self.make_calibration_incomplete(paths[label], status)
+                    output = root/'rejected-noise.json'
+                    with self.assertRaisesRegex(ValueError, 'incomplete calibration run'):
+                        m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', output)
+                    self.assertFalse(output.exists())
+
+    def test_analyze_revalidates_completion_of_hash_bound_calibration(self):
+        for status in ('deferred', 'unsupported', 'policy_debt'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp); paths = self.make_campaign(root)
+                self.make_calibration_incomplete(paths['C2'], status)
+                noise_path = root/'noise.json'; noise = json.loads(noise_path.read_bytes())
+                noise['hashes'][1] = m.unified.sha256(paths['C2']); m.save(noise_path, noise)
+                bundle_path = root/'bundle.json'; bundle = json.loads(bundle_path.read_bytes())
+                bundle['calibration_sha256'] = m.unified.sha256(noise_path); m.save(bundle_path, bundle)
+                # Digest, chronology and numeric noise checks all still agree;
+                # the invalid work-completion endpoint must reject the packet.
+                with self.assertRaisesRegex(ValueError, 'incomplete calibration run'):
+                    m.analyze(bundle_path)
+
 
 if __name__ == '__main__':
     unittest.main()
