@@ -1,0 +1,29 @@
+File: unified-bench-baseline
+Build ID: d591e3b148796173d183376a2da2c5d446024650
+Type: cpu
+Time: 2026-10-04 22:26:35 HST
+Duration: 3.50s, Total samples = 13800ms (394.10%)
+Showing nodes accounting for 9860ms, 71.45% of 13800ms total
+Dropped 156 nodes (cum <= 69ms)
+Showing top 20 nodes out of 104
+      flat  flat%   sum%        cum   cum%
+    2110ms 15.29% 15.29%     2430ms 17.61%  github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock
+     830ms  6.01% 21.30%     1140ms  8.26%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal
+     820ms  5.94% 27.25%      820ms  5.94%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     770ms  5.58% 32.83%      770ms  5.58%  cmpbody
+     630ms  4.57% 37.39%    13750ms 99.64%  main.quicksilverReadPhase.func1
+     620ms  4.49% 41.88%     1190ms  8.62%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     600ms  4.35% 46.23%      620ms  4.49%  github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)
+     600ms  4.35% 50.58%      600ms  4.35%  runtime.memmove
+     520ms  3.77% 54.35%      520ms  3.77%  encoding/binary.littleEndian.Uint32 (inline)
+     310ms  2.25% 56.59%    11450ms 82.97%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     260ms  1.88% 58.48%      260ms  1.88%  hash/crc32.ieeeCLMUL
+     230ms  1.67% 60.14%     4570ms 33.12%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo
+     220ms  1.59% 61.74%      240ms  1.74%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     210ms  1.52% 63.26%      240ms  1.74%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).readAppendTo
+     210ms  1.52% 64.78%      360ms  2.61%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+     210ms  1.52% 66.30%      210ms  1.52%  hash/crc32.simpleUpdate (inline)
+     190ms  1.38% 67.68%      190ms  1.38%  runtime.nanotime (inline)
+     180ms  1.30% 68.99%      180ms  1.30%  time.runtimeNow
+     170ms  1.23% 70.22%      330ms  2.39%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState
+     170ms  1.23% 71.45%      350ms  2.54%  github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad

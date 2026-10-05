@@ -1,0 +1,44 @@
+{
+  "output": "offsets-3m-profile-paired",
+  "repeats": 3,
+  "cells": [
+    {
+      "label": "baseline-durable-primary-profile",
+      "source": "baseline",
+      "engine": "treedb",
+      "profile": "durable",
+      "keys": 3000000,
+      "reads": 6000000,
+      "updates": 40000,
+      "workers": 4,
+      "case": "realistic",
+      "seed": 24,
+      "duration": "8s",
+      "duration_ns": 8000000000,
+      "profiled": true,
+      "keep": false,
+      "mixture": "primary",
+      "working_set": "uniform",
+      "miss_percent": 90
+    },
+    {
+      "label": "candidate-durable-primary-profile",
+      "source": "candidate",
+      "engine": "treedb",
+      "profile": "durable",
+      "keys": 3000000,
+      "reads": 6000000,
+      "updates": 40000,
+      "workers": 4,
+      "case": "realistic",
+      "seed": 24,
+      "duration": "8s",
+      "duration_ns": 8000000000,
+      "profiled": true,
+      "keep": false,
+      "mixture": "primary",
+      "working_set": "uniform",
+      "miss_percent": 90
+    }
+  ]
+}

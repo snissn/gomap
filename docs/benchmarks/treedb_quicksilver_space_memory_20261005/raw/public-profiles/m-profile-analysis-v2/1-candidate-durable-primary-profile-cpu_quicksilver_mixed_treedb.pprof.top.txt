@@ -1,0 +1,29 @@
+File: unified-bench-candidate
+Build ID: 3ce61646204e04a4711660f2fbb2f4edd6427fdf
+Type: cpu
+Time: 2026-10-04 22:22:02 HST
+Duration: 3.45s, Total samples = 13700ms (397.36%)
+Showing nodes accounting for 9790ms, 71.46% of 13700ms total
+Dropped 173 nodes (cum <= 68.50ms)
+Showing top 20 nodes out of 103
+      flat  flat%   sum%        cum   cum%
+    2420ms 17.66% 17.66%     2870ms 20.95%  github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock
+     890ms  6.50% 24.16%      890ms  6.50%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     790ms  5.77% 29.93%      790ms  5.77%  runtime.memmove
+     740ms  5.40% 35.33%     1060ms  7.74%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal
+     710ms  5.18% 40.51%      710ms  5.18%  github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)
+     700ms  5.11% 45.62%      700ms  5.11%  cmpbody
+     570ms  4.16% 49.78%    13630ms 99.49%  main.quicksilverReadPhase.func1
+     560ms  4.09% 53.87%      560ms  4.09%  encoding/binary.littleEndian.Uint32 (inline)
+     370ms  2.70% 56.57%      900ms  6.57%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     220ms  1.61% 58.18%      230ms  1.68%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     210ms  1.53% 59.71%      400ms  2.92%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getViewLockedWithState
+     210ms  1.53% 61.24%      210ms  1.53%  time.runtimeNow
+     200ms  1.46% 62.70%    11270ms 82.26%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     200ms  1.46% 64.16%      360ms  2.63%  github.com/snissn/gomap/TreeDB/tree.noteOuterLeafLoad
+     200ms  1.46% 65.62%      430ms  3.14%  main.quicksilverGenericKey
+     180ms  1.31% 66.93%      180ms  1.31%  hash/crc32.ieeeCLMUL
+     160ms  1.17% 68.10%     4670ms 34.09%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readViaMmapViewTo
+     160ms  1.17% 69.27%      180ms  1.31%  internal/strconv.formatBits
+     150ms  1.09% 70.36%      150ms  1.09%  github.com/snissn/gomap/TreeDB/db.leafPageReadMissCandidateLaneIndex (inline)
+     150ms  1.09% 71.46%      290ms  2.12%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf

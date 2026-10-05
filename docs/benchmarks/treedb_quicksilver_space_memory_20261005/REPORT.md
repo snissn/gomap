@@ -1,6 +1,6 @@
 # TreeDB space, memory, and maintenance: provisional 3M evidence
 
-This packet records the baseline, 18 public matched runs, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). Candidate acceptance and final publication remain pending. The maintenance and initial memory observations use one profiled primary run; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
+This packet records the baseline, 18 public matched runs, six public profile runs, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). Candidate acceptance and final publication remain pending. The maintenance and initial memory observations use one profiled primary run; the later controlled heap comparison uses three profiled durable-primary repeats per source; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
 
 <!-- BEGIN summary -->
 Full reduced apparent WAL-excluded bytes by 47.39%, from 2,832,310,293 to 1,490,201,793.
@@ -109,9 +109,9 @@ The baseline observer retained 291 samples of one process. Maximum observed kern
 The separate 256MiB outer-leaf mapping-budget diagnostic retained 333 samples, with observed kernel VmHWM 2,351,124,480 bytes and sampled RSS peak 2,351,124,480. Its frozen producer chain and full-fixture oracle are bound here. This single profiled setting run does not establish a repeatable memory or throughput improvement.
 <!-- END rss -->
 
-HeapAlloc endpoints are not peaks. Profiled StatsBefore follows explicit pre-profile GC plus setup; StatsAfter precedes post-profile GC. Concurrent allocation measurement ends at reader join and excludes the writer-only tail included in composition time. Delta inuse-space profiles are net sampled changes, not total retained cache heap. RSS has no phase markers and cannot establish phase-specific RSS peaks. RESULTS.json preserves reported cache slots, capacity, entries, and retained payload bytes at both boundaries; these statistics are not an atomic cache-manager snapshot or a complete metadata-heap measurement.
+HeapAlloc endpoints are not peaks. Profiled HeapAlloc before follows explicit pre-profile GC plus setup; HeapAlloc after precedes post-profile GC. Cache StatsAfter is captured later, after profiling stops and the writer joins. Concurrent allocation measurement ends at reader join and excludes the writer-only tail included in composition time. Delta inuse-space profiles are net sampled changes, not total retained cache heap. RSS has no phase markers and cannot establish phase-specific RSS peaks. RESULTS.json preserves reported cache slots, capacity, entries, and retained payload bytes at both boundaries; these statistics are not an atomic cache-manager snapshot or a complete metadata-heap measurement.
 
-Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; profiled heap/structural qualification and candidate acceptance remain pending.
+Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; structural qualification and candidate acceptance remain pending.
 
 ## Bounded diagnosis and operation
 
@@ -174,7 +174,7 @@ Mixed and concurrent tails retain both distributions and matched repeat ratios. 
 | durable holdout | concurrent | 11.769 [11.641, 12.440] | 11.903 [11.883, 12.250] | 1.010 [0.985, 1.023] | 20.636 [20.345, 21.581] | 20.256 [20.134, 21.377] | 0.991 [0.976, 0.996] |
 <!-- END public_tails -->
 
-The guardrails below retain process RSS, command/load time, and final runtime file sizes. These file sizes are apparent bytes after final checkpoint and close, before the final writable reopen/full oracle; they are not allocated-byte censuses or post-oracle retention measurements ([capture boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L932)). Per-domain initial/final totals are in RESULTS.json. GNU-time RSS high-water is a whole-process observation; observer samples retain anonymous/file/shared components at the sampled RSS peak and separate component maxima. These public rows do not exercise the earlier diagnostic's 256MiB leaf-mapping override. Neither unprofiled heap endpoints nor RSS differences establish a cache-memory improvement: GC state is uncontrolled and the six profiled public rows and two structural diagnostics remain pending.
+The guardrails below retain process RSS, command/load time, and final runtime file sizes. These file sizes are apparent bytes after final checkpoint and close, before the final writable reopen/full oracle; they are not allocated-byte censuses or post-oracle retention measurements ([capture boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L932)). Per-domain initial/final totals are in RESULTS.json. GNU-time RSS high-water is a whole-process observation; observer samples retain anonymous/file/shared components at the sampled RSS peak and separate component maxima. These public rows do not exercise the earlier diagnostic's 256MiB leaf-mapping override. Neither unprofiled heap endpoints nor RSS differences establish a cache-memory improvement: GC state is uncontrolled and the two structural diagnostics remain pending. The separately profiled comparison below supplies controlled heap evidence.
 
 <!-- BEGIN public_guardrails -->
 | Cell | Load s | Whole command GNU time s | Process RSS high-water bytes | Final pre-oracle apparent bytes excluding WAL |
@@ -200,14 +200,54 @@ The guardrails below retain process RSS, command/load time, and final runtime fi
 
 The last two columns summarize each run's maximum among four concurrent checkpoints and 40 update batches, then report median [minimum, maximum] of those three per-run maxima. All raw batch/checkpoint values are retained. The observer's 4,323 samples are bound by executable, PID, and recorded run interval; native library hashes and per-run loader output are checked before accepting row metrics.
 
+## Six public profile rows: controlled heap evidence
+
+Three durable-primary profile repeats per source passed the complete initial/final 3M fixture oracles. The frozen sources, binaries, native dependencies, runtime environment, and workload match the unprofiled matrix; profiling is the explicit difference. Profile collection order was baseline/candidate, candidate/baseline, baseline/candidate. These profile timings are excluded from public performance acceptance; the earlier mixed-read p99 concern remains unchanged.
+
+Each profile begins with two explicit GCs for the allocation snapshot ([GC boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/main.go#L1158)), then profiling and reader setup precede HeapAlloc/StatsBefore ([measurement bracket](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L557)). This controls the preceding GC boundary without isolating cache heap from the rest of the process. StatsAfter and allocation timing retain the reader-join versus writer-tail limitation described above. Values below are median [minimum, maximum]; paired differences retain repeat pairing rather than dividing unrelated medians.
+
+<!-- BEGIN profile_heap -->
+| Profiled phase | Baseline HeapAlloc before B | Candidate HeapAlloc before B | Difference of medians B | Paired candidate-minus-baseline B | Baseline HeapAlloc after B | Candidate HeapAlloc after B | Baseline allocated B/op | Candidate allocated B/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hits | 329,210,776 [320,865,088, 354,776,752] | 275,357,488 [275,332,224, 293,594,072] | -53,853,288 | -53,878,552 [-79,419,264, -27,271,016] | 604,990,216 [495,952,432, 663,188,664] | 488,191,200 [458,291,640, 673,954,392] | 675.938 [672.796, 683.436] | 673.963 [672.299, 680.647] |
+| misses | 418,811,240 [391,619,704, 464,066,488] | 354,485,464 [348,215,528, 363,113,152] | -64,325,776 | -70,595,712 [-109,581,024, -28,506,552] | 477,400,160 [449,625,776, 522,366,472] | 412,843,624 [405,665,864, 421,048,024] | 9.717 [9.668, 9.765] | 9.656 [9.575, 9.726] |
+| mixed | 419,917,408 [393,371,456, 465,148,960] | 354,892,016 [349,545,608, 364,544,192] | -65,025,392 | -70,371,800 [-110,256,944, -28,827,264] | 476,406,712 [470,682,496, 477,771,712] | 470,364,016 [468,293,128, 474,333,760] | 73.584 [73.500, 73.819] | 73.462 [73.383, 74.345] |
+| concurrent | 425,467,088 [397,453,896, 470,617,760] | 359,813,632 [353,922,784, 368,105,640] | -65,653,456 | -71,544,304 [-110,804,128, -29,348,256] | 872,767,968 [855,496,464, 917,199,608] | 891,612,512 [878,753,904, 896,609,320] | 138.188 [134.121, 139.676] | 138.269 [134.757, 139.112] |
+<!-- END profile_heap -->
+
+Candidate HeapAlloc before is lower in all three paired repeats for every phase; the median differences are about 54–66 million bytes. Both sources retain approximately the same 67.1-million-byte decoded payload budget. Slots, allocated shards, aggregate capacity, and entry counts vary between repeats and sources. The counters therefore support a metadata-efficiency hypothesis without assigning the whole heap difference to offset storage. These are whole-process observations after prior workload phases, not isolated per-entry sizes; two structural diagnostics remain required.
+
+<!-- BEGIN profile_cache -->
+| StatsBefore, value-log grouped cache | Allocated slots | Allocated shards | Capacity | Entries | Retained payload B | Budget B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| hits baseline | 49,468 [42,736, 55,504] | 12,367 [10,684, 13,876] | 92,160 [83,968, 108,544] | 14,406 [13,902, 14,438] | 67,106,019 [67,104,777, 67,107,066] | 67,108,864 [67,108,864, 67,108,864] |
+| hits candidate | 46,984 [42,912, 49,156] | 11,746 [10,728, 12,289] | 92,160 [83,968, 94,208] | 14,295 [14,002, 14,311] | 67,106,285 [67,105,516, 67,108,467] | 67,108,864 [67,108,864, 67,108,864] |
+| misses baseline | 54,176 [46,436, 65,968] | 13,544 [11,609, 16,492] | 92,160 [83,968, 108,544] | 14,534 [14,363, 14,707] | 67,107,540 [67,107,305, 67,108,812] | 67,108,864 [67,108,864, 67,108,864] |
+| misses candidate | 53,880 [46,732, 54,528] | 13,470 [11,683, 13,632] | 92,160 [83,968, 94,208] | 14,643 [14,306, 14,682] | 67,107,757 [67,106,625, 67,108,740] | 67,108,864 [67,108,864, 67,108,864] |
+| mixed baseline | 54,880 [46,900, 66,736] | 13,720 [11,725, 16,684] | 92,160 [83,968, 108,544] | 14,553 [14,374, 14,727] | 67,106,817 [67,103,246, 67,107,867] | 67,108,864 [67,108,864, 67,108,864] |
+| mixed candidate | 54,636 [47,192, 55,240] | 13,659 [11,798, 13,810] | 92,160 [83,968, 94,208] | 14,663 [14,315, 14,696] | 67,107,398 [67,106,756, 67,108,703] | 67,108,864 [67,108,864, 67,108,864] |
+| concurrent baseline | 55,660 [47,420, 67,552] | 13,915 [11,855, 16,888] | 92,160 [83,968, 108,544] | 14,566 [14,396, 14,741] | 67,105,583 [67,105,086, 67,108,836] | 67,108,864 [67,108,864, 67,108,864] |
+| concurrent candidate | 55,400 [47,680, 55,856] | 13,850 [11,920, 13,964] | 92,160 [83,968, 94,208] | 14,691 [14,341, 14,724] | 67,106,855 [67,105,117, 67,107,241] | 67,108,864 [67,108,864, 67,108,864] |
+<!-- END profile_cache -->
+
+The RSS observations below include mappings, heap, stacks, profiler buffers, and runtime state. Candidate RSS high-water has a lower median, but the third paired candidate exceeds baseline and ranges overlap. Controlled HeapAlloc and cache counters do not prove repeatable process-RSS reduction. Anonymous/file values are co-timed with each sampled peak; they are not independent maxima added together.
+
+<!-- BEGIN profile_rss -->
+| Profiled source | GNU process RSS high-water B | Sampled RSS peak B | Anonymous B at sampled peak | File-backed B at sampled peak |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 3,663,904,768 [3,551,256,576, 3,744,370,688] | 3,660,574,720 [3,550,408,704, 3,742,965,760] | 1,154,617,344 [1,093,935,104, 1,197,580,288] | 2,505,957,376 [2,456,473,600, 2,545,385,472] |
+| candidate | 3,546,640,384 [3,442,348,032, 3,556,036,608] | 3,546,537,984 [3,442,413,568, 3,555,897,344] | 1,027,112,960 [978,558,976, 1,034,346,496] | 2,519,425,024 [2,463,854,592, 2,521,550,848] |
+<!-- END profile_rss -->
+
+The native ledger preserves 78 profile/trace objects (13 per run) by path, byte count, and SHA-256; these larger originals remain on the protected native host. Twenty-four successful mixed CPU, mixed allocation-space, mutex, and block top analyses bind the exact source binary, profile digest, tool digest, command, and output hash. The initial analysis failed with a Go 1.25/Go 1.26 toolchain-version mismatch; its original failure output is preserved separately and supplies no performance evidence. Allocation-space top samples are not retained heap, block/mutex delays are not CPU time, and cumulative frames must not be added together. RESULTS.json preserves the ledger, analysis commands, full grouped-cache snapshots, GC counts, heap brackets, allocation brackets, and process observations.
+
 ## Remaining matrix inputs
 
-The three original collector plans remain hash-bound. The public matched plan is now populated above; only the following result inventories remain pending.
+The three original collector plans remain hash-bound. The public matched and profile plans are now populated above; only the following result inventories remain pending.
 
 <!-- BEGIN planned_inputs -->
 | Pending plan | Expected rows | Imported result rows | Class |
 | --- | ---: | ---: | ---: |
-| offsets-3m-profile-paired-plan.json | 6 | 0 | profiled public pair |
 | offsets-3m-structural-diagnostic-plan.json | 2 | 0 | profiled structural diagnostic |
 <!-- END planned_inputs -->
 
@@ -226,7 +266,7 @@ The generic-v1 primary fixture uses seed 24, 3M keys, 6M aggregate reads, 40k up
 Raw paths and exact SHA-256 values are in inputs.json and RESULTS.json. Larger profiles remain at their recorded native paths with digests. Gzipped raw inputs preserve exact original bytes and bind both compressed and original digests. REPORT.md supplies hash-pinned prose around generated numerical blocks. Reproduce extraction with `python3 extract.py --check`; run bounded validation with `python3 selfcheck.py` and `python3 -O selfcheck.py`. No command here builds binaries or opens a database.
 
 <!-- BEGIN pending -->
-- M: six profiled public primary rows, two structural cache diagnostics, performance acceptance, and final source qualification
+- M: two structural cache diagnostics, performance acceptance, and final source qualification
 - C: qualified default and opt-in maintenance churn curves
 - R: independent acceptance of the retained production-repair and qualified restored-copy maintenance evidence
 - Accept the missing original maintenance build receipt as a documented reconstruction limitation

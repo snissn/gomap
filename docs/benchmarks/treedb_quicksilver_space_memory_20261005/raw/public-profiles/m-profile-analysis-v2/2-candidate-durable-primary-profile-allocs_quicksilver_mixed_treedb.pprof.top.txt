@@ -1,0 +1,28 @@
+File: unified-bench-candidate
+Build ID: 3ce61646204e04a4711660f2fbb2f4edd6427fdf
+Type: alloc_space
+Time: 2026-10-04 22:24:20 HST
+Showing nodes accounting for 431MB, 98.51% of 437.51MB total
+Dropped 19 nodes (cum <= 2.19MB)
+Showing top 20 nodes out of 52
+      flat  flat%   sum%        cum   cum%
+  219.04MB 50.06% 50.06%   219.04MB 50.06%  github.com/snissn/gomap/TreeDB/internal/valuelog.growRealloc (inline)
+   73.01MB 16.69% 66.75%   376.13MB 85.97%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get
+   71.01MB 16.23% 82.98%    71.01MB 16.23%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+   46.53MB 10.63% 93.62%    46.53MB 10.63%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+    7.32MB  1.67% 95.29%     7.32MB  1.67%  github.com/snissn/compress/zstd.(*blockDec).reset
+    4.74MB  1.08% 96.38%     4.74MB  1.08%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+       3MB  0.69% 97.06%        3MB  0.69%  runtime/pprof.allFrames
+    2.50MB  0.57% 97.63%   425.16MB 97.18%  main.quicksilverReadPhase.func1
+    1.76MB   0.4% 98.04%     3.54MB  0.81%  compress/flate.NewWriter (inline)
+    1.04MB  0.24% 98.27%     2.58MB  0.59%  github.com/snissn/gomap/TreeDB/caching.(*DB).Stats
+    0.54MB  0.12% 98.40%     5.54MB  1.27%  runtime/pprof.writeHeapInternal
+    0.51MB  0.12% 98.51%     2.59MB  0.59%  runtime/pprof.(*profileBuilder).emitLocation
+         0     0% 98.51%     3.54MB  0.81%  compress/gzip.(*Writer).Write
+         0     0% 98.51%     8.32MB  1.90%  github.com/snissn/compress/zstd.(*Decoder).DecodeAll
+         0     0% 98.51%     8.32MB  1.90%  github.com/snissn/compress/zstd.(*frameDec).runDecoder
+         0     0% 98.51%    46.53MB 10.63%  github.com/snissn/gomap/TreeDB.(*DB).AcquireSnapshot
+         0     0% 98.51%     2.58MB  0.59%  github.com/snissn/gomap/TreeDB.(*DB).Stats
+         0     0% 98.51%    46.53MB 10.63%  github.com/snissn/gomap/TreeDB/caching.(*DB).AcquireBackendSnapshotFastPath
+         0     0% 98.51%    46.53MB 10.63%  github.com/snissn/gomap/TreeDB/db.(*DB).AcquireSnapshot
+         0     0% 98.51%    46.53MB 10.63%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireSnapshotWithValueLogPublicationLockHeld

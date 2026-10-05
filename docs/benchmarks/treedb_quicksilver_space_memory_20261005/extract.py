@@ -10,7 +10,7 @@ import re
 from statistics import median
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "7061d6aa63dcbb66a3de535b7c086e57427ae3ac5de7345e6e20f0d28fa8b7b9"
+INPUTS_SHA256 = "d253776ccc3463626f09528c67c1984bf74a2923b2b661f9d8706819ce055374"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -140,11 +140,12 @@ def rss_summary(rows, run=None, binary="unified-bench-baseline"):
                 for key in ["RssAnon", "RssFile", "RssShmem", "VmSwap"]}}
 
 
-def public_matched(contract, raw):
-    prefix = "public-matched/"
-    bundle = prefix + "offsets-3m-matched/"
+def public_matched(contract, raw, profiled=False):
+    prefix = "public-profiles/" if profiled else "public-matched/"
+    output = "offsets-3m-profile-paired" if profiled else "offsets-3m-matched"
+    bundle = prefix + output + "/"
     read = lambda name: json.loads(raw[prefix + name])
-    fixed = contract["public_matched"]
+    fixed = contract["public_profiles" if profiled else "public_matched"]
     manifest = read("qualified-manifest-offsets.json")
     require(raw[prefix + "qualified-manifest-offsets.json"] == raw[bundle + "manifest.json"],
             "public manifest copies differ")
@@ -152,17 +153,17 @@ def public_matched(contract, raw):
             "public frozen source identity differs")
     plan_bytes = raw[bundle + "plan.json"]
     require(sha(plan_bytes) == fixed["plan_sha256"] and
-            plan_bytes == raw["pending-plans/offsets-3m-matched-plan.json"], "public plan differs")
+            plan_bytes == raw["pending-plans/" + output + "-plan.json"], "public plan differs")
     plan = json.loads(plan_bytes)
-    require(plan["repeats"] == 3 and len(plan["cells"]) == 6 and
-            len({c["label"] for c in plan["cells"]}) == 6, "public matrix dimensions differ")
+    require(plan["repeats"] == 3 and len(plan["cells"]) == (2 if profiled else 6) and
+            len({c["label"] for c in plan["cells"]}) == len(plan["cells"]), "public matrix dimensions differ")
     receipts = {}
     for name, receipt in manifest["receipts"].items():
         data = raw[prefix + receipt["path"]]
         require(sha(data) == receipt["sha256"] and data == raw[bundle + name + "-receipt.json"],
                 "public receipt binding differs: " + name)
         receipts[name] = json.loads(data)
-    observations = [json.loads(line) for line in raw[prefix + "offsets-3m-matched-memory.jsonl"].splitlines()]
+    observations = [json.loads(line) for line in raw[prefix + output + "-memory.jsonl"].splitlines()]
     observed_count = 0
     for name, identity in fixed["sources"].items():
         source, build = receipts["source"][name], receipts["build"][name]
@@ -184,7 +185,7 @@ def public_matched(contract, raw):
             path = bundle + str(repeat) + "-" + cell["label"] + "/"
             run = json.loads(raw[path + "run.json"])
             require(run["cell"] == cell and run["repeat"] == repeat and run["validated"] is True
-                    and run["rc"] == 0 and cell["profiled"] is False, "public row identity/status differs")
+                    and run["rc"] == 0 and cell["profiled"] is profiled, "public row identity/status differs")
             identity = fixed["sources"][cell["source"]]
             require(run["source"] == identity and run["manifest_sha256"] == sha(raw[bundle + "manifest.json"])
                     and run["plan_sha256"] == fixed["plan_sha256"]
@@ -198,6 +199,8 @@ def public_matched(contract, raw):
                        "-quicksilver-read-batch", "64", "-quicksilver-commit", "auto", "-max-wall", "30m",
                        "-seed", str(cell["seed"]), "-quicksilver-mixture", cell["mixture"],
                        "-quicksilver-working-set", cell["working_set"], "-quicksilver-miss-percent", str(cell["miss_percent"])]
+            if profiled:
+                command += ["-profile-dir", "/mnt/fast4tb/quicksilver-space-memory-20261005/" + output + "/" + str(repeat) + "-" + cell["label"]]
             require(run["command"] == command, "public command differs")
             resolution = run["native_resolution"]
             libraries = {p:v["sha256"] for p,v in manifest["libraries"].items()}
@@ -211,7 +214,7 @@ def public_matched(contract, raw):
             outputs = json.loads(raw[path + "stdout.json"])
             require(len(outputs) == 1, "public result inventory differs")
             value = outputs[0]
-            require(value["engine"] == "treedb" and value["profiled"] is False and value["gomaxprocs"] == 12,
+            require(value["engine"] == "treedb" and value["profiled"] is profiled and value["gomaxprocs"] == 12,
                     "public result configuration differs")
             config = dict(contract["fixture"], mixture=cell["mixture"], working_set=cell["working_set"],
                           miss_percent=cell["miss_percent"])
@@ -242,6 +245,17 @@ def public_matched(contract, raw):
                     "p50_us", "p95_us", "p99_us", "p999_us", "max_us", "process_allocated_bytes",
                     "process_bytes_per_op", "process_heap_alloc_before", "process_heap_alloc_after",
                     "process_gc_cycles", "requested_present", "requested_absent", "observed_hits"]})
+            if profiled:
+                for selected, phase in zip(phases, value["phases"]):
+                    selected["reported_cache_snapshots"] = {}
+                    for boundary in ["stats_before", "stats_after"]:
+                        stats = {k:v for k,v in phase[boundary].items() if "grouped_frame_cache." in k}
+                        require(stats and all(math.isfinite(float(v)) and float(v) >= 0 for v in stats.values()),
+                                "profile cache counters missing/invalid")
+                        selected["reported_cache_snapshots"][boundary] = stats
+                    for field in ["process_heap_alloc_before", "process_heap_alloc_after", "process_mallocs", "process_gc_pause_ns", "process_gc_cycles"]:
+                        require(type(phase[field]) is int and phase[field] >= 0, "profile heap/allocation bracket invalid")
+                        selected[field] = phase[field]
             require([r["phase"] for r in run["miss_ratio_validation"]] == phase_names[2:], "miss screening inventory differs")
             for screen, phase in zip(run["miss_ratio_validation"], phases[2:]):
                 expected = phase["ops"] * cell["miss_percent"] / 100
@@ -283,6 +297,8 @@ def public_matched(contract, raw):
     ordered = sorted(records, key=lambda r:r["started"])
     require(all(a["finished"] <= b["started"] for a,b in zip(ordered, ordered[1:])), "public commands overlap")
     require(observed_count == len(observations), "unbound public RSS sample")
+    if profiled:
+        return profile_evidence(records, contract, raw)
     def spread(values):
         return {"median":median(values), "min":min(values), "max":max(values)}
     comparisons = []
@@ -300,6 +316,72 @@ def public_matched(contract, raw):
     return {"status":"VALIDATED_ALL", "acceptance":"PENDING", "expected_rows":18,"observed_rows":len(records),
             "manifest_provisional":True,"sources":fixed["sources"],"environment":fixed["environment"],
             "records":records,"comparisons":comparisons}
+
+
+
+def profile_evidence(records, contract, raw):
+    prefix = "public-profiles/"
+    read = lambda name: json.loads(raw[prefix + name])
+    # These are the same frozen producers as the accepted unprofiled packet.
+    for name in ["qualified-manifest-offsets.json"] + ["receipts-offsets/" + n + ".json" for n in ["source", "build", "native", "runner"]]:
+        require(raw[prefix + name] == raw["public-matched/" + name], "profile/public frozen producer differs")
+    inventory = read("m-profile-analysis-v2/inventory.json")
+    profile_names = {"allocs_quicksilver_" + phase + "_treedb.pprof" for phase in ["hits", "misses", "mixed", "concurrent"]}
+    profile_names |= {"cpu_quicksilver_" + phase + "_treedb.pprof" for phase in ["hits", "misses", "mixed", "concurrent"]}
+    profile_names |= {"checkpoint_cpu_checkpoint_quicksilver_" + phase + "_treedb.pprof" for phase in ["initial", "final"]}
+    profile_names |= {"block.pprof", "mutex.pprof", "trace.out"}
+    expected = {"offsets-3m-profile-paired/" + str(r["repeat"]) + "-" + r["cell"]["label"] + "/" + name
+                for r in records for name in profile_names}
+    require(len(inventory) == len(expected) and {v["path"] for v in inventory} == expected
+            and all(type(v["bytes"]) is int and v["bytes"] > 0 and re.fullmatch(r"[0-9a-f]{64}", v["sha256"]) for v in inventory),
+            "retained native profile inventory differs")
+    by_path = {v["path"]:v for v in inventory}
+    analyses = read("m-profile-analysis-v2/analyses.json")
+    require(analyses["go_sha256"] == contract["public_profiles"]["analysis_tool_sha256"], "profile analysis tool differs")
+    expected_top = {"cpu_quicksilver_mixed_treedb.pprof", "allocs_quicksilver_mixed_treedb.pprof", "mutex.pprof", "block.pprof"}
+    analyzed = set()
+    for row in analyses["rows"]:
+        command = row["command"]
+        profile_path = command[-1].removeprefix("/mnt/fast4tb/quicksilver-space-memory-20261005/")
+        profile_name = Path(profile_path).name
+        require(profile_name in expected_top and profile_path in by_path and profile_path not in analyzed,
+                "profile analysis inventory differs")
+        record = next(r for r in records if profile_path.split("/")[1] == str(r["repeat"]) + "-" + r["cell"]["label"])
+        identity = record["source"]
+        expected_command = ["/home/mikers/.gvm/gos/go1.26.3/bin/go", "tool", "pprof", "-top", "-nodecount=20"]
+        if profile_name.startswith("allocs_"):
+            expected_command += ["-sample_index=alloc_space"]
+        expected_command += [record["command"][0], "/mnt/fast4tb/quicksilver-space-memory-20261005/" + profile_path]
+        output = "m-profile-analysis-v2/" + profile_path.split("/")[1] + "-" + profile_name + ".top.txt"
+        require(command == expected_command and row["rc"] == 0 and row["started"] >= record["finished"]
+                and row["finished"] > row["started"] and row["binary_sha256"] == identity["binary_sha256"]
+                and row["profile_sha256"] == by_path[profile_path]["sha256"] and row["output"] == output
+                and row["output_sha256"] == sha(raw[prefix + output]), "profile analysis provenance differs")
+        analyzed.add(profile_path)
+    require(len(analyzed) == 24, "profile top analyses incomplete")
+    failure = "m-profile-analysis/1-baseline-durable-primary-profile-cpu_quicksilver_mixed_treedb.pprof.top.txt"
+    require(b'does not match go tool version' in raw[prefix + failure], "original analysis failure lost")
+    def spread(values):
+        return {"median":median(values), "min":min(values), "max":max(values)}
+    comparisons = []
+    for i, phase in enumerate(records[0]["phases"]):
+        metrics = {}
+        for metric in ["process_heap_alloc_before", "process_heap_alloc_after", "process_bytes_per_op", "process_mallocs", "process_gc_cycles"]:
+            vals = {side:[r["phases"][i][metric] for r in records if r["cell"]["source"] == side] for side in ["baseline", "candidate"]}
+            metrics[metric] = {side:spread(v) for side,v in vals.items()}
+            metrics[metric]["candidate_minus_baseline_median"] = median(vals["candidate"]) - median(vals["baseline"])
+            metrics[metric]["paired_candidate_minus_baseline"] = spread([c-b for b,c in zip(vals["baseline"],vals["candidate"])])
+        counters = {}
+        for key in ["allocated_slots", "allocated_shards", "capacity", "entries", "retained_bytes", "budget_bytes"]:
+            full_key = "treedb.vlog.grouped_frame_cache." + key
+            counters[key] = {side:spread([int(r["phases"][i]["reported_cache_snapshots"]["stats_before"][full_key])
+                for r in records if r["cell"]["source"] == side]) for side in ["baseline","candidate"]}
+        comparisons.append({"phase":phase["name"], "metrics":metrics, "reported_vlog_cache_before":counters})
+    return {"status":"VALIDATED_ALL", "acceptance":"EVIDENCE_ONLY", "observed_rows":6, "expected_rows":6,
+            "records":records, "comparisons":comparisons, "native_profile_inventory":inventory,
+            "top_analyses":analyses, "original_analysis_failure":failure,
+            "heap_boundary":"explicit pre-profile GC followed by profile and reader setup; whole-process HeapAlloc",
+            "timing_scope":"profiled diagnostic timings excluded from public performance acceptance"}
 
 
 def restored_maintenance(contract, raw):
@@ -550,6 +632,7 @@ def extract(contract, raw):
                            "maintenance_binary_binding": "post-measurement bit-identical reconstruction; original build receipt missing"},
             "fixture": baseline["config"], "storage": storage, "pending_packets": pending_packets,
             "public_matched": public_matched(contract, raw),
+            "public_profiles": public_matched(contract, raw, profiled=True),
             "restored_maintenance": restored_maintenance(contract, raw),
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
@@ -568,7 +651,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "cc009ea60320b2386b251f0aa8e15ab34f08b149610c8fca768da14d4ebb3c92"
+REPORT_PROSE_SHA256 = "1fcd7ce0894efd6b386defe1e8fed0d8eb4dccdf85bd88c3a666a7bb3716ea6c"
 
 
 def report(result, template=None):
@@ -638,6 +721,31 @@ def report(result, template=None):
         return f"{median(values):,.{digits}f} [{min(values):,.{digits}f}, {max(values):,.{digits}f}]"
     def metric_interval(values, digits=3):
         return f"{values['median']:,.{digits}f} [{values['min']:,.{digits}f}, {values['max']:,.{digits}f}]"
+    profiles = result["public_profiles"]
+    rows, cache_rows = [], []
+    for comparison in profiles["comparisons"]:
+        heap = comparison["metrics"]["process_heap_alloc_before"]
+        after = comparison["metrics"]["process_heap_alloc_after"]
+        allocation = comparison["metrics"]["process_bytes_per_op"]
+        rows.append([comparison["phase"].removeprefix("quicksilver_"), metric_interval(heap["baseline"], 0),
+            metric_interval(heap["candidate"], 0), heap["candidate_minus_baseline_median"],
+            metric_interval(heap["paired_candidate_minus_baseline"], 0), metric_interval(after["baseline"], 0),
+            metric_interval(after["candidate"], 0), metric_interval(allocation["baseline"]), metric_interval(allocation["candidate"])])
+        counters = comparison["reported_vlog_cache_before"]
+        for side in ["baseline", "candidate"]:
+            cache_rows.append([comparison["phase"].removeprefix("quicksilver_") + " " + side] +
+                [metric_interval(counters[key][side], 0) for key in ["allocated_slots", "allocated_shards", "capacity", "entries", "retained_bytes", "budget_bytes"]])
+    blocks["profile_heap"] = table(["Profiled phase", "Baseline HeapAlloc before B", "Candidate HeapAlloc before B", "Difference of medians B",
+        "Paired candidate-minus-baseline B", "Baseline HeapAlloc after B", "Candidate HeapAlloc after B", "Baseline allocated B/op", "Candidate allocated B/op"], rows)
+    blocks["profile_cache"] = table(["StatsBefore, value-log grouped cache", "Allocated slots", "Allocated shards", "Capacity", "Entries", "Retained payload B", "Budget B"], cache_rows)
+    rows = []
+    for side in ["baseline", "candidate"]:
+        records = [r for r in profiles["records"] if r["cell"]["source"] == side]
+        rows.append([side, interval([r["guardrails"]["kernel_process_rss_hwm_bytes"] for r in records], 0),
+            interval([r["rss"]["sampled_rss_peak_bytes"] for r in records], 0),
+            interval([r["rss"]["peak_sample"]["memory"]["RssAnon"] for r in records], 0),
+            interval([r["rss"]["peak_sample"]["memory"]["RssFile"] for r in records], 0)])
+    blocks["profile_rss"] = table(["Profiled source", "GNU process RSS high-water B", "Sampled RSS peak B", "Anonymous B at sampled peak", "File-backed B at sampled peak"], rows)
     rows, tails = [], []
     for comparison in public["comparisons"]:
         label = comparison["profile"] + " " + comparison["mixture"]

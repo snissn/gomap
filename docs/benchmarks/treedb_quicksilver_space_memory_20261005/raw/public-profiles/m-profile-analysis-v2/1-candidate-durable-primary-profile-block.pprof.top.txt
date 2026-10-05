@@ -1,0 +1,28 @@
+File: unified-bench-candidate
+Build ID: 3ce61646204e04a4711660f2fbb2f4edd6427fdf
+Type: delay
+Time: 2026-10-04 22:22:59 HST
+Showing nodes accounting for 2hrs, 99.64% of 2.01hrs total
+Dropped 419 nodes (cum <= 0.01hrs)
+Showing top 20 nodes out of 45
+      flat  flat%   sum%        cum   cum%
+   1.20hrs 59.86% 59.86%    1.20hrs 59.86%  runtime.selectgo
+   0.70hrs 35.03% 94.89%    0.70hrs 35.03%  runtime.chanrecv2
+   0.08hrs  3.97% 98.86%    0.08hrs  3.97%  runtime.chanrecv1
+   0.02hrs  0.78% 99.64%    0.02hrs  0.78%  sync.(*WaitGroup).Wait
+         0     0% 99.64%    0.04hrs  1.82%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).Start.func1
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).StartAutoCheckpoint.gowrap1
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).autoCheckpointLoop
+         0     0% 99.64%    0.01hrs  0.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogDictTrainer.gowrap2
+         0     0% 99.64%    0.13hrs  6.61%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureVlogDictPrepWorkers.gowrap1
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLoop
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).startProcessMemorySampler.func1
+         0     0% 99.64%    0.04hrs  1.80%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop.gowrap1
+         0     0% 99.64%    0.48hrs 23.77%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter.gowrap1
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictLoop
+         0     0% 99.64%    0.13hrs  6.61%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop
+         0     0% 99.64%    0.04hrs  1.80%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop
+         0     0% 99.64%    0.48hrs 23.77%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogWriteLoop
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.Open.gowrap1
+         0     0% 99.64%    0.04hrs  1.83%  github.com/snissn/gomap/TreeDB/caching.retainPoolPressureSampler.gowrap1

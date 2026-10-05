@@ -122,6 +122,40 @@ def main():
     row["exe"] = "/unowned-process"
     changed[observer_path] = b"\n".join([extract.encoded(row).strip()] + observations[1:]) + b"\n"
     checks.append(rejected("public RSS observation unbound", lambda: extract.public_matched(contract, changed)))
+    profiles = result["public_profiles"]
+    extract.require(profiles["status"] == "VALIDATED_ALL" and profiles["acceptance"] == "EVIDENCE_ONLY"
+                    and profiles["observed_rows"] == 6 and len(profiles["native_profile_inventory"]) == 78
+                    and len(profiles["top_analyses"]["rows"]) == 24, "profile inventory/qualification differs")
+    path = "public-profiles/offsets-3m-profile-paired/1-candidate-durable-primary-profile/"
+    cell = dict(profiles["records"][1]["cell"], profiled=False)
+    checks.append(rejected("profile capture disabled", lambda: extract.public_matched(contract,
+        altered(path + "run.json", "cell", cell), profiled=True)))
+    checks.append(rejected("profile output directory omitted", lambda: extract.public_matched(contract,
+        altered(path + "run.json", "command", profiles["records"][1]["command"][:-2]), profiled=True)))
+    for label, mutate in [
+        ("profile GC heap bracket negative", lambda v:v["phases"][0].update(process_heap_alloc_before=-1)),
+        ("profile cache snapshot omitted", lambda v:v["phases"][0].update(stats_before={})),
+        ("profile oracle incomplete", lambda v:v.update(verified_misses=0))]:
+        values = json.loads(raw[path + "stdout.json"])
+        mutate(values[0])
+        changed = dict(raw, **{path + "stdout.json":extract.encoded(values)})
+        checks.append(rejected(label, lambda changed=changed:extract.public_matched(contract, changed, profiled=True)))
+    ledger_path = "public-profiles/m-profile-analysis-v2/inventory.json"
+    inventory = json.loads(raw[ledger_path])
+    inventory.pop()
+    checks.append(rejected("profile trace ledger omission", lambda:extract.public_matched(contract,
+        dict(raw, **{ledger_path:extract.encoded(inventory)}), profiled=True)))
+    analysis_path = "public-profiles/m-profile-analysis-v2/analyses.json"
+    for label, field, replacement in [("profile analysis tool changed", "go_sha256", "0" * 64),
+                                      ("profile analysis missing", "rows", profiles["top_analyses"]["rows"][:-1])]:
+        checks.append(rejected(label, lambda field=field, replacement=replacement:extract.public_matched(contract,
+            altered(analysis_path, field, replacement), profiled=True)))
+    analyses = json.loads(raw[analysis_path])
+    analyses["rows"][0]["profile_sha256"] = "0" * 64
+    checks.append(rejected("profile analysis digest changed", lambda:extract.public_matched(contract,
+        dict(raw, **{analysis_path:extract.encoded(analyses)}), profiled=True)))
+    checks.append(rejected("profile producer receipt differs from public", lambda:extract.public_matched(contract,
+        altered("public-profiles/qualified-manifest-offsets.json", "provisional", False), profiled=True)))
     restored = result["restored_maintenance"]
     extract.require(len(restored["attempts"]) == 3 and restored["status"] == "MEASURED_PROVISIONAL"
                     and restored["input_metadata"].startswith("inherited baseline"), "restored input boundary lost")

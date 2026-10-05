@@ -1,0 +1,28 @@
+File: unified-bench-baseline
+Build ID: d591e3b148796173d183376a2da2c5d446024650
+Type: delay
+Time: 2026-10-04 22:20:41 HST
+Showing nodes accounting for 40.57s, 99.88% of 40.62s total
+Dropped 582 nodes (cum <= 0.20s)
+Showing top 20 nodes out of 71
+      flat  flat%   sum%        cum   cum%
+    38.82s 95.57% 95.57%     38.82s 95.57%  sync.(*Mutex).Unlock (partial-inline)
+     1.70s  4.18% 99.75%      1.70s  4.18%  sync.(*RWMutex).RUnlock (inline)
+     0.05s  0.12% 99.88%      2.89s  7.12%  sync.(*RWMutex).Unlock
+         0     0% 99.88%     29.62s 72.92%  github.com/snissn/gomap/TreeDB.(*DB).Checkpoint
+         0     0% 99.88%     29.62s 72.92%  github.com/snissn/gomap/TreeDB.(*DB).checkpointCachedForPublicCommandWAL
+         0     0% 99.88%      4.21s 10.37%  github.com/snissn/gomap/TreeDB.(*DB).vacuumIndexOnlineStats
+         0     0% 99.88%      4.21s 10.37%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).Start.func1
+         0     0% 99.88%      4.21s 10.37%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).runOnceContext
+         0     0% 99.88%      4.21s 10.37%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).runOnceContextLocked
+         0     0% 99.88%      4.21s 10.37%  github.com/snissn/gomap/TreeDB.backgroundIndexVacuumRun
+         0     0% 99.88%     29.58s 72.82%  github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint (inline)
+         0     0% 99.88%      1.36s  3.34%  github.com/snissn/gomap/TreeDB/caching.(*DB).CheckpointContext (inline)
+         0     0% 99.88%      0.25s  0.62%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+         0     0% 99.88%     30.93s 76.16%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 99.88%     30.93s 76.16%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext.func2
+         0     0% 99.88%      3.37s  8.30%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushAll
+         0     0% 99.88%      1.22s  3.00%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnits
+         0     0% 99.88%      1.22s  3.00%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed
+         0     0% 99.88%      1.22s  3.00%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed.func4
+         0     0% 99.88%      1.22s  3.00%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStreamed
