@@ -737,6 +737,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/internal/typedcolumn/query_ready_open.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-encoded-execution.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-generation-open.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Retained benchmark configuration/Stats preserve public compatibility field names.
+	{path: "docs/benchmarks/treedb_quicksilver_generic_20261004/RESULTS.json", classification: typedStorageLegacyCompatibility, matchingLines: 559, occurrences: 559},
 	{path: "docs/benchmarks/treedb_jsonbench_canonical_contract.md", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},
 	{path: "experiments/colgranule/DEFERRED_ISSUES.md", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},
 	{path: "experiments/colgranule/README.md", classification: typedStorageLegacyTrueColumn, matchingLines: 4, occurrences: 4},

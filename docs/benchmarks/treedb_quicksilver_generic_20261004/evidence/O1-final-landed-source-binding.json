@@ -1,0 +1,23 @@
+{
+  "status": "PASS_LANDED_WHOLE_TREE_EQUALS_REVIEWED_HEAD_COMPILED_EQUALS_MEASURED_RUNTIME",
+  "merged_sha": "9205bbbeb8183b404222734c2705a25edfb75fcb",
+  "reviewed_head": "8229183f61d5d93e612e9adb79ace3514fddd50c",
+  "landed_tree": "41198af9f263353fb098ac305d63edb62d8aa8b1",
+  "reviewed_tree": "41198af9f263353fb098ac305d63edb62d8aa8b1",
+  "parent_sha": "d47c778cbc9ed5dd4628431ee1195f1f68e69079",
+  "runtime_measured_head": "63794357c03898da03a37c5412770fdf197f2ce0",
+  "runtime_predecessor": "36ecf6a0d90d50497bf1a83876c794b9d24bec0e",
+  "TreeDB_object": "0f14eb61f370b79cbc5c37b9dbec701fbc24cfa3",
+  "compiled_inputs_count": 2130,
+  "compiled_changed_paths": [],
+  "tooling_docs_changed_paths": [
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "scripts/treedb_point_lookup_profile.sh"
+  ],
+  "whole_project_tree_equals_measured_runtime": false,
+  "runtime_applicability": "Exact reviewed/landed whole-tree match, with measured runtime applicability proven by exact three-file-only diff and unchanged entire TreeDB/all2130compiled/production capture. No claim measured637 and landed9205 whole project trees equal.",
+  "source_proof": "O1-capture-doc-repair-receipt.json",
+  "branch_retained": true,
+  "updated_at": "2026-10-04T23:59:30.217882+00:00"
+}

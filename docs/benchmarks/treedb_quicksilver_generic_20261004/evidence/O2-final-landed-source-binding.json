@@ -1,0 +1,53 @@
+{
+  "status": "LANDED_RUNTIME_APPLICABILITY_VERIFIED",
+  "verified_at": "2026-10-05T00:46:39.205438+00:00",
+  "pr": 4990,
+  "actual_squash_sha": "17712b9cfcef2b90516419a34ccf3d464984d473",
+  "actual_parent_main": "9205bbbeb8183b404222734c2705a25edfb75fcb",
+  "reviewed_head": "4163c789551ef142f9ad27b73f639bcc02ca0f66",
+  "captured_head": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+  "actual_landed_tree": "24af7b1a47c2c97131d8cba38798620062daea34",
+  "actual_landed_tree_equals_reviewed_head": true,
+  "actual_landed_TreeDB_tree": "7ccc2e9f9bc3a0cfacf7bb97ee0dc32ba0bd45a0",
+  "actual_landed_TreeDB_equals_captured": true,
+  "compiled_project_input_count": 2131,
+  "compiled_path_intersection_with_actual_captured_to_landed_diff": [],
+  "compiled_project_inputs_byte_equal": true,
+  "full_5733_path_set_equal": true,
+  "exact_changed_paths": [
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "scripts/treedb_point_lookup_profile.sh"
+  ],
+  "tooling_documentation_blob_transitions": [
+    {
+      "path": "cmd/benchprof/README.md",
+      "captured_blob": "fc1ca832dc2f250002e4a6c6858bad977893f9d9",
+      "landed_blob": "f6cd1c62a46c8a4b7a0d93befa86fb327d449ce1",
+      "role": "README documentation"
+    },
+    {
+      "path": "cmd/unified_bench/README.md",
+      "captured_blob": "309cf9c59c67967abba9256684ec67de8dc45753",
+      "landed_blob": "3a40d2b73cc6fd5484b1ecc7f380223c4f797ea3",
+      "role": "README documentation"
+    },
+    {
+      "path": "scripts/treedb_point_lookup_profile.sh",
+      "captured_blob": "334bc7831473b0d2e5d859fb3d85ae3ba24ede3c",
+      "landed_blob": "e8f268ff9f404dade6966627ff1046129bcf39df",
+      "role": "standalone diagnostic helper; did not produce retained captures"
+    }
+  ],
+  "capture_runtime_harness_changes": [],
+  "source_receipt_sha256": "bc0d7c0116555ef93169893432855011b54e941a60494c11ba2a979190ce97c0",
+  "candidate_applicability_sha256": "62cf6dc3ae446dfd14549cb22e5246b944cb7c89f4644cd2df1e7736e3b74531",
+  "landed_commit_api_sha256": "1fa153db197d7dbe07ff08c7dc2e4eecfc83a62ed0619187b86ff3e6ed03c184",
+  "branch_retained": {
+    "ref": "refs/heads/codex/4988-compressed-group-cap",
+    "head": "4163c789551ef142f9ad27b73f639bcc02ca0f66",
+    "protected": true
+  },
+  "worktree_clean": true,
+  "scope": "Actual Git objects and live server commit/tree/ref verified. Exact full-tree equality to reviewed4163 plus measured87eb\u2192landed diff proves all retained2131 compiled inputs/wholeTreeDB/protected runtime unchanged. Three documentation/tooling transitions are explicit; whole-project tree is not asserted equal to87eb. No new native run/build/remote-byte inspection; original native/performance identities retained."
+}
