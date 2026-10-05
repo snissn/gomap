@@ -107,6 +107,156 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 	}
 }
 
+func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		name := "manifest-v1"
+		if directory {
+			name = "directory-v2"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := filepath.Join(t.TempDir(), "source")
+			mainDir := filepath.Join(source, "maindb")
+			dictDir := filepath.Join(source, "dictdb")
+			for _, dir := range []string{mainDir, dictDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if directory {
+				if err := SaveFormatConfig(mainDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dictionary := []byte("restored dictionary namespace dependency")
+			provider := newPublicLayoutDictionaryProviderV1(t, dictDir, 9702, dictionary)
+			publish := func(database *DB, provider *publicLayoutDictionaryProviderV1) {
+				t.Helper()
+				resources, err := provider.CaptureDictionaryResources(context.Background(), provider.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resources.Release()
+				_, _, err = database.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+					storagemaintenance.ColumnAssetRewritePlan(),
+					[]StorageMaintenanceRootDeltaPublishInput{{
+						Iter:             mustFrozenRawMemtable(t, "side-layout/root", []byte("published")).NewIterator(nil, nil),
+						DurableResources: resources,
+						DurableResourceRequirements: rootpublication.StableLogicalObligationRequirements{
+							ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
+							Obligations:  []rootpublication.StableLogicalObligation{provider.logicalObligation()},
+						},
+					}}, nil,
+					func(roots []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "side-layout/descriptor", "published").NewIterator(nil, nil), nil
+					},
+				)
+				if err != nil {
+					t.Fatalf("publish dictionary authority: %v", err)
+				}
+			}
+			database, err := Open(Options{Dir: mainDir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			publish(database, provider)
+			publish(database, provider)
+			for slot, resources := range database.durableRoot.slotResources {
+				for _, descriptor := range resources.PhysicalDescriptors() {
+					namespace, present := descriptor.Namespace()
+					t.Logf("slot=%d source identity=%+v lane=%q resource=%q path=%q digest=%x frontier=%+v reachability=%v namespace_present=%t namespace=%+v", slot, descriptor.Identity(), descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.DiagnosticPath(), descriptor.Digest(), descriptor.Frontier(), descriptor.ReachabilityFields(), present, namespace)
+				}
+			}
+			sourceCommits := database.durableRoot.slotCommit
+			if sourceCommits[0] == 0 || sourceCommits[1] == 0 {
+				t.Fatalf("source lacks two recoverable slots: %v", sourceCommits)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := provider.file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.CopyFS(target, os.DirFS(source)); err != nil {
+				t.Fatal(err)
+			}
+			if err := RebindDurableRootSnapshotLayoutV1(filepath.Join(target, "maindb"), target); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := Open(Options{Dir: filepath.Join(target, "maindb"), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			if restored.durableRoot.slotCommit != sourceCommits {
+				t.Fatalf("rebind changed slot sequences: source=%v target=%v", sourceCommits, restored.durableRoot.slotCommit)
+			}
+			file, err := os.Open(filepath.Join(target, "dictdb", indexFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			freshProvider := &publicLayoutDictionaryProviderV1{file: file, dictionary: dictionary, id: provider.id}
+			fresh, err := freshProvider.CaptureDictionaryResources(context.Background(), provider.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fresh.Release()
+			freshDescriptors := fresh.PhysicalDescriptors()
+			for slot, retained := range restored.durableRoot.slotResources {
+				retainedDescriptors := retained.PhysicalDescriptors()
+				logDescriptors := func(label string, descriptors []rootpublication.StableResourcePhysicalDescriptor) {
+					for _, descriptor := range descriptors {
+						namespace, present := descriptor.Namespace()
+						t.Logf("slot=%d %s identity=%+v lane=%q resource=%q path=%q digest=%x frontier=%+v reachability=%v namespace_present=%t namespace=%+v", slot, label, descriptor.Identity(), descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.DiagnosticPath(), descriptor.Digest(), descriptor.Frontier(), descriptor.ReachabilityFields(), present, namespace)
+					}
+				}
+				logDescriptors("restored", retainedDescriptors)
+				logDescriptors("fresh", freshDescriptors)
+				matched := false
+				for _, descriptor := range retainedDescriptors {
+					if descriptor.Identity() != freshDescriptors[0].Identity() {
+						continue
+					}
+					matched = true
+					restoredNamespace, present := descriptor.Namespace()
+					freshNamespace, freshPresent := freshDescriptors[0].Namespace()
+					if !present || !freshPresent || restoredNamespace != freshNamespace {
+						t.Errorf("slot=%d same destination child identity has incompatible namespaces: restored=%+v fresh=%+v", slot, restoredNamespace, freshNamespace)
+					}
+				}
+				if !matched {
+					t.Errorf("slot=%d restored closure lost dictionary child identity %+v", slot, freshDescriptors[0].Identity())
+				}
+				inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(retained)
+				if err != nil {
+					t.Fatal(err)
+				}
+				additional, err := rootpublication.CloneStableResourceSetExcludingKinds(fresh)
+				if err != nil {
+					inherited.Release()
+					t.Fatal(err)
+				}
+				builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+				err = builder.Merge(inherited)
+				if err == nil {
+					err = builder.Merge(additional)
+				}
+				builder.Abandon()
+				inherited.Release()
+				additional.Release()
+				if err != nil {
+					t.Errorf("slot=%d restored dictionary cannot merge with fresh destination authority: %v", slot, err)
+				}
+			}
+			if t.Failed() {
+				return
+			}
+			publish(restored, freshProvider)
+		})
+	}
+}
+
 type publicLayoutDictionaryProviderV1 struct {
 	file       *os.File
 	dictionary []byte
