@@ -23,7 +23,7 @@ import (
 // Both independently recoverable slot generations are rebound in a stable
 // sibling copy that is atomically installed only after its metas are durable.
 // Their commit sequences, roots, allocator generations, and logical dependency
-// frontiers remain unchanged. Dictionary and template namespace epochs are
+// frontiers remain unchanged. Dictionary namespace epochs are
 // derived from restored parent handles, matching fresh destination authority.
 func RebindDurableRootSnapshotV1(dir string) error {
 	return RebindDurableRootSnapshotLayoutV1(dir, "")
@@ -299,14 +299,14 @@ func rebindSnapshotManifestEntryV1(dir, sideRoot string, entry *rootpublication.
 		if err != nil {
 			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)
 		}
-		// Side-store producers derive the namespace epoch from the physical
+		// Dictionary producers derive the namespace epoch from the physical
 		// parent. Other producers may instead bind an immutable manifest revision
 		// or asset file generation, which must remain unchanged during restore.
 		syncErr := rootpublication.SyncStableNamespace(parent)
 		parentIdentity, identityErr := rootpublication.StableIdentityFromFile(parent)
 		parentGeneration := entry.Namespace.ParentIdentity.Generation
 		var generationErr error
-		if entry.Kind == rootpublication.ResourceDictionary || entry.Kind == rootpublication.ResourceTemplate {
+		if entry.Kind == rootpublication.ResourceDictionary {
 			parentGeneration, generationErr = rootpublication.StableNamespaceParentGeneration(parent)
 		}
 		closeErr := parent.Close()

@@ -302,12 +302,12 @@ func TestCompactStorageFullRestoredDictionaryAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restored dictionary Full compaction: %v", err)
 	}
-	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran || stats.LeafGenerationPacks[0].LeafPagesCopied == 0 {
+	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran || stats.LeafGenerationPacks[0].Pack.LeafPagesCopied == 0 {
 		t.Fatalf("restored dictionary maintenance did not pack: %+v", stats.LeafGenerationPacks)
 	}
 	var packedPaths []string
 	for _, pack := range stats.LeafGenerationPacks {
-		for _, fileID := range pack.CreatedFileIDs {
+		for _, fileID := range pack.Pack.CreatedFileIDs {
 			lane, seq := valuelog.DecodeFileID(fileID)
 			packedPaths = append(packedPaths, filepath.Join(target, "maindb", "leaf_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq)))
 		}
