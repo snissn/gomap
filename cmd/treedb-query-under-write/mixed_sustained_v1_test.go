@@ -55,6 +55,44 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 	}
 }
 
+func TestMixedCumulativeRPCBudgetV1(t *testing.T) {
+	base := mixedOptions{Window: windowOptions{Admission: recallOptions{Timeout: 10 * time.Minute, RPCTimeout: 3 * time.Second}, Concurrency: 1, Warmup: 64, MaxAttempts: 65536, OutputBytes: 128 << 20, Duration: 300 * time.Second}, Interval: 5 * time.Second}
+	for _, tc := range []struct {
+		name      string
+		originals int
+		window    time.Duration
+		interval  time.Duration
+		rpc       time.Duration
+		wantOK    bool
+	}{
+		{"superseded-58-needs348s", 58, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"revised-48-leaves12s", 48, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
+		{"49-leaves6s", 49, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
+		{"50-has-no-headroom", 50, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"48-at-cumulative-equality", 48, 288 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"spacing-dominates", 58, 300 * time.Second, 5 * time.Second, 2500 * time.Millisecond, true},
+		{"spacing-equality", 58, 290 * time.Second, 5 * time.Second, 2500 * time.Millisecond, false},
+		{"omitted-six-needs120s", 0, time.Minute, 5 * time.Second, 10 * time.Second, false},
+		{"explicit-six-needs120s", 6, time.Minute, 5 * time.Second, 10 * time.Second, false},
+		{"six-at-cumulative-equality", 6, time.Minute, 5 * time.Second, 5 * time.Second, false},
+		{"six-feasible-rpc", 6, time.Minute, 5 * time.Second, 3 * time.Second, true},
+		{"six-spacing-dominates", 6, time.Minute, 8 * time.Second, 3 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := base
+			o.Originals, o.Window.Duration, o.Interval, o.Window.Admission.RPCTimeout = tc.originals, tc.window, tc.interval, tc.rpc
+			if err := mixedValidate(o); (err == nil) != tc.wantOK {
+				t.Fatalf("originals%d window%v interval%v rpc%v: %v", tc.originals, tc.window, tc.interval, tc.rpc, err)
+			}
+		})
+	}
+	var output bytes.Buffer
+	err := runArgs(context.Background(), []string{"-mode", "mixed-window", "-mixed-originals", "58", "-read-window", "300s", "-mixed-interval", "5s", "-rpc-timeout", "3s", "-timeout", "420s", "-read-concurrency", "1"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "positive headroom") {
+		t.Fatalf("cumulative budget must refuse before input or network access: %v", err)
+	}
+}
+
 func TestMixedRejectedAdmissionReportsRequestedCampaignV1(t *testing.T) {
 	for _, originals := range []int{0, 6, 58, 63} {
 		for _, profile := range []string{"", mixedProfileChangingTop10} {
