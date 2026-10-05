@@ -770,10 +770,9 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		}
 		runErr = errors.Join(runErr, mixedEmit(output, "result", &r))
 	}()
-	if err := mixedValidate(o); err != nil {
-		return err
-	}
-	if originals := mixedOriginalCount(o.Originals); originals != 6 {
+	// Capture admitted-count metadata before validation: a rejected campaign
+	// still reports its requested workload, without planning or issuing writes.
+	if originals := mixedOriginalCount(o.Originals); originals >= 6 && originals <= 63 && originals != 6 {
 		r.Originals = originals
 		r.Schedule = "bounded serial original writes plus untimed token strict visibility before next mutation; no failed/UNKNOWN retry or discarded sample"
 		r.LatencyBasis = "public client submit-to-visible ACK; all declared original raw samples; read QPS includes validation/retention/drain and excludes setup/full-prefix oracle/warmup/resource gate/post-join causal recheck/retry/post-recall/audit"
@@ -786,6 +785,9 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		if r.Originals != 0 {
 			r.Scope = "bounded serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
 		}
+	}
+	if err := mixedValidate(o); err != nil {
+		return err
 	}
 	gate, err := newWindowResourceGate(ctx, o.Window.ResourceGateDir, o.Window.Admission.RunID)
 	if err != nil {
