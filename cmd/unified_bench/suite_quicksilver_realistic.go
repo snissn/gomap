@@ -21,6 +21,12 @@ func (c quicksilverConfig) resolved() quicksilverConfig {
 		}
 	}
 	c.BarrierPolicy = "initial/final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters"
+	if c.ChurnRounds > 0 && c.ChurnShape == "" {
+		c.ChurnShape = "full-refresh"
+	}
+	if c.FinalFixture {
+		c.BarrierPolicy = "retained pre-oracle; final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters"
+	}
 	if c.Case == "realistic" {
 		if c.Mixture == "" {
 			c.Mixture = "primary"
@@ -221,6 +227,30 @@ func quicksilverAccess(c *quicksilverConfig, r *rand.Rand, mode, ordinal, stride
 	return
 }
 
+// Retained reads keep the requested hit/miss ratio but route to the final
+// population. Deleted original hits advance to the next surviving original;
+// deleted misses cycle through both setup deletes and mutation deletes.
+func quicksilverFinalAccess(c quicksilverConfig, f *quicksilverFixture, id uint64, absent bool, kind, ordinal, distinct int) (uint64, int) {
+	if absent && kind == 2 {
+		setup := quicksilverDeletedKeys(c)
+		n := (ordinal / 3) % (setup + (c.Updates+2)/4)
+		if n < setup {
+			return uint64(c.Keys+n) * 2, n*5 + 3
+		}
+		j := (n-setup)*4 + 1
+		i := int(int64(j) * int64(quicksilverUpdateStride(c.Keys)) % int64(c.Keys))
+		return uint64(i) * 2, i * 5
+	}
+	if !absent && id/2 < uint64(c.Keys) {
+		i := int(id / 2)
+		for f.states[i] == 255 {
+			i = (i + 1) % c.Keys
+		}
+		return uint64(i) * 2, i * 5
+	}
+	return id, distinct
+}
+
 func quicksilverCheckRead(c *quicksilverConfig, id uint64, value []byte, absent, concurrent bool, state uint8) error {
 	if c.Case != "realistic" {
 		return quicksilverCheckValue(id, value, c.valueSize(), concurrent)
@@ -231,13 +261,26 @@ func quicksilverCheckRead(c *quicksilverConfig, id uint64, value []byte, absent,
 		}
 		return nil
 	}
-	if concurrent && value == nil && (state == 255 || state == 5) {
+	if concurrent && !c.FinalFixture && value == nil && (state == 255 || state == 5) {
 		return nil
 	}
 	if len(value) != quicksilverRealisticSize(c, id) || binary.BigEndian.Uint64(value) != id {
 		return fmt.Errorf("quicksilver: bad identity/length at %d", id)
 	}
 	gen := binary.BigEndian.Uint64(value[8:])
+	if c.FinalFixture && !concurrent {
+		expected := uint64(state)
+		if state == 5 {
+			expected = 1
+		}
+		if gen != expected {
+			return fmt.Errorf("quicksilver: bad retained generation %d at %d (want %d)", gen, id, expected)
+		}
+		return nil
+	}
+	if c.FinalFixture && concurrent && ((state == 1 && gen != 1) || (state == 4 && gen == 0)) {
+		return fmt.Errorf("quicksilver: invalid retained concurrent generation %d at %d", gen, id)
+	}
 	if (!concurrent && gen != 0) || (concurrent && ((state == 0 || state == 255) && gen != 0 || state == 1 && gen > 1 || state == 4 && gen > 4 || state == 5 && gen != 1)) {
 		return fmt.Errorf("quicksilver: bad generation %d at %d", gen, id)
 	}
@@ -544,6 +587,40 @@ func quicksilverMeasureCompressibility(c quicksilverConfig) (out quicksilverComp
 		if g.RawBytes > 0 {
 			g.Ratio = float64(g.CompressedBytes) / float64(g.RawBytes)
 		}
+	}
+	return
+}
+
+// The byte/miss oracle proves every expected identity; a census also rejects
+// unexpected extra keys before retained measurement can mutate a wrong fixture.
+func quicksilverVerifyFinalFixture(db kvstore.DB, c quicksilverConfig, stride int, guard *benchGuard) (keys, misses int, err error) {
+	keys, misses, err = quicksilverVerify(db, c, stride, guard)
+	if err != nil {
+		return
+	}
+	scanner, ok := db.(kvstore.RangeScanner)
+	if !ok {
+		return keys, misses, fmt.Errorf("quicksilver: retained measurement requires live-key iteration")
+	}
+	it, err := scanner.Iterator(nil, nil)
+	if err != nil {
+		return keys, misses, err
+	}
+	defer func() { err = errors.Join(err, it.Close()) }()
+	count := 0
+	for ; it.Valid(); it.Next() {
+		if count%256 == 0 {
+			if err = guard.Checkpoint(); err != nil {
+				return
+			}
+		}
+		count++
+	}
+	if err = it.Error(); err != nil {
+		return
+	}
+	if count != keys {
+		err = fmt.Errorf("quicksilver: retained fixture has %d live keys; expected %d", count, keys)
 	}
 	return
 }
