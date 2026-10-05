@@ -8,7 +8,7 @@ This separate contract does not qualify the native-prune benchmark schema.
 """
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
-CONTRACT = 'gomap-native-memory-v1'
+CONTRACT = 'gomap-native-memory-v2'
 BUILD_KEYS = ('CGO_ENABLED','GOFLAGS','GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOROOT','PATH','GOGC','GOMEMLIMIT','GODEBUG')
 
 def sha(path):
@@ -32,13 +32,25 @@ def bindings(root):
 def same_source(expected, actual):
     require(expected == actual, 'source bindings drift')
 
+def validate_state(a):
+    require(isinstance(a,dict),'missing custody sample')
+    p=a.get('Private');require(isinstance(p,dict) and isinstance(p.get('Native'),dict),'missing private sample')
+    z=p['Native']
+    for owner, bools, nums in ((a,('Native','Accepted','EOF'),('Phase','InputCount','Chunk')),(p,('Build',),('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')),(z,(),('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes'))):
+        require(all(k in owner and type(owner[k]) is bool for k in bools),'missing/malformed owner booleans')
+        require(all(k in owner and type(owner[k]) is int and owner[k]>=0 for k in nums),'missing/malformed owner counts')
+    require(p.get('FlatRetiredCap')==0 and z.get('FlatRetiredCap')==0 and 0 <= z.get('Window',-1) <= 32 and 0 <= a.get('InputCount',-1)<=32,'sample descriptor failure')
+    require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
+    require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
+    return p,z
+
 def validate_case(x, n, mode, pinned):
     require(isinstance(x, dict), 'result must be object')
-    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','cuts')
+    required = ('schema','n','mode','pinned','pid','Calls','Records','Bytes','Pruned','MaxRecords','MaxBytes','MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames','MaxFlatRetiredCap','SampledMaintenanceRSSPeak','PhysicalBefore','PhysicalAfter','FixedSurvivors','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel','RetirementPeak','SourceRetirementPeak','cuts')
     require(all(k in x for k in required), 'missing result field')
     require((x['schema'],x['n'],x['mode'],x['pinned']) == (CONTRACT,n,mode,pinned), 'case identity mismatch')
     for k in required:
-        if k not in ('schema','mode','pinned','cuts') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
+        if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
             require(type(x[k]) is int and x[k] >= 0, 'invalid numeric field '+k)
     for k in ('pinned','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel'):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
@@ -48,7 +60,7 @@ def validate_case(x, n, mode, pinned):
     require(x['PhysicalBefore'] == n+2 and x['FixedSurvivors'] == 3, 'fixture shape mismatch')
     require(x['PhysicalAfter'] == (3 if mode == 'prune' else n+2) and x['Pruned'] == (n-1 if mode == 'prune' else 0), 'physical/ACK mismatch')
     if mode != 'control':
-        require(x['PartialOutput'] and x['MaxSourceRetirementCells'] >= n//8, 'missing actual physical-page/output witness')
+        require(x['PartialOutput'] and x['MaxSourceRetirementCells'] > 0, 'missing actual physical-page/output witness')
     require(mode != 'prune' or x['RelaxedCustody'], 'missing accepted RELAXED custody')
     require(mode != 'cancel' or x['ChargedCancel'], 'missing charged public cancellation')
     cuts=x['cuts'];require(isinstance(cuts,list) and 8 <= len(cuts) <= 16,'invalid bounded samples')
@@ -68,22 +80,29 @@ def validate_case(x, n, mode, pinned):
         require(s['TotalAlloc']>=previous_alloc and s['Mallocs']>=previous_malloc,'allocation counter regression')
         previous_alloc,previous_malloc=s['TotalAlloc'],s['Mallocs']
         a=s.get('State');require(isinstance(a,dict),'missing custody sample')
-        p=a.get('Private');require(isinstance(p,dict) and isinstance(p.get('Native'),dict),'missing private sample')
-        z=p['Native']
-        for owner, bools, nums in ((a,('Native','Accepted','EOF'),('Phase','InputCount','Chunk')),(p,('Build',),('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')),(z,(),('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes'))):
-            require(all(k in owner and type(owner[k]) is bool for k in bools),'missing/malformed owner booleans')
-            require(all(k in owner and type(owner[k]) is int and owner[k]>=0 for k in nums),'missing/malformed owner counts')
-        require(p.get('FlatRetiredCap')==0 and z.get('FlatRetiredCap')==0 and 0 <= z.get('Window',-1) <= 32 and 0 <= a.get('InputCount',-1)<=32,'sample descriptor failure')
+        p,z=validate_state(a)
         require(s['OutputPages']==z['ObservedOutputPages'] and s['OutputBufferBytes']==z['ObservedOutputBufferBytes'],'contradictory output sample')
         require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
         require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
         require(z['Frames']<=x['MaxFrames'] and max(z['Window'],a['InputCount'])<=x['MaxWindow'] and p['RetirementCells']<=x['MaxRetirementCells'],'sample exceeds reported maximum')
         if not a['EOF'] and not a['Accepted']:require(p['RetirementCells']<=x['MaxSourceRetirementCells'],'source retirement sample exceeds reported maximum')
         if s['name']=='partial_private_output':
-            require(a['Native'] and p['Build'] and not a['EOF'] and not a['Accepted'] and p['AllocatedPages']>0 and p['RetirementCells']>=n//8 and z['ObservedOutputPages']==1 and z['ObservedOutputBufferBytes']>0,'missing actual allocated-page/source-retirement/partial-output witness')
+            require(a['Native'] and p['Build'] and not a['EOF'] and not a['Accepted'] and p['AllocatedPages']>0 and p['RetirementCells']>0 and z['ObservedOutputPages']==1 and z['ObservedOutputBufferBytes']>0,'missing actual allocated-page/source-retirement/partial-output witness')
         if s['name']=='accepted_relaxed':require(a.get('Native') and a.get('Accepted') and p.get('Build'),'missing real DB custody')
         if s['name'] in ('finish','cancel_drained','cursor_close','db_owned_cleanup','reader_released','db_close','reopen','final_db_close','directory_cleanup'):
             require(not a['Native'] and not a['Accepted'] and not p['Build'] and p['AllocatedPages']==0 and p['Dependencies']==0 and p['RetirementCells']==0 and all(z[k]==0 for k in ('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes')),'terminal owner retained')
+    require(x['MaxSourceRetirementCells']<=x['MaxRetirementCells'],'source peak exceeds overall peak')
+    for field, maximum, source_only in (('RetirementPeak','MaxRetirementCells',False),('SourceRetirementPeak','MaxSourceRetirementCells',True)):
+        w=x[field];require(isinstance(w,dict) and type(w.get('Call')) is int,'missing/malformed peak witness')
+        a=w.get('State');p,z=validate_state(a)
+        require(p['RetirementCells']==x[maximum],'unwitnessed retirement maximum')
+        if not a['EOF'] and not a['Accepted']:require(p['RetirementCells']<=x['MaxSourceRetirementCells'],'source retirement peak exceeds reported maximum')
+        if x[maximum]==0:
+            require(w['Call']==0 and all(v is False if type(v) is bool else v==0 for owner in (a,p,z) for k,v in owner.items() if k not in ('Private','Native') or type(v) is bool),'nonzero empty peak witness')
+        else:
+            require(1<=w['Call']<=x['Calls'] and a['Native'] and p['Build'],'invalid observed peak call/custody')
+            require(not source_only or (not a['EOF'] and not a['Accepted']),'source peak after EOF/acceptance')
+        require(z['Frames']<=x['MaxFrames'] and max(z['Window'],a['InputCount'])<=x['MaxWindow'],'peak descriptor exceeds reported maximum')
     require(cuts[-1]['name']=='directory_cleanup','final DB Close/cleanup allocations excluded')
     return x
 
@@ -160,7 +179,7 @@ def self_test(out):
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env'):
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1'):
             original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
             shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
             shutil.copyfile(out/witness_case['command'],tmp/witness_case['command']);shutil.copyfile(out/'build-command.json',tmp/'build-command.json')
@@ -177,6 +196,17 @@ def self_test(out):
             elif fault=='bool-n':case['n']=True
             elif fault=='invalid-pinned':case['pinned']=1
             elif fault=='invalid-mode':case['mode']=None
+            elif fault in ('inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1'):
+                altered=json.loads(original)
+                if fault=='inflated-overall-peak':altered['MaxRetirementCells']+=1
+                elif fault=='inflated-source-peak':altered['MaxSourceRetirementCells']+=1
+                elif fault=='peak-call':altered['RetirementPeak']['Call']=altered['Calls']+1
+                elif fault=='source-peak-phase':altered['SourceRetirementPeak']['State']['Accepted']=True
+                elif fault=='overall-peak-source-phase':
+                    altered['MaxRetirementCells']=max(altered['MaxRetirementCells'],altered['MaxSourceRetirementCells']+1)
+                    peak=altered['RetirementPeak']['State'];peak['Private']['RetirementCells']=altered['MaxRetirementCells'];peak['EOF']=False;peak['Accepted']=False
+                else:altered['schema']='gomap-native-memory-v1'
+                (tmp/case['result']).write_text(json.dumps(altered));case['result_sha256']=sha(tmp/case['result'])
             elif fault=='receipt-errors':test_receipt['errors']=['rejected']
             elif fault=='binary-drift':test_receipt['binary_sha256']='0'*64
             elif fault=='build-command-drift':test_receipt['build_command_sha256']='0'*64

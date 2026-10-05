@@ -157,7 +157,8 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	defer reader.Close()
 	var cursor *PruneCursor
 	foregroundStarted := false
-	quantum := func() (PruneStats, error) {
+	var active atomic.Bool
+	quantum := func() (PruneStats, error, bool) {
 		before := cursor
 		opts := PruneOptions{BatchSize: 1, Mode: CommitRelaxed, Cursor: cursor}
 		if algorithm == "bounded" {
@@ -166,6 +167,8 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		}
 		start := time.Now()
 		stats, err := s.PruneVersions(opts)
+		// Attribute ACKs and completion at the public return, before bookkeeping.
+		writerActiveAtReturn := active.Load()
 		r.QuantumLatency.add(time.Since(start))
 		r.Calls++
 		r.FinalWorkRecords = stats.WorkRecords
@@ -209,11 +212,11 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.MinimumRecords = large.Records
 			r.MinimumBytes = large.Bytes
 		}
-		return stats, err
+		return stats, err, writerActiveAtReturn
 	}
 	if algorithm == "bounded" {
 		for i := 0; i < 8192; i++ {
-			stats, err := quantum()
+			stats, err, _ := quantum()
 			if err != nil {
 				fail(err)
 			}
@@ -232,7 +235,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			fail(fmt.Errorf("no actual private output"))
 		}
 	}
-	var inQuantum, readInCall, writeInCall, active atomic.Bool
+	var inQuantum, readInCall, writeInCall atomic.Bool
 	var acknowledged atomic.Uint64
 	var stopReads atomic.Bool
 	var wg sync.WaitGroup
@@ -346,9 +349,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.ForegroundIntervalsAtQuantumStart++
 		}
 		inQuantum.Store(true)
-		stats, e := quantum()
+		stats, e, writerActiveAtReturn := quantum()
 		inQuantum.Store(false)
-		if active.Load() {
+		if writerActiveAtReturn {
 			r.WriterActiveCalls++
 			r.ACKWhileWriterActive += stats.Pruned
 		} else {
@@ -361,7 +364,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		}
 		if stats.Complete || algorithm == "unbounded" {
 			completed = true
-			r.CompletedWhileWriterActive = active.Load()
+			r.CompletedWhileWriterActive = writerActiveAtReturn
 			r.CompletedAfterStop = !r.CompletedWhileWriterActive
 			break
 		}

@@ -502,6 +502,14 @@ output and custody, but do not measure exclusive cursor/tree heap. The packets
 are not benchprof inputs and cannot satisfy the native runtime's exclusive
 retained/peak measurement gate.
 
+Memory v2 retains two fixed-size scalar peak witnesses for retirement cells,
+including the observing call and custody phase. Validators bind reported maxima
+to these witnesses and reject v1 packets for current acceptance. Zero maxima
+claim no observing call or phase. These scalars do not measure owner-exclusive heap.
+Partial-output cuts require real allocated output and nonzero source retirement.
+Custody bounds and record-count scaling are evaluated separately from this
+presence witness.
+
 ## Native prune foreground pilot packets
 
 `scripts/native_prune_foreground.py` emits standalone schema-v2 causal packets;
@@ -511,6 +519,9 @@ and sampled ACK active/stop attribution. They do not qualify tail latency;
 zero-work references fence foreground and have a different start cut. These
 packets are not benchprof inputs. The fail-closed validator checks eight unique
 continuing-reader cases with completed post-writer reads, real data oracles, caps and executable/source bindings.
+
+Foreground ACK and completion attribution samples writer activity immediately
+at the public prune return, before counter bookkeeping.
 
 ## Current source-population audit microbenchmarks
 

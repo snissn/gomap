@@ -26,8 +26,17 @@ type nativeMemoryCut struct {
 	OutputPages                                            int
 	OutputBufferBytes                                      uint64
 }
+
+// Two scalar copies witness the observed maxima without retaining any owner.
+// A zero maximum keeps the zero-value witness: no call or phase is claimed.
+type nativeMemoryPeak struct {
+	Call  uint64
+	State treedb.MaintenanceMemoryStateForTest
+}
+
 type nativeMemoryResult struct {
-	CursorCloseOracle bool
+	RetirementPeak, SourceRetirementPeak nativeMemoryPeak
+	CursorCloseOracle                    bool
 
 	PID                      int `json:"pid"`
 	MaxSourceRetirementCells uint64
@@ -88,7 +97,7 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		t.Fatal("invalid memory mode")
 	}
 	pinned := os.Getenv("MVCC_MEMORY_PINNED") == "1"
-	result := nativeMemoryResult{Schema: "gomap-native-memory-v1", PID: os.Getpid(), N: n, Mode: mode, Pinned: pinned, FixedSurvivors: 3}
+	result := nativeMemoryResult{Schema: "gomap-native-memory-v2", PID: os.Getpid(), N: n, Mode: mode, Pinned: pinned, FixedSurvivors: 3}
 	var db *treedb.DB
 	var cursor *PruneCursor
 	var reader treedb.Snapshot
@@ -231,9 +240,11 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		cells := s.Private.RetirementCells
 		if !s.EOF && !s.Accepted && cells > result.MaxSourceRetirementCells {
 			result.MaxSourceRetirementCells = cells
+			result.SourceRetirementPeak = nativeMemoryPeak{Call: result.Calls, State: s}
 		}
 		if cells > result.MaxRetirementCells {
 			result.MaxRetirementCells = cells
+			result.RetirementPeak = nativeMemoryPeak{Call: result.Calls, State: s}
 		}
 		window := s.Private.Native.Window
 		if s.InputCount > window {
@@ -262,7 +273,7 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 			prepared = true
 			cut("prepared")
 		}
-		if !partial && s.Private.AllocatedPages > 0 && s.Private.Native.ObservedOutputBufferBytes > 0 && cells >= uint64(n/8) && !s.EOF && !s.Accepted {
+		if !partial && s.Private.AllocatedPages > 0 && s.Private.Native.ObservedOutputBufferBytes > 0 && cells > 0 && !s.EOF && !s.Accepted {
 			if stats.Pruned != 0 || stats.Batches != 0 {
 				t.Fatal("ACK before acceptance")
 			}
@@ -318,7 +329,7 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 			t.Fatalf("lifecycle did not finish: %+v", s)
 		}
 	}
-	if mode != "control" && (!prepared || !partial || result.MaxRetirementCells < uint64(n/8)) {
+	if mode != "control" && (!prepared || !partial || result.MaxRetirementCells == 0) {
 		t.Fatalf("physical-page/private-output witness missing: %+v", result)
 	}
 	want := n + 2

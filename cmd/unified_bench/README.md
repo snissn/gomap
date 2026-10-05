@@ -1194,6 +1194,14 @@ artifacts, have no benchprof input contract and do not qualify schema 1's
 native runtime gate. Expensive collection requires reviewed landed tooling
 and an externally recorded exact product/harness source freeze.
 
+Memory v2 retains two fixed-size scalar peak witnesses for retirement cells,
+including the observing call and custody phase. Validators bind reported maxima
+to these witnesses and reject v1 packets for current acceptance. Zero maxima
+claim no observing call or phase. These scalars do not measure owner-exclusive heap.
+Partial-output cuts require real allocated output and nonzero source retirement.
+Custody bounds and record-count scaling are evaluated separately from this
+presence witness.
+
 ## Native prune foreground causal pilot
 
 `scripts/native_prune_foreground.py` runs eight fresh-process N64/128 cases:
@@ -1225,6 +1233,9 @@ fence foreground and have a different start cut. Optional tags need the M7
 native interfaces; ordinary main builds exclude these tests. Neither pilot
 packet is a benchprof input. Reviewed tooling landing and exact product source
 freeze precede expensive qualification collection.
+
+Foreground ACK and completion attribution samples writer activity immediately
+at the public prune return, before counter bookkeeping.
 
 ## Current source-population audit microbenchmarks
 
