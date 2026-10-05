@@ -129,8 +129,11 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 			}
 			dictionary := []byte("restored dictionary namespace dependency")
 			provider := newPublicLayoutDictionaryProviderV1(t, dictDir, 9702, dictionary)
+			publication := 0
 			publish := func(database *DB, provider *publicLayoutDictionaryProviderV1) {
 				t.Helper()
+				publication++
+				value := fmt.Sprintf("published-%d", publication)
 				resources, err := provider.CaptureDictionaryResources(context.Background(), provider.id)
 				if err != nil {
 					t.Fatal(err)
@@ -139,7 +142,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 				_, _, err = database.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 					storagemaintenance.ColumnAssetRewritePlan(),
 					[]StorageMaintenanceRootDeltaPublishInput{{
-						Iter:             mustFrozenRawMemtable(t, "side-layout/root", []byte("published")).NewIterator(nil, nil),
+						Iter:             mustFrozenRawMemtable(t, "side-layout/root", []byte(value)).NewIterator(nil, nil),
 						DurableResources: resources,
 						DurableResourceRequirements: rootpublication.StableLogicalObligationRequirements{
 							ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
@@ -147,7 +150,7 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 						},
 					}}, nil,
 					func(roots []uint64) (iterator.UnsafeIterator, error) {
-						return mustFrozenSystemMemtable(t, "side-layout/descriptor", "published").NewIterator(nil, nil), nil
+						return mustFrozenSystemMemtable(t, "side-layout/descriptor", value).NewIterator(nil, nil), nil
 					},
 				)
 				if err != nil {
