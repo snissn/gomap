@@ -156,6 +156,9 @@ func TestRebindDurableRootSnapshotDictionaryNamespaceMatchesFreshAuthority(t *te
 				if err != nil {
 					t.Fatalf("publish dictionary authority: %v", err)
 				}
+				if err := database.Checkpoint(); err != nil {
+					t.Fatalf("checkpoint dictionary publication: %v", err)
+				}
 			}
 			database, err := Open(Options{Dir: mainDir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
