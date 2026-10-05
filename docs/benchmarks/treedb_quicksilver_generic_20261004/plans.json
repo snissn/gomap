@@ -816,7 +816,7 @@
     "repeats": 1,
     "cells": [
       {
-        "label": "treedb-durable-holdout-s173",
+        "label": "treedb-durable-ws1-s24",
         "source": "final",
         "engine": "treedb",
         "profile": "durable",
@@ -835,7 +835,7 @@
         "profiled": false
       },
       {
-        "label": "lmdb-durable-holdout-s173",
+        "label": "lmdb-durable-ws1-s24",
         "source": "final",
         "engine": "lmdb",
         "profile": "durable",
@@ -857,7 +857,7 @@
         ]
       },
       {
-        "label": "rocksdb-durable-holdout-s173",
+        "label": "rocksdb-durable-ws1-s24",
         "source": "final",
         "engine": "rocksdb",
         "profile": "durable",
@@ -876,7 +876,7 @@
         "profiled": false
       },
       {
-        "label": "treedb-fast-holdout-s173",
+        "label": "treedb-fast-ws1-s24",
         "source": "final",
         "engine": "treedb",
         "profile": "fast",

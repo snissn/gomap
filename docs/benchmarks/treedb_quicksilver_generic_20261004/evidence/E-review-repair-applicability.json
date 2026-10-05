@@ -1,0 +1,202 @@
+{
+  "status": "ACCEPT_REVIEW_REPAIRS",
+  "initial_publication_head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681",
+  "scope": "Evidence validation and publication metadata repairs, plus one existing naming-test inventory entry. No production, benchmark harness, workload, captured receipt or numeric result changes.",
+  "initial_results_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c",
+  "current_files_sha256": {
+    "assemble.py": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+    "selfcheck.py": "54696e1d381b2f55510d1c0ee20b13a0a01ad122f0a33f2bb68b699f9fb6bb23",
+    "plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
+    "RESULTS.json": "51f351db11b8872000b0503ab255a34bb1c9952e001e28a2a0bd1c349f0e3268",
+    "REPORT.md": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
+    "FINAL_FINDINGS.md": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+    "README.md": "e7fbd8fb9d0c4e732818efc9e854977b5d19a610f4baab1895776e624465b36d",
+    "evidence/review-E-review-repairs.md": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
+  },
+  "test_file": {
+    "path": "TreeDB/collections/typed_storage_naming_test.go",
+    "sha256": "c6bd4714458759d74ad5554e29cef0522a84b394c56f7d5ed23282e91980ed3f",
+    "change": "One exact retained-JSON compatibility inventory entry; 559 matching lines and occurrences remain unchanged."
+  },
+  "result_delta": {
+    "coverage": 43,
+    "raw_hash_count": 492,
+    "changes_from_original": [
+      {
+        "path": "/plans/plan-final-ws1-3m.json/cells/0/label",
+        "before": "treedb-durable-holdout-s173",
+        "after": "treedb-durable-ws1-s24"
+      },
+      {
+        "path": "/plans/plan-final-ws1-3m.json/cells/1/label",
+        "before": "lmdb-durable-holdout-s173",
+        "after": "lmdb-durable-ws1-s24"
+      },
+      {
+        "path": "/plans/plan-final-ws1-3m.json/cells/2/label",
+        "before": "rocksdb-durable-holdout-s173",
+        "after": "rocksdb-durable-ws1-s24"
+      },
+      {
+        "path": "/plans/plan-final-ws1-3m.json/cells/3/label",
+        "before": "treedb-fast-holdout-s173",
+        "after": "treedb-fast-ws1-s24"
+      },
+      {
+        "path": "/raw_file_sha256//private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/plans.json",
+        "before": "7fb43e1155821eb9ee6577e2fb2f4e71a933530b6ee5bb8c69c5e4bb4746a83e",
+        "after": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab"
+      },
+      {
+        "path": "/raw_file_sha256//private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
+        "before": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
+        "after": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1"
+      }
+    ],
+    "final_records_exactly_equal": true,
+    "baseline_records_exactly_equal": true,
+    "matched_pairs_exactly_equal": true,
+    "published_report_matches_regenerated": true
+  },
+  "unchanged_raw_hash_bindings": 490,
+  "strict_reassembly": {
+    "directory": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+    "receipts_sha256": {
+      "command.json": "af643d53d6571907878ed4575b5508cddf0347484d27e63fb702d0932b3f512d",
+      "assembly.stdout.log": "c9c32288abd688cc3d4522000f4c2ba244995b171551752fc19a0710c5a9568e",
+      "assembly.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "selfcheck-results.json": "83a044ad5683873430d7852a0803929c539d1df8a79bb8a0759e26f8d653ecaf",
+      "delta-check.json": "0ee990b8398dc9237a93f14af06853faaa2e16cccbc286f6adf9f5569fb09e47"
+    },
+    "command": [
+      "python3",
+      "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-landed-identity-reassembly-me3__ym4",
+      "--repo",
+      "/private/tmp/gomap-qs-4983-evidence",
+      "--landed-final",
+      "17712b9cfcef2b90516419a34ccf3d464984d473",
+      "--finalize",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-historical-random4k-paged",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-holdout-s173",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s2027",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s24",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-s91",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-ws1-s24",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-holdout-s173",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-holdout-s173-sync",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s2027",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s24",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-s91",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-fast-ws1-s24",
+      "--bundle",
+      "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/final-remaining30"
+    ],
+    "selfchecks": [
+      {
+        "command": [
+          "python3",
+          "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/selfcheck.py",
+          "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
+        ],
+        "rc": 0,
+        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "python3",
+          "-O",
+          "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/selfcheck.py",
+          "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003"
+        ],
+        "rc": 0,
+        "stdout": "PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O\n",
+        "stderr": ""
+      }
+    ]
+  },
+  "source_applicability": {
+    "measured_product_sha": "87eb344543709e7752c5f5c222f8a7d42f330dac",
+    "accepted_landed_product_sha": "17712b9cfcef2b90516419a34ccf3d464984d473",
+    "compiled_inputs": 2131,
+    "note": "Original whole-TreeDB and compiled-input identity remains the campaign source proof. Publication adds only the listed test inventory entry outside the evidence directory; it does not relabel the frozen campaign as a new publication-head capture."
+  },
+  "independent_checks_receipt": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/E-review-repairs-independent-checks.json",
+    "sha256": "102d36c8c387de3a4b512b7291c0e1bbebbf7bab4c59978b72e56c172ffd0ec8",
+    "note": "Assessment digest in this prior receipt describes metadata before coordinator reconciliation; code, plans, report, result and naming-test digests remain current."
+  },
+  "focused_native_validation": {
+    "source_copy": "source-o2-o1-composed",
+    "scope": "same frozen production bytes plus one test-only retained-JSON allowlist entry and original57d5 report JSON",
+    "modified_files_sha256": {
+      "TreeDB/collections/typed_storage_naming_test.go": "c6bd4714458759d74ad5554e29cef0522a84b394c56f7d5ed23282e91980ed3f",
+      "docs/benchmarks/treedb_quicksilver_generic_20261004/RESULTS.json": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c"
+    },
+    "tests": [
+      {
+        "name": "legacy-naming",
+        "rc": 0,
+        "command": [
+          "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+          "test",
+          "-json",
+          "-timeout",
+          "5m",
+          "./collections",
+          "-run",
+          "^TestTypedStorageLegacyNameAllowlistIsComplete$",
+          "-count=1"
+        ],
+        "log_sha256": "277df1b3c0cd197bda90617f1a9cec0c091fe661977840fb737795b97cf573a9"
+      },
+      {
+        "name": "vector-repeat3",
+        "rc": 0,
+        "command": [
+          "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+          "test",
+          "-json",
+          "-timeout",
+          "5m",
+          "./nativewire",
+          "-run",
+          "^TestFixedPeerVectorWaitingSearchPrecedesNextWriterRealRaftV1$",
+          "-count=3"
+        ],
+        "log_sha256": "e631b7342ac004898a377f6aa851a8218a7b667ca9307d5195669e7f9d953dd2"
+      }
+    ]
+  },
+  "ci_failure_disposition": {
+    "initial_run": 37252692190,
+    "naming_inventory": "Four jobs report the same exact inventory omission; targeted naming test passes with one compatibility entry. Fresh publication-head CI remains required.",
+    "vector_case": "Original live vector-state mismatch retained; three targeted fresh runs pass without production edits. This does not establish a cause or claim that the intermittent failure is fixed."
+  },
+  "prior_numeric_review": {
+    "path": "evidence/review-E-final43-numeric.md",
+    "sha256": "15e786e7e3eb343ec5133c9998900dd398e346085e796f04720a510619f2fa4c",
+    "applicability": "All records, matching, numeric findings and 490 unchanged raw bindings retained; two tooling hash bindings and four descriptive labels repaired and independently reviewed."
+  },
+  "outstanding": [
+    "publication-head CI and Codex review",
+    "all review-thread dispositions",
+    "merge and authorized cleanup"
+  ]
+}

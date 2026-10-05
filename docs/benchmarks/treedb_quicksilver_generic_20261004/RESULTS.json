@@ -842,7 +842,7 @@
       "repeats": 1,
       "cells": [
         {
-          "label": "treedb-durable-holdout-s173",
+          "label": "treedb-durable-ws1-s24",
           "source": "final",
           "engine": "treedb",
           "profile": "durable",
@@ -861,7 +861,7 @@
           "profiled": false
         },
         {
-          "label": "lmdb-durable-holdout-s173",
+          "label": "lmdb-durable-ws1-s24",
           "source": "final",
           "engine": "lmdb",
           "profile": "durable",
@@ -883,7 +883,7 @@
           ]
         },
         {
-          "label": "rocksdb-durable-holdout-s173",
+          "label": "rocksdb-durable-ws1-s24",
           "source": "final",
           "engine": "rocksdb",
           "profile": "durable",
@@ -902,7 +902,7 @@
           "profiled": false
         },
         {
-          "label": "treedb-fast-holdout-s173",
+          "label": "treedb-fast-ws1-s24",
           "source": "final",
           "engine": "treedb",
           "profile": "fast",
@@ -57673,8 +57673,8 @@
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/baseline-ws1-local/runner-receipt.json": "bc559a19116b9e7f6346a1228922456ed2828f993abd6c5952c859ac94c486d1",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/baseline-ws1-local/source-receipt.json": "b7a3be84240b736624aaddbb42ac52d7032351cd02c339db6c62a46d9c6ba255",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/landed-source-equality-baseline.json": "7d13da144176167fd9260f8a923ba220fcff1e5367ea6f0415769838cffbb00a",
-    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/plans.json": "7fb43e1155821eb9ee6577e2fb2f4e71a933530b6ee5bb8c69c5e4bb4746a83e",
-    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
+    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/plans.json": "0e02daae758d39ee282c7fb9ddc7dad096151885d5ddd86cf52673ef239326ab",
+    "/private/tmp/gomap-qs-4983-evidence/docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/ldd.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/ldd.stdout.txt": "a9f23e67936e84aa3263afedaf85dcccf406efb4e677b0a67e4f36aa97340152",
     "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-authoritative-20261003/o2-o1-o2-treedb-durable-generic-compression-off/1-treedb-durable-generic-compression-off/run.json": "77ef598ade45c11eed10ebb02d3192e13910e757d9c99ac9df99e5e8161e108f",

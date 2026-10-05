@@ -21,6 +21,13 @@ import subprocess
 BASE = '6137db44b66e0323daba05ae891db44a8055c0fd'
 BASE_PACKET = '52959db2d657b5a57d992a677e27c2d1f676654891a4cfaa4680480bf24631a9'
 DOC_REPAIR = '8229183f61d5d93e612e9adb79ace3514fddd50c'
+# Accepted native go-list inventories for both benchmark and analyzer builds.
+# Digest the complete sorted path list, not a receipt-declared subset or count.
+PROJECT_INVENTORIES = {
+    'c6c9aa07d255862feb1f72e5f6d6ebdf8b3b530c': (2120, 'f19c0dfeb4e6af8a2ba8c3378bc6412992c33853eb46f4c7a7c0d1c8547148aa', BASE),
+    '63794357c03898da03a37c5412770fdf197f2ce0': (2130, 'fac466bf894114fd2c55b1f1efaac7aaa67bcdb90c43fd4f5351182bd8406a36', DOC_REPAIR),
+    '87eb344543709e7752c5f5c222f8a7d42f330dac': (2131, 'ae0c3e7cd61312b06f5154e1cc115c14de59c2bba0cd90b47f4b8240fa3c8f41', '17712b9cfcef2b90516419a34ccf3d464984d473'),
+}
 README_BLOBS = {
     'cmd/benchprof/README.md': ('fc1ca832dc2f250002e4a6c6858bad977893f9d9', 'f6cd1c62a46c8a4b7a0d93befa86fb327d449ce1'),
     'cmd/unified_bench/README.md': ('309cf9c59c67967abba9256684ec67de8dc45753', '3a40d2b73cc6fd5484b1ecc7f380223c4f797ea3'),
@@ -59,6 +66,13 @@ def contract(repo):
     # The landed validator uses assertions. Preserve them under python -O too.
     exec(compile(raw, 'frozen_capture_contract.py', 'exec', optimize=0), namespace)
     return namespace['validate'], digest(raw)
+
+
+def accepted_baseline(packet, collector):
+    require(digest(packet.read_bytes()) == BASE_PACKET, 'accepted baseline packet identity')
+    baseline = read(packet)
+    require(collector == baseline['source_identity']['collector_sha256'], 'baseline collector contract')
+    return baseline
 
 
 def project_inputs(repo, head, files):
@@ -100,6 +114,11 @@ def check_harness(before, captured, landed, repaired):
 
 
 def source_applicability(repo, head, landed, source):
+    inventory = source['compiled_project_inputs']
+    expected = PROJECT_INVENTORIES.get(head)
+    require(expected is not None and expected[:2] == (len(inventory), digest(json.dumps(sorted(inventory), separators=(',', ':')).encode())),
+            'complete frozen project input inventory ' + head)
+    require(landed == expected[2], 'accepted final landed identity ' + head)
     require(git(repo, 'rev-parse', head + ':TreeDB') == git(repo, 'rev-parse', landed + ':TreeDB'), 'final landed TreeDB equality')
     transitions = check_harness(*(harness_entries(repo, sha) for sha in (BASE, head, landed, DOC_REPAIR)))
     require(all(source['files'][k] == v for k, v in source['compiled_project_inputs'].items()), 'project input inventory')
@@ -210,8 +229,10 @@ def load_bundle(directory, repo, landed, baseline, validate, collector, raw_hash
             for override in cell.get('flags', []):
                 key, value = override.lstrip('-').split('=', 1)
                 require(flags[key] == value, 'executed override ' + key)
+            rss = re.search(r'Maximum resident set size \(kbytes\): (\d+)', stderr)
+            require(rss is not None, 'missing peak RSS in ' + str(path.parent / 'stderr.log'))
             record.update(status='PASS_UNPROFILED', result=compact(reports[0]),
-                          peak_rss_kib=int(re.search(r'Maximum resident set size \(kbytes\): (\d+)', stderr)[1]),
+                          peak_rss_kib=int(rss[1]),
                           wall_seconds=meta['finished'] - meta['started'])
         records.append(record)
     return records
@@ -226,8 +247,8 @@ def describe(records, engine, profile, phase, metric):
 def assemble(args):
     root, output, repo = args.evidence.resolve(), args.output.resolve(), args.repo.resolve()
     packet = root / 'A2-full-baseline-completion.json'
-    require(digest(packet.read_bytes()) == BASE_PACKET, 'accepted baseline packet identity')
-    baseline = read(packet)
+    validate, collector = contract(repo)
+    baseline = accepted_baseline(packet, collector)
     # Campaign amendments/optimization diagnostics may evolve; the accepted raw
     # captures and baseline binding remain immutable. Verify all capture entries.
     hashes = {str(packet): BASE_PACKET}
@@ -241,8 +262,6 @@ def assemble(args):
         hashes[str(path)] = digest(path.read_bytes())
     expected = {semantic(c): {'plan': name, 'cell': c} for name, p in plans.items() for c in p['cells']}
     require(len(expected) == 43, '43 distinct declared final cells')
-    validate, collector = contract(repo)
-    require(collector == baseline['source_identity']['collector_sha256'], 'baseline collector contract')
     final, fixtures = {}, {}
     for directory in args.bundle:
         for record in load_bundle(directory, repo, args.landed_final, baseline, validate, collector, hashes, fixtures, root):
@@ -270,7 +289,7 @@ def assemble(args):
             'baseline_pareto_targets': baseline['pareto_targets'],
             'baseline_original_raw_file_sha256': baseline['raw_file_sha256'], 'raw_file_sha256': hashes}
     lines = ['# Generic Quicksilver owned-value evidence', '', '**' + data['status'] + '** — optimization acceptance remains coordinator-owned.', '',
-             'The 3M primary table pairs seeds 24/91/2027. Entries show median [min, max] over different fixture seeds; these are descriptive variation, not confidence or noise intervals. Final columns remain PENDING until all three observations exist.', '',
+             'The 3M primary table pairs seeds 24/91/2027. Entries show median [min, max] over different fixture seeds; these are descriptive variation, not confidence or noise intervals.' + (' Final columns remain PENDING until all three observations exist.' if missing else ''), '',
              '| ACK / engine / phase | before Mops/s | final Mops/s | before p99 µs | final p99 µs | before Go B/op / allocs/op | final Go B/op / allocs/op |',
              '|---|---:|---:|---:|---:|---:|---:|']
     def shown(records, e, p, phase, metric, scale=1):
@@ -293,9 +312,10 @@ def assemble(args):
               'Go allocations exclude native C allocations and mmap; GOMEMLIMIT2GiB is not a process RSS cap. Peak RSS includes load/verification and native work. LMDB64GiB is virtual map capacity; RocksDB64MiB is its cache control. Shared-host CPU/OS/native receipts and load observations remain in raw data. Native ACK flags differ; suite ordinary/sync dispatch does not establish cross-engine durability equivalence.', '',
               'Actual initial/final storage sums, checkpoint/update-batch/reopen timings, distributions, verification/request counts, four-phase allocations and original receipts are retained in RESULTS.json. TreeDB fast column-physical durability/storage accounting is unsupported and must not be inferred as zero.', '',
               'The baseline 3M explicit-sync holdout173 capture is retained as a 30-minute censored performance failure (rc1, empty JSON); it supplies no completed throughput, correctness or corruption finding. Its failed database remains retained. A completed final sync cell is mandatory. Historical random4k control is separate from the new generic baseline.', '',
-              'Profiles are diagnostic attribution only and excluded from unprofiled performance. Baseline outer-leaf/frame allocation Pareto targets O1/O2 are retained in JSON; O3 sync work and matched candidate attribution require final evidence. Original candidate receipts preserve their original SHAs; publication requires exact landed tree, compiled project input, unchanged harness, raw hash, build/native/loader and actual config binding.', '',
-              'Missing or failed cells: ' + ', '.join(v['cell']['label'] for v in missing), '',
-              'Independent review, CI, performance/noise/checkpoint/storage guardrails and graph acceptance remain external gates even when evidence coverage is complete.', '']
+              'Profiles are diagnostic attribution only and excluded from unprofiled performance. Baseline outer-leaf/frame allocation Pareto targets O1/O2 are retained in JSON; O3 sync work and matched candidate attribution require final evidence. Original candidate receipts preserve their original SHAs; publication requires exact landed tree, compiled project input, unchanged harness, raw hash, build/native/loader and actual config binding.', '']
+    if missing:
+        lines += ['Missing or failed cells: ' + ', '.join(v['cell']['label'] for v in missing), '']
+    lines += ['Independent review, CI, performance/noise/checkpoint/storage guardrails and graph acceptance remain external gates even when evidence coverage is complete.', '']
     output.mkdir(parents=True, exist_ok=True)
     (output / 'RESULTS.json').write_text(json.dumps(data, indent=2, allow_nan=False) + '\n')
     (output / 'REPORT.md').write_text('\n'.join(lines))

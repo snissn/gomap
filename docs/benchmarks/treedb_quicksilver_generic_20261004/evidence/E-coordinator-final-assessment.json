@@ -4,12 +4,12 @@
   "measured_product_sha": "87eb344543709e7752c5f5c222f8a7d42f330dac",
   "final_coverage_required": 43,
   "current_verified_coverage": 43,
-  "current_assembler_sha256": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
-  "scope": "Artifact-only final publication; native 43cells are predeclared, with13 fixed qualified reuse and30 fresh. No production/workload change.",
+  "current_assembler_sha256": "a7b850cabb1707d09b787b22ebf226d0b50e9058e75b014c992bdae397d6a7c1",
+  "scope": "Evidence validation and publication metadata repairs, plus one existing naming-test inventory entry. No production, benchmark harness, workload, captured receipt or numeric result changes. Native 43 cells are predeclared: 13 fixed qualified reuse and 30 fresh.",
   "reuse": [
     "review-E-first25-numeric.md:25records/402hashes unchanged, numeric table applicability",
     "review-E-final-claims.md plus bounded new-prose review",
-    "review-E-frozen-documentation-applicability.json:exact current assembler/selfcheck, normal and-O checks",
+    "review-E-frozen-documentation-applicability.json: initial publication validation; current repaired tooling covered by review-E-review-repairs.md and E-review-repair-applicability.json",
     "O1/O2/O3 current-head product CI/Codex/native/performance acceptance"
   ],
   "tradeoffs": [
@@ -22,7 +22,7 @@
     "current E exact-head requiredCI/Codex/all paginated findings dispositions",
     "merge and authorized final cleanup/graph closure"
   ],
-  "final_result_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c",
+  "final_result_sha256": "51f351db11b8872000b0503ab255a34bb1c9952e001e28a2a0bd1c349f0e3268",
   "raw_hash_count": 492,
   "native_campaign": "Sole session3229 exited0 VALIDATED_ALL;30fresh completed rc0/validatedtrue/nonSKIP; native working DB inventory retains only censored baseline.",
   "accepted_at": "2026-10-05T01:44:31.492860+00:00",
@@ -31,12 +31,25 @@
     "sha256": "15e786e7e3eb343ec5133c9998900dd398e346085e796f04720a510619f2fa4c",
     "disposition": "ACCEPT_FINAL_EVIDENCE"
   },
-  "report_sha256": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+  "final_findings_sha256": "f9b1661eae69b965dd89896204168b60f7f9e67b645368027581cdff403ddeb2",
+  "report_sha256": "f38c1008f7430fdf2514a18940a390cdd3e6b7726689fbcdb9f90dc6a13e3b2e",
   "acceptance_scope": "Complete numeric/provenance evidence and explicitly investigated optimization tradeoffs accepted; this artifact does not assert that unpublished E-head CI/Codex/merge has passed.",
-  "publication_format_applicability": {
+  "initial_publication_format_applicability": {
     "path": "REPORT.md",
     "change": "Remove one generated trailing space after empty Missing or failed cells summary; original generated REPORT retained in final-assembly-complete. Numeric fields, prose, RESULTS, assembler, plan and FINAL_FINDINGS unchanged.",
     "examined_generated_sha256": "8bf41f5f51992c75a745dde4a5a34e5fb6752cd7aa89f7b1fecbbd7b43fbb29c",
-    "published_sha256": "d46c9db9c9a37f5b096c8846ae4be819d67f58e441d3c39c92d0251d2b140d1a"
-  }
+    "published_sha256": "d46c9db9c9a37f5b096c8846ae4be819d67f58e441d3c39c92d0251d2b140d1a",
+    "publication_head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681"
+  },
+  "initial_publication_validation": {
+    "head": "57d5bebdc6d78cbb15e11ac7142a1e34fce2c681",
+    "assembler_sha256": "716a2f230bed7fa78372d8afe7365870bd7b17f3fa9d380c44c6746f941a172d",
+    "results_sha256": "97a04839a57e523992087c772de3ed6fe0dcc1f8a2d138799eaba18c7ba7116c"
+  },
+  "review_repair_applicability": {
+    "path": "evidence/E-review-repair-applicability.json",
+    "sha256": "ad75f050a98338b576926982a1df86d7ce34eed3df497bb39a3767a602739dfb",
+    "review_sha256": "46f59d7ea74fbeac622338932e09c4eab523832cbe1e70888ac945548c8a72c6"
+  },
+  "updated_at": "2026-10-05T02:18:42.655856+00:00"
 }

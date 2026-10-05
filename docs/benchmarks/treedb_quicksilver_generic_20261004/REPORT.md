@@ -2,7 +2,7 @@
 
 **COMPLETE_EVIDENCE** — optimization acceptance remains coordinator-owned.
 
-The 3M primary table pairs seeds 24/91/2027. Entries show median [min, max] over different fixture seeds; these are descriptive variation, not confidence or noise intervals. Final columns remain PENDING until all three observations exist.
+The 3M primary table pairs seeds 24/91/2027. Entries show median [min, max] over different fixture seeds; these are descriptive variation, not confidence or noise intervals.
 
 | ACK / engine / phase | before Mops/s | final Mops/s | before p99 µs | final p99 µs | before Go B/op / allocs/op | final Go B/op / allocs/op |
 |---|---:|---:|---:|---:|---:|---:|
@@ -43,7 +43,5 @@ Actual initial/final storage sums, checkpoint/update-batch/reopen timings, distr
 The baseline 3M explicit-sync holdout173 capture is retained as a 30-minute censored performance failure (rc1, empty JSON); it supplies no completed throughput, correctness or corruption finding. Its failed database remains retained. A completed final sync cell is mandatory. Historical random4k control is separate from the new generic baseline.
 
 Profiles are diagnostic attribution only and excluded from unprofiled performance. Baseline outer-leaf/frame allocation Pareto targets O1/O2 are retained in JSON; O3 sync work and matched candidate attribution require final evidence. Original candidate receipts preserve their original SHAs; publication requires exact landed tree, compiled project input, unchanged harness, raw hash, build/native/loader and actual config binding.
-
-Missing or failed cells:
 
 Independent review, CI, performance/noise/checkpoint/storage guardrails and graph acceptance remain external gates even when evidence coverage is complete.

@@ -12,8 +12,10 @@ full baseline packet. It verifies actual raw hashes, receipt/build/native/loader
 binding, frozen compiled project bytes, unchanged benchmark/capture code,
 declared plan cells, exact retained argv and absolute built/loaded executable,
 executed overrides, owned-value/reopen/request contracts,
-and matched fixture/configuration before pairing observations. Assertions in
-the reused validator remain enabled even with `python -O`.
+and matched fixture/configuration before pairing observations. Complete compiled-path
+inventories and their accepted captured-to-landed revisions are pinned for this
+fixed campaign; final captures bind to `17712b9cfcef2b90516419a34ccf3d464984d473`.
+Assertions in the reused validator remain enabled even with `python -O`.
 
 ```sh
 python3 docs/benchmarks/treedb_quicksilver_generic_20261004/assemble.py \

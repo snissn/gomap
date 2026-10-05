@@ -3,13 +3,25 @@
 import copy
 import pathlib
 import sys
+import tempfile
 
 namespace = {'__name__': 'assembler', '__file__': str(pathlib.Path(__file__).with_name('assemble.py'))}
 exec(compile(pathlib.Path(namespace['__file__']).read_bytes(), namespace['__file__'], 'exec', optimize=0), namespace)
 root = pathlib.Path(sys.argv[1]).resolve()
 repo = pathlib.Path(__file__).resolve().parents[3]
-baseline = namespace['read'](root / 'A2-full-baseline-completion.json')
 validate, collector = namespace['contract'](repo)
+packet = root / 'A2-full-baseline-completion.json'
+baseline = namespace['accepted_baseline'](packet, collector)
+with tempfile.TemporaryDirectory() as temporary:
+    mutated_packet = pathlib.Path(temporary) / packet.name
+    mutated_packet.write_bytes(packet.read_bytes() + b'\n')
+    for path, identity in ((mutated_packet, collector), (packet, '0' * 64)):
+        try:
+            namespace['accepted_baseline'](path, identity)
+        except ValueError:
+            pass
+        else:
+            raise ValueError('mutated baseline packet/collector identity accepted')
 records = namespace['load_bundle'](root / 'baseline-primary-local', repo, namespace['BASE'], baseline, validate, collector, {}, {}, root)
 namespace['require'](len(records) == 12 and all(r['status'] == 'PASS_UNPROFILED' for r in records), 'actual accepted baseline parser')
 directory = pathlib.Path(records[0]['raw_directory'])
@@ -87,12 +99,42 @@ source = namespace['read'](root / 'o1-o1-composed-durable91-pair1/source-receipt
 applicability = namespace['source_applicability'](repo, source['head'], namespace['DOC_REPAIR'], source)
 namespace['require'](applicability['captured_head'] == source['head'] and
                      applicability['compiled_project_input_count'] == 2130, 'actual O1 documentation applicability')
+for bundle, landed in (('baseline-primary-local', namespace['BASE']),
+                       ('o1-o1-composed-durable91-pair1', namespace['DOC_REPAIR']),
+                       ('final-remaining30', '17712b9cfcef2b90516419a34ccf3d464984d473')):
+    accepted = namespace['read'](root / bundle / 'source-receipt.json')
+    namespace['source_applicability'](repo, accepted['head'], landed, accepted)
+    original_git = namespace['git']
+    namespace['git'] = lambda *args: namespace['fail']('Git called before landed identity rejection')
+    try:
+        namespace['source_applicability'](repo, accepted['head'], accepted['head'], accepted)
+    except ValueError as error:
+        namespace['require']('accepted final landed identity' in str(error), 'unaccepted landed identity rejected before Git')
+    else:
+        raise ValueError('unaccepted landed identity accepted: ' + bundle)
+    finally:
+        namespace['git'] = original_git
+    name = next(k for k in accepted['compiled_project_inputs'] if not k.startswith('TreeDB/'))
+    for mutation in ('omission', 'addition', 'same-count replacement'):
+        mutated = copy.deepcopy(accepted)
+        if mutation != 'addition':
+            del mutated['compiled_project_inputs'][name]
+            del mutated['files'][name]
+        if mutation != 'omission':
+            mutated['compiled_project_inputs']['unreviewed.go'] = '0' * 64
+            mutated['files']['unreviewed.go'] = '0' * 64
+        try:
+            namespace['source_applicability'](repo, mutated['head'], landed, mutated)
+        except ValueError as error:
+            namespace['require']('complete frozen project input inventory' in str(error), 'inventory rejected before blob checks')
+        else:
+            raise ValueError('mutated complete inventory accepted: ' + bundle + ' ' + mutation)
 try:
     namespace['source_applicability'](repo, source['head'], namespace['BASE'], source)
 except ValueError:
     pass
 else:
-    raise ValueError('changed landed TreeDB accepted')
+    raise ValueError('unaccepted O1-to-baseline landed identity accepted')
 name = next(iter(source['compiled_project_inputs']))
 try:
     namespace['project_inputs'](repo, namespace['DOC_REPAIR'], {name: '0' * 64})
@@ -100,4 +142,4 @@ except ValueError:
     pass
 else:
     raise ValueError('changed compiled input accepted')
-print('PASS: 12 actual baseline packets; original request/configuration/argv guards; exact README transitions and 2130 O1 compiled inputs; README/runtime/test/producer drift rejected; assertions retained under -O')
+print('PASS: accepted baseline packet/collector identity; 12 actual baseline packets; request/configuration/argv guards; exact README transitions; complete 2120/2130/2131 frozen inventories reject omission/addition/replacement and unaccepted landed identity before Git; README/runtime/test/producer drift rejected; assertions retained under -O')
