@@ -25,7 +25,7 @@ func BenchmarkPopulationSharedIteratorGuardV1(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		it := newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: newer.NewIterator(nil, nil)}, {iter: older.NewIterator(nil, nil)}}, nil, nil, false, true, false, 4096, nil)
+		it := newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: newer.NewIterator(nil, nil), priority: 0}, {iter: older.NewIterator(nil, nil), priority: 1}}, nil, nil, false, true, false, 4096, nil)
 		rows := 0
 		for it.Valid() {
 			rows++
