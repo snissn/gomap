@@ -947,6 +947,23 @@ surviving/inserted value and **every** miss domain. Errors cancel and join all r
 the writer before owner close. Failed suite DBs are retained with their path in
 the error; successful DBs are removed unless `-keep` is supplied.
 
+After closing the workload process and running offline maintenance, reuse the
+same full value/miss oracle with `-quicksilver-verify-dir <retained-data-dir>`.
+Select exactly one `-dbs` engine and supply the original case, mixture, seed,
+key count and update count (plus the same TreeDB format/profile settings).
+This mode opens an existing nonempty directory, verifies the final state and
+closes it; it does not load, mutate or checkpoint a new workload. Normal engine
+open/recovery and close behavior still apply, so this is not a read-only open.
+Supported engines are TreeDB, LMDB and RocksDB; a nonempty engine database
+marker is required before the factory opens. Profiling outputs are rejected.
+Stdout is a single JSON object marked
+`verification_only`, with the effective fixture and verified counts. A missing
+or empty directory, oracle mismatch or close failure makes the command fail.
+The ordinary suite and its profile artifact names remain unchanged.
+The native capture script also accepts an optional boolean `keep` per cell
+(default false), validating that the retained database is under its recorded
+working database directory.
+
 The suite prints its effective settings banner on stderr and a JSON array on
 stdout. With `-profile-dir`, benchprof prints artifact notices on stderr and
 also writes detailed `quicksilver_results.json` and canonical
