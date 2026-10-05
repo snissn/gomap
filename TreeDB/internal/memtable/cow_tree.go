@@ -508,6 +508,8 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	r := COWRetirement{}
 	if deferred != 0 {
 		r.prepared = p
+	} else {
+		p.owners = nil
 	}
 	p.writer = nil
 	p.private = nil

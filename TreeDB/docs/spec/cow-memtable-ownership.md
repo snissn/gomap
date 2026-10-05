@@ -34,7 +34,8 @@ already allocated staged header for constructing that cut before frame
 acceptance. It cannot be retained or acquired before `Publish`; it must not be
 exposed or used to resolve pointers. `Publish` transfers already allocated state
 and activates the root's first reference; it does not allocate, resolve data,
-invoke callbacks or rebase. `Cancel` refunds the full reservation.
+invoke callbacks or rebase. `Cancel` refunds private node/payload reservations
+immediately and transfers attached resource cleanup with its retained charge.
 
 ## Generation, resource and retirement ownership
 
@@ -42,8 +43,9 @@ The writer, each distinct immutable root and independently pinned views/cursors
 keep their generation alive. Multiple cuts retain the same root with
 `Retain`/`Release`; the root keeps one generation reference until its last source
 reference releases. Cumulative node/payload/wrapper history is released only
-after the writer and every root owner are gone and deferred cleanup completes. Replacements therefore consume
-generation history even when the logical table size stays constant.
+after the writer and every root owner are gone and deferred cleanup completes.
+Replacements therefore consume generation history even when the logical table
+size stays constant.
 
 `COWPrepareOptions.ResourceSlots` reserves bounded distinct resource identity
 and release callback staging. `ResourceBytes` covers the concrete independently
@@ -70,8 +72,8 @@ cancelled preparations release only their privately attached owners. Generation
 history, resource identities and wrapper charges remain until all callbacks
 finish. Cancelled callback/staging storage remains in `DeferredBytes` and
 `RetiredBytes` until cleanup finishes. The budget lock never runs callbacks or
-IO. The installer reserves its retirement queue
-descriptor/capacity before accepting a frame; C1 creates no unbounded queue.
+IO. The installer reserves its retirement queue descriptor/capacity before
+accepting a frame; C1 creates no unbounded queue.
 
 `Freeze` admits a write-triggered source rollover without walking records; it
 requires no pending preparation. Construct/reserve the successor empty writer
