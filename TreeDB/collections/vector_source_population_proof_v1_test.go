@@ -11,6 +11,7 @@ import (
 	"sort"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -242,11 +243,20 @@ func TestVectorSourcePopulationRetainedJSONV1(t *testing.T) {
 // Refuse it before any value-log decode rather than mislabel a frame bound as
 // a source payload bound. Column pointers are covered by the real V2 fixture.
 func TestVectorSourcePopulationJSONPointerRefusesV1(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	// Collection pointerization requires the cached backend's appender, not
+	// only backend value-log options. Flush/checkpoint the real winning entry
+	// before asserting representation; an unflushed inline row tests nothing.
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { _ = cleanup() })
+	if !db.HasValueLogAppender() {
+		t.Fatal("cached pointer fixture has no value-log appender")
+	}
 	manager := NewCollectionManager(db)
 	if _, err := manager.CreateCollection(&CollectionMeta{Name: "pointers", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
 		t.Fatal(err)
@@ -260,6 +270,12 @@ func TestVectorSourcePopulationJSONPointerRefusesV1(t *testing.T) {
 	}
 	meta, err := c.CreateVectorIndex(VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	requireCollectionPrimaryEntryPointer(t, db, c.name, []byte("id"))

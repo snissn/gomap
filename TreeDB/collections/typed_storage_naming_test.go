@@ -448,8 +448,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_partition_live_document_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_live_document_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	// Current source-vector attestation and its shared-helper controls consume
-	// existing compatibility-retained configuration and typed value APIs.
-	{path: "TreeDB/collections/vector_source_population_proof_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	// existing compatibility-retained configuration and typed value APIs. The
+	// empty-source support check also reads the retained configuration to validate
+	// retained-payload/reconstruction policy without requiring unused assets.
+	{path: "TreeDB/collections/vector_source_population_proof_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/vector_source_population_proof_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/population_shared_guard_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// #4324 replay uses the compatibility-retained typed-column configuration
