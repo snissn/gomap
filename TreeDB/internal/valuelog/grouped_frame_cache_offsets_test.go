@@ -105,6 +105,32 @@ func TestGroupedFrameCache_OffsetBackingCloseAndMaxK(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_InvalidOffsetAdmissionPreservesEntry(t *testing.T) {
+	c := newGroupedFrameCache(nil, 1, 1024, 0, nil)
+	valid := groupedCacheOffsets(1, 1)
+	if !c.store(100, false, 2, valid, []byte("ab"), false) {
+		t.Fatal("valid admission")
+	}
+	slot := &c.shardFor(100, false).slots[0]
+	backing := &slot.offsets[0]
+	for _, offsets := range [][MaxFrameK + 1]uint32{
+		groupedCacheOffsets(1, 2), // Terminal offset exceeds decoded length.
+		{0, 3, 2},                 // Descending offsets with a valid terminal.
+		{1, 1, 2},                 // Nonzero origin.
+	} {
+		if c.store(100, false, 2, offsets, []byte("xy"), false) {
+			t.Fatal("admitted invalid offsets")
+		}
+		got, _, err, hit := c.readTo(100, false, 2, &valid, 2, 1, nil, nil)
+		if err != nil || !hit || !bytes.Equal(got, []byte("b")) {
+			t.Fatalf("invalid replacement changed entry: hit=%v got=%q err=%v", hit, got, err)
+		}
+		if &slot.offsets[0] != backing || c.stats().RetainedBytes != 2 || c.stats().Stores != 1 {
+			t.Fatal("invalid admission changed backing, budget or stores")
+		}
+	}
+}
+
 // metadata-B counts slot structures plus offset backing capacity. It excludes
 // allocator size-class rounding, shard structures and raw payloads, and is not
 // a process RSS or live-heap measurement. Cold admission includes cache/shard

@@ -9,6 +9,8 @@ slots, larger/smaller K replacement, backing reuse, eviction and clear) and
 and release on file close). Existing `TestGroupedFrameCache_StateIsolationAndSubValues`
 and `TestGroupedFrameCache_CorruptNonHitPathsFailClosed` retain full shape,
 terminal-offset and descending-offset rejection coverage.
+`TestGroupedFrameCache_InvalidOffsetAdmissionPreservesEntry` rejects malformed
+replacement tables without changing the existing entry, backing or raw budget.
 `TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVerifyRead`
 checks source integrity after a warm verified hit;
 `TestGroupedFrameCache_ConcurrentReadsAndEvictions` and

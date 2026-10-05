@@ -297,8 +297,8 @@ func groupedFrameOffsetsEqual(a []uint32, b *[MaxFrameK + 1]uint32, k int) bool 
 	if k < 0 || k > MaxFrameK || len(a) != k+1 {
 		return false
 	}
-	for i := 0; i < k+1; i++ {
-		if a[i] != b[i] {
+	for i, offset := range a {
+		if offset != b[i] {
 			return false
 		}
 	}
