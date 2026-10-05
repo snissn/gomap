@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
+from unittest.mock import patch
 
 BENCH = "TreeDB/mvcc/native_prune_bench_test.go"
 HARNESS = [BENCH, "scripts/mvcc_native_prune.py"]
@@ -73,6 +75,14 @@ def identity(runtime, harness, scope, go, runtime_commit=None, archive=None):
 
 def validate(packet, expected, qualify=False):
     check(expected["scope"] in ("smoke", "full"), "invalid evidence scope")
+    for key, size in (("runtime_commit", 40), ("harness_commit", 40),
+                      ("runtime_snapshot_base_commit", 40), ("runtime_archive_sha256", 64)):
+        check(key in expected, f"missing provenance field: {key}")
+        value = expected[key]
+        check(value is None or (isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % size, value)), f"invalid provenance: {key}")
+    base, archive = expected["runtime_snapshot_base_commit"], expected["runtime_archive_sha256"]
+    check((base is None) == (archive is None), "snapshot base and archive must be paired")
+    check(expected["runtime_commit"] is not None or (base and archive), "missing committed or frozen runtime provenance")
     for key in ("runtime_files", "harness_files"):
         check(isinstance(expected[key], dict) and expected[key], "missing source bindings")
         check(all(isinstance(name, str) and re.fullmatch(r"[0-9a-f]{64}", value or "") for name, value in expected[key].items()), "invalid source hash")
@@ -80,6 +90,7 @@ def validate(packet, expected, qualify=False):
     if expected["scope"] == "full":
         check(all(re.fullmatch(r"[0-9a-f]{40}", expected[key] or "") for key in ("runtime_commit", "harness_commit")), "missing exact committed identities")
         check(expected["runtime_archive_sha256"] is None and expected["runtime_snapshot_base_commit"] is None, "full qualification cannot use a provisional snapshot")
+    check(not packet.get("execution_error") and not packet.get("identity_after_error"), "capture failed; see retained packet errors")
     check(packet["schema"] == 1 and packet["identity_before"] == expected, "unexpected source/toolchain identity")
     check(packet["identity_after"] == expected, "source drift")
     check(packet["options"] == {"records": 32, "bytes": 1048576, "batch": 1, "mode": "CommitDurable", "iterations": 1, "tags": "mvcc_native_prune,treedb_test"}, "incorrect quantum/options")
@@ -88,11 +99,12 @@ def validate(packet, expected, qualify=False):
     rows = packet["results"]
     cases = SMOKE if expected["scope"] == "smoke" else CASES
     check(len(rows) == len(cases) and {r["case"] for r in rows} == set(cases), "missing/duplicate/unexpected subcases")
-    check(packet["build_returncode"] == 0, "build failed")
+    check(type(packet["build_returncode"]) is int and packet["build_returncode"] == 0, "build failed or invalid exit status")
     for row in rows:
         name = row["case"]
-        check(row["returncode"] == 0 and row["Error"] == "", f"unclassified execution error: {name}")
+        check(type(row["returncode"]) is int and row["returncode"] == 0 and row["Error"] == "", f"unclassified execution error: {name}")
         check(all(row[k] is True for k in ("Complete", "Oracle", "CursorClosed")), f"missing completion/oracle: {name}")
+        check(type(row["FirstACKReopened"]) is bool, f"invalid recovery flag: {name}")
         for key in COUNTERS + TIMES:
             check(type(row[key]) is int and row[key] >= 0, f"invalid {key}: {name}")
         queued = name.startswith("queued/")
@@ -107,6 +119,7 @@ def validate(packet, expected, qualify=False):
         check(0 < row["MaxRecords"] <= 32 and 0 < row["MaxBytes"] <= 1048576, f"quantum cap: {name}")
         check(row["MaxRecords"] <= row["Records"] <= row["Calls"]*32 and row["MaxBytes"] <= row["Bytes"] <= row["Calls"]*1048576, f"counter reconciliation: {name}")
         check(row["SetupRecords"] + row["CleanupRecords"] <= row["Records"], f"setup/cleanup accounting: {name}")
+        check(row["Visited"] <= row["Records"], f"uncharged visits: {name}")
         check(0 < row["MaxQuantumNS"] <= row["PassNS"] and row["SetupNS"] > 0 and row["CloseNS"] > 0, f"missing timings: {name}")
         check(row["AllocationScope"] == "combined_process_during_pass", "invalid allocation attribution")
         if queued:
@@ -133,11 +146,12 @@ def capture(args):
     out.mkdir(parents=True)
     expected = json.loads(Path(args.expected).read_text())
     env = build_env()
-    before = identity(runtime, harness, expected["scope"], args.go, args.runtime_commit, args.archive)
-    packet = {"schema": 1, "identity_before": before, "identity_after": None,
+    packet = {"schema": 1, "identity_before": None, "identity_after": None,
               "options": {"records": 32, "bytes": 1048576, "batch": 1, "mode": "CommitDurable", "iterations": 1, "tags": "mvcc_native_prune,treedb_test"},
               "build_returncode": None, "results": [], "missing_runtime_measurements": GAPS, "verdict": "tooling_only"}
     try:
+        before = identity(runtime, harness, expected["scope"], args.go, args.runtime_commit, args.archive)
+        packet["identity_before"] = before
         check(before == expected, "unexpected source identity before build")
         overlay = out / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {str(runtime / BENCH): str(harness / BENCH)}}))
@@ -160,14 +174,20 @@ def capture(args):
             row["returncode"] = code
             packet["results"].append(row)
             check(code == 0, f"subcase failed: {case}; failed evidence preserved")
+    except Exception as error:
+        packet["execution_error"] = str(error)
+        raise
     finally:
-        packet["identity_after"] = identity(runtime, harness, expected["scope"], args.go, args.runtime_commit, args.archive)
+        try:
+            packet["identity_after"] = identity(runtime, harness, expected["scope"], args.go, args.runtime_commit, args.archive)
+        except Exception as error:
+            packet["identity_after_error"] = str(error)
         (out / "packet.json").write_text(json.dumps(packet, indent=2) + "\n")
     print(validate(packet, expected))
 
 
 def self_test():
-    ident = {"runtime_files": {"TreeDB/mvcc/versions.go": "a"*64}, "harness_files": {name: "b"*64 for name in HARNESS}, "scope": "smoke", "go_version": "go version go1.26.4 linux/amd64", "go_env": {"CGO_ENABLED": "1", "GOWORK": "off", "GOTOOLCHAIN": "local"}}
+    ident = {"runtime_commit": None, "harness_commit": None, "runtime_snapshot_base_commit": "c"*40, "runtime_archive_sha256": "d"*64, "runtime_files": {"TreeDB/mvcc/versions.go": "a"*64}, "harness_files": {name: "b"*64 for name in HARNESS}, "scope": "smoke", "go_version": "go version go1.26.4 linux/amd64", "go_env": {"CGO_ENABLED": "1", "GOWORK": "off", "GOTOOLCHAIN": "local"}}
     row = dict.fromkeys(COUNTERS + TIMES, 1)
     row.update(case=SMOKE[0], profile="command_wal_durable", order="ascending", history=8, extra=0, Calls=8, Records=8, Bytes=8, Deletes=7, Batches=7, PassNS=2, SetupRecords=0, CleanupRecords=0, Complete=True, Oracle=True, CursorClosed=True, FirstACKReopened=False, AllocationScope="combined_process_during_pass", Error="", returncode=0)
     packet = dict(schema=1, identity_before=ident, identity_after=ident, options={"records":32,"bytes":1048576,"batch":1,"mode":"CommitDurable","iterations":1,"tags":"mvcc_native_prune,treedb_test"}, build_returncode=0, results=[row], missing_runtime_measurements=GAPS, verdict="tooling_only")
@@ -175,12 +195,36 @@ def self_test():
     bad = []
     for key, value in (("results", []), ("verdict", "qualified"), ("missing_runtime_measurements", []), ("identity_after", {})):
         p = copy.deepcopy(packet); p[key] = value; bad.append(p)
-    for key, value in (("Complete", False), ("Oracle", False), ("MaxRecords", 33), ("Records", -1), ("Error", "unknown"), ("profile", "wrong")):
+    for key, value in (("Complete", False), ("Oracle", False), ("MaxRecords", 33), ("Records", -1), ("Visited", 2**60), ("FirstACKReopened", 0), ("returncode", False), ("Error", "unknown"), ("profile", "wrong")):
         p = copy.deepcopy(packet); p["results"][0][key] = value; bad.append(p)
     for p in bad:
         try: validate(p, ident)
         except (ValueError, KeyError): continue
         raise AssertionError("corrupt packet accepted")
+    for key, value in (("runtime_archive_sha256", None), ("runtime_snapshot_base_commit", "invalid"), ("runtime_commit", False)):
+        wrong = copy.deepcopy(ident); wrong[key] = value
+        try: validate(packet, wrong)
+        except ValueError: continue
+        raise AssertionError("invalid provenance accepted")
+    missing = copy.deepcopy(ident); del missing["harness_commit"]
+    try: validate(packet, missing)
+    except ValueError: pass
+    else: raise AssertionError("missing provenance accepted")
+    wrong = copy.deepcopy(packet); wrong["build_returncode"] = False
+    try: validate(wrong, ident)
+    except ValueError: pass
+    else: raise AssertionError("boolean exit status accepted")
+    # No real build: preserve both errors when final source inspection fails.
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); expected = root / "expected.json"
+        expected.write_text(json.dumps(ident))
+        args = argparse.Namespace(runtime=str(root / "runtime"), harness=str(root / "harness"), out=str(root / "capture"), expected=str(expected), go="unused", runtime_commit=None, archive=None, profiles=False)
+        with patch(__name__ + ".identity", side_effect=[ident, ValueError("dirty final sources")]), patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+            try: capture(args)
+            except ValueError as error: check("tagged API build failed" in str(error), "original error lost")
+            else: raise AssertionError("failed build accepted")
+        failed = json.loads((root / "capture/packet.json").read_text())
+        check("tagged API build failed" in failed["execution_error"] and failed["identity_after_error"] == "dirty final sources", "failure packet lost errors")
     try: validate(packet, ident, qualify=True)
     except ValueError: pass
     else: raise AssertionError("missing runtime measurements qualified")
