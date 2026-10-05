@@ -34,9 +34,11 @@ type VectorSourcePopulationExpectationV1 struct {
 	Limits     VectorSourcePopulationLimitsV1
 }
 
-// SourceRecordBytes counts retained primary payloads and, when stripped from
-// those payloads, the fixed-D vector projection. It is not reconstructed full
-// document size. TotalBytes also charges metadata, loaded assets and hash input.
+// SourceRecordBytes counts materialized source entries: inline primary bytes or
+// a 16-byte pointer descriptor, plus the fixed-D vector projection for stripped
+// column payloads. Pointer payloads are never read. It is not retained payload,
+// value-log frame or reconstructed document size. TotalBytes also charges
+// metadata, loaded assets and hash input.
 type VectorSourcePopulationProofV1 struct {
 	Rows                                                              uint64
 	Dimensions                                                        int
@@ -88,7 +90,7 @@ func (owner *CommandWALAdmittedCollection) ProveVectorSourcePopulationV1(ctx con
 	if err != nil {
 		return out, err
 	}
-	if catalog == nil || !VectorPartitionLiveDocumentProofSupportedV1(catalog.meta) {
+	if catalog == nil || normalizedDocumentFormat(catalog.meta.Options.DocumentFormat) != DocumentFormatJSON {
 		return out, ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	def, found := findVectorIndex(catalog.meta.VectorIndexes, manifest.IndexName)
@@ -120,6 +122,12 @@ func (owner *CommandWALAdmittedCollection) ProveVectorSourcePopulationV1(ctx con
 	}
 	var projection *vectorPopulationColumnProjectionV1
 	needsProjection := columnStoreNeedsRetainedPayloadTransform(catalog.meta)
+	if needsProjection {
+		cfg := catalog.meta.Options.ColumnStore
+		if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn || cfg.Reconstruction != ColumnReconstructionRetainedPayloadAndColumns {
+			return out, ErrVectorIndexPartitionLiveUnavailableV1
+		}
+	}
 	defer func() {
 		if projection != nil {
 			err = errors.Join(err, projection.close())
@@ -168,15 +176,26 @@ func (owner *CommandWALAdmittedCollection) ProveVectorSourcePopulationV1(ctx con
 		if len(id) == 0 || uint64(len(id)) > l.MaxIDBytes || out.Rows >= l.MaxRows || out.Rows >= expected.Rows || previous != nil && bytes.Compare(previous, id) >= 0 {
 			return out, ErrVectorIndexPartitionLiveMismatchV1
 		}
-		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && uint64(ptr.Length) > l.MaxSourceRecordBytes {
-			return out, errors.New("collections: source population retained pointer limit")
+		// UnsafeEntry loads only inline bytes or pointer metadata. UnsafeValue
+		// would decode a value-log frame and may prefetch unchecked future rows.
+		document, _, flags := it.UnsafeEntry()
+		recordBytes := uint64(len(document))
+		if flags&node.FlagPointer != 0 {
+			if !needsProjection {
+				return out, errors.New("collections: source population JSON pointer unsupported")
+			}
+			recordBytes = 16 // encoded ValuePtr, never its flagged Length or payload
 		}
-		document := it.UnsafeValue()
-		if uint64(len(document)) > l.MaxSourceRecordBytes {
+		if needsProjection {
+			recordBytes += uint64(def.Dimensions) * 4
+		}
+		if recordBytes > l.MaxSourceRecordBytes {
 			return out, errors.New("collections: source population record limit")
 		}
-		recordBytes := uint64(len(document))
+		hashed := uint64(4+len(id)) + uint64(def.Dimensions)*4
+		if err = charge(recordBytes + hashed); err != nil {
+			return out, err
+		}
 		if !needsProjection {
 			var present bool
 			vector, present, err = vectorFromJSONFieldAppend(document, path, vector, def.Dimensions)
@@ -184,11 +203,10 @@ func (owner *CommandWALAdmittedCollection) ProveVectorSourcePopulationV1(ctx con
 				return out, errors.Join(ErrVectorIndexPartitionLiveMismatchV1, err)
 			}
 		} else {
-			if uint64(def.Dimensions)*4 > l.MaxSourceRecordBytes-recordBytes {
-				return out, errors.New("collections: source population projected record limit")
-			}
-			recordBytes += uint64(def.Dimensions) * 4
 			if projection == nil {
+				if !VectorPartitionLiveDocumentProofSupportedV1(catalog.meta) {
+					return out, ErrVectorIndexPartitionLiveUnavailableV1
+				}
 				projection, err = c.prepareVectorPopulationProjectionV1(ctx, snap, catalog, def, charge, inspect)
 				if err != nil {
 					return out, err
@@ -200,10 +218,6 @@ func (owner *CommandWALAdmittedCollection) ProveVectorSourcePopulationV1(ctx con
 			}
 		}
 		if err = validateIngestVectors([][]float32{vector}, def); err != nil {
-			return out, err
-		}
-		hashed := uint64(4+len(id)) + uint64(def.Dimensions)*4
-		if err = charge(recordBytes + hashed); err != nil {
 			return out, err
 		}
 		out.SourceRecordBytes += recordBytes

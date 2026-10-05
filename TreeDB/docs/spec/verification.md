@@ -107,7 +107,14 @@ follower-apply test refuses changed-state receipts without an FSM/admission lock
 cycle. `TestVectorSourcePopulationCurrentProjectionV1` covers current inserts,
 deletes, replacements, fixed-D column projection, signed zero, exact inspection
 exhaustion, bounds/overflow and cancellation; `TestVectorSourcePopulationRetainedJSONV1`
-covers retained JSON and invalid/missing/nonfinite/zero-cosine vectors.
+covers inline retained JSON and invalid/missing/nonfinite/zero-cosine vectors,
+including exact source-record and total-byte bounds.
+`TestVectorSourcePopulationDirectoryV2` requires real pointer-backed current
+primary entries and exact descriptor-plus-vector bytes, with one-byte and
+physical-work refusal controls. `TestVectorSourcePopulationJSONPointerRefusesV1`
+refuses non-column JSON pointers before value-log payload decoding.
+`TestVectorSourcePopulationEmptyV1` proves an empty typed collection without
+requiring an unused manifest or asset.
 `TestVectorPopulationPhysicalIteratorCancellationV1` cancels skipped tombstone
 work before a visible callback exists. `TestPeerPopulationAuditPreMarshalBoundV1`
 checks conservative encoded accounting and oversized/partial-plan refusal.

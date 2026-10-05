@@ -10,6 +10,8 @@ import (
 	"math"
 	"sort"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // The test oracle sorts the known input IDs independently of the product's
@@ -65,10 +67,19 @@ func TestVectorSourcePopulationDirectoryV2(t *testing.T) {
 		t.Fatal("fixture did not select the directory point-probe path")
 	}
 	rows := []columnGraphRebuildInputRowV2A{{id: "b", vector: columns[0].Float32Vectors[0]}, {id: "a", vector: columns[0].Float32Vectors[1]}}
+	for _, id := range ids {
+		requireCollectionPrimaryEntryPointer(t, db, c.name, id)
+	}
 	p := vectorPopulationTestExpectationV1(rows, 8)
+	p.Limits.MaxSourceRecordBytes = 16 + 4*8
 	proof, err := vectorPopulationTestProofV1(context.Background(), c, meta.VectorIndexes[0], p)
-	if err != nil || proof.Rows != 2 || proof.AssetBytes == 0 {
+	if err != nil || proof.Rows != 2 || proof.AssetBytes == 0 || proof.SourceRecordBytes != 2*(16+4*8) {
 		t.Fatalf("directory proof=%+v err=%v", proof, err)
+	}
+	tooSmall := p
+	tooSmall.Limits.MaxSourceRecordBytes--
+	if got, err := vectorPopulationTestProofV1(context.Background(), c, meta.VectorIndexes[0], tooSmall); err == nil || got != (VectorSourcePopulationProofV1{}) {
+		t.Fatalf("pointer projection byte refusal %+v %v", got, err)
 	}
 	p.Limits.MaxInspected = proof.Inspected
 	if _, err := vectorPopulationTestProofV1(context.Background(), c, meta.VectorIndexes[0], p); err != nil {
@@ -174,7 +185,10 @@ func (c *vectorPopulationCancelContextV1) Err() error {
 }
 
 func TestVectorSourcePopulationRetainedJSONV1(t *testing.T) {
-	_, db, _, _ := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, nil)
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer db.Close()
 	for i, raw := range []string{`{"embedding":[1,-0]}`, `{"embedding":null}`, `{"other":[1,0]}`, `{"embedding":[1]}`, `{"embedding":[1,0,2]}`, `{"embedding":["bad",0]}`, `{"embedding":[1e40,0]}`, `{"embedding":[0,0]}`} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
@@ -203,10 +217,56 @@ func TestVectorSourcePopulationRetainedJSONV1(t *testing.T) {
 				if err != nil || proof.SourceRecordBytes != uint64(len(raw)) || proof.AssetBytes != 0 {
 					t.Fatalf("retained proof %+v %v", proof, err)
 				}
+				p.Limits.MaxSourceRecordBytes = uint64(len(raw))
+				p.Limits.MaxTotalBytes = proof.TotalBytes
+				if _, err := vectorPopulationTestProofV1(context.Background(), c, def, p); err != nil {
+					t.Fatalf("exact inline byte bounds: %v", err)
+				}
+				p.Limits.MaxTotalBytes--
+				if got, err := vectorPopulationTestProofV1(context.Background(), c, def, p); err == nil || got != (VectorSourcePopulationProofV1{}) {
+					t.Fatalf("inline total byte refusal %+v %v", got, err)
+				}
+				p.Limits.MaxTotalBytes = proof.TotalBytes
+				p.Limits.MaxSourceRecordBytes--
+				if got, err := vectorPopulationTestProofV1(context.Background(), c, def, p); err == nil || got != (VectorSourcePopulationProofV1{}) {
+					t.Fatalf("inline record byte refusal %+v %v", got, err)
+				}
 			} else if err == nil || proof != (VectorSourcePopulationProofV1{}) {
 				t.Fatalf("invalid source %+v %v", proof, err)
 			}
 		})
+	}
+}
+
+// A JSON pointer's frame can include other rows and omitted length hints.
+// Refuse it before any value-log decode rather than mislabel a frame bound as
+// a source payload bound. Column pointers are covered by the real V2 fixture.
+func TestVectorSourcePopulationJSONPointerRefusesV1(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager := NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&CollectionMeta{Name: "pointers", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := manager.OpenCollection("pointers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Insert([]byte("id"), []byte(`{"embedding":[1,-0]}`)); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := c.CreateVectorIndex(VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireCollectionPrimaryEntryPointer(t, db, c.name, []byte("id"))
+	p := vectorPopulationTestExpectationV1([]columnGraphRebuildInputRowV2A{{id: "id", vector: []float32{1, math.Float32frombits(0x80000000)}}}, 2)
+	got, err := vectorPopulationTestProofV1(context.Background(), c, meta.VectorIndexes[0], p)
+	if err == nil || err.Error() != "collections: source population JSON pointer unsupported" || got != (VectorSourcePopulationProofV1{}) {
+		t.Fatalf("pointer proof %+v %v", got, err)
 	}
 }
 

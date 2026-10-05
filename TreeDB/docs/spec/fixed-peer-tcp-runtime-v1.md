@@ -517,11 +517,15 @@ There is no bulk vector response, collection-sized vector array or sort.
 
 The admitted scan resolves the captured catalog definition once and iterates
 the current primary root and overlays, charging superseded entries and tombstones.
-Supported source representations are retained JSON and JSON noncolumn payloads
+Supported source representations are inline retained JSON and JSON noncolumn payloads
 with a declared nonnullable, fixed-D, raw uncompressed FP32 typed column. The latter
 uses the current row/scoring locator (including metadata-only preserved vectors),
 current manifest references, existing prepared projection and checksum-verified
-assets; unrelated document columns are not materialized. Other representations
+assets; unrelated document columns and pointer-backed primary payloads are not
+materialized. Current pointer entries supply ID/existence and the fixed 16-byte
+descriptor only. Retained JSON pointers refuse before value-log decoding because
+grouped frames and omitted length hints cannot supply the declared pre-decode
+bound. Empty supported collections require no source manifest or asset. Other representations
 refuse observation. The existing native runtime owns ACTIVE/generation, authenticated
 quorum, current-FSM DB identity and applied/root/WAL/summary fences before and after
 the source scan. The collections helper alone supplies no consensus or live-graph
@@ -529,9 +533,12 @@ authority. Any drift, cancellation, iterator or close error returns no receipt.
 
 All limits are positive and mandatory: `MaxRows` <=65536, `MaxIDBytes` <=65536,
 `MaxSourceRecordBytes` <=1048576, `MaxTotalBytes` <=536870912 and `MaxInspected`
-<=1048576; dimensions are 1..4096. `MaxSourceRecordBytes` bounds each retained
-primary payload plus the fixed-D vector bytes when those were stripped. The
-receipt's `SourceRecordBytes` reports that sum, **not full document size**.
+<=1048576; dimensions are 1..4096. `MaxSourceRecordBytes` bounds each materialized
+source entry: inline primary bytes or a 16-byte pointer descriptor, plus fixed-D
+vector bytes for stripped column payloads. The receipt's `SourceRecordBytes`
+reports that sum, **not retained payload, value-log frame or full document size**.
+No pointer length hint is treated as a payload bound; no primary pointer is
+read or prefetched. Source entry/hash bytes are charged before vector decoding.
 `HashedBytes` reports encoded oracle input; `AssetBytes` reports loaded typed
 images (including reloads); `TotalBytes` additionally charges bounded metadata
 and locator payloads. `Inspected` charges physical primary merge work, locator
