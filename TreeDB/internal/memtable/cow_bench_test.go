@@ -3,6 +3,7 @@ package memtable
 import (
 	"fmt"
 	"testing"
+	"unsafe"
 )
 
 // Fixed-count runs keep the measured foundation inside its finite generation.
@@ -117,4 +118,58 @@ func BenchmarkCOWExternalLease(b *testing.B) {
 	b.StopTimer()
 	b.ReportMetric(float64(charge), "charged-B/op")
 	budget.Close()
+}
+
+// This fixture exceeds conversion elision's short-input buffer. Construction
+// and the admitted cursor/lease live outside the measured lookup/refusal loops.
+func BenchmarkCOWLargeKeyLookup(b *testing.B) {
+	budget, w := cowTestWriter(b, DefaultCOWLimits())
+	key := make([]byte, 1<<20)
+	for i := range key {
+		key[i] = 'k'
+	}
+	root := cowTestPublish(b, w, []COWMutation{{Key: key, Value: []byte("value")}})
+	cursor, err := root.Cursor(key, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	entries := []COWMutation{{Key: key, Value: []byte("new")}}
+	defer func() { cursor.Close(); cowTestRelease(root); cowTestClose(w); budget.Close() }()
+	b.Run("Get", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, ok := root.Get(key); !ok {
+				b.Fatal("missing")
+			}
+		}
+	})
+	b.Run("CursorSeek", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if err := cursor.Seek(key); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Estimate", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := w.Estimate(entries, COWPrepareOptions{}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	lease, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer lease.Close()
+	b.Run("RefusedPrepare", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := w.Prepare(entries, COWPrepareOptions{}); err != ErrCOWCapacity {
+				b.Fatalf("refusal=%v", err)
+			}
+		}
+	})
 }

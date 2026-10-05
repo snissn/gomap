@@ -202,7 +202,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 		if !e.Remove && e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
 			return c, fmt.Errorf("COW entry has pointer and tombstone flags")
 		}
-		_, exists := w.private.Get(bytesToStringNoCopy(e.Key))
+		exists := cowHasKey(w.private, e.Key)
 		if !exists || e.Remove {
 			allReplace = false
 		}
@@ -348,22 +348,15 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
 	for _, e := range entries {
+		// Lookup returns an existing owned key; safe builds compare bytes
+		// directly, without temporary key conversions before or after admission.
 		if e.Remove {
-			p.private.Delete(bytesToStringNoCopy(e.Key))
+			cowDeleteKey(p.private, e.Key)
 			continue
 		}
-		// Reuse an already owned immutable key on replacement. The value is
-		// copied exactly once; no key arena or caller-buffer borrowing occurs.
-		pivot := bytesToStringNoCopy(e.Key)
-		ownedKey := ""
-		exists := false
-		p.private.Ascend(pivot, func(key string, _ cowValue) bool {
-			if key == pivot {
-				ownedKey = key
-				exists = true
-			}
-			return false
-		})
+		ownedKey, _, exists := cowLookupGE(p.private, e.Key)
+		exists = exists && cowKeyCompare(ownedKey, e.Key) == 0
+		// Reuse an owned immutable key on replacement; new payloads copy once.
 		if !exists {
 			ownedKey = string(e.Key)
 		}
@@ -629,30 +622,20 @@ func (r *COWRoot) Len() int    { return r.tree.Len() }
 func (r *COWRoot) Height() int { return r.tree.Height() }
 func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
 	record, ok := r.SeekGE(key, nil)
-	if !ok || record.Key != bytesToStringNoCopy(key) {
+	if !ok || cowKeyCompare(record.Key, key) != 0 {
 		return COWRecord{}, false
 	}
 	return record, true
 }
 
-// SeekGE uses the already owned cut/source reference. It allocates no cursor or
-// view and performs only a logarithmic search; resolution/copy remains with the
-// enclosing caller. The returned strings are immutable generation-owned data.
+// SeekGE uses the already owned cut/source reference and allocates no cursor,
+// view or key conversion. Default builds search one path; treedb_safe uses
+// read-only rank binary search, O(log N * height), to avoid unsafe conversions.
+// The returned strings are immutable generation-owned data.
 func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
-	pivot := bytesToStringNoCopy(start)
-	limit := bytesToStringNoCopy(end)
-	if end != nil && pivot >= limit {
+	key, v, found := cowLookupGE(r.tree, start)
+	if !found || (end != nil && cowKeyCompare(key, end) >= 0) {
 		return COWRecord{}, false
 	}
-	var record COWRecord
-	found := false
-	r.tree.Ascend(pivot, func(key string, v cowValue) bool {
-		if end != nil && key >= limit {
-			return false
-		}
-		record = COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Revision: v.revision, Flags: v.flags}
-		found = true
-		return false
-	})
-	return record, found
+	return COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Revision: v.revision, Flags: v.flags}, true
 }
