@@ -17,6 +17,7 @@ import pathlib
 import re
 import shutil
 import statistics
+import subprocess
 import sys
 import time
 import traceback
@@ -41,7 +42,7 @@ def integer(value, name, minimum=0):
     return value
 
 
-def fingerprint(directory):
+def fingerprint(directory, payload_only=False):
     directory = pathlib.Path(directory)
     require(directory.is_dir() and not directory.is_symlink(), 'fixture must be a directory')
     entries = []
@@ -50,10 +51,35 @@ def fingerprint(directory):
         if path.is_dir():
             continue
         require(path.is_file(), 'fixture contains nonregular entry: '+str(path))
+        if payload_only and path.relative_to(directory).as_posix() in (
+                'index.db', 'maindb/index.db', 'dictdb/index.db', 'templatedb/index.db'):
+            continue
         entries.append([path.relative_to(directory).as_posix(), path.stat().st_size, unified.sha256(path)])
-    require(entries, 'empty fixture')
+    require(entries or payload_only, 'empty fixture')
     raw = json.dumps(entries, separators=(',', ':'), ensure_ascii=True).encode()
     return dict(sha256=hashlib.sha256(raw).hexdigest(), files=len(entries), bytes=sum(v[1] for v in entries))
+
+
+def restore_snapshot(root, manifest, database, directory, env, metadata):
+    # Ordinary open must retain physical-identity validation. Only the existing
+    # explicit restore API may rebind the private copy, before measured work.
+    source = manifest['sources'][manifest['snapshot_restore']]
+    require(pathlib.Path(source['binary']).name == source['binary'], 'restore binary basename')
+    binary = root/'bin'/source['binary']
+    require(source['head'] and unified.sha256(binary) == source['binary_sha256'], 'restore binary binding')
+    native = {}
+    unified.validate_native(binary, source, manifest['libraries'], env, root, directory, native)
+    for name in ('ldd.stdout.txt', 'ldd.stderr.txt'):
+        (directory/name).rename(directory/('restore.'+name))
+    command = [str(binary), str(database)]
+    with (directory/'restore.stdout.json').open('w') as stdout, (directory/'restore.stderr.log').open('w') as stderr:
+        result = subprocess.run(command, cwd=root, env=env, stdout=stdout, stderr=stderr, timeout=1800)
+    metadata['snapshot_restore'] = dict(source=source, command=command, native=native, rc=result.returncode)
+    require(result.returncode == 0, 'snapshot restore exit: '+str(result.returncode))
+    restored = json.loads((directory/'restore.stdout.json').read_bytes())
+    require(restored['rebound'] is True and restored['operation'] == 'RebindDurableRootSnapshotLayoutWithContextV1', 'wrong restore operation')
+    require(restored['stores'] in (['maindb'], ['dictdb', 'maindb'], ['templatedb', 'maindb'],
+            ['dictdb', 'templatedb', 'maindb'], ['backend']), 'restore store order')
 
 
 def compact_command(binary, database, cell):
@@ -139,7 +165,20 @@ def capture(manifest_path, plan_path):
     manifest, plan = json.loads(manifest_raw), json.loads(plan_raw)
     output = pathlib.Path(plan['output'])
     require(not output.is_absolute() and '..' not in output.parts and output.parts, 'new root-relative output required')
-    out = root/output
+    out = (root/output).resolve()
+    require(out != root and out.is_relative_to(root), 'output escaped manifest root')
+    labels = [v['label'] for v in plan['cells']]
+    require(labels and len(set(labels)) == len(labels), 'missing/duplicate labels')
+    require(all(pathlib.Path(v).name == v and v not in ('.', '..') for v in labels), 'invalid label')
+    fixtures = []
+    # Validate every input/output relationship before creating any output. A
+    # rejected alias or ancestor must not change the frozen physical fixture.
+    for cell in plan['cells']:
+        fixture = pathlib.Path(cell['fixture'])
+        require(fixture.is_absolute() and not fixture.is_symlink(), 'absolute nonsymlink fixture required')
+        fixture = fixture.resolve(strict=True)
+        require(fixture.is_dir() and not out.is_relative_to(fixture) and not fixture.is_relative_to(out), 'fixture/output overlap')
+        fixtures.append(fixture)
     out.mkdir(exist_ok=False)
     (out/'manifest.json').write_bytes(manifest_raw)
     (out/'plan.json').write_bytes(plan_raw)
@@ -154,10 +193,7 @@ def capture(manifest_path, plan_path):
     env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='2GiB',
                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
     (root/'working-dbs').mkdir(exist_ok=True)
-    labels = [v['label'] for v in plan['cells']]
-    require(labels and len(set(labels)) == len(labels), 'missing/duplicate labels')
-    require(all(pathlib.Path(v).name == v and v not in ('.', '..') for v in labels), 'invalid label')
-    for cell in plan['cells']:
+    for cell, fixture in zip(plan['cells'], fixtures):
         directory = out/cell['label']
         directory.mkdir()
         source = manifest['sources'][cell['source']]
@@ -172,8 +208,6 @@ def capture(manifest_path, plan_path):
                                  [('collector', sys.modules[__name__]), ('unified_collector', unified), ('rss_observer', owned_process_rss)]},
                         unavailable=['peak temporary disk', 'per-phase CRC/decode bytes'])
         try:
-            fixture = pathlib.Path(cell['fixture'])
-            require(fixture.is_absolute() and not database.is_relative_to(fixture), 'independent absolute fixture required')
             receipt = cell['fixture_receipt']
             raw = pathlib.Path(receipt['path']).read_bytes()
             require(hashlib.sha256(raw).hexdigest() == receipt['sha256'], 'fixture receipt hash')
@@ -188,6 +222,13 @@ def capture(manifest_path, plan_path):
                 if path.is_file():
                     original = fixture/path.relative_to(database)
                     require((path.stat().st_dev, path.stat().st_ino) != (original.stat().st_dev, original.stat().st_ino), 'hardlinked fixture')
+            metadata['payload'] = fingerprint(database, payload_only=True)
+            restore_snapshot(root, manifest, database, directory, env, metadata)
+            metadata['restored_fixture'] = fingerprint(database)
+            require(metadata['restored_fixture']['files'] == metadata['fixture']['files'] and
+                    metadata['restored_fixture']['bytes'] == metadata['fixture']['bytes'], 'restore extent drift')
+            require(fingerprint(database, payload_only=True) == metadata['payload'], 'restore changed payload')
+            require(fingerprint(fixture) == metadata['fixture'], 'restore changed original fixture')
             require(source['head'] and unified.sha256(binary) == source['binary_sha256'], 'binary/source binding')
             unified.validate_native(binary, source, manifest['libraries'], env, root, directory, metadata)
             metadata.update(started_ns=time.time_ns(), load_before=os.getloadavg())
@@ -217,7 +258,9 @@ def load_run(path):
     require(run['schema'] == 1 and run.get('validated') is True and run['rc'] == 0 and 'error' not in run, 'invalid/failed run')
     for name, expected in run['artifacts'].items():
         require(pathlib.Path(name).name == name and unified.sha256(path.parent/name) == expected, 'raw artifact drift: '+name)
-    required = {'stdout.json', 'stderr.log', 'rss_samples.jsonl', 'rss_samples.jsonl.summary.json', 'fixture-receipt.json', 'ldd.stdout.txt', 'ldd.stderr.txt'}
+    required = {'stdout.json', 'stderr.log', 'rss_samples.jsonl', 'rss_samples.jsonl.summary.json', 'fixture-receipt.json',
+                'ldd.stdout.txt', 'ldd.stderr.txt', 'restore.stdout.json', 'restore.stderr.log',
+                'restore.ldd.stdout.txt', 'restore.ldd.stderr.txt'}
     require(required <= set(run['artifacts']), 'missing raw artifacts')
     parent = path.parent.parent
     require(unified.sha256(parent/'manifest.json') == run['manifest_sha256'] and unified.sha256(parent/'plan.json') == run['plan_sha256'], 'manifest/plan drift')
@@ -226,6 +269,15 @@ def load_run(path):
     for role, receipt in manifest['receipts'].items():
         require(unified.sha256(parent/(role+'-receipt.json')) == receipt['sha256'], 'source receipt drift: '+role)
     require(run['command'] == compact_command(run['command'][0], path.parent/'db', run['cell']), 'CLI flag drift')
+    require(pathlib.Path(run['command'][0]).name == run['source']['binary'], 'compact binary basename drift')
+    restore = run['snapshot_restore']
+    require(restore['source'] == manifest['sources'][manifest['snapshot_restore']] and restore['rc'] == 0 and
+            restore['command'] == [restore['command'][0], str(path.parent/'db')], 'restore source/command drift')
+    require(pathlib.Path(restore['command'][0]).name == restore['source']['binary'], 'restore binary basename drift')
+    restored = json.loads((path.parent/'restore.stdout.json').read_bytes())
+    require(restored['rebound'] is True and restored['operation'] == 'RebindDurableRootSnapshotLayoutWithContextV1', 'restore receipt drift')
+    require(run['restored_fixture']['files'] == run['fixture']['files'] and
+            run['restored_fixture']['bytes'] == run['fixture']['bytes'], 'restore extent receipt drift')
     attest = json.loads((path.parent/'fixture-receipt.json').read_bytes())
     require(attest['closed'] is True and attest['verified'] is True and attest['fixture_sha256'] == run['fixture']['sha256'], 'fixture binding drift')
     require(run['artifacts']['fixture-receipt.json'] == run['cell']['fixture_receipt']['sha256'], 'fixture receipt drift')
@@ -242,7 +294,8 @@ def contract(run):
     # must match, including explicit timeout. Fixture contents identify workload.
     return dict(fixture=run['fixture'], mode=run['cell']['mode'], batch_size=run['cell']['batch_size'],
                 timeout_seconds=run['cell'].get('timeout_seconds', 1800), harness=run['harness'], env=run['env'],
-                loader=run['native_resolution']['libraries'], interval=run['rss_sampling']['interval_ms'])
+                loader=run['native_resolution']['libraries'], interval=run['rss_sampling']['interval_ms'],
+                restore=run['snapshot_restore']['source'], restore_loader=run['snapshot_restore']['native'])
 
 
 def metric(run, name):
@@ -292,10 +345,11 @@ def analyze(bundle_path):
     effects = [(metric(a[0], noise['metric'])-metric(b[0], noise['metric']))/metric(a[0], noise['metric']) for a, b in loaded]
     completion = [[{k: report[k] for k in ('fully_compacted', 'policy_fully_compacted', 'byte_minimized')} for _, report in pair] for pair in loaded]
     equal_completion = all(a == b for a, b in completion)
-    material = all(v > 0 for v in effects) and statistics.median(effects) > 2*noise['E'] and equal_completion
+    complete_runs = all(flags['policy_fully_compacted'] for pair in completion for flags in pair)
+    material = all(v > 0 for v in effects) and statistics.median(effects) > 2*noise['E'] and equal_completion and complete_runs
     return dict(metric=noise['metric'], E=noise['E'], threshold=2*noise['E'], pair_effects=effects,
                 median_effect=statistics.median(effects), all_favourable=all(v > 0 for v in effects),
-                equal_completion=equal_completion, completion=completion, material=material,
+                equal_completion=equal_completion, complete_runs=complete_runs, completion=completion, material=material,
                 conclusion='material improvement' if material else 'inconclusive or negative; parent gate remains unmet',
                 unavailable=['peak temporary disk', 'per-phase CRC/decode bytes'],
                 scope='one maintenance metric only; correctness, service-read and online-progress gates are separate')

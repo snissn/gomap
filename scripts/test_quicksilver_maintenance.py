@@ -27,10 +27,14 @@ class MaintenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp); fixture = root/'fixture'; fixture.mkdir()
             (fixture/'value').write_bytes(b'real pointer value')
+            (fixture/'index.db').write_bytes(b'physical identity metadata')
             expected = m.fingerprint(fixture)
             m.shutil.copytree(fixture, root/'copy')
             self.assertEqual(expected, m.fingerprint(root/'copy'))
             self.assertNotEqual((fixture/'value').stat().st_ino, (root/'copy'/'value').stat().st_ino)
+            payload = m.fingerprint(root/'copy', payload_only=True)
+            (root/'copy'/'index.db').write_bytes(b'restored identity metadata')
+            self.assertEqual(payload, m.fingerprint(root/'copy', payload_only=True))
             (root/'copy'/'value').write_bytes(b'different pointer value')
             self.assertNotEqual(expected, m.fingerprint(root/'copy'))
             (fixture/'alias').symlink_to('value')
@@ -54,11 +58,28 @@ class MaintenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.compact_command('/bin/treemap', '/db', dict(mode='full', batch_size=True))
 
+    def test_overlap_and_output_alias_rejected_before_any_write(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = pathlib.Path(temp).resolve(); root = base/'root'; root.mkdir()
+            fixture = root/'fixture'; fixture.mkdir(); (fixture/'value').write_bytes(b'frozen')
+            outside = base/'outside'; outside.mkdir(); (root/'alias').symlink_to(outside, target_is_directory=True)
+            m.save(root/'manifest.json', {})
+            for path, output in [(str(root), 'out'), (str(fixture/'..'), 'out'), (str(fixture), 'fixture/out'),
+                                 (str(fixture), 'alias/out')]:
+                m.save(root/'plan.json', dict(output=output, cells=[dict(label='test', fixture=path)]))
+                before = sorted(str(p) for p in base.rglob('*')); frozen = m.fingerprint(fixture)
+                with self.assertRaises(ValueError):
+                    m.capture(root/'manifest.json', root/'plan.json')
+                self.assertEqual(before, sorted(str(p) for p in base.rglob('*')))
+                self.assertEqual(frozen, m.fingerprint(fixture))
+
     def make_campaign(self, root, candidate=8.0):
         root = root.resolve()
         out = root/'out'; out.mkdir()
         manifest = dict(sources={name: dict(head=letter*40, binary=name, binary_sha256=letter*64)
                                 for name, letter in [('A', 'a'), ('B', 'b')]}, receipts={})
+        manifest['snapshot_restore'] = 'restore'
+        manifest['sources']['restore'] = dict(head='r'*40, binary='restore', binary_sha256='r'*64)
         for role in ('source', 'build', 'native', 'runner'):
             m.save(out/(role+'-receipt.json'), {'reviewed': role})
             manifest['receipts'][role] = dict(path=role, sha256=m.unified.sha256(out/(role+'-receipt.json')))
@@ -84,11 +105,16 @@ class MaintenanceTests(unittest.TestCase):
             (directory/'stderr.log').write_text('Maximum resident set size (kbytes): 12\n')
             m.save(directory/'stdout.json', report())
             (directory/'ldd.stdout.txt').write_text('static linkage\n'); (directory/'ldd.stderr.txt').touch()
+            (directory/'restore.ldd.stdout.txt').write_text('static linkage\n'); (directory/'restore.ldd.stderr.txt').touch()
+            (directory/'restore.stderr.log').touch()
+            m.save(directory/'restore.stdout.json', dict(rebound=True, stores=['maindb'], operation='RebindDurableRootSnapshotLayoutWithContextV1'))
             run = dict(schema=1, cell=cell, source=manifest['sources'][source], fixture=dict(sha256='f'*64, files=4, bytes=7128),
                        command=m.compact_command('/bin/'+source, directory/'db', cell), env=dict(GOWORK='off'),
                        harness=dict(collector='h'*64, unified_collector='u'*64, rss_observer='s'*64),
                        native_resolution=dict(libraries={}), started_ns=started, finished_ns=finished,
                        elapsed_seconds=elapsed, rc=0, rss_sampling=summary, validated=True)
+            run['restored_fixture'] = dict(run['fixture'])
+            run['snapshot_restore'] = dict(source=manifest['sources']['restore'], command=['/bin/restore', str(directory/'db')], rc=0, native={})
             run['memory'] = m.rss_metrics(directory, summary, started, finished)
             run['artifacts'] = {p.name: m.unified.sha256(p) for p in directory.iterdir() if p.is_file()}
             m.save(directory/'run.json', run); paths[label] = directory/'run.json'
@@ -107,6 +133,7 @@ class MaintenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp).resolve(); fixture = root/'fixture'; fixture.mkdir()
             (fixture/'index.db').write_bytes(b'closed verified fixture')
+            (fixture/'value').write_bytes(b'persistent payload')
             before = m.fingerprint(fixture)
             m.save(root/'fixture-receipt.json', dict(closed=True, verified=True, fixture_sha256=before['sha256']))
             (root/'bin').mkdir(); binary = root/'bin'/'treemap'; binary.write_bytes(b'\x7fELF')
@@ -128,7 +155,7 @@ class MaintenanceTests(unittest.TestCase):
                 m.save(str(sample_path)+'.summary.json', summary)
                 return types.SimpleNamespace(returncode=-15), summary
 
-            with mock.patch.object(m.unified, 'validate_native'), mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
+            with mock.patch.object(m, 'restore_snapshot'), mock.patch.object(m.unified, 'validate_native'), mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
                 with self.assertRaisesRegex(ValueError, 'compact exit: -15'):
                     m.capture(root/'manifest.json', root/'plan.json')
             directory = root/'capture'/'failed'
@@ -191,6 +218,19 @@ class MaintenanceTests(unittest.TestCase):
             self.change(path, lambda r: r['rss_sampling'].update(complete=False))
             with self.assertRaises(ValueError):
                 m.analyze(root/'bundle.json')
+
+    def test_equal_incomplete_runs_are_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root)
+            for i, label in enumerate(('A1', 'B1', 'A2', 'B2', 'A3', 'B3')):
+                path = paths[label]; directory = path.parent
+                incomplete = report(); incomplete['remaining_debt']['value_log_gc_bytes'] = i+1
+                incomplete.update(fully_compacted=False, policy_fully_compacted=False, byte_minimized=False)
+                m.save(directory/'stdout.json', incomplete)
+                self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(directory/'stdout.json')}))
+            result = m.analyze(root/'bundle.json')
+            self.assertTrue(result['equal_completion']); self.assertFalse(result['complete_runs'])
+            self.assertFalse(result['material']); self.assertTrue(result['all_favourable'])
 
 
 if __name__ == '__main__':

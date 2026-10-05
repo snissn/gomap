@@ -13,6 +13,16 @@ their truth. Freeze exact product and landed harness/observer identities before
 collection. A baseline may contain the identical landed instrumentation overlay;
 record that composition in the source/build receipts.
 
+The manifest also names `snapshot_restore`, a fixed source entry for
+`cmd/quicksilver_snapshot_restore`. Build it from the frozen baseline plus landed
+harness and use the same binary for all cells. A raw copy is byte-identical but
+has different physical file identities. Before timing, the collector invokes
+the existing explicit snapshot restore API, side stores first, then main. It
+checks unchanged original bytes, unchanged payload files and unchanged file
+counts/extents, retaining the rebound index fingerprint and restore receipts.
+Ordinary recovery retains its identity checks. Restore, copying and hashing are
+outside maintenance time and RSS; the final full logical oracle remains required.
+
 ```sh
 python3 scripts/quicksilver_maintenance.py capture /abs/manifest.json /abs/plan.json
 python3 scripts/quicksilver_maintenance.py calibrate --metric elapsed_seconds \
@@ -27,7 +37,9 @@ characterizations first, write the immutable noise packet, then execute
 `pairs: [{"A":"/abs/A1/run.json","B":"/abs/B1/run.json"}, ...]`.
 The analyzer recomputes `E=(max A-min A)/median A` and reports every pair's
 fractional reduction. Material improvement requires all three favorable signs,
-median reduction greater than `2E`, and equal truthful completion flags.
+median reduction greater than `2E`, and all six policy-completed runs with equal
+truthful completion flags (exhaustive also requires byte minimization). Equally
+incomplete runs remain diagnostics even when faster.
 `peak_rss_bytes` is also supported with its own pre-comparison noise packet.
 Negative or noisy evidence leaves the parent gate open. Changed fixture contents,
 mode, fixed batch size, environment, source, harness, raw artifacts, RSS identity,
