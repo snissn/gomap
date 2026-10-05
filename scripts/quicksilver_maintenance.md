@@ -141,3 +141,15 @@ Use the landed unified capture's `measure_dir` mode on a released successful cop
 for the full bytes/misses/live-key oracle and final service-read guard. Do not
 normally reopen failed originals. This single-metric analysis cannot replace
 correctness, online eligibility/progress, read regression, or source-equality gates.
+
+Online churn receipts from the unified collector include actual per-round
+`pause_started_unix_nano` and `pause_finished_unix_nano` alongside monotonic
+`pause_seconds`. Capture validates positive integer boundaries, snapshot and
+round ordering, and wall/monotonic agreement within 1 millisecond. Quiet RSS
+analysis must use the frozen 200 ms exclusion at both boundaries and actual
+interior samples; absent interior observations cannot establish residency.
+The fixed 1 ms sanity tolerance is 0.5% of the 200 ms boundary trim; wall and
+monotonic clocks have no exact cross-platform equality contract. It is frozen
+before calibration and does not excuse unordered stamps or larger clock drift.
+Whole-command timing/RSS still includes all work. These markers do not force
+maintenance or alter the workload or profile artifacts.

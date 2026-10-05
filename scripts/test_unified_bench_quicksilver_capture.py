@@ -70,15 +70,25 @@ class CaptureRehearsal(unittest.TestCase):
         round = dict(round=1, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                      mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                      wall_seconds=10., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                     pause_seconds=6., before=snapshot, after=snapshot)
+                     pause_seconds=6., pause_started_unix_nano=1000000001, pause_finished_unix_nano=7000000001,
+                     before=snapshot, after=dict(snapshot, captured_at_unix_nano=8000000001))
         packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
-                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2)],
+                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2, pause_started_unix_nano=11000000001, pause_finished_unix_nano=17000000001,
+                                                              before=dict(snapshot, captured_at_unix_nano=10000000001),
+                                                              after=dict(snapshot, captured_at_unix_nano=18000000001))],
                                           final_files_after_close={'maindb/index.db': 4096})
         metadata = dict(env={'TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE': '1'})
         with tempfile.TemporaryDirectory() as temp:
             capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
             for section, field, value in ((round, 'verified_keys', 1), (round, 'round', 2),
                                            (round, 'pause_seconds', 5.), (round, 'mutation_commit_batches', 1),
+                                           (round, 'pause_started_unix_nano', True), (round, 'pause_started_unix_nano', 0),
+                                           (round, 'pause_finished_unix_nano', float('inf')),
+                                           (round, 'pause_finished_unix_nano', 2**63),
+                                           (round, 'pause_finished_unix_nano', 999999999),
+                                           (round, 'pause_finished_unix_nano', 7002000001),
+                                           (round, 'pause_started_unix_nano', -1),
+                                           (snapshot, 'captured_at_unix_nano', 1000000002),
                                            (snapshot, 'process_rss_supported', False),
                                            (packet['maintenance_churn'], 'leaf_generation_pack_maintenance_env', '')):
                 original = section[field]
@@ -86,6 +96,25 @@ class CaptureRehearsal(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
                 section[field] = original
+            end = round['pause_finished_unix_nano']
+            round['pause_finished_unix_nano'] = end+500000
+            capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['pause_finished_unix_nano'] = end
+            after = round['after']['captured_at_unix_nano']
+            round['after']['captured_at_unix_nano'] = round['pause_finished_unix_nano']-1
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['after']['captured_at_unix_nano'] = after
+            second = packet['maintenance_churn']['rounds'][1]
+            second_start = second['pause_started_unix_nano']
+            second['pause_started_unix_nano'] = round['pause_started_unix_nano']
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            second['pause_started_unix_nano'] = second_start
+            marker = round.pop('pause_started_unix_nano')
+            with self.assertRaises(KeyError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            round['pause_started_unix_nano'] = marker
             original = packet['registered_cli_flags']['max-wall']
             packet['registered_cli_flags']['max-wall'] = '30m0s'
             with self.assertRaises(AssertionError):
@@ -175,7 +204,10 @@ class CaptureRehearsal(unittest.TestCase):
         rounds = [dict(round=i, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                        mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                        wall_seconds=64., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                       pause_seconds=60., before=snapshot, after=snapshot) for i in range(1, 33)]
+                       pause_seconds=60., pause_started_unix_nano=(i-1)*70000000000+1000000001,
+                       pause_finished_unix_nano=(i-1)*70000000000+61000000001,
+                       before=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+1),
+                       after=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+62000000001)) for i in range(1, 33)]
         packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
                                           leaf_generation_pack_maintenance_env='', rounds=rounds,
                                           final_files_after_close={'maindb/index.db': 4096})

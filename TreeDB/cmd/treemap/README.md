@@ -29,7 +29,12 @@ initial applied report, final dry-run audit, refresh basis/result/WAL frontier/r
 summaries, actual operation statuses and GC counters. Errors retain partial work
 and cleanup status. `completed` describes successful execution and cleanup;
 final policy completion is a separate audit result. Planned audit phases are not
-executed phases. Retain initial debt and verify full values, misses, live-key
+executed phases. Exhaustive mode retains the existing leaf-pack promotion
+capability requirement. Platforms without persistent relative-namespace and
+cross-parent move authority return the typed namespace-unsupported error with a
+failed partial receipt and cleanup status; earlier applied phases remain visible.
+That receipt cannot qualify completion. Full mode retains its existing platform
+contract. Retain initial debt and verify full values, misses, live-key
 census and reopen correctness on a released independent copy.
 
 [The maintenance capture guide](../../../scripts/quicksilver_maintenance.md)

@@ -246,6 +246,7 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert churn['label'] == 'bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound'
         assert churn['leaf_generation_pack_maintenance_env'] == metadata['env'].get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '')
         assert len(churn['rounds']) == rounds
+        previous_pause_end = 0
         for index, round in enumerate(churn['rounds'], 1):
             assert (round['round'], round['restored_keys'], round['mutation_targets']) == (index, updates-(updates+1)//4 if c['churn_shape'] == 'sparse' else keys, updates)
             assert round['restore_commit_batches'] == math.ceil((updates if c['churn_shape'] == 'sparse' else keys)/1000)
@@ -255,6 +256,12 @@ def validate(reports, cell, directory, fixtures, metadata):
             assert all(math.isfinite(v) and v >= 0 for v in times)
             assert math.isfinite(round['wall_seconds']) and round['wall_seconds'] >= sum(times)
             assert round['pause_seconds'] >= pause/1e9
+            pause_start, pause_end = round['pause_started_unix_nano'], round['pause_finished_unix_nano']
+            assert type(pause_start) is int and type(pause_end) is int and 0 < pause_start <= pause_end <= 9223372036854775807, 'invalid pause boundaries'
+            assert previous_pause_end <= pause_start, 'overlapping or unordered round pauses'
+            previous_pause_end = pause_end
+            assert round['before']['captured_at_unix_nano'] <= pause_start <= pause_end <= round['after']['captured_at_unix_nano'], 'pause outside round snapshots'
+            assert abs((pause_end-pause_start)/1e9-round['pause_seconds']) <= 1e-3, 'pause wall/monotonic duration mismatch'
             for snapshot in (round['before'], round['after']):
                 assert type(snapshot['captured_at_unix_nano']) is int and snapshot['captured_at_unix_nano'] > 0
                 assert type(snapshot['process_rss_supported']) is bool

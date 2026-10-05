@@ -14,6 +14,8 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func compactEndpointFixture(t *testing.T, commandWAL bool) string {
@@ -95,27 +97,57 @@ func TestCompactCommandWALSettlePreservesDataAndReceipt(t *testing.T) {
 			if err := cleanup(); err != nil {
 				t.Fatal(err)
 			}
-			out := captureStdout(t, func() {
-				runCompact(dir, []string{"-rw", "-json", "-mode", mode, "-sync-each-phase", "-command-wal-settle"})
-			})
 			var receipt compactEndpointReceipt
-			if err := json.Unmarshal([]byte(out), &receipt); err != nil {
-				t.Fatal(err)
-			}
-			if receipt.Endpoint != compactCommandWALSettleEndpoint || receipt.Status != "completed" || len(receipt.Reports) != 2 || receipt.Error != "" {
-				t.Fatalf("endpoint=%q status=%q reports=%d error=%q", receipt.Endpoint, receipt.Status, len(receipt.Reports), receipt.Error)
-			}
-			pub := receipt.Refresh
-			if pub.Status != "succeeded" || pub.CheckpointStatus != "succeeded" || pub.Basis == nil || pub.Result == nil ||
-				(pub.Result.CommitSeq != pub.Basis.CommitSeq && pub.Result.CommitSeq != pub.Basis.CommitSeq+1) ||
-				pub.Result.RootPageID != pub.Basis.RootPageID || pub.Result.SystemRootPageID != pub.Basis.SystemRootPageID ||
-				pub.Result.AppliedCommandLSN != pub.Basis.AppliedCommandLSN || pub.Result.MaxEntryRevision != pub.Basis.MaxEntryRevision ||
-				pub.NextLSNBefore == 0 || pub.NextLSNAfter != pub.NextLSNBefore {
-				t.Fatal("checkpoint refresh changed root/RID/WAL authority")
-			}
-			if receipt.InitialStatus != "succeeded" || receipt.AuditStatus != "succeeded" || receipt.CleanupStatus != "succeeded" || receipt.LeafGC.Status != "succeeded" ||
-				pub.SummaryBeforeStatus != "succeeded" || pub.SummaryAfterStatus != "succeeded" || receipt.Reports[0].DryRun || !receipt.Reports[1].DryRun {
-				t.Fatal("missing executed operation or dry-run audit")
+			packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
+			if mode == "exhaustive" && !packSupported {
+				// The CLI exits after emitting this same partial receipt. Call its
+				// endpoint seam to inspect the typed error without exiting the test.
+				opts := treedb.Options{Dir: dir}
+				applyPersistedFormatConfig(dir, &opts)
+				receipt, err = runCompactCommandWALSettle(context.Background(), opts, treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive, SyncEachPhase: true})
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("unsupported pack promotion error: %v", err)
+				}
+				if receipt.Endpoint != compactCommandWALSettleEndpoint || receipt.Status != "failed" || receipt.InitialStatus != "failed" || receipt.Error == "" || receipt.CleanupStatus != "succeeded" || len(receipt.Reports) != 1 {
+					t.Fatalf("missing partial failure/cleanup receipt: %+v", receipt)
+				}
+				if receipt.Refresh.Status != "not_started" || receipt.Refresh.CheckpointStatus != "not_started" || receipt.Refresh.SummaryBeforeStatus != "not_started" || receipt.Refresh.SummaryAfterStatus != "not_started" || receipt.LeafGC.Status != "not_started" || receipt.AuditStatus != "not_started" || receipt.Refresh.Basis != nil || receipt.Refresh.Result != nil {
+					t.Fatal("unsupported initial compact promoted later operations")
+				}
+				initial := receipt.Reports[0]
+				if initial.DryRun || initial.FullyCompacted || initial.PolicyFullyCompacted || initial.ByteMinimized || len(initial.Phases) == 0 || initial.Phases[len(initial.Phases)-1].Name != "leaf-generation-pack-1" {
+					t.Fatal("unsupported pack promoted compact completion")
+				}
+				seenGC, seenCheckpoint := false, false
+				for _, phase := range initial.Phases {
+					seenGC = seenGC || phase.Name == "value-log-gc"
+					seenCheckpoint = seenCheckpoint || phase.Name == "checkpoint-after-value-log-gc"
+				}
+				if !seenGC || !seenCheckpoint {
+					t.Fatal("fixture did not reach genuine applied phases before unsupported pack")
+				}
+			} else {
+				out := captureStdout(t, func() {
+					runCompact(dir, []string{"-rw", "-json", "-mode", mode, "-sync-each-phase", "-command-wal-settle"})
+				})
+				if err := json.Unmarshal([]byte(out), &receipt); err != nil {
+					t.Fatal(err)
+				}
+				if receipt.Endpoint != compactCommandWALSettleEndpoint || receipt.Status != "completed" || len(receipt.Reports) != 2 || receipt.Error != "" {
+					t.Fatalf("endpoint=%q status=%q reports=%d error=%q", receipt.Endpoint, receipt.Status, len(receipt.Reports), receipt.Error)
+				}
+				pub := receipt.Refresh
+				if pub.Status != "succeeded" || pub.CheckpointStatus != "succeeded" || pub.Basis == nil || pub.Result == nil ||
+					(pub.Result.CommitSeq != pub.Basis.CommitSeq && pub.Result.CommitSeq != pub.Basis.CommitSeq+1) ||
+					pub.Result.RootPageID != pub.Basis.RootPageID || pub.Result.SystemRootPageID != pub.Basis.SystemRootPageID ||
+					pub.Result.AppliedCommandLSN != pub.Basis.AppliedCommandLSN || pub.Result.MaxEntryRevision != pub.Basis.MaxEntryRevision ||
+					pub.NextLSNBefore == 0 || pub.NextLSNAfter != pub.NextLSNBefore {
+					t.Fatal("checkpoint refresh changed root/RID/WAL authority")
+				}
+				if receipt.InitialStatus != "succeeded" || receipt.AuditStatus != "succeeded" || receipt.CleanupStatus != "succeeded" || receipt.LeafGC.Status != "succeeded" ||
+					pub.SummaryBeforeStatus != "succeeded" || pub.SummaryAfterStatus != "succeeded" || receipt.Reports[0].DryRun || !receipt.Reports[1].DryRun {
+					t.Fatal("missing executed operation or dry-run audit")
+				}
 			}
 			backend, cleanup, err = treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: true})
 			if err != nil {
@@ -164,8 +196,60 @@ func TestCompactCommandWALSettlePreservesDataAndReceipt(t *testing.T) {
 			if err != nil || !bytes.Equal(document, []byte(`{"name":"keep"}`)) {
 				t.Fatalf("collection authority changed: %v", err)
 			}
+			compactEndpointVerifyRecoverableRoots(t, backend)
 			// Convergence on the retained physical leaf fixture is a separate native gate.
 		})
+	}
+}
+
+// Inspect actual captured roots after reopen, including selectable older slots.
+// Older views may contain fewer keys; every surviving pointer must decode the
+// original fixture bytes. The current-view census above remains exact.
+func compactEndpointVerifyRecoverableRoots(t *testing.T, backend *treedbdb.DB) {
+	t.Helper()
+	roots, err := backend.CaptureRecoverableRootSetForInspection(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer roots.Release()
+	if len(roots.Roots()) == 0 {
+		t.Fatal("missing recoverable roots")
+	}
+	for _, root := range roots.Roots() {
+		err := func() (err error) {
+			snapshot := roots.AcquireSnapshotForRoot(root)
+			if snapshot == nil {
+				return errors.New("cannot acquire captured root")
+			}
+			defer func() { err = errors.Join(err, snapshot.Close()) }()
+			if found, err := snapshot.Has([]byte("missing")); err != nil || found {
+				return fmt.Errorf("recoverable root miss: found=%t err=%v", found, err)
+			}
+			it, err := snapshot.Iterator(nil, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { err = errors.Join(err, it.Close()) }()
+			for ; it.Valid(); it.Next() {
+				known := false
+				for i := 0; i < 32; i++ {
+					if bytes.Equal(it.Key(), []byte(fmt.Sprintf("user/%03d", i))) && bytes.Equal(it.Value(), bytes.Repeat([]byte{byte(i + 1)}, 256)) {
+						known = true
+						break
+					}
+				}
+				if !known {
+					return fmt.Errorf("recoverable root fixture mismatch: key=%q", it.Key())
+				}
+			}
+			return it.Error()
+		}()
+		if err != nil {
+			t.Fatalf("recoverable root %d: %v", root.CommitSeq, err)
+		}
+	}
+	if err := roots.Revalidate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
