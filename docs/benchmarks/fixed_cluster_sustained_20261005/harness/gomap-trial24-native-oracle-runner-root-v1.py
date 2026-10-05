@@ -7,7 +7,7 @@ import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, 
 if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="594d2009f491aaf5657efbbc5d11b845ff6876bdeadc890cbc449d91828e5c5f"
+HELPER_SHA="fdc7c6ea3cff6401a38efedb142c407220f3421ae1ddb11f7ae6361db4080e52"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
 COLLECTOR_SHA="32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')

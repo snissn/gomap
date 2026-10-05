@@ -204,7 +204,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "594d2009f491aaf5657efbbc5d11b845ff6876bdeadc890cbc449d91828e5c5f"
+        "sha256": "fdc7c6ea3cff6401a38efedb142c407220f3421ae1ddb11f7ae6361db4080e52"
       },
       "changes": [
         [
@@ -232,7 +232,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "679b05dc368425269c20f840616790d37bedb8c566b27fedf31c0c138d36727e"
+        "sha256": "521d7f731f6ab0624d5a8a35f81c12e94e3281de5d2782b15a70bb6dd03f3729"
       },
       "changes": [
         [

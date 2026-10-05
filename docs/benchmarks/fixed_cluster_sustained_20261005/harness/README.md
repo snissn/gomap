@@ -127,3 +127,5 @@ the source/output separation on the remote filesystem before mkdir. Pure tests
 execute only the actual guards and source/provenance joins on owned fixtures.
 Single-writer ownership remains required; no adversarial symlink-race guarantee
 or actual remote filesystem acceptance is claimed.
+
+The prefix helper protects the staged helper, collector and resolver files individually, along with product sources, frozen inputs and pinned proof files. This permits the native runner's intended sibling `oracle-preparation` directory while rejecting output overlap with any immutable staged file. Pure checks derive the helper arguments from the assembled remote caller and execute the actual guard and first mkdir in an owned synthetic layout; they do not execute full preparation or qualify a remote filesystem.

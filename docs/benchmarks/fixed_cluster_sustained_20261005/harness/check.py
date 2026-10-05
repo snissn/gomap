@@ -408,7 +408,7 @@ for site,node in sites.items():
   elif kind=='dotdot':target=fixtures/'trial24-outside'/'..'/protected.name/('trial24-'+site)
   elif kind=='symlink_parent':target=alias/('trial24-'+site)
   elif kind=='input_pollution':target=inputs/('trial24-'+site)
-  elif kind=='packet_descendant':target=out/('trial24-'+site)
+  elif kind=='packet_descendant':target=(out/'owned-writer.py' if site=='oracle_helper' else out)/('trial24-'+site)
   else:target=fixtures/(protected.name+'-sibling-'+site if kind=='positive_prefix_sibling' else 'trial24-sibling-'+site)
   # Native remote protects SOURCE and retained runner/template sources. Frozen
   # inputs are only created under its new root, so no external input root exists.
@@ -416,7 +416,7 @@ for site,node in sites.items():
   ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
   # Prefix accepts its intentional source symlink as a read root.
   if site=='oracle_helper':
-   ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path'])
+   ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path']);ns['COLLECTOR']=portable_sources['collector']
   if site=='growth_constructor':ns['a']=ns['args']
   if site=='post_sealer':ns['ARCHIVE']=fixtures/('trial24-archive-'+site+'.tar.gz')
   before=snapshot();denied=False
@@ -465,5 +465,51 @@ checks.append('actual_finalize_manifest_command_frozen_input_pollution_exit_nonz
 dangling=fixtures/'trial24-dangling-output';dangling.symlink_to(fixtures/'trial24-absent-target')
 bad('actual_shared_guard_dangling_output_leaf',lambda:isolate_paths([dangling],[protected]))
 (fixtures/'provenance-isolation-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_JOIN_AND_WRITER_GUARD_CHECKS_ONLY','nonhistorical_server_sha256':server,'qualification_sha256_values':['b'*64,'c'*64],'writers':writer_receipts,'runtime_started':False,'network_calls':0,'proof_limits':['No full bootstrap, native Go, SSH, runtime or remote filesystem qualification.','Guards execute on owned local fixtures; no concurrent symlink race guarantee.']},indent=2)+'\n')
+
+
+# Mirror the actual remote caller's staged sibling layout. Execute its actual
+# helper.prepare argument expressions and the helper guard plus first mkdir;
+# neither full preparation nor remote/runtime operations run.
+layout=fixtures/'trial24-remote-layout';layout.mkdir()
+layout_product=fixtures/'trial24-remote-layout-product';layout_product.mkdir()
+(layout_product/'sentinel').write_bytes(b'accepted synthetic product bytes\n')
+(layout/'source').symlink_to(layout_product,target_is_directory=True)
+layout_inputs=layout/'inputs';layout_inputs.mkdir()
+(layout_inputs/'sentinel').write_bytes(b'accepted synthetic input bytes\n')
+staged={}
+for role in ('oracle_helper','collector'):
+ target=layout/Path(portable_sources[role]).name
+ target.write_bytes(Path(portable_sources[role]).read_bytes());staged[role]=target
+staged['resolver']=layout/'source_paths.py'
+staged['resolver'].write_bytes((R/'source_paths.py').read_bytes())
+for name in ('oracle-pins.json','git-source-inventory.json','initial-oracle.json'):
+ (layout/name).write_bytes(b'{"synthetic_only":true}\n')
+call=next(n for n in ast.walk(remote_ast) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and isinstance(n.func.value,ast.Name) and n.func.value.id=='helper' and n.func.attr=='prepare')
+assert len(call.args)==2 and not call.keywords
+actual_args=[eval(compile(ast.Expression(body=n),'actual-remote-helper-argument','eval'),{'ROOT':layout}) for n in call.args]
+assert actual_args==[layout/'oracle-pins.json',layout/'oracle-preparation']
+layout_pin,layout_output=actual_args
+layout_alias=fixtures/'trial24-remote-layout-product-alias';layout_alias.symlink_to(layout_product,target_is_directory=True)
+cases=[('actual_remote_sibling',layout_output),('source_equal',layout_product),('source_descendant',layout/'source'/'oracle-preparation'),('source_reverse',layout_product.parent),('input_equal',layout_inputs),('input_descendant',layout_inputs/'oracle-preparation'),('dotdot',layout/'other'/'..'/'inputs'/'oracle-preparation'),('symlink_parent',layout_alias/'oracle-preparation')]
+for role,path in staged.items():
+ cases.extend([(role+'_equal',path),(role+'_descendant',path/'oracle-preparation')])
+cases.append(('staged_reverse',layout))
+def layout_snapshot():
+ return {str(p):p.read_bytes() for root in (layout,layout_product) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+layout_receipts=[]
+for label,target in cases:
+ before=layout_snapshot();existed=target.exists();denied=False
+ ns={'isolate_paths':isolate_paths,'pathlib':__import__('pathlib'),'__file__':str(staged['oracle_helper']),'COLLECTOR':str(staged['collector']),'root':layout/'source','inputs':layout_inputs,'out':target,'pin_path':layout_pin,'a':{'source_inventory':str(layout/'git-source-inventory.json'),'initial_oracle':str(layout/'initial-oracle.json')}}
+ try:
+  exec(compile(ast.Module(body=[sites['oracle_helper'],writes['oracle_helper']],type_ignores=[]),'actual-remote-layout-helper-guard-and-mkdir','exec'),ns)
+ except ValueError:denied=True
+ positive=label=='actual_remote_sibling'
+ assert denied!=positive,(label,'actual remote layout guard')
+ assert layout_snapshot()==before,(label,'staged/product/input bytes changed')
+ assert (layout/'source').is_symlink() and (layout/'source').resolve()==layout_product
+ assert target.exists()==(existed or positive),(label,'unexpected output mutation')
+ layout_receipts.append({'case':label,'output':str(target),'rejected_before_write':denied,'protected_bytes_unchanged':True})
+ checks.append('actual_remote_layout_'+label+'_no_protected_mutation')
+(fixtures/'native-remote-layout-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_REMOTE_LAYOUT_PREWRITE_CHECKS_ONLY','actual_helper_arguments':[str(p) for p in actual_args],'staged_files':{role:{'path':str(path),'sha256':sha(path.read_bytes())} for role,path in staged.items()},'cases':layout_receipts,'intentional_source_alias_preserved':True,'runtime_started':False,'network_calls':0,'Go_started':False,'limitations':['Actual caller arguments, helper guard and first mkdir only; full population preparation and remote activation are unexecuted.']},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

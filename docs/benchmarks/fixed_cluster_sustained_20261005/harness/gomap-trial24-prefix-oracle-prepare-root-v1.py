@@ -89,7 +89,7 @@ def prepare(pin_path,out):
  root=pathlib.Path(a['source_root']);inputs=pathlib.Path(a['input_root']);out=pathlib.Path(out)
  assert all(p.is_absolute() for p in (root,inputs,out)) and root.is_dir() and inputs.is_dir()
  assert not out.exists() and not out.is_symlink()
- isolate_paths([out],[root.resolve(),inputs,pathlib.Path(__file__).resolve().parent,pin_path,a['source_inventory'],a['initial_oracle']])
+ isolate_paths([out],[root.resolve(),inputs,pathlib.Path(__file__).resolve(),pathlib.Path(COLLECTOR).resolve(),pathlib.Path(__file__).with_name('source_paths.py').resolve(),pin_path,a['source_inventory'],a['initial_oracle']])
  inventory_raw=read(a['source_inventory']);assert sha(inventory_raw)==a['source_inventory_sha256']
  source=c.strict_json(inventory_raw);assert set(source)=={'head','tree','rows','overlays'}
  assert source['head']==a['source_head'] and source['tree']==a['source_tree'] and source['overlays']=={}
