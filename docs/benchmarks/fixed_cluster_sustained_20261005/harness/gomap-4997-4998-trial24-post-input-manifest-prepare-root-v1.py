@@ -1,6 +1,6 @@
 from source_paths import source_path
 """Inert local-only derivation: seal fresh inputs, native Go oracle, finalize inactive manifest."""
-import argparse, ast, hashlib, importlib.util, json, pathlib
+import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
 TEMPLATE_SHA256 = 'e486d6ef8059e75958ae85be621784904c8a0bd949693f90452cf13e55a3bdcc'
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
@@ -34,7 +34,7 @@ def main():
     text = raw.decode().replace('rf4trial14mixedc1', 'rf4trial24mixedchangingc1')
     constants = pins['constants']
     required = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
-    assert set(constants) == required
+    assert set(constants) == required, 'exact required sealer constants'
     assert constants['OUT'] == c.LOCAL_INPUT_ROOT and constants['HEAD'] == pins['source_head'] and constants['TREE'] == pins['source_tree']
     assert type(pins['pre_input_count']) is int and pins['pre_input_count'] > 0
     assert type(pins['source_pr']) is int and pins['source_pr']>0 and type(pins['predecessor_pr']) is int and pins['predecessor_pr']>0
@@ -62,6 +62,7 @@ def main():
     assert 'c.prepare_local(manifest)' in text
     text = text.replace('c.prepare_local(manifest)', "assert c.population_identity(c.build_initial_population(files, boot, baseline), 128)['SHA256'] == baseline['PopulationSHA256']")
     text = text.replace('PREPARED_LOCAL_INPUTS_INACTIVE_MANIFEST','SEALED_INPUTS_PENDING_NATIVE_PREFIX_ORACLE_AND_FINALIZATION')
+    assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',text), 'unreplaced historical artifact path'
     assert 'rf4trial14mixedc1' not in text
     ast.parse(text, str(out)); out.write_text(text)
     print(json.dumps(dict(state='UNEXECUTED_SEALER_REQUIRES_INDEPENDENT_SOURCE_REVIEW', source=str(out), sha256=sha(out.read_bytes()), template_sha256=TEMPLATE_SHA256, collector_sha256=COLLECTOR_SHA256)))

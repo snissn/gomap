@@ -26,7 +26,7 @@ Run the bounded pure checks with a fresh or already owned absolute fixture path:
 
 ```sh
 python3 -B /absolute/path/harness/check.py \
-  --fixtures-root /tmp/owned-sustained-source-fixtures
+  --fixtures-root /Volumes/FlashDrive/owned-sustained-source-fixtures
 ```
 
 Checks retain source-only instantiation and portable-import stdout/stderr/actual
@@ -36,6 +36,23 @@ All 51 earlier controls remain; negative checks cover each packaged host's
 identity, source, ELF hash/positive bytes, packaging state, unchanged parent and
 unmounted stores, and all three native frozen-inventory count joins. No network,
 Go build, native oracle execution, Docker, campaign, or workload replay occurs.
+
+Growth construction derives the required reviewed path keys from its pinned
+templates after removing deferred admission/review environment assignments.
+The exact external mapping keys are:
+
+- `/home/mikers/gomap-4994-rf4trial14mixedc1-growth-driver-hash-root-v1`
+- `/tmp/gomap-4994-trial14mixedc1-bootstrap-independent-artifact-review-root-v1.json`
+
+Root supplies fresh absolute destinations backed by reviewed actual evidence.
+Role source destinations, artifact-volume descendants, and node roots already
+have deterministic replacements and must not be duplicated in that map.
+Missing or extra keys, unchanged or historical destinations, and any historical
+artifact path left in an assembled source are rejected before output creation.
+The post-input sealer similarly rejects historical paths in supplied constants,
+including nested final-inspect wrapper paths. Pure checks exercise both actual
+source-only generator commands and retain their stdout/stderr/exit codes; their
+synthetic path/hash fixtures establish no actual evidence acceptance.
 
 Root fills `declaration-template.json` with the exact predeclared workload,
 actual final source head/tree/root, strict complete inventory bytes, actual ELF

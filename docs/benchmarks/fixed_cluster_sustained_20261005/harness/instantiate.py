@@ -5,7 +5,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='2c0e2a504712cc7c106505fe0357a9f5ec177911a64fd55e794e9e2116cfcdf9'
+PACKET_SHA='ba48752336541c8cdb67236cc8bf24fd5ac9a22f47f7cdbfde06771255998a50'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()

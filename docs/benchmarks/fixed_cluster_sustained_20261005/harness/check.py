@@ -214,4 +214,80 @@ assert proc.returncode==0,proc.stderr
 checks.append('actual_all15_generated_imports_exit0_no_historical_source_reads_or_external_processes')
 
 
+# Exercise both actual source generators from the fully instantiated portable
+# packet before any generated campaign source may run.
+portable_sources={role:row['path'] for role,row in receipt['roles'].items()}
+gp=load(R/m['roles']['growth_constructor']['output']['path'],'trial24_growth_path_checks')
+templates={}
+for role,path in gp.TEMPLATES.items():
+ raw=Path(gp.source_path(path)).read_bytes();assert sha(raw)==gp.TEMPLATE_SHA256[role]
+ text=raw.decode()
+ if role=='admission':
+  for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
+   text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
+ templates[role]=text
+required_paths=gp.required_path_bindings(templates)
+assert required_paths=={'/home/mikers/gomap-4994-rf4trial14mixedc1-growth-driver-hash-root-v1','/tmp/gomap-4994-trial14mixedc1-bootstrap-independent-artifact-review-root-v1.json'}
+hash_literals=set()
+for text in templates.values():hash_literals.update(re.findall(r'(?<![0-9a-f])(?:sha256:)?[0-9a-f]{64}(?![0-9a-f])|(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])',text))
+hash_literals-={gp.TEMPLATE_SHA256[k] for k in ('query','lifecycle','exact-validate')}
+literal_bindings={v:('sha256:' if v.startswith('sha256:') else '')+sha(('synthetic-only-'+v).encode())[:40 if len(v)==40 else 64] for v in hash_literals}
+literal_bindings['b625421c06ae6f9398c384686f3c50ce2389ac21']=head
+literal_bindings['223df16137b4d11565a4a5ed033973c40ffa7556']=tree
+growth_pins={'source_pr':5032,'predecessor_pr':4995,'campaign':gp.CAMPAIGN,'remote_root':'/home/mikers/gomap-4250-twohost-'+gp.CAMPAIGN,'source_head':head,'source_tree':tree,'literal_bindings':literal_bindings,'qualification_prefix':1,'artifact_root':str(fixtures/'trial24-artifacts'),'reviewed_path_bindings':{path:str(fixtures/('trial24-reviewed-'+str(i))) for i,path in enumerate(sorted(required_paths))}}
+def generated(role,pins,label):
+ output=fixtures/('trial24-'+label)
+ pin=fixture('pins-'+label,pins)
+ argv=[sys.executable,'-B',portable_sources[role],'--pins',pin['path'],'--'+('output-root' if role=='growth_constructor' else 'output'),str(output)]
+ proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+ (fixtures/(label+'.stdout')).write_text(proc.stdout);(fixtures/(label+'.stderr')).write_text(proc.stderr);(fixtures/(label+'.exit')).write_text(str(proc.returncode)+'\n')
+ return proc,output
+def rejected_generator(role,pins,label):
+ proc,output=generated(role,pins,label)
+ assert proc.returncode!=0 and not output.exists(),(label,proc.stderr)
+ expected='exact required historical path bindings' if label.startswith(('growth_missing','growth_extra')) else 'fresh absolute reviewed path' if label.endswith('_identity') else 'exact required sealer constants' if label.startswith(('post_missing','post_extra')) else 'unreplaced historical artifact path'
+ assert 'AssertionError: '+expected in proc.stderr,(label,proc.stderr)
+ checks.append(label)
+for i,path in enumerate(sorted(required_paths)):
+ pins=copy.deepcopy(growth_pins);pins['reviewed_path_bindings'].pop(path)
+ rejected_generator('growth_constructor',pins,'growth_missing_required_path_'+str(i))
+pins=copy.deepcopy(growth_pins);pins['reviewed_path_bindings']['/tmp/unrequested-artifact.json']=str(fixtures/'trial24-extra')
+rejected_generator('growth_constructor',pins,'growth_extra_path_mapping')
+for label,value in [('identity',sorted(required_paths)[0]),('campaign_only','/home/mikers/gomap-4994-rf4trial24mixedchangingc1-growth-driver-hash-root-v1')]:
+ pins=copy.deepcopy(growth_pins);pins['reviewed_path_bindings'][sorted(required_paths)[0]]=value
+ rejected_generator('growth_constructor',pins,'growth_unreplaced_historical_'+label)
+pins=copy.deepcopy(growth_pins);pins['artifact_root']='/Volumes/FlashDrive/gomap-4994-rf4trial24mixedchangingc1'
+rejected_generator('growth_constructor',pins,'growth_unreplaced_artifact_root')
+bad('growth_residual_historical_literal_before_output',lambda:gp.no_historical_paths("path='/tmp/gomap-4994-other/artifact.json'"))
+proc,growth_out=generated('growth_constructor',growth_pins,'growth-complete')
+assert proc.returncode==0,proc.stderr
+receipt=json.loads((growth_out/'preparation.json').read_bytes());assert len(receipt['sources'])==5
+for path,digest in receipt['sources'].items():
+ raw=Path(path).read_bytes();assert sha(raw)==digest;program=ast.parse(raw);gp.no_historical_paths(raw.decode())
+ for node in ast.walk(program):
+  if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SAMPLER' for t in node.targets):ast.parse(ast.literal_eval(node.value))
+checks.append('actual_complete_growth_instantiation_all5_hashes_AST_remote_sampler_no_historical_paths')
+
+sp=load(R/m['roles']['post_constructor']['output']['path'],'trial24_post_path_checks')
+template=ast.parse(Path(sp.TEMPLATE).read_bytes())
+assignments={node.targets[0].id:node.value for node in template.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name)}
+required_constants={'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
+pathkeys={'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ARTIFACT_REVIEW_PATH','BOOT_REVIEW','LANDED','BUILD','SOURCE_REVIEW','SOURCE_INV'}
+constants={key:str(fixtures/('trial24-sealed-'+key)) if key in pathkeys else sha(('synthetic-only-'+key).encode()) for key in required_constants}
+constants.update(OUT=c.LOCAL_INPUT_ROOT,HEAD=head,TREE=tree,CIDS={n:sha(n.encode()) for n in ('node-a','node-b','node-c','node-d')},FINAL_INSPECT_WRAPPERS={n:{'path':str(fixtures/('trial24-inspect-'+n+'.json')),'sha256':sha(n.encode())} for n in ('node-a','node-b','node-c','node-d')})
+post_pins={'constants':constants,'source_head':head,'source_tree':tree,'pre_input_count':1,'source_pr':5032,'predecessor_pr':4995}
+for key in ('SOURCE_INV','ARTIFACT_REVIEW_PATH','FINAL_INSPECT_WRAPPERS'):
+ pins=copy.deepcopy(post_pins);pins['constants'].pop(key)
+ rejected_generator('post_constructor',pins,'post_missing_path_class_'+key)
+pins=copy.deepcopy(post_pins);pins['constants']['UNREQUESTED']=str(fixtures/'trial24-extra')
+rejected_generator('post_constructor',pins,'post_extra_constant_mapping')
+for key in ('SOURCE_INV','ARTIFACT_REVIEW_PATH','FINAL_INSPECT_WRAPPERS'):
+ pins=copy.deepcopy(post_pins);value=ast.literal_eval(assignments[key].args[0]) if isinstance(assignments[key],ast.Call) else ast.literal_eval(assignments[key])
+ pins['constants'][key]=value
+ rejected_generator('post_constructor',pins,'post_unreplaced_historical_'+key)
+proc,post_out=generated('post_constructor',post_pins,'post-complete')
+assert proc.returncode==0,proc.stderr
+post_source=post_out.read_text();ast.parse(post_source);assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',post_source)
+checks.append('actual_complete_post_instantiation_AST_nested_bindings_no_historical_paths')
+
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

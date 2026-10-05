@@ -175,10 +175,11 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "4ce8701d8d7b6889ff441a6b93fa9d82a188ba7aef680f9854785f8a0168eab6"
+        "sha256": "b62fc9b04b391aa4b16679b3f7c2e9fc45a35cd38dc02081f98a4a6dbd163da8"
       },
       "changes": [
-        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
+        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
+        "Exact template-derived reviewed artifact path keys and no residual historical artifact paths before source emission"
       ]
     },
     "post_constructor": {
@@ -188,10 +189,11 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "79fa26a47a5cab857565c46123d1ca25ce5fcb9bd6028957fa0f8df17c5066c1"
+        "sha256": "d47d49e84835f493b234e24e565f890eb7e291e94abc4da538ed0083f44cfc2e"
       },
       "changes": [
-        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
+        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
+        "Reject residual historical artifact paths including nested supplied constants before sealer source emission"
       ]
     },
     "oracle_helper": {

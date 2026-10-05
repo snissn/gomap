@@ -6,6 +6,25 @@ TEMPLATE_SHA256 = {'admission': '9fde2650d5b2336c51fb1cf89828f49ee4a3e39b0f024b1
 CAMPAIGN = 'rf4trial24mixedchangingc1'
 PREFIX = 'gomap-4997-4998-trial24-growth-'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
+ARTIFACT_TEMPLATE_ROOT = '/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1'
+REMOTE_TEMPLATE_ROOT = '/home/mikers/gomap-4250-twohost-rf4trial14mixedc1'
+def required_path_bindings(texts):
+    # Admission's deferred environment paths are removed before this scan.
+    # Role sources, the artifact volume and node roots have deterministic joins.
+    paths={node.value for text in texts.values() for node in ast.walk(ast.parse(text))
+           if isinstance(node,ast.Constant) and isinstance(node.value,str)
+           and node.value.startswith(('/tmp/gomap-4994-','/home/mikers/gomap-4994-','/Volumes/FlashDrive/gomap-4994-',REMOTE_TEMPLATE_ROOT))}
+    return {path for path in paths if path not in TEMPLATES.values()
+            and path!=ARTIFACT_TEMPLATE_ROOT and not path.startswith(ARTIFACT_TEMPLATE_ROOT+'/')
+            and path!=REMOTE_TEMPLATE_ROOT and not path.startswith(REMOTE_TEMPLATE_ROOT+'/')}
+def no_historical_paths(text):
+    assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',text), 'unreplaced historical artifact path'
+    assert REMOTE_TEMPLATE_ROOT not in text, 'unreplaced historical cluster path'
+def validate_path_bindings(texts,bindings):
+    assert isinstance(bindings,dict) and set(bindings)==required_path_bindings(texts), 'exact required historical path bindings'
+    for old,new in bindings.items():
+        assert isinstance(new,str) and pathlib.Path(new).is_absolute() and new!=old, 'fresh absolute reviewed path'
+        no_historical_paths(new)
 def main():
     if not __debug__: raise RuntimeError('assertions required')
     ap=argparse.ArgumentParser();ap.add_argument('--pins',required=True);ap.add_argument('--output-root',required=True)
@@ -18,7 +37,6 @@ def main():
     bindings=pins['literal_bindings']; assert isinstance(bindings,dict)
     assert all(re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64}',k) and isinstance(v,str) and re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64}',v) for k,v in bindings.items())
     assert isinstance(pins['qualification_prefix'],int) and pins['qualification_prefix']>0
-    assert set(pins['reviewed_path_bindings']) and all(isinstance(k,str) and k.startswith('/') and isinstance(v,str) and v.startswith('/') for k,v in pins['reviewed_path_bindings'].items())
     texts={}
     for role,path in TEMPLATES.items():
         raw=pathlib.Path(source_path(path)).read_bytes();assert sha(raw)==TEMPLATE_SHA256[role]
@@ -27,6 +45,9 @@ def main():
             for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
                 text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
         texts[role]=text
+    validate_path_bindings(texts,pins['reviewed_path_bindings'])
+    assert isinstance(pins['artifact_root'],str) and pathlib.Path(pins['artifact_root']).is_absolute()
+    no_historical_paths(pins['artifact_root'])
     old_source_hashes={TEMPLATE_SHA256[k] for k in ('query','lifecycle','exact-validate')}
     required=set()
     for text in texts.values():
@@ -88,6 +109,7 @@ def main():
             for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
                 text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
         assert 'rf4trial14mixedc1' not in text and 'landed[\'pr\']==4995' not in text
+        no_historical_paths(text)
         ast.parse(text,str(destinations[role]));sources[role]=text;generated_hashes[role]=sha(text.encode())
     assert not out.exists();out.mkdir()
     for role,text in sources.items(): destinations[role].write_text(text)
