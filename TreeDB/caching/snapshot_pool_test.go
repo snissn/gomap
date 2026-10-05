@@ -150,7 +150,13 @@ func TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites(t *testing.T
 					publishErr(fmt.Errorf("worker %d acquire %d: nil snapshot", worker, i))
 					return
 				}
-				got, err := snap.GetAppend(key, nil)
+				var got []byte
+				var err error
+				if i%2 == 0 {
+					got, err = snap.Get(key)
+				} else {
+					got, err = snap.GetAppend(key, nil)
+				}
 				closeErr := snap.Close()
 				if err != nil {
 					publishErr(fmt.Errorf("worker %d get %d: %w", worker, i, err))

@@ -90,19 +90,23 @@ const (
 	SectionDenseSearchWork        SectionID = 134
 	// Q3 typed dense transport sections are deliberately siblings of the
 	// frozen request/work sections. IDs are allocated from the live registry.
-	SectionDenseSearchQuantizedOptions  SectionID = 135
-	SectionDenseSearchScorePlaneProof   SectionID = 136
-	SectionDenseSearchNormalizedOptions SectionID = 137
-	SectionDenseSearchRouteIdentity     SectionID = 138
-	SectionDenseSearchDiagnostics       SectionID = 139
-	SectionSourceDeleteIDs              SectionID = 140
-	SectionSourceReplaceResponse        SectionID = 141
-	SectionTypedMetadataUpdateRequest   SectionID = 142
-	SectionTypedMetadataUpdateResponse  SectionID = 143
-	SectionVectorInsertRequest          SectionID = 144
-	SectionVectorInsertResponse         SectionID = 145
-	SectionSplitVectorInsertV1          SectionID = 146
-	SectionVectorPrepareV1              SectionID = 147
+	SectionDenseSearchQuantizedOptions    SectionID = 135
+	SectionDenseSearchScorePlaneProof     SectionID = 136
+	SectionDenseSearchNormalizedOptions   SectionID = 137
+	SectionDenseSearchRouteIdentity       SectionID = 138
+	SectionDenseSearchDiagnostics         SectionID = 139
+	SectionSourceDeleteIDs                SectionID = 140
+	SectionSourceReplaceResponse          SectionID = 141
+	SectionTypedMetadataUpdateRequest     SectionID = 142
+	SectionTypedMetadataUpdateResponse    SectionID = 143
+	SectionColocatedVectorMutationScopeV1 SectionID = 151
+	SectionVectorReplaceRequest           SectionID = 148
+	SectionVectorDeleteRequest            SectionID = 149
+	SectionVectorMutationResponse         SectionID = 150
+	SectionVectorInsertRequest            SectionID = 144
+	SectionVectorInsertResponse           SectionID = 145
+	SectionSplitVectorInsertV1            SectionID = 146
+	SectionVectorPrepareV1                SectionID = 147
 )
 
 type CommandID uint64
@@ -142,6 +146,8 @@ const (
 	CommandVectorClosePinnedSnapshot CommandID = 63
 	CommandDenseVectorSearch         CommandID = 64
 	CommandTypedDocumentUpsert       CommandID = 65
+	CommandVectorReplace             CommandID = 71
+	CommandVectorDelete              CommandID = 72
 	CommandVectorInsert              CommandID = 66
 	CommandTypedSourceReplace        CommandID = 67
 	CommandTypedMetadataUpdate       CommandID = 68

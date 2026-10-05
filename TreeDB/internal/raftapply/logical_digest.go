@@ -185,6 +185,22 @@ func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionMana
 				writeLogicalDigestField(h, name, value)
 			}
 		}
+		var colocatedState [][]byte
+		if orderedSnapshot {
+			colocatedState, _, err = collection.VerifyVectorPartitionColocatedMutationLogicalStateV1(metadataContext)
+		} else {
+			colocatedState, err = collection.VectorPartitionColocatedMutationLogicalStateV1(metadataContext)
+		}
+		if err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
+		if len(colocatedState) != 0 {
+			writeLogicalDigestU64(h, "collection-colocated-mutation-field-count", uint64(len(colocatedState)))
+			for _, value := range colocatedState {
+				writeLogicalDigestField(h, "collection-colocated-mutation-state", value)
+			}
+		}
+
 		definitions := append([]collections.VectorIndexDefinition(nil), meta.VectorIndexes...)
 		sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
 		for _, definition := range definitions {

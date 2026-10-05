@@ -488,6 +488,15 @@ When the cached layer is enabled:
   backed by a recycled snapshot object.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
+- `Snapshot.Get` returns caller-owned bytes that remain valid after subsequent
+  reads and snapshot closure. Present empty values return a non-nil empty slice.
+  Cached `Get` shares the `GetAppend` visibility and published/backend append
+  path, then detaches its result from pooled scratch. `GetAppend` is the
+  recommended point-read API when callers can reuse their own destination;
+  owned `Get` still allocates storage for positive results. Entry-only published
+  readers and active range spans retain their existing entry lookup fallback.
+  Diagnostic hit attribution follows `GetAppend`: with active range spans,
+  published entries found by its cached lookup are counted as cached hits.
 - Under the planned user-command WAL contract, collection scans and snapshots
   that can read pending collection-local state use a `CollectionReadView`. The
   view pins backend snapshot state, pending mutable/queued/publishing
@@ -751,3 +760,15 @@ durable pending intent for retry rather than reporting an unproved success.
 This fixed identity accepts one pending and at most 64 completed operations,
 with no completed-outcome eviction. This is a bounded checkpoint, not general
 indefinite write capacity. See [the split insert contract](vector-partition-split-source-insert-v1.md).
+
+### Mixed colocated qualification diagnostics
+
+Optional version1 `ColocatedAudit` on existing fixed-peer diagnostics is bounded
+to six original outcomes and final known IDs (524288 encoded plan bytes). Its
+current-FSM/ACTIVE/root/applied/physical-WAL/summary fences and prepared-owner
+source/live proof are mandatory; stale or torn evidence is refused. Ordinary
+serving/diagnostics and mutation formats are unchanged. This is not full-population
+authority or a distributed quiescence mechanism. All four RF4 voters must remain
+live through audit acquisition; root owns stop/join/catchup and clean shutdown
+verification. The mixed-window README and schema specify retained attempts,
+causal prefixes, original retries, observation limits and failure consumption.

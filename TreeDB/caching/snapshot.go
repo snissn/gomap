@@ -981,84 +981,27 @@ func (s *Snapshot) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) 
 	return owned, revision, nil
 }
 
+// Get returns a caller-owned value that remains valid after subsequent reads
+// and snapshot closure. Use GetAppend to reuse a caller-owned destination.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	if err := s.beginRead(); err != nil {
-		return nil, err
+	// Preserve Get's nil-receiver contract; GetAppend treats nil as a miss.
+	if s == nil {
+		return nil, backenddb.ErrClosed
 	}
-	defer s.endRead()
-	key = normalizeRawKVPointKey(key)
-	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
-	if found {
-		if flags&node.FlagTombstone != 0 {
-			return nil, tree.ErrKeyNotFound
-		}
-		if flags&node.FlagPointer != 0 {
-			if source == rootDomainEntrySourcePublished {
-				scratch := getOwnedReadScratch()
-				defer putOwnedReadScratch(scratch)
+	scratch := getOwnedReadScratch()
+	defer putOwnedReadScratch(scratch)
 
-				out, ok, err := rootDomainPublishedGetAppend(snap, key, scratch.buf[:0])
-				if ok {
-					if err != nil {
-						return nil, err
-					}
-					recordSnapshotRootDomainRead(source, true, len(out))
-					if len(out) == 0 {
-						return []byte{}, nil
-					}
-					maybeRecordSnapshotGetCallerSample(len(out))
-					return ownedReadResult(out, scratch), nil
-				}
-			}
-			if s.db == nil {
-				return nil, ErrSnapshotValueLogReaderUnavailable
-			}
-			scratch := getOwnedReadScratch()
-			defer putOwnedReadScratch(scratch)
-
-			out, err := s.db.readValueLogAppend(key, ptr, scratch.buf[:0])
-			if err != nil {
-				return nil, err
-			}
-			recordSnapshotRootDomainRead(source, true, len(out))
-			if len(out) == 0 {
-				return []byte{}, nil
-			}
-			maybeRecordSnapshotGetCallerSample(len(out))
-			return ownedReadResult(out, scratch), nil
-		}
-		if len(val) == 0 {
-			recordSnapshotRootDomainRead(source, false, len(val))
-			return []byte{}, nil
-		}
-		recordSnapshotRootDomainRead(source, false, len(val))
-		maybeRecordSnapshotGetCallerSample(len(val))
-		owned := make([]byte, len(val))
-		copy(owned, val)
-		return owned, nil
-	}
-
-	if s == nil || s.backend == nil || s.db == nil {
-		return nil, tree.ErrKeyNotFound
-	}
-	if err := s.db.flushValueLogForBackendRead(); err != nil {
-		return nil, err
-	}
-	out, err := s.backend.Get(key)
+	// Share cached visibility, published lookup, read lifetime, and backend
+	// fallback with GetAppend, avoiding a materializing GetEntry pre-read.
+	out, err := s.GetAppend(key, scratch.buf[:0])
 	if err != nil {
 		return nil, err
-	}
-	if hotPathStatsEnabled {
-		snapshotReadBackendHitsTotal.Add(1)
 	}
 	if len(out) == 0 {
 		return []byte{}, nil
 	}
-	if hotPathStatsEnabled {
-		snapshotReadBackendBytesTotal.Add(uint64(len(out)))
-	}
 	maybeRecordSnapshotGetCallerSample(len(out))
-	return out, nil
+	return ownedReadResult(out, scratch), nil
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {

@@ -267,6 +267,22 @@ installs the already computed counts without applying its commit delta twice.
 Aborted or mismatched candidates cannot repair the live tracker. This reuses the
 required scan; it does not add a scan or change the reachability authority for GC.
 
+Raw outer-leaf created/current identities in an apply delta are physical
+dependency membership only; they do not increment logical reference counters.
+An additive publication conservatively retains predecessor raw segments and
+all producer-created/current segments, including empty lanes and non-current
+segments created by rotations within the apply. This can retain bytes not
+reachable from the newest root and adds segment-frontier capture/sync work.
+Inventory snapshots occur before registration consumes the created list.
+
+The superset is durability protection, never permission to delete. Destructive
+ordinary publication restores exact candidate projection; older recoverable
+meta slots, read snapshots, and stable identity pins continue to protect their
+resources until released. GC/rewrite uses the existing reachability and pin
+rules, so this admission does not grant an independent indefinite-retention
+or reclamation authority. No directory enumeration or new on-disk format is
+part of this capture.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:
@@ -566,3 +582,29 @@ Template and dictionary lookup failures for encoded/compressed records are treat
 2. Unreferenced segments may be deleted; referenced segments must remain.
 3. Segment deletion is reachability-based, not age-based.
 4. Rewrite must preserve key/value visibility across reopen.
+
+## 10. Ordinary Compressed Frame Read Cost
+
+An owned point read verifies the complete stored frame CRC and, on a decoded
+group-cache miss, decodes the complete compressed payload before selecting one
+value. Ordinary cached user-value block batches under auto/balanced compression
+therefore bound newly ingested frames by 32 KiB of actual decoded value bytes,
+with the selector's K as an upper bound and oversized values as singletons.
+RID/offset metadata is not part of that decoded payload. Compression rejection
+keeps the same bounded grouping when writing the frame raw.
+
+The bound reduces cold point-read amplification without changing frame version,
+read verification, owned-output lifetime, cache budget, publication/durability
+boundaries, pointer reachability or GC rules. Smaller groups can cost compression
+ratio, frame overhead and ingestion/checkpoint throughput; assess those costs
+together with read throughput and tail latency on representative workloads.
+Eligible grouping counters report successful emitted frame sizes, including
+compression-rejected frames, rather than the selector's pre-cap estimate.
+
+Recognized retained JSON/template/semantic streams and template-enabled lanes,
+dedicated leaf-log lanes, explicit block/dictionary compression, size/throughput
+policies and selected raw-mode batches keep their existing grouping policies.
+The bound applies to eligible fresh cached ingestion, not every persisted frame:
+previously written files remain readable and maintenance rewrite independently
+groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
+an ingestion improvement alone is not a global post-maintenance size guarantee.

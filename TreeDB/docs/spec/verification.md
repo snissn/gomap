@@ -2,6 +2,26 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
+forced serialized, and physical build-group publication with multiple real
+within-apply rotations and an empty current lane. It requires zero fresh-load
+candidate scans, inclusion and stable frontiers for created/current identities
+before registration consumes them, unchanged logical pointer counts, exact
+projection for overwrite/delete/range-delete, retained snapshot bytes, and
+checkpoint/clean-close/reopen pointer bytes.
+`TestBuildValueLogRefDeltaProducerInventoryErrors` rejects created/current
+snapshot errors while preserving pager/untrackable eligibility. Existing
+`TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister`,
+`TestOuterLeafPointerCommitFailsClosedForUnreportedSegmentWithoutRefreshScan`,
+`TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath`,
+`TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures`,
+`TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration`,
+`TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses`, and
+`TestValueLogGC_IncrementalParityWithFullScan` retain ownership of registration,
+recovery-slot, pin, and GC safety checks. The tests establish correctness and
+path selection; same-harness native sync-load and ordinary guardrails remain
+required for performance acceptance.
+
 Prepared no-index JSON semantic-stream insertion is covered by
 `TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
 before publication, with no early acknowledgment),
@@ -395,6 +415,22 @@ directory sync. The stable identifiers `before-publication-seal-write` and
 write. The following index sync makes that record and its COW closure stable;
 only the later alternate-meta write and sync make it recovery-selectable.
 
+The full-index mapped-write barrier uses the pager's existing platform policy:
+Linux requires one retained-file data barrier rather than a preceding `MS_SYNC`
+per dirty chunk; flush-only and non-Linux mapped-range fences remain required.
+`pager.TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier` checks selective
+flush bookkeeping without a file barrier, exact retained-file identity, one file
+barrier per durable attempt, restoration after a failed barrier, and byte readback
+after retry. Existing `TestSyncIndexDataWithStableFile*`,
+`TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement` and
+`TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync` cover retained handles
+after close, nil-target cut ordering, path replacement and final dirty drainage.
+These guards do not count mapped syscalls or prove physical power-loss survival.
+An external Linux syscall comparison must show durable dirty-chunk `msync` calls
+on the prior source and none on the revised source, while flush-only calls still
+issue them. The crash-image oracle, platform CI and matched unprofiled load and
+checkpoint campaigns remain separate acceptance gates.
+
 `db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
 proves that ordinary copied dependencies fail before explicit snapshot rebind,
 a cut immediately before the first rebound-meta write leaves the installed
@@ -577,6 +613,21 @@ Coverage:
   - `TestPublicCommandWALRawFrames_DurableGrouping` uses the public command-WAL
     durable profile, syncs a forced-pointer 4 KiB raw batch, checks persisted
     records hold one value per frame, and verifies exact values after reopen.
+  - `TestPublicCompressedFrames_OrdinaryGroupingReopen` checks mixed-size
+    auto/balanced frames through ordinary public writes, checkpoint, close and
+    reopen in command-WAL durable and no-WAL fast profiles, including owned
+    rereads and oversized singletons.
+- `TreeDB/caching/vlog_block_read_amplification_test.go`:
+  - `TestValueLogBlockFrames_BoundedOrdinaryPayload` checks actual decoded-byte
+    bounds, pointer order and emitted-K counters through direct, worker-prepared
+    and queued ordinary block paths, including raw compression rejection.
+  - `TestValueLogBlockFrameBoundary` covers exact/empty/mixed/oversized payloads
+    and K ceilings; `TestValueLogBlockRawLimitEligibility` preserves excluded
+    leaf/template/retained and explicit compression-policy paths.
+  - `TestAppendValueLog_RestoresWriterPolicyAfterBoundedHandoff` injects a
+    competing same-lane policy change at a variable-span handoff and checks the
+    resumed batch's mode/codec/keep policy and pointer order. The fake writer
+    controls the interleaving; this is not a physical scheduler timing proof.
 
 ## 2. Recovery Coherence
 
@@ -857,6 +908,23 @@ Coverage:
   - `TestAcquireSnapshot_IncludesCachedWrites_ValuePointers`
 - `TreeDB/caching/snapshot_test.go`:
   - `TestIteratorSnapshotIsolation`
+  - `TestSnapshotGet_PublishedAppendOwnsResultWithoutEntryProbe`: published
+    owned reads use one append lookup without an entry pre-read; empty, small,
+    and larger-than-scratch results survive caller mutation, later reads and close.
+  - `TestSnapshotGet_BackendPublishedMissSkipsEntryProbe`: published backend
+    misses use one append lookup without materializing a leaf entry.
+  - `TestSnapshotGet_NilReceiverReturnsClosed`: owned nil-receiver reads retain
+    `ErrClosed`, distinct from append's nil-receiver miss behavior.
+  - `TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot`:
+    both owned and append reads preserve the pinned root on a miss.
+- `TreeDB/caching/snapshot_pool_test.go`:
+  - `TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites`: alternating
+    owned and append reads with concurrent acquisition, closure and queued writes.
+- `TreeDB/caching/snapshot_owned_read_bench_test.go`:
+  - `BenchmarkSnapshotPublishedOwnedRead`: warmed published outer-leaf reads
+    through a cached snapshot with an unrelated queued write; owned `Get` and
+    reused-destination `GetAppend` allocation costs exclude setup/checkpoint.
+    This microbenchmark does not qualify the concurrent generic workload.
 - `TreeDB/caching/iterator_cached_writes_test.go`:
   - `TestIterator_IncludesCachedWrites_SnapshotIsolated`
   - `TestIterator_IncludesCachedWrites_ValuePointers`

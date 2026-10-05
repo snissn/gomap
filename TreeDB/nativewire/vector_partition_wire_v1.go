@@ -358,6 +358,9 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 			return nil, protocolError(iwire.ErrInvalidCommand, "connection state is unavailable")
 		}
 		return dst, vectorPartitionServerErrorV1(state.closeVectorPinnedLocked())
+	case iwire.CommandVectorReplace, iwire.CommandVectorDelete:
+		return s.handleVectorPartitionColocatedCommandV1(ctx, cmd, dst)
+
 	case iwire.CommandVectorInsert:
 		raw, ok, err := singletonSection(cmd.Known, iwire.SectionVectorInsertRequest)
 		if err != nil || !ok {
@@ -397,6 +400,10 @@ func appendVectorPartitionInsertCommandBodyV1(dst []byte, request public.InsertR
 }
 
 func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.InsertRequestV1, limits iwire.Limits) ([]byte, error) {
+	return appendVectorPartitionInsertRequestSectionIDV1(dst, request, limits, iwire.SectionVectorInsertRequest)
+}
+
+func appendVectorPartitionInsertRequestSectionIDV1(dst []byte, request public.InsertRequestV1, limits iwire.Limits, section iwire.SectionID) ([]byte, error) {
 	if request.Version != 1 || request.Generation.Index == "" || request.Generation.Generation == 0 || len(request.IdempotencyKey) == 0 || len(request.ID) == 0 || len(request.Vector) == 0 || len(request.Vector) > limits.MaxByteVectorItems || len(request.Document) == 0 || uint64(len(request.IdempotencyKey)) > limits.MaxSectionLen || uint64(len(request.ID)) > limits.MaxSectionLen || uint64(len(request.Document)) > limits.MaxSectionLen || len(request.Vector) > maxInt/4 {
 		return nil, protocolError(iwire.ErrInvalidCommand, "vector insert request cannot be encoded")
 	}
@@ -408,7 +415,7 @@ func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.Inse
 		deadline = uint64(request.Deadline.UnixNano())
 	}
 	payloadLen := uvarintLen(1) + encodedStringLenV1(request.Generation.Index) + uvarintLen(request.Generation.Generation) + uvarintLen(uint64(len(request.IdempotencyKey))) + len(request.IdempotencyKey) + uvarintLen(uint64(len(request.ID))) + len(request.ID) + uvarintLen(uint64(len(request.Vector))) + 4*len(request.Vector) + uvarintLen(uint64(len(request.Document))) + len(request.Document) + uvarintLen(deadline)
-	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorInsertRequest, 0, payloadLen)
+	body, err := iwire.AppendSectionHeader(dst, section, 0, payloadLen)
 	if err != nil {
 		return nil, err
 	}

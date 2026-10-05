@@ -551,7 +551,7 @@ func admitBootstrap(config nativewire.FixedPeerTCPConfigV1, bootstrap nativewire
 }
 func runArgs(parent context.Context, args []string, output io.Writer) (runErr error) {
 	flags := flag.NewFlagSet("treedb-query-under-write", flag.ContinueOnError)
-	mode := flags.String("mode", "query-under-write", "query-under-write, quiescent-recall, read-window, or paced-window")
+	mode := flags.String("mode", "query-under-write", "query-under-write, quiescent-recall, read-window, paced-window, or mixed-window")
 	dataset := flags.String("dataset", "", "unchanged representative exported dataset directory")
 	phase := flags.String("phase", "", "recall phase: pre or post-only")
 	provenance := flags.String("provenance", "", "root-accepted quiescence/runtime/input provenance JSON")
@@ -569,16 +569,27 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	readOutputBytes := flags.Int("read-output-bytes", 128<<20, "read-window aggregate planned/result byte cap, 1MiB..256MiB")
 	readResourceGateDir := flags.String("read-resource-gate-dir", "", "optional fresh trusted run-local directory for ready/done resource sampling acknowledgments")
 	pacedInserts := flags.Int("paced-inserts", 6, "paced-window distinct ordinary insert slots, 1..10")
+	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window six serial writer slots, interval1s..8s; 5*interval+2*rpc-timeout must be less than60s")
 	pacedInterval := flags.Duration("paced-interval", 5*time.Second, "paced-window minimum interval between serial insert invocation starts")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	readFlags, freshFlag, pacedFlags := false, false, false
+	readFlags, freshFlag, pacedFlags, mixedFlags := false, false, false, false
 	flags.Visit(func(f *flag.Flag) {
+		mixedFlags = mixedFlags || strings.HasPrefix(f.Name, "mixed-")
 		pacedFlags = pacedFlags || strings.HasPrefix(f.Name, "paced-")
 		readFlags = readFlags || strings.HasPrefix(f.Name, "read-")
 		freshFlag = freshFlag || f.Name == "fresh-inserts"
 	})
+	if *mode == "mixed-window" {
+		if freshFlag || pacedFlags || flags.NArg() != 0 {
+			return errors.New("mixed-window refuses insert/pace/positional flags")
+		}
+		return runMixedWindow(parent, mixedOptions{Window: windowOptions{Admission: recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout}, Concurrency: *readConcurrency, Warmup: *readWarmup, Duration: *readWindow, MaxAttempts: *readMaxAttempts, OutputBytes: *readOutputBytes, ResourceGateDir: *readResourceGateDir}, Interval: *mixedInterval}, output)
+	}
+	if mixedFlags {
+		return errors.New("mixed flags require -mode mixed-window")
+	}
 	if *mode == "paced-window" {
 		if freshFlag || flags.NArg() != 0 {
 			return errors.New("paced-window refuses legacy mutation flags and positional arguments")

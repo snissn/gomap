@@ -795,7 +795,8 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 	return p.syncDirtyChunks(false, firstChunk)
 }
 
-// Sync msyncs the memory maps and syncs the backing file to disk.
+// Sync makes mapped writes durable through the backing file, with explicit
+// mapped-range flushes where required by the platform.
 func (p *Pager) Sync() error {
 	return p.syncDirtyChunksWithFile(true, 0, p.file)
 }
@@ -809,9 +810,10 @@ func (p *Pager) SyncIndexData() error {
 }
 
 // SyncIndexDataWithStableFile is the index-publication data barrier bound to
-// an exact retained index handle. While the pager is live it drains dirty mmap
-// chunks before syncing that handle. After Pager.Close has unmapped and closed
-// the pager-owned descriptor, the retained handle still supplies the file
+// an exact retained index handle. While the pager is live it claims dirty mmap
+// chunks and syncs that handle, flushing mapped ranges where the platform
+// requires it. After Pager.Close unmaps and closes the pager-owned descriptor,
+// the retained handle still supplies the file
 // durability fence required by an outstanding stable-resource token.
 func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
 	if file == nil {
@@ -860,56 +862,58 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	}
 	p.mu.Unlock()
 
-	// Perform msync under read lock
+	// Hold the mappings stable through mapped-range and file sync.
 	p.mu.RLock()
-	// We defer RUnlock to ensure we hold it during the entire sync process
-	// including file sync.
 
 	var syncErr error
-	concurrency := int(p.syncConcurrency.Load())
-	if concurrency <= 1 || len(toSync) <= 1 {
-		for _, idx := range toSync {
-			if idx < len(p.chunks) {
-				if err := msyncFile(p.chunks[idx]); err != nil {
-					syncErr = err
-					break // Stop on first error
+	// The file data barrier covers Linux mapped writes. Flush-only calls still
+	// need msync, and other platforms retain their explicit mapped-write fence.
+	if !syncFile || mappedRangeSyncRequired() {
+		concurrency := int(p.syncConcurrency.Load())
+		if concurrency <= 1 || len(toSync) <= 1 {
+			for _, idx := range toSync {
+				if idx < len(p.chunks) {
+					if err := msyncFile(p.chunks[idx]); err != nil {
+						syncErr = err
+						break // Stop on first error
+					}
 				}
 			}
-		}
-	} else {
-		if concurrency > len(toSync) {
-			concurrency = len(toSync)
-		}
-		var (
-			wg    sync.WaitGroup
-			jobs  = make(chan int)
-			errCh = make(chan error, 1)
-		)
-		for i := 0; i < concurrency; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for idx := range jobs {
-					if idx >= len(p.chunks) {
-						continue
-					}
-					if err := msyncFile(p.chunks[idx]); err != nil {
-						select {
-						case errCh <- err:
-						default:
+		} else {
+			if concurrency > len(toSync) {
+				concurrency = len(toSync)
+			}
+			var (
+				wg    sync.WaitGroup
+				jobs  = make(chan int)
+				errCh = make(chan error, 1)
+			)
+			for i := 0; i < concurrency; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for idx := range jobs {
+						if idx >= len(p.chunks) {
+							continue
+						}
+						if err := msyncFile(p.chunks[idx]); err != nil {
+							select {
+							case errCh <- err:
+							default:
+							}
 						}
 					}
-				}
-			}()
-		}
-		for _, idx := range toSync {
-			jobs <- idx
-		}
-		close(jobs)
-		wg.Wait()
-		select {
-		case syncErr = <-errCh:
-		default:
+				}()
+			}
+			for _, idx := range toSync {
+				jobs <- idx
+			}
+			close(jobs)
+			wg.Wait()
+			select {
+			case syncErr = <-errCh:
+			default:
+			}
 		}
 	}
 

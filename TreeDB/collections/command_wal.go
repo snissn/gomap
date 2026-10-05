@@ -436,6 +436,9 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
+	if payload.Colocated != nil {
+		return replayColocatedVectorMutationCommandWALV1(db, env, *payload.Colocated)
+	}
 	intent, err := db.NewCommandWALReplayIntent(env)
 	if err != nil {
 		return err
@@ -564,6 +567,9 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
 	if err != nil {
 		return err
+	}
+	if payload.Colocated != nil {
+		return replayColocatedVectorMutationCommandWALV1(db, env, *payload.Colocated)
 	}
 	if len(payload.Documents) == 0 {
 		intent, err := db.NewCommandWALReplayIntent(env)

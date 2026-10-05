@@ -281,3 +281,16 @@ Primary AWS contracts: [EC2 instance resource](https://docs.aws.amazon.com/AWSCl
 [Scheduler](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-scheduler-schedule.html),
 [universal targets](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html),
 and [flow records](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html).
+
+For the bounded colocated mutation checkpoint, keep source and all ANN packs in
+one unchanged mutable fixed group (including RF4). Use native
+`VectorReplaceV1` with one existing exact ID, replacement JSON/vector and a new
+attempt key, or `VectorDeleteV1` with one exact ID and new key. Retry identical
+bytes with the same key after ambiguity; inspect original matched/modified or
+deleted counts and commit term/index. Pass the returned visibility token on a
+strict search when a scoped read-your-write floor is required. Missing targets
+are explicit zero-count outcomes; replacement never inserts them. A later
+mutation uses a new key. Retained witnesses are bounded collection-wide at
+65,536 outcomes / 32 MiB, with precommit refusal on exhaustion. Split-source /
+cross-group replace/delete, immutable/M7 layouts and indefinite writable
+lifetime remain unsupported; see `../spec/vector-partition-raft-v1.md`.

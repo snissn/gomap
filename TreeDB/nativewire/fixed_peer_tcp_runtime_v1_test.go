@@ -612,6 +612,62 @@ func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
 	}
 }
 
+func TestFixedPeerTCPAuditCallerBudgetV1(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		audit   bool
+		budget  time.Duration
+		succeed bool
+	}{
+		{"audit-longer-caller-budget", true, 2 * time.Second, true},
+		{"ordinary-rpc-still-bounded", false, 2 * time.Second, false},
+		{"audit-shorter-caller-budget", true, 50 * time.Millisecond, false},
+		{"audit-without-deadline-still-bounded", true, 0, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				select {
+				case <-time.After(350 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				_ = json.NewEncoder(w).Encode(fixedPeerReplyV1{
+					NodeID: raftcluster.NodeID(r.Header.Get("X-TreeDB-Node")), ConfigDigest: r.Header.Get("X-TreeDB-Config"),
+				})
+			}))
+			defer server.Close()
+			config := fixedPeerTestConfigsV1(t)[0]
+			config.RequestTimeout = 100 * time.Millisecond
+			config.Nodes[0].Address = strings.TrimPrefix(server.URL, "http://")
+			config.ListenAddress = config.Nodes[0].Address
+			client, err := NewFixedPeerTCPClientV1(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			digest := client.digest
+			ctx := t.Context()
+			if tt.budget != 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.budget)
+				defer cancel()
+			}
+			body := fixedPeerRequestV1{}
+			if tt.audit {
+				body.ColocatedAudit = &ColocatedAuditPlanV1{}
+			}
+			_, err = client.call(ctx, config.NodeID, "diagnostics", body, false)
+			if (err == nil) != tt.succeed || (!tt.succeed && !errors.Is(err, context.DeadlineExceeded)) {
+				t.Fatalf("audit=%v budget=%v outcome=%v", tt.audit, tt.budget, err)
+			}
+			if client.digest != digest || client.readHTTP.Timeout != config.RequestTimeout || client.http.Timeout != config.RequestTimeout {
+				t.Fatal("audit changed shared configuration or ordinary RPC deadlines")
+			}
+		})
+	}
+}
+
 func TestFixedPeerTCPPostSendCancellationIsCommitAmbiguousV1(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
