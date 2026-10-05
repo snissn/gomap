@@ -241,9 +241,13 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 	if err != nil {
 		return out, err
 	}
-	for _, w := range p.Writes {
-		// Route only the fresh token/quorum proof. The audit below still reads
-		// this voter's own current FSM, covered witnesses and source/live roots.
+	if len(p.Writes) > 0 {
+		// Validation binds every original to one scope and strictly ascending
+		// commits. Fresh authority at the highest commit covers that prefix;
+		// the audit below still verifies EVERY original against this voter's
+		// current FSM witnesses and source/live roots. Keep network proof cost
+		// independent of ledger length within the existing request deadline.
+		w := p.Writes[len(p.Writes)-1]
 		if e := r.requireColocatedVectorVisibilityV1(ctx, public.SearchRequestV1{Version: 1, Generation: w.Response.Generation, VisibilityToken: w.Response.VisibilityToken}); e != nil {
 			return out, e
 		}
