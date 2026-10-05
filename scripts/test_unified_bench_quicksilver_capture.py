@@ -64,7 +64,7 @@ class CaptureRehearsal(unittest.TestCase):
         packet = report()
         cell = dict(engine='treedb', keys=40000, reads=10000, churn_rounds=2)
         packet['config'].update(churn_rounds=2, churn_pause_ns=6000000000)
-        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '2', 'quicksilver-churn-pause': '6s'})
+        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '2', 'quicksilver-churn-pause': '6s', 'max-wall': '30m12s'})
         snapshot = dict(process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
                         engine_stats=packet['final_stats'])
         round = dict(round=1, restored_keys=40000, mutation_targets=40000, mutation_commit_batches=160,
@@ -86,9 +86,41 @@ class CaptureRehearsal(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
                 section[field] = original
+            original = packet['registered_cli_flags']['max-wall']
+            packet['registered_cli_flags']['max-wall'] = '30m0s'
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            packet['registered_cli_flags']['max-wall'] = original
             packet['maintenance_churn']['rounds'].pop()
             with self.assertRaises(AssertionError):
                 capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+
+    def test_churn_wall_allowance_maximum_and_precision(self):
+        self.assertEqual(capture.capture_wall_limit(dict(engine='treedb')), '30m')
+        self.assertEqual(capture.capture_wall_limit(dict(engine='treedb', churn_rounds=2)), '30m12s')
+        self.assertEqual(capture.capture_wall_limit(dict(engine='treedb', churn_rounds=32,
+                                                       churn_pause='2ns', churn_pause_ns=2)), '30m0.000000064s')
+        cell = dict(engine='treedb', keys=40000, reads=10000, churn_rounds=32,
+                    churn_pause='1m0s', churn_pause_ns=60000000000)
+        self.assertEqual(capture.capture_wall_limit(cell), '1h2m0s')
+        packet = report()
+        packet['config'].update(churn_rounds=32, churn_pause_ns=60000000000)
+        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '32',
+                                               'quicksilver-churn-pause': '1m0s', 'max-wall': '1h2m0s'})
+        snapshot = dict(process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
+                        engine_stats=packet['final_stats'])
+        rounds = [dict(round=i, restored_keys=40000, mutation_targets=40000, mutation_commit_batches=160,
+                       mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
+                       wall_seconds=64., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
+                       pause_seconds=60., before=snapshot, after=snapshot) for i in range(1, 33)]
+        packet['maintenance_churn'] = dict(label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
+                                          leaf_generation_pack_maintenance_env='', rounds=rounds,
+                                          final_files_after_close={'maindb/index.db': 4096})
+        with tempfile.TemporaryDirectory() as temp:
+            capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
+            packet['registered_cli_flags']['max-wall'] = '30m0s'
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
 
     def test_retained_database_contract(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -107,6 +107,17 @@ def churn_settings(cell):
     return rounds, pause
 
 
+def capture_wall_limit(cell):
+    rounds, pause = churn_settings(cell)
+    if not rounds:
+        return '30m'  # Keep ordinary capture commands identical.
+    seconds, ns = divmod(1800000000000 + rounds*pause, 1000000000)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    fraction = ('.' + f'{ns:09d}'.rstrip('0')) if ns else ''
+    return (f'{hours}h' if hours else '') + f'{minutes}m{seconds}{fraction}s'
+
+
 def validate(reports, cell, directory, fixtures, metadata):
     assert len(reports) == 1
     r, c = reports[0], reports[0]['config']
@@ -172,6 +183,7 @@ def validate(reports, cell, directory, fixtures, metadata):
     stats = [r.get('initial_stats', {}), r.get('final_stats', {})]
     if rounds:
         assert (c['churn_rounds'], c['churn_pause_ns']) == (rounds, pause)
+        assert flags['max-wall'] == capture_wall_limit(cell), 'churn guard must retain 30m work allowance plus all requested pauses'
         assert flags['quicksilver-churn-rounds'] == str(rounds)
         assert flags['quicksilver-churn-pause'] == cell.get('churn_pause', '6s')
         churn = r['maintenance_churn']
@@ -303,7 +315,7 @@ def main():
             command = [str(binary), '-suite', 'quicksilver', '-dbs', cell['engine'], '-profile', cell.get('profile', 'durable'),
                        '-quicksilver-case', case, '-keys', str(cell.get('keys', 3000000)), '-read-workers', str(cell.get('workers', 4)),
                        '-quicksilver-reads', str(cell.get('reads', 6000000)), '-quicksilver-updates', str(cell.get('updates', 40000)),
-                       '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', '30m']
+                       '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', capture_wall_limit(cell)]
             if case == 'realistic':
                 command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
                             '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
