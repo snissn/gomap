@@ -947,6 +947,21 @@ surviving/inserted value and **every** miss domain. Errors cancel and join all r
 the writer before owner close. Failed suite DBs are retained with their path in
 the error; successful DBs are removed unless `-keep` is supplied.
 
+Optional `-quicksilver-churn-rounds 2` adds bounded write/automatic-maintenance
+characterization after the ordinary measured phases and final reopen proof.
+It reuses one cached public TreeDB owner across rounds: restore generic records,
+repeat the existing mutations/deleted-key preparation, checkpoint, pause
+(default `-quicksilver-churn-pause 6s`), and run the full oracle each round.
+Only realistic cached public TreeDB supports it; rounds are bounded to 1..32
+and pauses to positive durations up to 1m, checked before loading. The additive
+`maintenance_churn` result separates write/checkpoint/pause/proof wall time,
+engine stats, Go heap, supported RSS and exact final files after clean close.
+Ordinary `final_files` remains the census before the ordinary final reopen;
+timed reads, report fields and phase artifact names keep their existing meaning.
+Whole-process HWM, block/mutex and trace include enabled rounds. This is a
+short characterization, not a steady-state bound or a performance win.
+See [capture configuration and method limits](../../docs/benchmarks/treedb_quicksilver_workflow/README.md#unified-generic-maintenance-characterization).
+
 After closing the workload process and running offline maintenance, reuse the
 same full value/miss oracle with `-quicksilver-verify-dir <retained-data-dir>`.
 Select exactly one `-dbs` engine and supply the original case, mixture, seed,

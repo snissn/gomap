@@ -161,3 +161,42 @@ It has four aggregate read phases with independently controlled reader widths
 and GOMAXPROCS. Its payload/trace/defaults and JSON schema differ from the
 standalone `BenchmarkQuicksilverWorkflow` described here. Keep their artifacts
 and measurements separate; neither establishes a Cloudflare service replacement.
+
+## Unified generic maintenance characterization
+
+For the separate unified `-suite quicksilver` generic workflow, append
+`-quicksilver-churn-rounds 2` to a realistic cached public TreeDB command.
+This default-off mode runs after the four ordinary warmed read phases and the
+ordinary final checkpoint/close/reopen/full oracle. The verified final reopen
+owner stays open continuously across the characterization rounds. Each round
+restores the original generic population, repeats the existing disjoint
+insert/delete preparation and mutation batches, checkpoints, pauses for
+`-quicksilver-churn-pause` (default 6s), then runs the same full value/miss oracle.
+It does not change the production maintenance scheduler. Counts are limited to
+1..32 and pauses to positive durations up to 1m; unsupported cases/engines and
+invalid bounds fail before loading. Retained verification mode rejects churn.
+
+The additive `maintenance_churn` result records per-round mutation counts,
+write/checkpoint/pause/proof and total wall time, engine stats, process Go heap
+bytes and separately labeled RSS (including whether RSS is supported).
+Engine mapping counters in the stats are virtual mapped bytes, not resident
+bytes. `final_files_after_close` is an exact file census after clean close of
+the continuous owner; ordinary `final_files` still describes the ordinary
+workload before its final verified reopen. Guard/error paths close the owner
+and retain the failed DB. No second fixture or full key/value map is retained.
+A short bounded run does not establish a steady-state or asymptotic space bound,
+and this instrumentation makes no performance improvement claim. Link findings
+about automatic maintenance to #1185/#943.
+
+The frozen `scripts/unified_bench_quicksilver_capture.py` collector accepts
+optional cell fields `churn_rounds`, `churn_pause` (Go canonical duration), and
+`churn_pause_ns` (required with a custom pause). Existing plans produce the same
+commands. The manifest's `build_env` can explicitly set
+`TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE=0` or `1` for matched default
+versus opt-in attribution; unset remains the default. This value, source head,
+command, resolved commit API/config, round counts, requested/observed pause and
+complete round proof are recorded and validated. Freeze and independently review
+the exact harness/runtime before retained collection. The four read-phase CPU
+and allocation artifact names and timers remain unchanged. Whole-process time-v
+HWM/RSS, block/mutex profiles and trace include enabled characterization rounds;
+do not compare those process totals with ordinary-only captures as read costs.

@@ -52,6 +52,44 @@ def report(reads=10000):
 
 
 class CaptureRehearsal(unittest.TestCase):
+    def test_churn_contract(self):
+        self.assertEqual(capture.churn_settings(dict(engine='treedb', churn_rounds=2)), (2, 6000000000))
+        for cell in (dict(churn_rounds=-1), dict(churn_rounds=33), dict(churn_rounds=True),
+                     dict(churn_pause='6s'), dict(engine='lmdb', churn_rounds=2),
+                     dict(engine='treedb', case='random4k', churn_rounds=2),
+                     dict(engine='treedb', churn_rounds=2, churn_pause_ns=-1),
+                     dict(engine='treedb', churn_rounds=2, churn_pause_ns=60000000001)):
+            with self.assertRaises(AssertionError):
+                capture.churn_settings(cell)
+        packet = report()
+        cell = dict(engine='treedb', keys=40000, reads=10000, churn_rounds=2)
+        packet['config'].update(churn_rounds=2, churn_pause_ns=6000000000)
+        packet['registered_cli_flags'].update({'quicksilver-churn-rounds': '2', 'quicksilver-churn-pause': '6s'})
+        snapshot = dict(process_heap_alloc_bytes=1, process_rss_bytes=2, process_rss_supported=True,
+                        engine_stats=packet['final_stats'])
+        round = dict(round=1, restored_keys=40000, mutation_targets=40000, mutation_commit_batches=160,
+                     mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
+                     wall_seconds=10., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
+                     pause_seconds=6., before=snapshot, after=snapshot)
+        packet['maintenance_churn'] = dict(label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
+                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2)],
+                                          final_files_after_close={'maindb/index.db': 4096})
+        metadata = dict(env={'TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE': '1'})
+        with tempfile.TemporaryDirectory() as temp:
+            capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            for section, field, value in ((round, 'verified_keys', 1), (round, 'round', 2),
+                                           (round, 'pause_seconds', 5.), (round, 'mutation_commit_batches', 1),
+                                           (snapshot, 'process_rss_supported', False),
+                                           (packet['maintenance_churn'], 'leaf_generation_pack_maintenance_env', '')):
+                original = section[field]
+                section[field] = value
+                with self.assertRaises(AssertionError):
+                    capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+                section[field] = original
+            packet['maintenance_churn']['rounds'].pop()
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+
     def test_retained_database_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = pathlib.Path(temp)/'evidence'/'capture'/'1-treedb'
