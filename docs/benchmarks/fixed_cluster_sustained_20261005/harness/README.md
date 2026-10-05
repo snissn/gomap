@@ -32,7 +32,16 @@ python3 -B /absolute/path/harness/check.py \
 Checks retain source-only instantiation and portable-import stdout/stderr/actual
 exit codes under the fixture directory. The synthetic receipts are deliberately
 fabricated for validation and must never become campaign or source authority.
-All 51 earlier controls remain; negative checks cover each packaged host's
+Input archives contain only regular files named relative to the input root:
+the inventory keys plus `input-inventory.json`, with no containing-directory
+entry. The pre-input freezer uses the existing post-input sealer's file-by-file
+packing pattern. Pure integration checks execute each actual archive producer
+block on an owned synthetic nested bundle and pass its bytes through the actual
+permission and native-oracle archive validators. The directory-prefixed form
+and mismatched payload digests are rejected; transport and campaign paths are
+not executed by this fixture.
+
+All 152 prior controls remain; negative checks cover each packaged host's
 identity, source, ELF hash/positive bytes, packaging state, unchanged parent and
 unmounted stores, and all three native frozen-inventory count joins. No network,
 Go build, native oracle execution, Docker, campaign, or workload replay occurs.

@@ -162,10 +162,11 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "65d5f2245a0d5d8600d0f86bc0719c01d83680d1f4740441e6d113134def3589"
+        "sha256": "572daee58e572d1755eeb70f4f1804d73ae8cccfb2caa1bb679b3af62bedfcd1"
       },
       "changes": [
-        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
+        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
+        "Pack only regular input files using inventory-relative archive names; no containing-directory entry"
       ]
     },
     "growth_constructor": {

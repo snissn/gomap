@@ -1,5 +1,5 @@
 """Bounded synthetic source construction checks. No transport or ranking."""
-import argparse,ast,base64,copy,difflib,hashlib,importlib.util,json,math,re,struct,subprocess,sys,uuid
+import argparse,ast,base64,copy,difflib,hashlib,importlib.util,json,math,re,struct,subprocess,sys,tarfile,uuid
 from pathlib import Path
 sys.dont_write_bytecode=True
 R=Path(__file__).parent
@@ -289,5 +289,48 @@ proc,post_out=generated('post_constructor',post_pins,'post-complete')
 assert proc.returncode==0,proc.stderr
 post_source=post_out.read_text();ast.parse(post_source);assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',post_source)
 checks.append('actual_complete_post_instantiation_AST_nested_bindings_no_historical_paths')
+
+# Build real archives with the actual producer AST blocks, without executing
+# their bootstrap, source-acceptance or transport paths. Both consumers validate
+# the resulting bytes using their unmodified inventory/member/digest gates.
+permission=load(R/m['roles']['permission_stage']['output']['path'],'trial24_archive_permission_checks')
+bundle=fixtures/'trial24-archive-inputs';bundle.mkdir()
+payloads={'bootstrap.json':b'{}\n','dataset/documents.f32':b'\x00\x01\x02\x03','historical-chain/nested/receipt.json':b'{"synthetic":true}\n','empty.bin':b''}
+for name,raw in payloads.items():
+ target=bundle/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
+inventory={name:sha(raw) for name,raw in payloads.items()}
+inventory_raw=(json.dumps(inventory,indent=2)+'\n').encode()
+(bundle/'input-inventory.json').write_bytes(inventory_raw)
+def archive_producer_block(source):
+ tree=ast.parse(source);main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+ blocks=[n for n in main.body if isinstance(n,ast.With) and any(isinstance(item.context_expr,ast.Call) and isinstance(item.context_expr.func,ast.Attribute) and isinstance(item.context_expr.func.value,ast.Name) and item.context_expr.func.value.id=='tarfile' and item.context_expr.func.attr=='open' for item in n.items)]
+ assert len(blocks)==1
+ return ast.Module(body=blocks,type_ignores=[])
+archive_receipts={}
+sources={'pre_input_freezer':Path(portable_sources['pre_input_freezer']).read_bytes(),'post_sealer':post_source.encode()}
+for name,source in sources.items():
+ archive=fixtures/('trial24-'+name+'.tar.gz')
+ exec(compile(archive_producer_block(source),'actual-'+name+'-archive-producer','exec'),{'tarfile':tarfile,'O':bundle,'OUT':bundle,'archive':archive,'ARCHIVE':archive})
+ raw=archive.read_bytes()
+ with tarfile.open(archive,'r:gz') as tar:
+  rows=tar.getmembers();assert len(rows)==len(inventory)+1 and all(row.isfile() for row in rows)
+  assert {row.name for row in rows}==set(inventory)|{'input-inventory.json'}
+ permission.archive_check(c,{'input_inventory_sha256':sha(inventory_raw)},inventory,raw)
+ assert nr.input_archive(raw,inventory_raw)==inventory
+ archive_receipts[name]={'archive_path':str(archive),'archive_sha256':sha(raw),'inventory_sha256':sha(inventory_raw),'members':sorted(set(inventory)|{'input-inventory.json'}),'permission_archive_check':True,'native_input_archive':True,'producer_source_sha256':sha(source)}
+ checks.append('actual_'+name+'_archive_flat_members_both_consumers_accept')
+# Reconstruct the rejected directory-prefixed form to prove this integration
+# protects against restoring the old producer and against relaxing consumers.
+legacy=fixtures/'trial24-legacy-directory-prefixed.tar.gz'
+with tarfile.open(legacy,'x:gz') as tar:tar.add(bundle,arcname=bundle.name)
+legacy_raw=legacy.read_bytes()
+bad('actual_permission_rejects_directory_prefixed_producer_archive',lambda:permission.archive_check(c,{'input_inventory_sha256':sha(inventory_raw)},inventory,legacy_raw))
+bad('actual_native_rejects_directory_prefixed_producer_archive',lambda:nr.input_archive(legacy_raw,inventory_raw))
+corrupt=copy.deepcopy(inventory);corrupt['dataset/documents.f32']='0'*64
+for name,row in archive_receipts.items():
+ raw=Path(row['archive_path']).read_bytes()
+ bad(name+'_archive_permission_rejects_payload_digest_mismatch',lambda raw=raw:permission.archive_check(c,{'input_inventory_sha256':sha(inventory_raw)},corrupt,raw))
+ bad(name+'_archive_native_rejects_inventory_raw_digest_mismatch',lambda raw=raw:nr.input_archive(raw,json.dumps(corrupt).encode()))
+(fixtures/'archive-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ARCHIVE_INTEGRATION_ONLY','producers':archive_receipts,'legacy_archive_sha256':sha(legacy_raw),'runtime_started':False,'network_calls':0},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

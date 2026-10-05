@@ -86,7 +86,9 @@ def main():
  (O/'root-chain-proof.json').write_text(json.dumps(proof,indent=2)+'\n')
  files={str(f.relative_to(O)):sha(f.read_bytes()) for f in sorted(O.rglob('*')) if f.is_file()};(O/'input-inventory.json').write_text(json.dumps(files,indent=2)+'\n')
  archive=O.with_suffix('.tar.gz');assert not archive.exists()
- with tarfile.open(archive,'x:gz') as t:t.add(O,arcname=O.name)
+ with tarfile.open(archive,'x:gz') as t:
+  for path in sorted(O.rglob('*')):
+   if path.is_file():t.add(path,arcname=str(path.relative_to(O)),recursive=False)
  seal=dict(state='FRESH_PRE_INPUTS_FROZEN_NO_RECALL_EXECUTED',campaign=RUN,input_root=str(O),input_inventory_sha256=sha((O/'input-inventory.json').read_bytes()),files=len(files),archive=str(archive),archive_sha256=sha(archive.read_bytes()),qualification_prefix=prefix,bootstrap_sha256=sha(bootraw),config_sha256=sha(configraw),plan_sha256=sha(planraw),voters=voters,build_source_head=prov['RuntimeSourceHead'],product_applicability_head=None,candidate_source_tree='__ROOT_FROZEN_TREE__',candidate_pending_merge=False)
  (R/'seal.json').write_text(json.dumps(seal,indent=2)+'\n');print(json.dumps(seal))
 if __name__=='__main__':main()
