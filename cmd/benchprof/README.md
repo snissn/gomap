@@ -541,3 +541,79 @@ Retain raw Go benchmark output and compare identical helper bytes in balanced
 fresh processes. These package microbenchmarks are diagnostic artifacts, not
 benchprof inputs or evidence of service throughput, recall or cluster capacity;
 the unified-bench profile format and parser contract are unchanged.
+
+
+### Opt-in retained foreground duration/fence capture
+
+Issue #5036 extends this same standalone driver with
+`--retained`; the default schema-v2 causal pilot and its eight cases remain
+unchanged. Retained schema `gomap-native-foreground-retained-v1` requires
+`treedb_test,mvcc_native_foreground,mvcc_native_prune`. The native observer
+package and interfaces are currently an explicit unmerged M7 runtime
+dependency: ordinary builds exclude the fixtures, the disabled bridge preserves
+the v2 tag combination, and requesting retained mode without the observer tag
+fails clearly. A candidate overlay smoke demonstrates tooling construction;
+it does not qualify clean main or a candidate with outstanding product failures.
+
+```sh
+# Small construction smoke; deliberately insufficient for qualification.
+python3 scripts/native_prune_foreground.py --go "$GO" --retained --smoke \
+  --n 64 --repetitions 1 --out "$OUT"
+python3 scripts/native_prune_foreground.py --out "$OUT" --validate
+python3 scripts/native_prune_foreground.py --out "$OUT" --self-test
+
+# Only after reviewed tooling/runtime land and the exact runtime manifest is
+# independently accepted: fixed Q32/1MiB, N/2N, growth/churn, fresh process/run.
+python3 scripts/native_prune_foreground.py --go "$GO" --retained --n 512 \
+  --repetitions 3 --runtime-status integrated-reviewed \
+  --expected-source "$EXPECTED_SOURCE_BINDINGS" --qualify --out "$QUAL_OUT"
+```
+
+The runtime-status declaration and expected source digest bind the reviewed
+runtime supplied by the caller; they are not an independent review attestation.
+`--validate` checks capture integrity; `--qualify` additionally applies the
+predeclared coverage/noise policy. Race captures establish correctness only.
+The native schema-1 qualification refusals remain unchanged; this separate
+capture does not populate exclusive `owned_retained_bytes`/`owned_peak_bytes`
+or certify the five native schema-1 gaps.
+
+Five raw-duration buffers have fixed capacity 65,536 uint64 values each:
+2,621,440 bytes of payload allocated before collection, plus fixed headers.
+Only scalar timing data is retained, with no source/DB pointer registry.
+Each worker owns its recorder. Overflow rejects capture integrity; no sampling
+or silent truncation occurs. Recorder writes happen after the public-operation
+end timestamp and affect scheduling; observer atomics/clock calls inside
+instrumented operations are included in observed latency. The fixed buffers
+remain resident during measurement and are part of the instrumented workload,
+not an exclusive native-owner heap measurement.
+
+Durations use Go monotonic `time.Now` intervals in nanoseconds. Read phases
+are defined by whether `writerDone` has closed at operation start; quantum
+phases sample the writer-active flag at entry; all writes belong to the active
+phase. Cross-boundary operations retain their start classification. Setup
+quanta and their total duration are excluded explicitly. Workers join before
+the first cumulative per-site observer snapshot. Cleanup duration runs from
+that join through cursor/old-reader release, correctness scans, checkpoint,
+reopen/pointer proof and final DB close; the second snapshot is then taken.
+The collector begins once after quiescent private-output setup and never
+resets during activity. Snapshots retain cumulative physical attempt/failure
+counts and all nine fence-site counts/maxima. Maxima are checked against the
+per-site maximum, never summed or subtracted into phase maxima. Nested holds
+may include waiting/I/O; physical attempts are not universal kernel syscall
+counts, and dedicated Finish-lock coverage remains limited by existing hooks.
+
+Per-run p95/p99 use nearest-rank `ceil(p*count)` over actual durations.
+Qualification requires at least 1,000 samples in each of ReadActive,
+ReadDrain and WriteActive in every run, at least three fresh repetitions per
+N/2N growth/churn cell, nonrace captures, and max/min <=1.25 for each phase's
+p95 and p99 across repetitions. Quantum distributions are descriptive and
+still require exact phase/count/duration accounting. Missing drain coverage,
+overflow, source/binary drift, missing sites/tags, false counts/maxima, failed
+children/oracles, or excessive spread fail closed. A tiny smoke cannot relax
+this policy. All failure artifacts are retained. The original immediate
+writer-activity sample at public prune return, partial-output start, overlap,
+finite writer/continuing-reader, survivor/pointer/old-reader and reopen
+oracles remain in force. The unbounded v2 reference has unmatched starting
+custody and stays descriptive. The driver verifies testing-owned temporary
+DB disposal only after the child releases all consumers and exits. These
+JSON/log packets are not benchprof inputs.

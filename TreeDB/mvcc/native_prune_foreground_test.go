@@ -46,7 +46,41 @@ func (h *foregroundLatency) add(d time.Duration) {
 	h.Buckets[i]++
 }
 
+// Raw durations have a fixed storage ceiling. A full recorder rejects retained
+// qualification; it never silently drops a sample. Each worker owns its buffers.
+const foregroundSampleCapacity = 65536
+
+type foregroundSamples struct {
+	DurationsNS             []uint64
+	FirstStartNS, LastEndNS uint64
+	Overflow                bool
+}
+
+func (h *foregroundSamples) init() { h.DurationsNS = make([]uint64, 0, foregroundSampleCapacity) }
+func (h *foregroundSamples) add(start, end time.Time, origin time.Time) {
+	if len(h.DurationsNS) == foregroundSampleCapacity {
+		h.Overflow = true
+		return
+	}
+	if len(h.DurationsNS) == 0 {
+		h.FirstStartNS = uint64(start.Sub(origin))
+	}
+	h.LastEndNS = uint64(end.Sub(origin))
+	h.DurationsNS = append(h.DurationsNS, uint64(end.Sub(start)))
+}
+
+type foregroundRetained struct {
+	SetupBuckets                                                                                         [8]uint64
+	Clock, PhaseRule                                                                                     string
+	Capacity                                                                                             int
+	SetupCalls, SetupTotalNS, SetupMaxNS, WriterStopNS, WorkersJoinedNS, CleanupEndNS, CleanupDurationNS uint64
+	DBDir                                                                                                string
+	OwnersClosed                                                                                         bool
+	ReadActive, ReadDrain, WriteActive, QuantumActive, QuantumDrain                                      foregroundSamples
+	AfterWorkers, AfterCleanup                                                                           foregroundMetrics
+}
 type foregroundResult struct {
+	Retained                                                                                                                                         *foregroundRetained `json:"retained,omitempty"`
 	AcceptanceCausePresent                                                                                                                           bool
 	AcceptanceCauseType, AcceptanceCauseText                                                                                                         string
 	LastCOWPhase, LastCOWSet, LastCOWItem                                                                                                            int
@@ -87,8 +121,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		t.Skip("opt-in driver only")
 	}
 	n, e := strconv.Atoi(os.Getenv("MVCC_FOREGROUND_N"))
-	if e != nil || n < 64 || n > 128 {
-		t.Fatal("N64/128 causal pilot only")
+	retained := os.Getenv("MVCC_FOREGROUND_RETAINED") == "1"
+	if e != nil || n < 64 || (!retained && n > 128) || (retained && n > 8192) {
+		t.Fatal("pilot N64/128; retained N64..8192 only")
 	}
 	mode, algorithm := os.Getenv("MVCC_FOREGROUND_MODE"), os.Getenv("MVCC_FOREGROUND_ALGORITHM")
 	if mode != "burst" && mode != "growth" && mode != "churn" {
@@ -98,6 +133,16 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		t.Fatal("algorithm")
 	}
 	r := foregroundResult{ReadersStopWithWriter: os.Getenv("MVCC_FOREGROUND_READER_STOP_WITH_WRITER") == "1", ForcedBudgetError: os.Getenv("MVCC_FOREGROUND_FORCE_BUDGET_ERROR") == "1", Schema: "gomap-native-foreground-v2", N: n, Mode: mode, Algorithm: algorithm, PID: os.Getpid()}
+	if retained {
+		if !foregroundMetricsEnabled {
+			t.Fatal("retained mode requires mvcc_native_prune tag and unmerged native observer/runtime dependency")
+		}
+		r.Schema = "gomap-native-foreground-retained-v1"
+		r.Retained = &foregroundRetained{Clock: "Go time.Now monotonic duration in nanoseconds", PhaseRule: "read start before writerDone closes = active; read start after writerDone closes = drain; quantum active flag sampled at entry; writes active; setup excluded; cleanup after workers join includes oracles checkpoint reopen and final close", Capacity: foregroundSampleCapacity}
+		for _, h := range []*foregroundSamples{&r.Retained.ReadActive, &r.Retained.ReadDrain, &r.Retained.WriteActive, &r.Retained.QuantumActive, &r.Retained.QuantumDrain} {
+			h.init()
+		}
+	}
 	defer func() {
 		data, err := json.MarshalIndent(r, "", "  ")
 		if err != nil {
@@ -110,6 +155,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	}()
 	fail := func(err error) { r.Error = err.Error(); t.Fatal(err) }
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	if retained {
+		r.Retained.DBDir = opts.Dir
+	}
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.PointerThreshold = 2048
 	db, err := treedb.Open(opts)
@@ -158,6 +206,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	var cursor *PruneCursor
 	foregroundStarted := false
 	var active atomic.Bool
+	var measurementStart time.Time
 	quantum := func() (PruneStats, error, bool) {
 		before := cursor
 		opts := PruneOptions{BatchSize: 1, Mode: CommitRelaxed, Cursor: cursor}
@@ -165,11 +214,20 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			opts.WorkRecords = 32
 			opts.WorkBytes = 1 << 20
 		}
+		startedActive := active.Load()
 		start := time.Now()
 		stats, err := s.PruneVersions(opts)
 		// Attribute ACKs and completion at the public return, before bookkeeping.
 		writerActiveAtReturn := active.Load()
-		r.QuantumLatency.add(time.Since(start))
+		end := time.Now()
+		r.QuantumLatency.add(end.Sub(start))
+		if retained && foregroundStarted {
+			h := &r.Retained.QuantumDrain
+			if startedActive {
+				h = &r.Retained.QuantumActive
+			}
+			h.add(start, end, measurementStart)
+		}
 		r.Calls++
 		r.FinalWorkRecords = stats.WorkRecords
 		r.FinalWorkBytes = stats.WorkBytes
@@ -243,6 +301,15 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	readerDone := make(chan struct{})
 	postWriterRead := make(chan struct{})
 	errCh := make(chan error, 2)
+	if retained {
+		r.Retained.SetupCalls = r.Calls
+		r.Retained.SetupTotalNS = r.QuantumLatency.TotalNS
+		r.Retained.SetupMaxNS = r.QuantumLatency.MaxNS
+		r.Retained.SetupBuckets = r.QuantumLatency.Buckets
+		foregroundMetricsBegin()
+		defer foregroundMetricsStop()
+	}
+	measurementStart = time.Now()
 	active.Store(true)
 	writerStart := time.Now()
 	wg.Add(2)
@@ -254,13 +321,21 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		defer wg.Done()
 		defer close(writerDone)
 		defer active.Store(false)
-		defer func() { r.WriterDurationNS = uint64(time.Since(writerStart)) }()
+		defer func() {
+			r.WriterDurationNS = uint64(time.Since(writerStart))
+			if retained {
+				r.Retained.WriterStopNS = uint64(time.Since(measurementStart))
+			}
+		}()
 		limit := uint64(256)
 		if mode == "burst" {
 			limit = 16
 		}
 		if mode == "churn" {
 			limit = 1024
+		}
+		if retained && mode != "burst" {
+			limit = 8192
 		}
 		for i := uint64(1); i <= limit; i++ {
 			ts := uint64(n + 1)
@@ -271,7 +346,11 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			overlap := inQuantum.Load()
 			start := time.Now()
 			e := s.CommitAt(ts, []Mutation{{Key: writer, Value: foregroundPayload(i)}}, CommitRelaxed)
-			r.WriteLatency.add(time.Since(start))
+			end := time.Now()
+			r.WriteLatency.add(end.Sub(start))
+			if retained {
+				r.Retained.WriteActive.add(start, end, measurementStart)
+			}
 			overlap = overlap || inQuantum.Load()
 			writeInCall.Store(false)
 			if overlap {
@@ -283,7 +362,11 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			}
 			acknowledged.Store(i)
 			r.Writes++
-			if mode != "burst" && time.Since(writerStart) >= 120*time.Millisecond {
+			duration := 120 * time.Millisecond
+			if retained {
+				duration = time.Second
+			}
+			if mode != "burst" && time.Since(writerStart) >= duration {
 				r.WriterStopReason = "observation-duration"
 				return
 			}
@@ -317,7 +400,15 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			lower := acknowledged.Load()
 			start := time.Now()
 			v, e := s.GetAt(writer, ^uint64(0))
-			r.ReadLatency.add(time.Since(start))
+			end := time.Now()
+			r.ReadLatency.add(end.Sub(start))
+			if retained {
+				h := &r.Retained.ReadActive
+				if afterWriter {
+					h = &r.Retained.ReadDrain
+				}
+				h.add(start, end, measurementStart)
+			}
 			overlap = overlap || inQuantum.Load()
 			readInCall.Store(false)
 			if overlap {
@@ -379,6 +470,10 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	}
 	stopReads.Store(true)
 	wg.Wait()
+	if retained {
+		r.Retained.WorkersJoinedNS = uint64(time.Since(measurementStart))
+		r.Retained.AfterWorkers = foregroundMetricsSnapshot()
+	}
 	close(errCh)
 	for e := range errCh {
 		if e != nil {
@@ -543,6 +638,16 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		fail(e)
 	}
 	r.PointerOracle = true
+	if retained {
+		if err = db.Close(); err != nil {
+			fail(err)
+		}
+		r.Retained.OwnersClosed = true
+		r.Retained.CleanupEndNS = uint64(time.Since(measurementStart))
+		r.Retained.CleanupDurationNS = r.Retained.CleanupEndNS - r.Retained.WorkersJoinedNS
+		r.Retained.AfterCleanup = foregroundMetricsSnapshot()
+		foregroundMetricsStop()
+	}
 	if r.Error != "" {
 		t.Error(r.Error)
 	}
@@ -572,5 +677,20 @@ func TestNativePruneForegroundBudgetErrorJoinsWorkers(t *testing.T) {
 	}
 	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || result.ReadsAfterWriterStop == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
 		t.Fatalf("error did not reach joined cleanup/oracles: %+v\n%s", result, raw)
+	}
+}
+
+func TestNativePruneForegroundRecorderBounds(t *testing.T) {
+	h := foregroundSamples{}
+	h.init()
+	begin := time.Now()
+	h.add(begin, begin.Add(time.Nanosecond), begin)
+	if len(h.DurationsNS) != 1 || h.DurationsNS[0] != 1 || h.FirstStartNS != 0 || h.LastEndNS != 1 || h.Overflow {
+		t.Fatal("monotonic raw interval")
+	}
+	h.DurationsNS = h.DurationsNS[:foregroundSampleCapacity]
+	h.add(begin, begin.Add(time.Nanosecond), begin)
+	if !h.Overflow || len(h.DurationsNS) != foregroundSampleCapacity || cap(h.DurationsNS) != foregroundSampleCapacity {
+		t.Fatal("recorder must reject overflow without allocation")
 	}
 }
