@@ -1,0 +1,38 @@
+File: unified-bench-diag-baseline
+Build ID: c26f61587e06fcf265a7cdcc3ff11fe8cb472cf9
+Type: inuse_space
+Time: 2026-10-04 22:44:01 HST
+Showing nodes accounting for 381.71MB, 98.40% of 387.93MB total
+Dropped 82 nodes (cum <= 1.94MB)
+Showing top 30 nodes out of 121
+      flat  flat%   sum%        cum   cum%
+  195.66MB 50.44% 50.44%   195.66MB 50.44%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+   62.29MB 16.06% 66.49%    62.29MB 16.06%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).store
+   34.13MB  8.80% 75.29%    34.13MB  8.80%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCacheSlot).storeLockedWithRecordChecksumState
+   32.01MB  8.25% 83.54%    32.01MB  8.25%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+   19.71MB  5.08% 88.63%    19.71MB  5.08%  main.newQuicksilverFixture
+      16MB  4.12% 92.75%       16MB  4.12%  bufio.NewWriterSize (inline)
+    6.97MB  1.80% 94.55%     6.97MB  1.80%  github.com/snissn/gomap/TreeDB/caching.getEntrySlice
+    5.51MB  1.42% 95.97%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB/caching.getBatchArena
+    2.88MB  0.74% 96.71%     2.88MB  0.74%  runtime/trace.(*traceMultiplexer).startLocked
+    2.50MB  0.65% 97.35%     2.50MB  0.65%  runtime.mallocgc
+    2.02MB  0.52% 97.88%     2.02MB  0.52%  github.com/snissn/gomap/TreeDB/db.newLeafPageReadCacheWithWriteAdmission (inline)
+    2.02MB  0.52% 98.40%     3.15MB  0.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter
+         0     0% 98.40%   202.75MB 52.26%  github.com/snissn/gomap/TreeDB.(*DB).Get
+         0     0% 98.40%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).Set
+         0     0% 98.40%    12.50MB  3.22%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).Write
+         0     0% 98.40%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).setView
+         0     0% 98.40%    12.50MB  3.22%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+         0     0% 98.40%    21.68MB  5.59%  github.com/snissn/gomap/TreeDB.Open
+         0     0% 98.40%    21.68MB  5.59%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0% 98.40%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB/caching.(*Batch).Set
+         0     0% 98.40%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB/caching.(*Batch).SetWithRevision
+         0     0% 98.40%    12.50MB  3.22%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 98.40%     5.51MB  1.42%  github.com/snissn/gomap/TreeDB/caching.(*Batch).arenaCopyInto
+         0     0% 98.40%     4.98MB  1.28%  github.com/snissn/gomap/TreeDB/caching.(*Batch).arenaCopyPtr (inline)
+         0     0% 98.40%     4.98MB  1.28%  github.com/snissn/gomap/TreeDB/caching.(*Batch).clonePtrValue
+         0     0% 98.40%    12.50MB  3.22%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 98.40%    12.50MB  3.22%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 98.40%   202.75MB 52.26%  github.com/snissn/gomap/TreeDB/caching.(*DB).Get
+         0     0% 98.40%    32.01MB  8.25%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog (inline)
+         0     0% 98.40%       12MB  3.09%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecords

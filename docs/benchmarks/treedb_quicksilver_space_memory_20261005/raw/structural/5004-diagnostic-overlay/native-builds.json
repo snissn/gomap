@@ -1,0 +1,98 @@
+{
+  "baseline": {
+    "binary_sha256": "1c084033cbbb478ec606a837d1cccda61fe54578bb3efbd439f951b0798f9562",
+    "build_env": {
+      "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+      "CGO_ENABLED": "1",
+      "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+      "GOCACHE": "/mnt/fast4tb/go-build-cache",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+      "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "command": [
+      "go",
+      "build",
+      "-p",
+      "1",
+      "-buildvcs=false",
+      "-tags",
+      "lmdb rocksdb",
+      "-overlay",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/baseline-native-overlay.json",
+      "-o",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-baseline",
+      "./cmd/unified_bench"
+    ],
+    "finished": 1791180943.3080604,
+    "gomaxprocs": "12",
+    "overlay_manifest_sha256": "09ed358d92457c07ee3a5b40098b4482f709421ce0c675c1c404578f5efa3941",
+    "overlay_mapping": {
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/TreeDB/internal/valuelog/grouped_frame_cache.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/baseline/grouped_frame_cache.go",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-baseline/cmd/unified_bench/main.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/baseline/main.go"
+    },
+    "rc": 0,
+    "receipt_sha256": "102249739856aec2720b29a20c994fbc1c67b67506d84a814820701ad5c96e98",
+    "source": {
+      "binary": "unified-bench-baseline",
+      "binary_sha256": "a1d3007d75440f623b748968ee7907908bb88fa7aa73042d27d1bc9326eea89f",
+      "head": "fb42d5ba229d2cbfba8727272af02f9544a33389",
+      "linkage": "dynamic"
+    },
+    "started": 1791180925.2746458,
+    "tmpdir": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp"
+  },
+  "candidate": {
+    "binary_sha256": "441642cc2f8da1a7ae397e14ea6de195e6d75a46a2aa48505c8c1723c34b6d54",
+    "build_env": {
+      "CGO_CFLAGS": "-I/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/include",
+      "CGO_ENABLED": "1",
+      "CGO_LDFLAGS": "-L/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib",
+      "GOCACHE": "/mnt/fast4tb/go-build-cache",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOMODCACHE": "/mnt/fast4tb/go-mod-cache",
+      "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "LD_LIBRARY_PATH": "/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib:/mnt/fast4tb/quicksilver-authoritative-20261003/native/root/usr/lib/x86_64-linux-gnu",
+      "PATH": "/home/mikers/.gvm/gos/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "command": [
+      "go",
+      "build",
+      "-p",
+      "1",
+      "-buildvcs=false",
+      "-tags",
+      "lmdb rocksdb",
+      "-overlay",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/candidate-native-overlay.json",
+      "-o",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/unified-bench-diag-candidate",
+      "./cmd/unified_bench"
+    ],
+    "finished": 1791180961.3775449,
+    "gomaxprocs": "12",
+    "overlay_manifest_sha256": "e35097dbc93542ad7b5d1c8629bdc0a9abc4a6c09836366ca490ba8f1c00b35d",
+    "overlay_mapping": {
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-candidate/TreeDB/internal/valuelog/grouped_frame_cache.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/candidate/grouped_frame_cache.go",
+      "/mnt/fast4tb/quicksilver-space-memory-20261005/source-candidate/cmd/unified_bench/main.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/candidate/main.go"
+    },
+    "rc": 0,
+    "receipt_sha256": "102249739856aec2720b29a20c994fbc1c67b67506d84a814820701ad5c96e98",
+    "source": {
+      "binary": "unified-bench-candidate",
+      "binary_sha256": "d02e3db6abf2761b948034872d290c490a31e6cf76586eaab64611ec34d0653c",
+      "head": "90219d64ced3539accff5d0e50d9b5fa6424ed20",
+      "linkage": "dynamic"
+    },
+    "started": 1791180943.4712968,
+    "tmpdir": "/mnt/fast4tb/quicksilver-space-memory-20261005/tmp"
+  }
+}

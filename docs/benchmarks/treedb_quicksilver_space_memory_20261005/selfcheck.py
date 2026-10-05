@@ -87,7 +87,7 @@ def main():
                                                extract.encoded(pending_plan)}))))
     public = result["public_matched"]
     extract.require(public["status"] == "VALIDATED_ALL" and public["observed_rows"] == 18
-                    and public["acceptance"] == "PENDING" and len(public["comparisons"]) == 12,
+                    and public["acceptance"] == "HELD" and len(public["comparisons"]) == 12,
                     "public inventory promoted to acceptance or incomplete")
     path = "public-matched/offsets-3m-matched/1-candidate-durable-primary/"
     for label, field, replacement in [
@@ -156,6 +156,50 @@ def main():
         dict(raw, **{analysis_path:extract.encoded(analyses)}), profiled=True)))
     checks.append(rejected("profile producer receipt differs from public", lambda:extract.public_matched(contract,
         altered("public-profiles/qualified-manifest-offsets.json", "provisional", False), profiled=True)))
+    structural = result["structural"]
+    extract.require(structural["status"] == "VALIDATED_ALL"
+                    and structural["acceptance"] == "STRUCTURAL_EVIDENCE_ONLY"
+                    and structural["per_cache_record_count"] == 864
+                    and len(structural["qualified_stats_before"]) == 8
+                    and len(structural["sampled_full_heap"]) == 16,
+                    "structural scope lost")
+    cache_path = "structural/offsets-3m-diagnostic-cache.jsonl"
+    cache_rows = [json.loads(line) for line in raw[cache_path].splitlines()]
+    first_capture = structural["qualified_stats_before"][0]
+    first = next(i for i,v in enumerate(cache_rows)
+                 if v["PID"] == first_capture["pid"] and v["UnixNano"] == first_capture["capture_start_ns"])
+    for label, mutate in [
+        ("structural live histogram changed", lambda v:v[first]["LiveK"].update({"2":0})),
+        ("structural reflected slot size changed", lambda v:v[first].update(SlotSizeBytes=136)),
+        ("structural retained empty capacity omitted", lambda v:v[first].update(EmptySlotOffsetCapacity={})),
+        ("structural byte total changed", lambda v:v[first].update(StructuralMetadataBytes=0)),
+        ("structural process identity changed", lambda v:v[first].update(PID=0)),
+        ("structural aggregate hit count changed", lambda v:v[first]["Stats"].update(Hits=v[first]["Stats"]["Hits"]+1)),
+        ("structural shared budget summed", lambda v:v[first]["Stats"].update(BudgetBytes=v[first]["Stats"]["BudgetBytes"]*2)),
+        ("structural duplicate cache in capture", lambda v:v[first+1].update(Cache=v[first]["Cache"])),
+        ("structural capture gap changed", lambda v:v[first+1].update(UnixNano=v[first]["UnixNano"]+10000001))]:
+        values = copy.deepcopy(cache_rows)
+        mutate(values)
+        changed = dict(raw, **{cache_path:("\n".join(json.dumps(v, sort_keys=True) for v in values)+"\n").encode()})
+        checks.append(rejected(label, lambda changed=changed:extract.structural_evidence(structural["records"], contract, changed)))
+    snapshot_path = "structural/m-diagnostic-analysis/full-snapshot-index.json"
+    for label, mutate in [
+        ("structural snapshot digest changed", lambda v:v[0].update(sha256="0"*64)),
+        ("structural snapshot PID changed", lambda v:v[0].update(pid=0)),
+        ("structural snapshot phase order changed", lambda v:v.reverse())]:
+        values = json.loads(raw[snapshot_path])
+        mutate(values)
+        changed = dict(raw, **{snapshot_path:extract.encoded(values)})
+        checks.append(rejected(label, lambda changed=changed:extract.structural_evidence(structural["records"], contract, changed)))
+    checks.append(rejected("structural analysis tool changed", lambda:extract.structural_evidence(
+        structural["records"], contract, altered("structural/m-diagnostic-analysis/analyses.json", "go_sha256", "0"*64))))
+    builds = json.loads(raw["structural/5004-diagnostic-overlay/native-builds.json"])
+    builds["baseline"]["binary_sha256"] = "0"*64
+    checks.append(rejected("structural overlay binary changed", lambda:extract.structural_evidence(structural["records"], contract,
+        dict(raw, **{"structural/5004-diagnostic-overlay/native-builds.json":extract.encoded(builds)}))))
+    records = copy.deepcopy(structural["records"])
+    records[0]["phases"][0]["reported_cache_snapshots"]["stats_before"]["treedb.vlog.grouped_frame_cache.hits"] = "0"
+    checks.append(rejected("structural phase aggregate changed", lambda:extract.structural_evidence(records, contract, raw)))
     restored = result["restored_maintenance"]
     extract.require(len(restored["attempts"]) == 3 and restored["status"] == "MEASURED_PROVISIONAL"
                     and restored["input_metadata"].startswith("inherited baseline"), "restored input boundary lost")
@@ -186,8 +230,8 @@ def main():
         altered(base + "exhaustive-before-oracle-census.json", "apparent_excluding_wal", 0))))
     prose = (extract.HERE / "REPORT.md").read_text()
     checks.append(rejected("publication prose changed", lambda:
-        extract.report(result, prose.replace("Candidate acceptance and final publication remain pending.",
-                                             "Candidate acceptance and final publication are complete."))))
+        extract.report(result, prose.replace("The measured candidate is held from merge; final publication remains pending.",
+                                             "The measured candidate is accepted for merge; final publication is complete."))))
     extract.require((extract.HERE / "RESULTS.json").read_bytes() == extract.encoded(result),
                     "RESULTS differs from extraction")
     extract.require((extract.HERE / "REPORT.md").read_text() == extract.report(result),

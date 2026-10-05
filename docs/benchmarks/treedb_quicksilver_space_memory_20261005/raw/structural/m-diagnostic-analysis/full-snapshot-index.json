@@ -1,0 +1,162 @@
+[
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "hits",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_2830144411.pprof",
+    "mtime_ns": 1791189834984003192,
+    "bytes": 45790,
+    "sha256": "9fc2ba4d37c5b2ea350c3008822c1983d3e3f63210a7b624318c8d1c896f684a"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "hits",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_354377343.pprof",
+    "mtime_ns": 1791189841073985215,
+    "bytes": 52937,
+    "sha256": "d34e2835d464a1a009d8c17da1bc90bcee6f4c5cabf089462eef127b055cbacf"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "misses",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_2063020319.pprof",
+    "mtime_ns": 1791189841144985009,
+    "bytes": 53108,
+    "sha256": "e560e652e681f21b0b5d89e9e1eaad58cc7c1502f60d0840e039894caa0a1440"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "misses",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_4168126585.pprof",
+    "mtime_ns": 1791189844384975655,
+    "bytes": 53734,
+    "sha256": "4fdb3a118c440cf1973983748454471ecb51fc02cba9c9fbf3cc72cb9a7d9562"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "mixed",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_234798887.pprof",
+    "mtime_ns": 1791189844451975463,
+    "bytes": 53796,
+    "sha256": "98f6e8863fd17773e05ef9977d931a537cb6c7aeec6c790008236c870db9cebe"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "mixed",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_439601822.pprof",
+    "mtime_ns": 1791189847993965401,
+    "bytes": 54250,
+    "sha256": "ec8c9494253f52bd227f1a25cb9ec11c2c869045ea7fc7a53e014dfe61ab9452"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "concurrent",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_3100667790.pprof",
+    "mtime_ns": 1791189848066965195,
+    "bytes": 54331,
+    "sha256": "c63c0b50bc7c35ed08e65a06f1a50db36b022a4531a01fbf88eeb537cc9dbca3"
+  },
+  {
+    "cell": "1-baseline-durable-primary-diagnostic",
+    "pid": 3098475,
+    "phase": "concurrent",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1649372314.pprof",
+    "mtime_ns": 1791189869885906921,
+    "bytes": 65653,
+    "sha256": "537e73c846e2ec9c12394dd66633a9eac5ac7335602ade6aab7aaa1387f60e11"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "hits",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_757678803.pprof",
+    "mtime_ns": 1791189968965715819,
+    "bytes": 47189,
+    "sha256": "bcfb1a3d13adf69a6d303e0e3c7976b4c1b4080b142a5c397f523d859de99138"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "hits",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_3825107869.pprof",
+    "mtime_ns": 1791189975158707557,
+    "bytes": 54550,
+    "sha256": "011b6ec73d5d8ad98b772ba764414ae6d4696cf33ce6c6889b73c38c606e4893"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "misses",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_753693128.pprof",
+    "mtime_ns": 1791189975232707461,
+    "bytes": 54780,
+    "sha256": "23c0f236ef76ec671e79a4e3e16f3bf411c791f06b1561916a0cdb81550b324e"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "misses",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1651225813.pprof",
+    "mtime_ns": 1791189978538703219,
+    "bytes": 55219,
+    "sha256": "bdd3ab9f3c5018f83f218e9f0610cb184cd3f06f5bee34f243d1e00042b78bb6"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "mixed",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_725167310.pprof",
+    "mtime_ns": 1791189978608703130,
+    "bytes": 55210,
+    "sha256": "a63980760d0f94922320ee9a90f481e8062244606bbc7319286e8900788d43be"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "mixed",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_3441094222.pprof",
+    "mtime_ns": 1791189982190698664,
+    "bytes": 55375,
+    "sha256": "45d4efbfa6e79a06871d9ea9a291a725045d30733f636535f1a15b608a5d252c"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "concurrent",
+    "kind": "base",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_base_1652890728.pprof",
+    "mtime_ns": 1791189982262698576,
+    "bytes": 55430,
+    "sha256": "fb49a7842b3d0d2837ed25dcd291721dfdf81f4200b94f061ec435e4fb2b3758"
+  },
+  {
+    "cell": "1-candidate-durable-primary-diagnostic",
+    "pid": 3100926,
+    "phase": "concurrent",
+    "kind": "after",
+    "path": "offsets-3m-diagnostic-full-allocs/quicksilver_allocs_after_1513164787.pprof",
+    "mtime_ns": 1791190006360671957,
+    "bytes": 68193,
+    "sha256": "a378880d1e609c0f750dffa597b21432838cbf9155980930adfe9c2510ea565c"
+  }
+]

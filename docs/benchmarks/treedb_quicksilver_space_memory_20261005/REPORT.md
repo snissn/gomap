@@ -1,6 +1,6 @@
 # TreeDB space, memory, and maintenance: provisional 3M evidence
 
-This packet records the baseline, 18 public matched runs, six public profile runs, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). Candidate acceptance and final publication remain pending. The maintenance and initial memory observations use one profiled primary run; the later controlled heap comparison uses three profiled durable-primary repeats per source; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
+This packet records the baseline, 18 public matched runs, six public profile runs, two structural diagnostics, restored-copy maintenance, and bounded failure diagnostics for [#5001](https://github.com/snissn/gomap/issues/5001). The measured candidate is held from merge; final publication remains pending. The maintenance and initial memory observations use one profiled primary run; the later controlled heap comparison uses three profiled durable-primary repeats per source; the public throughput comparison uses three unprofiled repeats per frozen source and workload.
 
 <!-- BEGIN summary -->
 Full reduced apparent WAL-excluded bytes by 47.39%, from 2,832,310,293 to 1,490,201,793.
@@ -111,7 +111,7 @@ The separate 256MiB outer-leaf mapping-budget diagnostic retained 333 samples, w
 
 HeapAlloc endpoints are not peaks. Profiled HeapAlloc before follows explicit pre-profile GC plus setup; HeapAlloc after precedes post-profile GC. Cache StatsAfter is captured later, after profiling stops and the writer joins. Concurrent allocation measurement ends at reader join and excludes the writer-only tail included in composition time. Delta inuse-space profiles are net sampled changes, not total retained cache heap. RSS has no phase markers and cannot establish phase-specific RSS peaks. RESULTS.json preserves reported cache slots, capacity, entries, and retained payload bytes at both boundaries; these statistics are not an atomic cache-manager snapshot or a complete metadata-heap measurement.
 
-Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; structural qualification and candidate acceptance remain pending.
+Known harness footprints are 3,000,000 oracle-state bytes, 9,375,000 distinct-tracking bytes, and 8,000,000 sample bytes; they are not directly subtractable from RSS. GOMEMLIMIT=2GiB is a soft Go memory goal. User and outer-leaf mapping budgets are separate controls, not process memory limits. The separate leaf-budget run is a setting diagnostic; the measured candidate remains held from merge.
 
 ## Bounded diagnosis and operation
 
@@ -140,7 +140,7 @@ The first performance experiment after R proves restored-copy correctness is the
 
 ## Public matched comparison: 18 validated runs
 
-Baseline `fb42d5ba229d2cbfba8727272af02f9544a33389` and frozen cache-offset candidate `90219d64ced3539accff5d0e50d9b5fa6424ed20` each ran three repeats of durable primary, fast primary, and durable holdout. Primary uses uniform access and 90% configured misses; holdout uses a 20% working set and 70% misses. All 18 rows passed the complete initial/final present and absent fixture oracles. Run order was not fully counterbalanced: fast primary and holdout ran baseline first in all three repeats; durable primary reversed only repeat 2, and collection spans repeats. Receipt `VALIDATED_ALL` describes the row inventory and correctness checks; performance acceptance remains pending. The manifest's original `provisional=true` remains unchanged. During import, all 2,143 baseline and 2,144 candidate compiled project-file entries were independently checked against their frozen Git blobs; extraction authenticates the preserved receipts and complete raw inventory.
+Baseline `fb42d5ba229d2cbfba8727272af02f9544a33389` and frozen cache-offset candidate `90219d64ced3539accff5d0e50d9b5fa6424ed20` each ran three repeats of durable primary, fast primary, and durable holdout. Primary uses uniform access and 90% configured misses; holdout uses a 20% working set and 70% misses. All 18 rows passed the complete initial/final present and absent fixture oracles. Run order was not fully counterbalanced: fast primary and holdout ran baseline first in all three repeats; durable primary reversed only repeat 2, and collection spans repeats. Receipt `VALIDATED_ALL` describes the row inventory and correctness checks; the measured candidate is held from merge. The manifest's original `provisional=true` remains unchanged. During import, all 2,143 baseline and 2,144 candidate compiled project-file entries were independently checked against their frozen Git blobs; extraction authenticates the preserved receipts and complete raw inventory.
 
 Cells show median [minimum, maximum] across three repeats. Throughput changes divide candidate median by baseline median; paired ranges divide corresponding candidate/baseline repeat values. Reader concurrent throughput excludes writer completion after reader join; whole-command time includes setup, all phases, writer completion, reopen, and full verification. No significance or noise-dismissal claim is made on this shared host.
 
@@ -174,7 +174,9 @@ Mixed and concurrent tails retain both distributions and matched repeat ratios. 
 | durable holdout | concurrent | 11.769 [11.641, 12.440] | 11.903 [11.883, 12.250] | 1.010 [0.985, 1.023] | 20.636 [20.345, 21.581] | 20.256 [20.134, 21.377] | 0.991 [0.976, 0.996] |
 <!-- END public_tails -->
 
-The guardrails below retain process RSS, command/load time, and final runtime file sizes. These file sizes are apparent bytes after final checkpoint and close, before the final writable reopen/full oracle; they are not allocated-byte censuses or post-oracle retention measurements ([capture boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L932)). Per-domain initial/final totals are in RESULTS.json. GNU-time RSS high-water is a whole-process observation; observer samples retain anonymous/file/shared components at the sampled RSS peak and separate component maxima. These public rows do not exercise the earlier diagnostic's 256MiB leaf-mapping override. Neither unprofiled heap endpoints nor RSS differences establish a cache-memory improvement: GC state is uncontrolled and the two structural diagnostics remain pending. The separately profiled comparison below supplies controlled heap evidence.
+The measured cache-offset candidate is held from merge. Durable mixed median throughput is lower by approximately 3–4% and p99 is higher by approximately 0.3 microseconds in the primary and holdout workloads. The 54–66-million-byte reduction in profiled pre-phase HeapAlloc and the structural evidence below do not satisfy the public cached performance gate. #5004 and its draft optimization remain open for refinement, without a regression-free performance claim. Replay-failure raw evidence will be imported separately.
+
+The guardrails below retain process RSS, command/load time, and final runtime file sizes. These file sizes are apparent bytes after final checkpoint and close, before the final writable reopen/full oracle; they are not allocated-byte censuses or post-oracle retention measurements ([capture boundary](https://github.com/snissn/gomap/blob/fb42d5ba229d2cbfba8727272af02f9544a33389/cmd/unified_bench/suite_quicksilver.go#L932)). Per-domain initial/final totals are in RESULTS.json. GNU-time RSS high-water is a whole-process observation; observer samples retain anonymous/file/shared components at the sampled RSS peak and separate component maxima. These public rows do not exercise the earlier diagnostic's 256MiB leaf-mapping override. Neither unprofiled heap endpoints nor RSS differences establish a cache-memory improvement: GC state is uncontrolled. The separately profiled comparison below supplies controlled heap evidence.
 
 <!-- BEGIN public_guardrails -->
 | Cell | Load s | Whole command GNU time s | Process RSS high-water bytes | Final pre-oracle apparent bytes excluding WAL |
@@ -215,7 +217,7 @@ Each profile begins with two explicit GCs for the allocation snapshot ([GC bound
 | concurrent | 425,467,088 [397,453,896, 470,617,760] | 359,813,632 [353,922,784, 368,105,640] | -65,653,456 | -71,544,304 [-110,804,128, -29,348,256] | 872,767,968 [855,496,464, 917,199,608] | 891,612,512 [878,753,904, 896,609,320] | 138.188 [134.121, 139.676] | 138.269 [134.757, 139.112] |
 <!-- END profile_heap -->
 
-Candidate HeapAlloc before is lower in all three paired repeats for every phase; the median differences are about 54–66 million bytes. Both sources retain approximately the same 67.1-million-byte decoded payload budget. Slots, allocated shards, aggregate capacity, and entry counts vary between repeats and sources. The counters therefore support a metadata-efficiency hypothesis without assigning the whole heap difference to offset storage. These are whole-process observations after prior workload phases, not isolated per-entry sizes; two structural diagnostics remain required.
+Candidate HeapAlloc before is lower in all three paired repeats for every phase; the median differences are about 54–66 million bytes. Both sources retain approximately the same 67.1-million-byte decoded payload budget. Slots, allocated shards, aggregate capacity, and entry counts vary between repeats and sources. The counters therefore support a metadata-efficiency hypothesis without assigning the whole heap difference to offset storage. These are whole-process observations after prior workload phases, not isolated per-entry sizes; the structural diagnostics below measure the offset layout separately.
 
 <!-- BEGIN profile_cache -->
 | StatsBefore, value-log grouped cache | Allocated slots | Allocated shards | Capacity | Entries | Retained payload B | Budget B |
@@ -241,17 +243,55 @@ The RSS observations below include mappings, heap, stacks, profiler buffers, and
 
 The native ledger preserves 78 profile/trace objects (13 per run) by path, byte count, and SHA-256; these larger originals remain on the protected native host. Twenty-four successful mixed CPU, mixed allocation-space, mutex, and block top analyses bind the exact source binary, profile digest, tool digest, command, and output hash. The initial analysis failed with a Go 1.25/Go 1.26 toolchain-version mismatch; its original failure output is preserved separately and supplies no performance evidence. Allocation-space top samples are not retained heap, block/mutex delays are not CPU time, and cumulative frames must not be added together. RESULTS.json preserves the ledger, analysis commands, full grouped-cache snapshots, GC counts, heap brackets, allocation brackets, and process observations.
 
-## Remaining matrix inputs
+## Structural cache diagnostics
 
-The three original collector plans remain hash-bound. The public matched and profile plans are now populated above; only the following result inventories remain pending.
+Two separately instrumented builds retain the frozen baseline and candidate runtime sources, with diagnostic overlays for cache census and full heap snapshots. Their commands, overlay inputs, native build receipts, binary hashes, and complete fixture oracles are bound separately from the public runs. Overlay timings and RSS do not enter public performance or memory acceptance.
+
+All 864 per-cache records pass individual histogram, slot-count, reflected-size, and byte identities. Adjacent records from one PID form a capture only while timestamp gaps are at most 10ms; the 20 resulting passes are separated by larger gaps. Within each phase's alternating base/after full-snapshot interval, the first of two contiguous passes is StatsBefore. All eight published passes have unique cache identities and owner paths, and their 14 additive counters equal emitted phase StatsBefore exactly. The shared global budget is checked for equality rather than summed. Each row below is one independent capture: rows and repeated captures must not be added together.
+
+<!-- BEGIN structural_bytes -->
+| Independent StatsBefore pass | Caches | Allocated slots | Live entries | Live K=2 fraction | Slot struct B | Separate offset backing B | Structural metadata B | Empty-slot offset capacity B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| diag-baseline hits | 41 | 40,940 | 13,875 | 98.97% | 46,507,840 | 0 | 46,507,840 | 27,714,560 |
+| diag-baseline misses | 41 | 46,920 | 14,366 | 99.38% | 53,301,120 | 0 | 53,301,120 | 33,335,296 |
+| diag-baseline mixed | 41 | 47,392 | 14,350 | 99.38% | 53,837,312 | 0 | 53,837,312 | 33,835,008 |
+| diag-baseline concurrent | 41 | 47,888 | 14,378 | 99.38% | 54,400,768 | 0 | 54,400,768 | 34,314,240 |
+| diag-candidate hits | 45 | 46,868 | 14,266 | 99.42% | 6,374,048 | 270,600 | 6,644,648 | 96,804 |
+| diag-candidate misses | 45 | 54,564 | 14,684 | 99.63% | 7,420,704 | 342,708 | 7,763,412 | 165,896 |
+| diag-candidate mixed | 45 | 55,204 | 14,690 | 99.63% | 7,507,744 | 348,396 | 7,856,140 | 171,512 |
+| diag-candidate concurrent | 45 | 55,880 | 14,707 | 99.64% | 7,599,680 | 355,188 | 7,954,868 | 178,168 |
+<!-- END structural_bytes -->
+
+Live K=2 accounts for approximately 99% of live entries. Baseline slots reserve capacity 256 for offsets, including empty slots; the candidate's common capacities are 0 and 3. Actual reflected slot structs are 1,136 and 136 bytes. The candidate still retains offset backing on some empty slots: concurrent StatsBefore includes 178,168 such bytes. Baseline inline-offset bytes are already embedded in its slot-struct total and must not be added again. Candidate totals include separate offset backing. These sums describe the measured slot representation, excluding allocator rounding, shard/maps, decoded payloads, and scratch; the sources have different cache and allocated-slot counts.
+
+Concurrent after captures contain duplicate owner paths with distinct cache identities and do not reproduce emitted phase StatsAfter: the baseline excess is 224 slots, 57 entries, and 1,752,412 retained payload bytes; candidate excess is 192 slots, 50 entries, and 1,556,050 retained payload bytes. Those captures remain individually validated raw evidence and are excluded from derived aggregates. No subset search or explanation of that discrepancy is used to qualify them.
+
+Sixteen full heap snapshots are retained byte-for-byte and bound to PID, cell, run interval, alternating phase/kind order, and file timestamp. Their native inuse-space analyses bind tool, binary, profile, command, and output hashes. The following pre-phase samples use the full pre-phase snapshots after explicit GC, rather than allocation delta profiles.
+
+<!-- BEGIN structural_heap -->
+| Full pre-phase GC snapshot | Sampled inuse-space total | Grouped cache store flat | Decode scratch flat |
+| --- | ---: | ---: | ---: |
+| baseline-durable-primary-diagnostic hits | 327.28MB | 57.77MB | 123.43MB |
+| baseline-durable-primary-diagnostic misses | 387.93MB | 62.29MB | 195.66MB |
+| baseline-durable-primary-diagnostic mixed | 389.44MB | 62.79MB | 196.17MB |
+| baseline-durable-primary-diagnostic concurrent | 396.67MB | 63.80MB | 200.87MB |
+| candidate-durable-primary-diagnostic hits | 266.10MB | 4.50MB | 119.82MB |
+| candidate-durable-primary-diagnostic misses | 317.60MB | 5MB | 184.87MB |
+| candidate-durable-primary-diagnostic mixed | 318.62MB | 5MB | 184.87MB |
+| candidate-durable-primary-diagnostic concurrent | 322.19MB | 5.50MB | 186.94MB |
+<!-- END structural_heap -->
+
+These sampled and rounded pprof quantities include the whole process. The cache-store flat samples support the structural explanation; decode scratch and other allocations remain substantial. Cumulative frames are not additive, and sampled heap is neither an exact metadata census nor proof of an RSS reduction. Full after snapshots and all sixteen analyses remain in RESULTS.json and raw inputs.
+
+## Collected matrix inputs
+
+The three original collector plans remain hash-bound. Their 18 unprofiled public rows, six public profile rows, and two structural diagnostic rows are populated above.
 
 <!-- BEGIN planned_inputs -->
-| Pending plan | Expected rows | Imported result rows | Class |
-| --- | ---: | ---: | ---: |
-| offsets-3m-structural-diagnostic-plan.json | 2 | 0 | profiled structural diagnostic |
+All three planned row inventories are populated; acceptance gates below remain open.
 <!-- END planned_inputs -->
 
-Each imported run retains its actual `run.json`, stdout, stderr, qualified manifest, and source/build/native/runner receipts. Extraction authenticates the complete raw inventory and manifest/collector/command/source/runtime bindings before interpreting a row, then matches repeat and cell identity to the pinned plan and verifies final values and misses. Public matched rows supply throughput and latency comparisons; profiled public pairs supply heap/allocation/cache observations; the two instrumented structural-K diagnostics remain diagnostic. The two remaining profiled packets will be added from concrete supplied raw; completion and acceptance wording remain provisional.
+Each imported run retains its actual `run.json`, stdout, stderr, qualified manifest, and source/build/native/runner receipts. Extraction authenticates the complete raw inventory and manifest/collector/command/source/runtime bindings before interpreting a row, then matches repeat and cell identity to the pinned plan and verifies final values and misses. Public matched rows supply throughput and latency comparisons; profiled public pairs supply heap/allocation/cache observations; instrumented structural-K rows supply diagnostic evidence. Churn, replay-failure evidence import, and final publication remain pending.
 
 ## Provenance and remaining gates
 
@@ -266,7 +306,7 @@ The generic-v1 primary fixture uses seed 24, 3M keys, 6M aggregate reads, 40k up
 Raw paths and exact SHA-256 values are in inputs.json and RESULTS.json. Larger profiles remain at their recorded native paths with digests. Gzipped raw inputs preserve exact original bytes and bind both compressed and original digests. REPORT.md supplies hash-pinned prose around generated numerical blocks. Reproduce extraction with `python3 extract.py --check`; run bounded validation with `python3 selfcheck.py` and `python3 -O selfcheck.py`. No command here builds binaries or opens a database.
 
 <!-- BEGIN pending -->
-- M: two structural cache diagnostics, performance acceptance, and final source qualification
+- M: final source qualification; measured candidate 90219 remains held from merge
 - C: qualified default and opt-in maintenance churn curves
 - R: independent acceptance of the retained production-repair and qualified restored-copy maintenance evidence
 - Accept the missing original maintenance build receipt as a documented reconstruction limitation

@@ -10,7 +10,7 @@ import re
 from statistics import median
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "d253776ccc3463626f09528c67c1984bf74a2923b2b661f9d8706819ce055374"
+INPUTS_SHA256 = "9b32f9ca7c62272097a434cb395dfe30dab0e0682efefecf1dcea9fe86b3a1a7"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -140,14 +140,15 @@ def rss_summary(rows, run=None, binary="unified-bench-baseline"):
                 for key in ["RssAnon", "RssFile", "RssShmem", "VmSwap"]}}
 
 
-def public_matched(contract, raw, profiled=False):
-    prefix = "public-profiles/" if profiled else "public-matched/"
-    output = "offsets-3m-profile-paired" if profiled else "offsets-3m-matched"
+def public_matched(contract, raw, profiled=False, diagnostic=False):
+    prefix = "structural/" if diagnostic else ("public-profiles/" if profiled else "public-matched/")
+    output = "offsets-3m-structural-diagnostic" if diagnostic else ("offsets-3m-profile-paired" if profiled else "offsets-3m-matched")
     bundle = prefix + output + "/"
     read = lambda name: json.loads(raw[prefix + name])
-    fixed = contract["public_profiles" if profiled else "public_matched"]
-    manifest = read("qualified-manifest-offsets.json")
-    require(raw[prefix + "qualified-manifest-offsets.json"] == raw[bundle + "manifest.json"],
+    fixed = contract["structural" if diagnostic else ("public_profiles" if profiled else "public_matched")]
+    manifest_name = "diagnostic-manifest-offsets.json" if diagnostic else "qualified-manifest-offsets.json"
+    manifest = read(manifest_name)
+    require(raw[prefix + manifest_name] == raw[bundle + "manifest.json"],
             "public manifest copies differ")
     require(manifest["provisional"] is True and manifest["sources"] == fixed["sources"],
             "public frozen source identity differs")
@@ -155,17 +156,20 @@ def public_matched(contract, raw, profiled=False):
     require(sha(plan_bytes) == fixed["plan_sha256"] and
             plan_bytes == raw["pending-plans/" + output + "-plan.json"], "public plan differs")
     plan = json.loads(plan_bytes)
-    require(plan["repeats"] == 3 and len(plan["cells"]) == (2 if profiled else 6) and
+    require(plan["repeats"] == (1 if diagnostic else 3) and len(plan["cells"]) == (2 if profiled else 6) and
             len({c["label"] for c in plan["cells"]}) == len(plan["cells"]), "public matrix dimensions differ")
     receipts = {}
     for name, receipt in manifest["receipts"].items():
-        data = raw[prefix + receipt["path"]]
+        data = raw[("public-matched/" if diagnostic else prefix) + receipt["path"]]
         require(sha(data) == receipt["sha256"] and data == raw[bundle + name + "-receipt.json"],
                 "public receipt binding differs: " + name)
         receipts[name] = json.loads(data)
     observations = [json.loads(line) for line in raw[prefix + output + "-memory.jsonl"].splitlines()]
     observed_count = 0
     for name, identity in fixed["sources"].items():
+        if diagnostic:
+            name = name.removeprefix("diag-")
+            identity = contract["public_matched"]["sources"][name]
         source, build = receipts["source"][name], receipts["build"][name]
         require(source["head"] == build["head"] == identity["head"] and
                 source["producer_script_sha256"] == fixed["collector_sha256"], "public producer differs")
@@ -180,7 +184,7 @@ def public_matched(contract, raw, profiled=False):
         require(receipts["runner"][name]["shared_host"] is True, "public runner qualification differs")
     phase_names = ["quicksilver_" + n for n in ["hits", "misses", "mixed", "concurrent"]]
     records = []
-    for repeat in range(1, 4):
+    for repeat in range(1, plan["repeats"] + 1):
         for cell in plan["cells"]:
             path = bundle + str(repeat) + "-" + cell["label"] + "/"
             run = json.loads(raw[path + "run.json"])
@@ -266,7 +270,7 @@ def public_matched(contract, raw, profiled=False):
                         and math.isclose(screen["tolerance_requests"], tolerance, rel_tol=1e-12)
                         and abs(phase["requested_absent"] - expected) <= tolerance, "public miss screening differs")
             require(run["finished"] > run["started"] >=
-                    receipts["build"][cell["source"]]["builds"]["native-build"]["finished"], "public time ordering differs")
+                    receipts["build"][cell["source"].removeprefix("diag-")]["builds"]["native-build"]["finished"], "public time ordering differs")
             require(len(value["update_batch_ms"]) == 40 and len(value["checkpoint_ms"]) == 4,
                     "public maintenance guardrail inventory differs")
             guard = {k:value[k] for k in ["load_seconds", "initial_checkpoint_ms", "reopen_ms",
@@ -297,6 +301,8 @@ def public_matched(contract, raw, profiled=False):
     ordered = sorted(records, key=lambda r:r["started"])
     require(all(a["finished"] <= b["started"] for a,b in zip(ordered, ordered[1:])), "public commands overlap")
     require(observed_count == len(observations), "unbound public RSS sample")
+    if diagnostic:
+        return structural_evidence(records, contract, raw)
     if profiled:
         return profile_evidence(records, contract, raw)
     def spread(values):
@@ -313,7 +319,7 @@ def public_matched(contract, raw, profiled=False):
                 metrics[metric]["candidate_over_baseline_median"] = median(vals["candidate"]) / median(vals["baseline"])
                 metrics[metric]["paired_candidate_over_baseline"] = spread([c/b for c,b in zip(vals["candidate"], vals["baseline"])])
             comparisons.append({"profile":profile,"mixture":mixture,"phase":phase_name,"metrics":metrics})
-    return {"status":"VALIDATED_ALL", "acceptance":"PENDING", "expected_rows":18,"observed_rows":len(records),
+    return {"status":"VALIDATED_ALL", "acceptance":"HELD", "expected_rows":18,"observed_rows":len(records),
             "manifest_provisional":True,"sources":fixed["sources"],"environment":fixed["environment"],
             "records":records,"comparisons":comparisons}
 
@@ -382,6 +388,132 @@ def profile_evidence(records, contract, raw):
             "top_analyses":analyses, "original_analysis_failure":failure,
             "heap_boundary":"explicit pre-profile GC followed by profile and reader setup; whole-process HeapAlloc",
             "timing_scope":"profiled diagnostic timings excluded from public performance acceptance"}
+
+
+def structural_evidence(records, contract, raw):
+    prefix = "structural/"
+    read = lambda name: json.loads(raw[prefix + name])
+    manifest = read("diagnostic-manifest-offsets.json")
+    builds = read("5004-diagnostic-overlay/native-builds.json")
+    overlay = read("5004-diagnostic-overlay/receipt.json")
+    require(manifest["diagnostic_inputs"]["sha256"] == sha(raw[prefix + manifest["diagnostic_inputs"]["path"]])
+            and overlay["generator_sha256"] == sha(raw[prefix + "5004-diagnostic-overlay/generate.py"]), "structural overlay method differs")
+    source_receipt = json.loads(raw["public-matched/receipts-offsets/source.json"])
+    for side, build in builds.items():
+        identity = contract["structural"]["sources"]["diag-" + side]
+        mapping_name = "5004-diagnostic-overlay/" + side + "-native-overlay.json"
+        require(build["rc"] == 0 and build["source"] == contract["public_matched"]["sources"][side]
+                and build["binary_sha256"] == identity["binary_sha256"]
+                and build["receipt_sha256"] == sha(raw[prefix + "5004-diagnostic-overlay/receipt.json"])
+                and build["overlay_manifest_sha256"] == sha(raw[prefix + mapping_name])
+                and read(mapping_name)["Replace"] == build["overlay_mapping"], "structural native build differs")
+        require(build["command"] == ["go", "build", "-p", "1", "-buildvcs=false", "-tags", "lmdb rocksdb", "-overlay",
+                "/mnt/fast4tb/quicksilver-space-memory-20261005/" + mapping_name, "-o",
+                "/mnt/fast4tb/quicksilver-space-memory-20261005/bin/" + identity["binary"], "./cmd/unified_bench"], "structural build command differs")
+        for filename, relative in [("grouped_frame_cache.go", "TreeDB/internal/valuelog/grouped_frame_cache.go"), ("main.go", "cmd/unified_bench/main.go")]:
+            binding = overlay["source_hashes"][side + "/" + filename]
+            require(binding["original_sha256"] == source_receipt[side]["files"][relative]
+                    and binding["overlay_sha256"] == sha(raw[prefix + "5004-diagnostic-overlay/" + side + "/" + filename + ".txt"]), "structural overlay source differs")
+    by_pid = {r["rss"]["pid"]:r for r in records}
+    require(len(by_pid) == 2 and all(r["started"] >= builds[r["cell"]["source"].removeprefix("diag-")]["finished"] for r in records), "structural process/build ordering differs")
+    index = read("m-diagnostic-analysis/full-snapshot-index.json")
+    require(len(index) == 16 and len({v["path"] for v in index}) == 16, "structural full snapshots incomplete")
+    for record in records:
+        cell = "1-" + record["cell"]["label"]
+        snapshots = [v for v in index if v["cell"] == cell]
+        require([(v["phase"],v["kind"]) for v in snapshots] == [(phase,kind) for phase in ["hits","misses","mixed","concurrent"] for kind in ["base","after"]], "structural snapshot order differs")
+        require(all(a["mtime_ns"] < b["mtime_ns"] for a,b in zip(snapshots,snapshots[1:])), "structural snapshot timestamps unordered")
+        for v in snapshots:
+            require(v["pid"] == record["rss"]["pid"] and record["started"] <= v["mtime_ns"]/1e9 <= record["finished"]
+                    and Path(v["path"]).name.startswith("quicksilver_allocs_" + v["kind"] + "_")
+                    and len(raw[prefix + v["path"]]) == v["bytes"] and sha(raw[prefix + v["path"]]) == v["sha256"], "structural snapshot process/bytes differ")
+    analyses = read("m-diagnostic-analysis/analyses.json")
+    require(analyses["go_sha256"] == contract["structural"]["analysis_tool_sha256"] and len(analyses["rows"]) == 16, "structural analysis tool/inventory differs")
+    by_digest = {v["sha256"]:v for v in index}
+    outputs = set()
+    sampled_heap = []
+    for row in analyses["rows"]:
+        v = by_digest[row["profile_sha256"]]
+        record = by_pid[v["pid"]]
+        output = "m-diagnostic-analysis/" + v["cell"] + "-" + v["phase"] + "-" + v["kind"] + ".top.txt"
+        require(row["command"] == ["/home/mikers/.gvm/gos/go1.26.3/bin/go", "tool", "pprof", "-top", "-nodecount=30", "-sample_index=inuse_space", record["command"][0], "/mnt/fast4tb/quicksilver-space-memory-20261005/" + v["path"]]
+                and row["rc"] == 0 and row["started"] >= record["finished"] and row["finished"] > row["started"]
+                and row["binary_sha256"] == record["source"]["binary_sha256"] and row["output"] == output
+                and row["output_sha256"] == sha(raw[prefix + output]) and output not in outputs, "structural full analysis provenance differs")
+        outputs.add(output)
+        text = raw[prefix + output].decode()
+        require("Type: inuse_space" in text, "structural heap sample type differs")
+        total = re.findall(r" of ([0-9.]+[kMGT]?B) total", text)
+        require(len(total) == 1, "structural sampled heap total missing")
+        symbols = {}
+        for symbol in ["github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).store", "github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch"]:
+            lines = [line.split() for line in text.splitlines() if line.endswith(symbol)]
+            require(len(lines) == 1, "structural sampled heap symbol missing")
+            symbols[symbol] = {"flat":lines[0][0], "cumulative":lines[0][3]}
+        sampled_heap.append({"cell":v["cell"],"phase":v["phase"],"kind":v["kind"],"reported_total":total[0],"symbols":symbols})
+    rows = [json.loads(line) for line in raw[prefix + "offsets-3m-diagnostic-cache.jsonl"].splitlines()]
+    require(len(rows) == 864, "structural per-cache inventory differs")
+    groups, group = [], []
+    for row in rows:
+        record = by_pid[row["PID"]]
+        require(row["Schema"] == 1 and record["started"] <= row["UnixNano"]/1e9 <= record["finished"], "structural cache process/time differs")
+        st = row["Stats"]
+        live, caps, empty = [row[k] for k in ["LiveK","AllSlotOffsetCapacity","EmptySlotOffsetCapacity"]]
+        for hist, lower, upper in [(live,1,255),(caps,0,256),(empty,0,256)]:
+            require(all(str(int(k)) == k and lower <= int(k) <= upper and type(n) is int and n >= 0 for k,n in hist.items()), "structural histogram invalid")
+        require(all(type(v) is int and v >= 0 for v in st.values()) and sum(live.values()) == st["Entries"]
+                and sum(caps.values()) == st["AllocatedSlots"] and sum(empty.values()) == st["AllocatedSlots"]-st["Entries"]
+                and all(n <= caps.get(k,0) for k,n in empty.items()), "structural slot counts differ")
+        inline = record["cell"]["source"] == "diag-baseline"
+        offset_bytes = sum(int(k)*4*n for k,n in caps.items())
+        require(row["Inline"] is inline and row["SlotSizeBytes"] == (1136 if inline else 136)
+                and row["SlotStructBytes"] == st["AllocatedSlots"]*row["SlotSizeBytes"]
+                and row["InlineOffsetBytes"] == (offset_bytes if inline else 0)
+                and row["OffsetBackingBytes"] == (0 if inline else offset_bytes)
+                and row["StructuralMetadataBytes"] == row["SlotStructBytes"]+row["OffsetBackingBytes"]
+                and (not inline or all(int(k)==256 for k in caps)), "structural retained byte identity differs")
+        if group and (row["PID"] != group[-1]["PID"] or row["UnixNano"]-group[-1]["UnixNano"] > 10000000):
+            groups.append(group)
+            group = []
+        if group:
+            require(row["UnixNano"] > group[-1]["UnixNano"], "structural cache captures unordered")
+        group.append(row)
+    groups.append(group)
+    require(len(groups) == 20 and all(len({r["Cache"] for r in g}) == len(g) for g in groups), "structural contiguous capture grouping differs")
+    fields = {"Hits":"hits","Misses":"misses","Stores":"stores","Evictions":"evictions","Releases":"releases",
+        "Entries":"entries","Capacity":"capacity","AllocatedShards":"allocated_shards","AllocatedSlots":"allocated_slots",
+        "RetainedBytes":"retained_bytes","SkippedDisabled":"skipped_disabled","SkippedOversize":"skipped_oversize",
+        "SkippedBudget":"skipped_budget","SkippedContention":"skipped_contention"}
+    qualified = []
+    for record in records:
+        own_groups = [g for g in groups if g[0]["PID"] == record["rss"]["pid"]]
+        require(len(own_groups) == 10, "structural per-process captures incomplete")
+        snapshots = [v for v in index if v["pid"] == record["rss"]["pid"]]
+        for i, phase in enumerate(record["phases"]):
+            # Select the unique contiguous pass between this phase's base/after full snapshots.
+            matches = [g for g in own_groups if snapshots[2*i]["mtime_ns"] < g[0]["UnixNano"] <= g[-1]["UnixNano"] < snapshots[2*i+1]["mtime_ns"]]
+            # CPU phase completion StatsAfter also occurs before the after snapshot; the first pass is StatsBefore.
+            require(len(matches) == 2, "structural phase capture interval differs")
+            g = matches[0]
+            require(len({r["OwnerPath"] for r in g}) == len(g), "structural qualified owner paths repeat")
+            stats = phase["reported_cache_snapshots"]["stats_before"]
+            require(all(sum(r["Stats"][k] for r in g) == int(stats["treedb.vlog.grouped_frame_cache." + field]) for k,field in fields.items())
+                    and {r["Stats"]["BudgetBytes"] for r in g} == {int(stats["treedb.vlog.grouped_frame_cache.budget_bytes"])}, "structural StatsBefore aggregate differs")
+            histograms = {}
+            for name in ["LiveK","AllSlotOffsetCapacity","EmptySlotOffsetCapacity"]:
+                hist = {}
+                for r in g:
+                    for k,n in r[name].items():hist[k] = hist.get(k,0)+n
+                histograms[name] = hist
+            totals = {k:sum(r[k] for r in g) for k in ["SlotStructBytes","InlineOffsetBytes","OffsetBackingBytes","StructuralMetadataBytes"]}
+            totals["empty_offset_capacity_bytes"] = sum(int(k)*4*n for k,n in histograms["EmptySlotOffsetCapacity"].items())
+            qualified.append({"source":record["cell"]["source"],"phase":phase["name"],"pid":record["rss"]["pid"],
+                "capture_start_ns":g[0]["UnixNano"],"capture_end_ns":g[-1]["UnixNano"],"cache_count":len(g),
+                "stats_before":stats,"histograms":histograms,"structural_bytes":totals})
+    return {"status":"VALIDATED_ALL", "acceptance":"STRUCTURAL_EVIDENCE_ONLY", "records":records,
+            "per_cache_record_count":len(rows), "contiguous_capture_count":len(groups), "qualified_stats_before":qualified,
+            "full_snapshot_index":index, "full_snapshot_analyses":analyses, "sampled_full_heap":sampled_heap,
+            "aggregation_scope":"eight exact StatsBefore passes; unmatched concurrent-after captures excluded; no repeated-capture sums"}
 
 
 def restored_maintenance(contract, raw):
@@ -633,6 +765,7 @@ def extract(contract, raw):
             "fixture": baseline["config"], "storage": storage, "pending_packets": pending_packets,
             "public_matched": public_matched(contract, raw),
             "public_profiles": public_matched(contract, raw, profiled=True),
+            "structural": public_matched(contract, raw, profiled=True, diagnostic=True),
             "restored_maintenance": restored_maintenance(contract, raw),
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
@@ -651,7 +784,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "1fcd7ce0894efd6b386defe1e8fed0d8eb4dccdf85bd88c3a666a7bb3716ea6c"
+REPORT_PROSE_SHA256 = "97ba7aa988e7a63330c4adfb7e9382902d92151f96f14569ef0202e4d7b6505c"
 
 
 def report(result, template=None):
@@ -700,7 +833,7 @@ def report(result, template=None):
     blocks["planned_inputs"] = table(["Pending plan", "Expected rows", "Imported result rows", "Class"],
         [[name, packet["expected_rows"], packet["observed_rows"], "profiled structural diagnostic" if "structural" in name else
           ("profiled public pair" if packet["profiled"] else "unprofiled public pairs")]
-         for name, packet in result["pending_packets"].items()])
+         for name, packet in result["pending_packets"].items()]) if result["pending_packets"] else "All three planned row inventories are populated; acceptance gates below remain open."
     restored = result["restored_maintenance"]
     rows = [[item["label"], item["time_elapsed_seconds"], f"{item['receipt_elapsed_seconds']:.3f}",
              item["kernel_process_rss_hwm_bytes"],
@@ -746,6 +879,24 @@ def report(result, template=None):
             interval([r["rss"]["peak_sample"]["memory"]["RssAnon"] for r in records], 0),
             interval([r["rss"]["peak_sample"]["memory"]["RssFile"] for r in records], 0)])
     blocks["profile_rss"] = table(["Profiled source", "GNU process RSS high-water B", "Sampled RSS peak B", "Anonymous B at sampled peak", "File-backed B at sampled peak"], rows)
+    structural = result["structural"]
+    rows = []
+    for group in structural["qualified_stats_before"]:
+        hist = group["histograms"]
+        stats = group["stats_before"]
+        vals = group["structural_bytes"]
+        entries = int(stats["treedb.vlog.grouped_frame_cache.entries"])
+        rows.append([group["source"] + " " + group["phase"].removeprefix("quicksilver_"), group["cache_count"],
+            int(stats["treedb.vlog.grouped_frame_cache.allocated_slots"]), entries,
+            f"{100*hist['LiveK'].get('2',0)/entries:.2f}%", vals["SlotStructBytes"], vals["OffsetBackingBytes"],
+            vals["StructuralMetadataBytes"], vals["empty_offset_capacity_bytes"]])
+    blocks["structural_bytes"] = table(["Independent StatsBefore pass", "Caches", "Allocated slots", "Live entries", "Live K=2 fraction",
+        "Slot struct B", "Separate offset backing B", "Structural metadata B", "Empty-slot offset capacity B"], rows)
+    rows = [[v["cell"].removeprefix("1-") + " " + v["phase"], v["reported_total"],
+             v["symbols"]["github.com/snissn/gomap/TreeDB/internal/valuelog.(*groupedFrameCache).store"]["flat"],
+             v["symbols"]["github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch"]["flat"]]
+            for v in structural["sampled_full_heap"] if v["kind"] == "base"]
+    blocks["structural_heap"] = table(["Full pre-phase GC snapshot", "Sampled inuse-space total", "Grouped cache store flat", "Decode scratch flat"], rows)
     rows, tails = [], []
     for comparison in public["comparisons"]:
         label = comparison["profile"] + " " + comparison["mixture"]

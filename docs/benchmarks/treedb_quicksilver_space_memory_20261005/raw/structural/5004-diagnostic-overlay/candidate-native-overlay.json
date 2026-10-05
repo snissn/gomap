@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/source-candidate/TreeDB/internal/valuelog/grouped_frame_cache.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/candidate/grouped_frame_cache.go",
+    "/mnt/fast4tb/quicksilver-space-memory-20261005/source-candidate/cmd/unified_bench/main.go": "/mnt/fast4tb/quicksilver-space-memory-20261005/5004-diagnostic-overlay/candidate/main.go"
+  }
+}
