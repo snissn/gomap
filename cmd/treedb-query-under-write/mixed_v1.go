@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,9 +28,10 @@ const mixedProfileChangingTop10 = "changing-top10"
 const mixedReadPrefixMaxBytes = 128
 
 type mixedOptions struct {
-	Profile  string
-	Window   windowOptions
-	Interval time.Duration
+	Profile   string
+	Originals int
+	Window    windowOptions
+	Interval  time.Duration
 }
 type mixedWrite struct {
 	Ordinal                                                                                          int
@@ -55,12 +57,13 @@ type mixedPrefix struct {
 }
 type mixedReadPrefix struct {
 	Ordinal, Lower, Upper, Matched int
-	CompatibleMask                 uint8
+	CompatibleMask                 uint64
 	RecallAt10                     float64
 }
 type mixedAnchor struct{ ID, VectorSHA256 string }
 type mixedReport struct {
 	Profile      string `json:",omitempty"`
+	Originals    int    `json:",omitempty"`
 	Anchors      []mixedAnchor
 	ReadPrefixes []mixedReadPrefix
 	windowReport
@@ -222,7 +225,18 @@ func mixedTruthForProfile(ctx context.Context, in *recallInput, baseline recallR
 	p.Top10SHA256 = hashJSON(p.Truth)
 	return r, p, nil
 }
+func mixedOriginalCount(originals int) int {
+	if originals == 0 {
+		return 6
+	}
+	return originals
+}
+
 func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInput, error) {
+	originals := mixedOriginalCount(r.Originals)
+	if originals < 6 || originals > 63 {
+		return nil, errors.New("mixed originals must be6..63")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -270,7 +284,17 @@ func mixedPlan(ctx context.Context, in *recallInput, r *mixedReport) (*recallInp
 	if r.Profile == mixedProfileChangingTop10 {
 		first, second, third = in.queries[0], in.queries[1], in.queries[2]
 	}
+	if originals > 6 && slices.Equal(first, second) {
+		return nil, errors.New("extended mixed originals require distinct alternating vectors")
+	}
 	r.Writes = []mixedWrite{replace(ids[0], first, 0), replace(ids[0], second, 1), deletion(ids[1], 2), replace(ids[2], third, 3), deletion(ids[2], 4), deletion(ids[3], 5)}
+	for ordinal := 6; ordinal < originals; ordinal++ {
+		vector := first
+		if ordinal%2 != 0 {
+			vector = second
+		}
+		r.Writes = append(r.Writes, replace(ids[0], vector, ordinal))
+	}
 	var final *recallInput
 	for prefix := 0; prefix <= len(r.Writes); prefix++ {
 		state, err := mixedPopulation(in, r.Writes[:prefix])
@@ -331,19 +355,24 @@ func mixedValidate(o mixedOptions) error {
 	if o.Profile != "" && o.Profile != mixedProfileChangingTop10 {
 		return errors.New("mixed-profile must be changing-top10 or omitted")
 	}
-	if err := windowValidate(o.Window); err != nil {
+	originals := mixedOriginalCount(o.Originals)
+	if originals < 6 || originals > 63 {
+		return errors.New("mixed originals must be6..63")
+	}
+	if err := windowValidateDuration(o.Window, 5*time.Minute); err != nil {
 		return err
 	}
-	if o.Window.Duration != time.Minute || o.Window.Warmup != 64 || o.Interval < time.Second || o.Interval > 8*time.Second {
-		return errors.New("mixed-window requires warmup64,window60s,interval1s..8s")
+	if o.Window.Warmup != 64 || o.Interval < time.Second || o.Interval > 8*time.Second {
+		return errors.New("mixed-window requires warmup64,window1s..300s,interval1s..8s")
 	}
-	if 5*o.Interval+2*o.Window.Admission.RPCTimeout >= o.Window.Duration {
+	if time.Duration(originals-1)*o.Interval+2*o.Window.Admission.RPCTimeout >= o.Window.Duration {
 		return errors.New("mixed-window final slot must leave positive headroom after write and visibility RPC budgets")
 	}
 	return nil
 }
 func mixedSummary(r *mixedReport) {
-	r.WriteCounts = counts{Planned: 6, Unissued: 6}
+	originals := mixedOriginalCount(r.Originals)
+	r.WriteCounts = counts{Planned: originals, Unissued: originals}
 	r.RetryCounts = counts{Planned: 2, Unissued: 2}
 	r.WriterLatencyNs = nil
 	for _, w := range r.Writes {
@@ -396,7 +425,7 @@ func mixedValidatePrefixProof(q *recallQuery, response public.SearchResponseV1, 
 			break
 		}
 	}
-	if qi < 0 || len(r.Prefixes) > 7 || lower < 0 || upper >= len(r.Prefixes) || lower > upper || qi >= len(r.Prefixes[0].Changed) {
+	if qi < 0 || len(r.Prefixes) > 64 || lower < 0 || upper >= len(r.Prefixes) || lower > upper || qi >= len(r.Prefixes[0].Changed) {
 		return proof, errors.New("invalid mixed causal prefix range")
 	}
 	scorer := q.scorer
@@ -437,7 +466,7 @@ func mixedValidatePrefixProof(q *recallQuery, response public.SearchResponseV1, 
 	countedHits := 0
 	for prefix := lower; prefix <= upper; prefix++ {
 		p := &r.Prefixes[prefix]
-		if qi >= len(p.Changed) || qi >= len(p.Truth) || len(p.Truth[qi]) != 10 || len(p.Changed[qi]) != len(changed) {
+		if p.Prefix != prefix || qi >= len(p.Changed) || qi >= len(p.Truth) || len(p.Truth[qi]) != 10 || len(p.Changed[qi]) != len(changed) {
 			return proof, errors.New("missing mixed canonical prefix oracle")
 		}
 		for i, item := range changed {
@@ -535,11 +564,20 @@ func mixedMeasured(parent context.Context, readers []ownedVectorClient, writer m
 	defer stop()
 	done := make(chan error, 1)
 	var ledgerMu sync.Mutex
-	var issued, acknowledged [6]int64
+	// Keep legacy setup storage unchanged; extended ledgers allocate once,
+	// before reads, and are bounded by the admitted original count.
+	if len(r.Writes) > 63 {
+		return errors.New("mixed writer ledger exceeds63 originals")
+	}
+	var issuedSix, acknowledgedSix [6]int64
+	issued, acknowledged := issuedSix[:], acknowledgedSix[:]
+	if len(r.Writes) > 6 {
+		issued, acknowledged = make([]int64, len(r.Writes)), make([]int64, len(r.Writes))
+	}
 	control := &windowPhaseControl{Stop: stop, Join: func() error { return <-done }, ResponseValidate: func(q *recallQuery, response public.SearchResponseV1, start, end int64) (float64, error) {
 		ledgerMu.Lock()
 		lower, upper := 0, 0
-		for i := range issued {
+		for i := range r.Writes {
 			if acknowledged[i] > 0 && acknowledged[i] <= start {
 				lower = i + 1
 			}
@@ -735,9 +773,19 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err := mixedValidate(o); err != nil {
 		return err
 	}
+	if originals := mixedOriginalCount(o.Originals); originals != 6 {
+		r.Originals = originals
+		r.Schedule = "bounded serial original writes plus untimed token strict visibility before next mutation; no failed/UNKNOWN retry or discarded sample"
+		r.LatencyBasis = "public client submit-to-visible ACK; all declared original raw samples; read QPS includes validation/retention/drain and excludes setup/full-prefix oracle/warmup/resource gate/post-join causal recheck/retry/post-recall/audit"
+		r.AuthorityBoundary = "all-voter current-FSM audits before any shutdown prove every declared original witness and four changed IDs; ANN absence is not source authority"
+		r.Scope = "bounded serial colocated exact-ID mutations with full canonical FP32 top10 strict reads; observational only, no capacity/host-loss/full-source population claim"
+	}
 	r.Profile = o.Profile
 	if r.Profile == mixedProfileChangingTop10 {
 		r.Scope = "six serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
+		if r.Originals != 0 {
+			r.Scope = "bounded serial colocated exact-ID mutations with changing full canonical FP32 top10; conservative recall over compatible causal prefixes; observational only, no capacity/full-source population claim"
+		}
 	}
 	gate, err := newWindowResourceGate(ctx, o.Window.ResourceGateDir, o.Window.Admission.RunID)
 	if err != nil {
@@ -765,7 +813,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 		return err
 	}
 	r.PreRecall = pacedRecallCopy(r.Admission, "quiescent-before-mixed")
-	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, 6, r.Profile)
+	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, len(r.Writes), r.Profile)
 	if err != nil {
 		return err
 	}
@@ -862,8 +910,8 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err = windowAcceptable(&r.windowReport); err != nil {
 		return err
 	}
-	if r.WriteCounts.Succeeded != 6 || r.CompletedSearchesDuringMutation == 0 {
-		return errors.New("mixed six ACKs and completed strict-search/write overlap required")
+	if r.WriteCounts.Succeeded != len(r.Writes) || r.CompletedSearchesDuringMutation == 0 {
+		return errors.New("mixed all declared ACKs and completed strict-search/write overlap required")
 	}
 	// Idle phase connections are renewed before a planned explicit call, never
 	// to retry a failed call. Old outcome position is not the highest new ACK.
@@ -898,7 +946,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 	if err != nil {
 		return err
 	}
-	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, 6, r.Profile)
+	r.PostRecall, _, err = mixedTruthForProfile(ctx, final, r.Admission, len(r.Writes), r.Profile)
 	if err != nil {
 		return err
 	}
@@ -928,7 +976,7 @@ func runMixedWindow(parent context.Context, o mixedOptions, output io.Writer) (r
 			return e
 		}
 		a := audit.ColocatedAudit
-		if a == nil || a.PlanSHA256 != hashJSON(plan) || a.NodeID != string(node.ID) || a.RunID != plan.RunID || a.AppliedIndex < r.RequiredAppliedIndex || len(a.Witnesses) != 6 || len(a.Final) != 4 || a.RetainedCount != 6 {
+		if a == nil || a.PlanSHA256 != hashJSON(plan) || a.NodeID != string(node.ID) || a.RunID != plan.RunID || a.AppliedIndex < r.RequiredAppliedIndex || len(a.Witnesses) != len(plan.Writes) || len(a.Final) != len(plan.Final) || a.RetainedCount != uint64(len(plan.Writes)) {
 			return errors.New("incomplete all-voter audit")
 		}
 		if len(r.Audits) > 1 {

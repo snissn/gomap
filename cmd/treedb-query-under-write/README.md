@@ -479,12 +479,16 @@ API overlap/cancellation; private short clocks are not distributed runtime proof
 
 `-mode mixed-window` reuses the fixed RF4 read-window admission, connections,
 resource gates and retained attempts. Existing insert/read modes are unchanged.
-This mode admits exactly six serial slots in a 60-second window: replace A,
-supersede A, delete B, replace C, delete C, delete D. A/B/C/D are four existing
+By default this mode admits six serial slots in a 60-second window: replace A,
+supersede A, delete B, replace C, delete C, delete D. Optional `-mixed-originals`
+declares 6..63 total originals; only mixed mode permits `-read-window` up to
+300s. Additional originals alternate changed replacements of surviving A with
+distinct idempotency keys. They never insert new IDs or reuse deleted targets.
+The two replacement directions must differ when extra originals are requested. A/B/C/D are four existing
 corpus IDs outside every query's baseline and exported-corpus canonical top10
 when `-mixed-profile` is omitted.
 The minimum invocation interval is `-mixed-interval` (default 5s, 1s..8s).
-Admission also requires `5*interval + 2*rpc-timeout < 60s`, leaving positive
+Admission requires `(originals-1)*interval + 2*rpc-timeout < read-window`, leaving positive
 headroom for the final write and its visibility check. Both full write and
 untimed visibility RPC budgets must fit before the cutoff.
 Warmup is 64 calls; read concurrency/caps use existing read-window limits.
@@ -498,7 +502,7 @@ treedb-query-under-write -mode mixed-window \
   -read-resource-gate-dir fresh-owned-gate > mixed.jsonl
 ```
 
-Admission scores the **entire frozen population** at all seven planned prefixes
+Admission scores the **entire frozen population** at all `originals+1` planned prefixes (at most64)
 before client networking, using canonical FP32 cosine and stable ID ordering.
 The 10,000-row/128D/16-query corpus is not the entire baseline: the authenticated
 bootstrap's fixture anchors and prior explicitly proven rows are counted too.
@@ -511,13 +515,13 @@ The default profile refuses any planned canonical top10 ID or score-bit change.
 Add `-mixed-profile changing-top10` explicitly to observe changing top10. This
 selects the first four existing corpus IDs in frozen corpus order and replaces
 A with query0, supersedes A with query1, and replaces C with query2 before the
-same three deletions. The six originals and two explicit retries are unchanged.
+same three deletions. The first six originals and two explicit retry identities are unchanged.
 Admission requires at least one canonical top10 membership change across the
-seven populations. It still validates the unchanged exported corpus truth at
+planned populations. It still validates the unchanged exported corpus truth at
 prefix0. Later oracles score the actual changed corpus and entire population;
 they never rewrite or masquerade as that export. Derived recall reports carry
 `OracleBasis=derived-changing-prefix-full-canonical-fp32`; every prefix retains
-its own population and top10 hashes. All seven oracles are computed before
+its own population and top10 hashes. All prefix oracles are computed before
 networking, and setup remains outside the measured window. Omission preserves
 the original profile, admission rules and verdict. The explicit profile emits
 `Profile=changing-top10` and the distinct
@@ -532,7 +536,9 @@ by original mutation ACKs before call entry and issued mutations before call
 return. Online validation is tightened after both reader and writer join against
 actual retained `StartNS`/`EndNS`; `ReadPrefixes` records lower/upper bounds,
 `CompatibleMask` and conservative `RecallAt10` per measured ordinal. Bit p marks
-whole-response compatibility with prefix p. Several set bits explicitly record
+whole-response compatibility with prefix p. `CompatibleMask` is an unsigned
+64-bit JSON integer, including bit63; consumers must preserve integer precision.
+Several set bits explicitly record
 ambiguity: `Matched` is only the first compatible diagnostic witness, not an
 exact publication time or a selected recall oracle. Recall is the **minimum**
 across every compatible prefix's full canonical truth. Final call/ACK bounds
@@ -561,7 +567,7 @@ RPC timeouts remain unchanged. Any failed,
 UNKNOWN, malformed, truncated, mismatched or missing sample consumes the run:
 no automatic retry, discarded sample, exact fallback or fast-read substitution.
 
-The final `AuditPlan` is a bounded six-original-request/ACK attachment to the
+The final `AuditPlan` is a bounded complete-original-request/ACK attachment to the
 **existing** fixed-peer diagnostics operation. The driver acquires `Audits` from
 all four live voters before any shutdown. Root may also extract that exact plan
 from the final result and independently collect the same existing operation:
@@ -573,7 +579,8 @@ treedb-fixed-peer -mode diagnostics -config voter.json \
 
 The schema also permits an optional external `Population` attachment, supported
 by the separate population-proof product contract. This independently compiled
-driver does not construct it and continues to emit its six known-ID audit.
+driver does not construct it and emits all declared original outcomes plus its
+four known-ID proofs.
 Root may attach a separately frozen full-population expectation to independent
 initial/final diagnostics. Its fields are `Rows`, `Dimensions`, `SHA256` and
 `Limits` (`MaxRows`, `MaxIDBytes`, `MaxSourceRecordBytes`, `MaxTotalBytes`,
@@ -586,8 +593,10 @@ payload sizes or prove their readability or equality of reconstructed documents.
 An empty population uses `Rows: 0`. Schema compatibility
 and the driver's known-ID receipts alone are not whole-population proof.
 
-The plan is at most 524288 encoded bytes, version1, six unique original attempts,
-zero logical deadlines and at most six final unique IDs (this mode has four).
+The plan is at most 524288 encoded bytes, version1, 6..63 unique original attempts,
+zero logical deadlines and at most63 final unique IDs (this mode has four).
+The actual fresh collection must retain exactly the declared number of outcomes;
+a shorter internally consistent plan cannot substitute for its complete ledger.
 `treedb-fixed-peer` loads/validates it before opening any stores or client
 networking. Ordinary diagnostics omit `ColocatedAudit`. No endpoint, offline
 DB opener, scheduler or shutdown hook is added.
@@ -601,10 +610,10 @@ its callback: follower Raft apply takes the FSM lock before shared admission.
 Physical root/WAL and summary checks stay inside that callback, with final
 current-DB/applied/ACTIVE/catalog rechecks rejecting concurrent drift.
 It verifies the retained ordinal/count/byte/SHA chain and performs
-six exact witness lookups, then uses the prepared source owner to prove final
+one exact witness lookup per declared original, then uses the prepared source owner to prove final
 canonical content/absence and exact per-domain live membership for the known
 IDs. The receipt carries per-voter applied term/index, physical root state,
-next WAL LSN, retained count/bytes/chain, six witnesses and final-ID proofs.
+next WAL LSN, retained count/bytes/chain, all declared witnesses and final-ID proofs.
 Current DB, root, applied state, summary and next LSN are rechecked; any torn
 state or pending publication refuses the audit. The owner wrapper can flush
 pending work; this is **not** an inherently read-only operation. Pending gauges
@@ -619,14 +628,14 @@ receipts separately.
 `mixed-report-v1.schema.json` describes the JSONL envelope and audit-plan shape;
 semantic validators are authoritative beyond schema shape. Root collectors must
 bind binary/config/bootstrap/dataset/provenance hashes, planned/result pair,
-seven full-prefix truths and changed-ID scores, every issued/unissued original
+all `originals+1` full-prefix truths and changed-ID scores, every issued/unissued original
 and retry, probe response hashes, query coverage/recall/error counters,
 client-call overlap and causal-prefix rows. `Writes[].LogicalSHA256` binds the
 zero-deadline request; `RequestSHA256` binds its actual deadline-bearing call.
 Search attempts retain their logical query hash plus actual deadline; token
 probes retain their actual request hash. No socket dispatch or server critical
-section overlap is claimed. Verify six original ACKs, two original retries,
-six token probes, full final-ledger identity and four matching audit summaries;
+section overlap is claimed. Verify exactly the declared original ACKs, two original retries,
+one token probe per original, full final-ledger identity and four matching audit summaries;
 per-voter physical LSNs/roots are local and need not equal.
 
 Root resource brackets reuse the ready/done nonce-bound gates. Report per-role
@@ -636,18 +645,18 @@ oracle, warmup, resource waits, post-join causal recheck, retry, recall and audi
 Writer latency is public client submit-to-visible ACK; six raw samples do not
 justify p99, sustained capacity, speedup or request-attributed process allocation.
 The driver verdict remains pending root shutdown verification. The audits prove
-only six original witnesses and four known IDs, **not** the entire 10K source
+all declared original witnesses and four known IDs, **not** the entire 10K source
 population. Cross-group projection, general changing-topK attribution, unlimited
 retention, movement/splitting, host loss and capacity remain open. RF4 quorum
 three cannot survive either two-voter host's loss.
 
 Allocation ownership: corpus/query vectors and prefix truths are immutable after
-setup. Seven full-population maps/oracles are built outside measurement; retained
+setup. At most64 full-population maps/oracles are built outside measurement; retained
 prefix evidence contains only 16x10 truths and 16x4 changed-ID scalar scores.
 Measured calls copy response strings/neighbors/tokens before client reuse. The
-writer retains six responses and two explicit retries; the final plan borrows
+writer retains every declared original response and two explicit retries; the final plan borrows
 that immutable ledger until synchronous serialization, and receivers own decoded
-plan bytes. Four audit receipts own six scalar witnesses/final proofs each.
+plan bytes. Four audit receipts own every declared scalar witness and final-ID proof.
 The existing aggregate JSONL byte cap covers the complete pair. Audit chain
 verification and manager gauges are untimed observation costs, not a hot serving
 path. `BenchmarkMixedRetainedCallV1` measures attributable fake-client retention
@@ -670,12 +679,12 @@ verified two-host campaign remain required for acceptance.
 
 ### Changing-top10 validation allocation audit
 
-Full population copies, sorted IDs, hash streams and seven canonical oracles are
+Full population copies, sorted IDs, hash streams and count+1 canonical oracles are
 setup work, excluded from measured read latency/QPS. Changed-prefix planning and
 quiescent checks reuse the sixteen admitted canonical scorers; ordinary exported
 baseline admission still prepares and verifies them independently. The measured
 validator uses prepared scorers, ten-neighbor duplicate/order checks, four
-changed-ID entries and at most seven truth rows. After full canonical ID/score
+changed-ID entries and at most64 truth rows (seven by default). After full canonical ID/score
 bit equality is proved, prefix planning reuses immutable admitted truth rows.
 Validation reuses a previous compatible row's hit count only for the same slice
 identity; distinct truths still contribute independently to the minimum,
@@ -708,3 +717,71 @@ setup excluded. No speed or allocation equivalence is asserted before root runs
 these checks. Optional standalone profiles use Go `-cpuprofile=cpu.pprof` and
 `-memprofile=alloc.pprof` for that exact benchmark selector; inspect with
 `go tool pprof -alloc_space` and retain the command, source head and raw profiles.
+
+
+### Bounded sustained qualification (#5021)
+
+The six-original/60s defaults and existing exported-baseline admission remain
+unchanged. Optional report `Originals` declares the extended ledger; omission
+means six. Collectors must require exactly that many `Writes`, successful ACKs,
+visibility calls and retained witnesses, exactly `Originals+1` contiguous native
+prefix rows, and the same two original retries at slots0/2. Keep global measured
+attempt ordinals contiguous, query mapping `ordinal%16`, exact worker IDs and
+per-worker serial call bounds for both C1 and C4. Worker identity is not ordinal
+modulo concurrency. Every whole response still needs a permitted prefix and the
+minimum recall across all compatible truths, tightened after join. Validate all
+64 mask bits and reject overflow, missing/duplicate prefix rows, malformed raw
+attempts, UNKNOWN and partial outcomes. A final population hash cannot replace
+any original witness.
+
+A proposed five-minute C1 qualification uses `-mixed-originals 58`,
+`-read-window 300s`, `-mixed-interval 5s`, `-rpc-timeout 3s`, 64 warmups,
+65536 attempts and 128MiB output, with a whole-checkpoint timeout leaving room for
+setup and final checks. These are planned limits, not a measured ACK rate or
+proof that caps will fit. Original dispatch still requires complete write and
+visibility budgets before cutoff; reaching any cap consumes the run. Freeze
+new collector/oracle/read/resource validators and all native prefix truths
+before mixed activation. Collect authenticated complete initial/final source
+population proofs on all four live voters, in addition to every original-outcome
+audit, before the first stop. Preserve clean closure, noOOM, resource boundaries,
+raw failures and hash-verified artifact copies. Prior six-write packets retain
+their original identities and cannot become sustained evidence.
+
+Report achieved ACKs per actual measured-window second, every raw writer latency
+and invocation lateness (`StartNS-IntendedOffsetNS`), successful/failed/drain
+durations, read throughput/latency/recall and available resource/storage counters.
+Mark unsupported counters explicitly. This bounded observation does not prove
+indefinite service, saturation, comparative speedup, host-loss tolerance or
+additional shards. Matched C1/C4 repeats are needed for comparative claims, not
+for constructing this extension; #4250/#4805 readiness remains separate.
+
+Allocation audit and checks: original requests/documents, complete prefix maps,
+canonical truths and call/ACK ledger storage are bounded setup work. Responses,
+tokens and attempt bytes are required owned per-call retention. Prefix validation
+reuses prepared scorers and immutable truth slices and adds no per-read population
+copy, map or score table; widening `CompatibleMask` needs no heap allocation.
+Post-join masks borrow joined attempts; conservative collection charges are never
+refunded. Complete final JSON encoding remains authoritative. Authenticated audit
+validation/decoding, witness verification and final proofs are separate observation
+costs, not request-attributed server allocations. Pair unchanged six-original
+`BenchmarkMixedPrefixValidationGuardV1`, `BenchmarkMixedRetainedCallV1`,
+`BenchmarkWindowRetainedCallGuardV1` and
+`BenchmarkPopulationLegacyColocatedPlanGuardV1/{validate,decode}` on exact
+base/candidate using identical fixtures/toolchain/GOMAXPROCS, balanced repeats,
+B/op and allocs/op. Measure 58-original setup, compatible-prefix validation and
+plan/witness costs separately; retain timings, allocations, memory limits and raw
+receipts. Investigate material regressions before accepting the qualification.
+
+
+Extended local cost selectors are `BenchmarkMixedSustained58V1/plan`,
+`BenchmarkMixedSustained58V1/validate-all-compatible` and
+`BenchmarkColocatedAuditSustained58V1/{validate,decode}`. Planning uses the small
+128D unit fixture and native scorer; audit costs use a clearly synthetic
+58-outcome extension with production request/token encoding. These isolate
+setup and local validation, excluding RPC, current-FSM witness lookup and
+population scans; the fresh qualification retains those actual costs separately.
+The serial timestamp ledger retains the six-slot default buffers and allocates
+two count-sized slices once for extended runs. Validation scans only the declared
+ledger and prepares no additional scorer, map, truth or response copy per read.
+The wider fixed proof reserves the same128-byte per-prefix allowance, tested
+against the full uint64 mask encoding.

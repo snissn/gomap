@@ -54,6 +54,14 @@ func TestColocatedAuditPopulationOnlyDecodeV1(t *testing.T) {
 }
 
 func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
+	testFixedPeerColocatedAuditCurrentAuthorityV1(t, 6)
+}
+
+func TestFixedPeerColocatedAuditVariableLengthCurrentAuthorityV2(t *testing.T) {
+	testFixedPeerColocatedAuditCurrentAuthorityV1(t, 63)
+}
+
+func testFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T, originals int) {
 	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 4, false, func(t *testing.T, parent context.Context, nodes []*FixedPeerTCPRuntimeV1) {
 		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 		defer cancel()
@@ -66,7 +74,7 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		}
 		defer client.Close()
 		// Reuse the real fixture's warm-router pattern. Restore its exact original
-		// canonical document with the sixth write for unchanged snapshot/tail checks.
+		// canonical document with the last original for unchanged snapshot/tail checks.
 		search := public.SearchRequestV1{Version: 1, Generation: g, Query: []float32{-1, 0}, Metric: public.MetricCosineV1, TopK: 3, Probes: 1, EfSearch: 16, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}}
 		if _, err = client.VectorSearchStrictV1(ctx, search); err != nil {
 			t.Fatal(err)
@@ -98,9 +106,9 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			}
 		}
 		p := ColocatedAuditPlanV1{Version: 1, RunID: "audit-test", Population: &population}
-		for i := 0; i < 6; i++ {
+		for i := 0; i < originals; i++ {
 			document := []byte(fmt.Sprintf(`{"embedding":[-1,0],"kind":"audit-%d"}`, i))
-			if i == 5 {
+			if i == originals-1 {
 				document = original
 			}
 			request := public.ReplaceRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-x"), IdempotencyKey: []byte(fmt.Sprintf("audit-%d", i)), Vector: []float32{-1, 0}, Document: document}
@@ -129,7 +137,7 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			// CLI/client attachment goes through the EXISTING authenticated diagnostics
 			// operation and validates actual per-voter current-FSM state.
 			report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, p)
-			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != 6 || len(report.ColocatedAudit.Witnesses) != 6 || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
+			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != uint64(originals) || len(report.ColocatedAudit.Witnesses) != originals || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
 				t.Fatalf("audit voter%s=%+v err%v", n.config.NodeID, report.ColocatedAudit, err)
 			}
 		}
@@ -160,6 +168,22 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		bad.Writes = bad.Writes[:5]
 		if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, node.config.NodeID, bad); err == nil {
 			t.Fatal("incomplete witnesses admitted")
+		}
+		if originals > 6 {
+			// This shorter plan is internally complete, but cannot stand in for
+			// the actual fresh collection's full retained-outcome ledger.
+			subset := p
+			// Omit the first witness while preserving the actual final source and floor.
+			// Refusal must come from the complete retained-count boundary.
+			subset.Writes = p.Writes[1:]
+			if err := ValidateColocatedAuditPlanV1(ctx, subset); err != nil {
+				t.Fatal("complete shorter plan admission:", err)
+			}
+			for _, n := range nodes {
+				if _, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, subset); err == nil {
+					t.Fatal("omitted retained outcome accepted")
+				}
+			}
 		}
 		// Matching bytes from an unrelated DB are insufficient authority. This
 		// explicit wrong-current handle must fail before attempting any proof.
@@ -251,7 +275,7 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			select {
 			case result := <-written:
 				response = result.response
-				if result.err != nil || response.Matched != 1 || response.Modified != 0 || response.LiveRevision != p.Writes[5].Response.LiveRevision {
+				if result.err != nil || response.Matched != 1 || response.Modified != 0 || response.LiveRevision != p.Writes[originals-1].Response.LiveRevision {
 					t.Fatalf("concurrent no-op response %+v err%v", response, result.err)
 				}
 			case <-ctx.Done():

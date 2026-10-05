@@ -109,3 +109,24 @@ fresh 10,000-row/128D packet (79 chunks plus preparation), explicitly plan with
 budget does not establish capacity or throughput; retain any UNKNOWN outcome
 and unissued suffix without retrying an ambiguous mutation or reusing its
 partial stores.
+
+
+## Bounded continued-write observation (#5021)
+
+The separate [`treedb-query-under-write` mixed driver](../../../cmd/treedb-query-under-write/README.md)
+preserves its six-original/60s default. Its optional extended mode admits 6..63
+originals and at most 300s, with all native full-population prefix truths frozen
+before mixed activation and all original outcomes audited on all four live
+voters before the first stop. The planned qualification is C1, 300s, 58
+originals at minimum 5s spacing, 3s RPC budgets, 64 warmups, 65536 measured
+attempts and 128MiB retained-output budget. These are proposed bounds, not an
+achieved rate or evidence that resource caps fit.
+
+Use fresh stores, credentials, actual sealed input/oracles and reviewed
+source/ELF/image/collector pins. Initial and final complete source populations
+are separate from the complete original-outcome ledger; neither replaces the
+other. Retain failures and UNKNOWN/unissued suffixes without automatic replay.
+Acceptance also requires actual resource boundaries, clean all-voter closure,
+no OOM, preserved stores and independent hash-verified evidence copies. This
+is a bounded continued-write observation, not indefinite service, saturation,
+comparative speedup, whole-host failure tolerance or parent readiness.

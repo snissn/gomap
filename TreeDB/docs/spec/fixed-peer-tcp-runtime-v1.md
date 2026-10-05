@@ -477,11 +477,13 @@ alone cannot make the failed unpaced trial a pass.
 ### Explicit bounded audit attachment
 
 `treedb-fixed-peer -mode diagnostics -colocated-audit-plan plan.json` loads and
-validates a version1 <=524288-byte six-outcome plan before client networking.
+validates a version1 <=524288-byte declared 6..63-outcome plan before client
+networking. The six-outcome default is preserved; every declared original must
+be present and the actual retained count must match exactly.
 It reuses the existing authenticated diagnostics operation and all-voter live
 readiness/proof paths. No serving flag, shutdown hook, endpoint or offline opener
 is added. The optional receipt proves actual current-FSM applied/root/WAL state,
-six retained original witnesses/chain and final known-ID canonical source/absence
+all planned original witnesses (6..63)/chain and final known-ID canonical source/absence
 plus live membership. The prepared-owner wrapper may flush pending work; pending
 state or any changed physical/root/applied/summary binding refuses observation.
 Each original token obtains a fresh routed leader/quorum proof; only that proof
@@ -497,7 +499,7 @@ retain separate clean-stop evidence. Ordinary diagnostics omit the attachment.
 The optional `Population` expectation extends this same operation with a complete
 **current canonical source-vector** observation. It does not enumerate or prove
 equality of the live ANN graph, and does not prove full reconstructed documents.
-A plan may attach it to the existing complete six-outcome/final-known-ID plan.
+A plan may attach it to the existing complete declared-outcome/final-known-ID plan (6..63 originals).
 An initial population-only plan instead has empty `Writes` and `Final`, zero
 `HighestNewCommitIndex`, and positive `RequiredAppliedIndex`. A partial ledger
 cannot select this mode. For example:

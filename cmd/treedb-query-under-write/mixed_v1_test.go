@@ -296,33 +296,46 @@ func TestMixedChangingTop10ConservativeCompatibleRecallV2(t *testing.T) {
 	}
 }
 func TestMixedUnknownStopsAndRetainsUnissuedV1(t *testing.T) {
-	in, r := mixedTestPlanV1(t)
-	r.Admission.RPCTimeout = 100 * time.Millisecond
-	r.PaceInterval = time.Millisecond
-	for i := range r.Writes {
-		r.Writes[i].IntendedOffsetNS = int64(i) * int64(time.Millisecond)
-	}
-	entered := make(chan struct{})
-	reader := &windowTestClient{fakeClient: fakeClient{search: func(ctx context.Context, _ public.SearchRequestV1) (public.SearchResponseV1, error) {
-		<-entered
-		<-ctx.Done()
-		return public.SearchResponseV1{}, ctx.Err()
-	}}}
-	writer := &mixedFakeV1{onCall: func() { close(entered) }, err: &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("original unknown")}}
-	proof := fakeClient{search: func(context.Context, public.SearchRequestV1) (public.SearchResponseV1, error) {
-		t.Error("visibility after UNKNOWN")
-		return public.SearchResponseV1{}, errors.New("unexpected")
-	}}
-	budget := 128 << 20
-	if err := mixedMeasured(context.Background(), []ownedVectorClient{reader}, writer, proof, &in, &r, &budget); err == nil {
-		t.Fatal("unknown accepted")
-	}
-	mixedSummary(&r)
-	if writer.calls != 1 || r.WriteCounts.Unknown != 1 || r.WriteCounts.Unissued != 5 || len(r.Retries) != 0 {
-		t.Fatalf("unknown campaign not consumed %+v calls%d", r.WriteCounts, writer.calls)
-	}
-	if _, err := mixedAuditPlan(&r); err == nil {
-		t.Fatal("incomplete ACK ledger audited")
+	for _, originals := range []int{6, 58} {
+		for _, concurrency := range []int{1, 4} {
+			t.Run(fmt.Sprintf("originals%d-readers%d", originals, concurrency), func(t *testing.T) {
+				in, r := mixedTestPlanV1(t)
+				if originals > 6 {
+					in, r = mixedSustainedTestPlanV1(t, originals)
+				}
+				r.Concurrency = concurrency
+				r.Admission.RPCTimeout = 100 * time.Millisecond
+				r.PaceInterval = time.Millisecond
+				for i := range r.Writes {
+					r.Writes[i].IntendedOffsetNS = int64(i) * int64(time.Millisecond)
+				}
+				entered := make(chan struct{})
+				readers := make([]ownedVectorClient, concurrency)
+				for i := range readers {
+					readers[i] = &windowTestClient{fakeClient: fakeClient{search: func(ctx context.Context, _ public.SearchRequestV1) (public.SearchResponseV1, error) {
+						<-entered
+						<-ctx.Done()
+						return public.SearchResponseV1{}, ctx.Err()
+					}}}
+				}
+				writer := &mixedFakeV1{onCall: func() { close(entered) }, err: &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("original unknown")}}
+				proof := fakeClient{search: func(context.Context, public.SearchRequestV1) (public.SearchResponseV1, error) {
+					t.Error("visibility after UNKNOWN")
+					return public.SearchResponseV1{}, errors.New("unexpected")
+				}}
+				budget := 128 << 20
+				if err := mixedMeasured(context.Background(), readers, writer, proof, &in, &r, &budget); err == nil {
+					t.Fatal("unknown accepted")
+				}
+				mixedSummary(&r)
+				if writer.calls != 1 || r.WriteCounts.Unknown != 1 || r.WriteCounts.Unissued != originals-1 || len(r.Retries) != 0 {
+					t.Fatalf("unknown campaign not consumed %+v calls%d", r.WriteCounts, writer.calls)
+				}
+				if _, err := mixedAuditPlan(&r); err == nil {
+					t.Fatal("incomplete ACK ledger audited")
+				}
+			})
+		}
 	}
 }
 func TestMixedFinalSlotHeadroomV1(t *testing.T) {
@@ -492,7 +505,7 @@ func TestMixedChangingTop10PostJoinRecallV2(t *testing.T) {
 		name         string
 		start, end   int64
 		online, want float64
-		mask         uint8
+		mask         uint64
 	}{{"ACK-before-call", 30, 40, 1, .9, 2}, {"not-yet-invoked", 1, 5, .9, 1, 1}, {"overlapping", 15, 25, .9, .9, 3}} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, r, response, _ := mixedAmbiguousFixtureV2(t)

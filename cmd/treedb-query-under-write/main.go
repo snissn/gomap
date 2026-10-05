@@ -563,14 +563,15 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	timeout := flags.Duration("timeout", 120*time.Second, "whole checkpoint deadline, 1s..10m; default 120s")
 	rpcTimeout := flags.Duration("rpc-timeout", 10*time.Second, "per-operation deadline, 1ms..1m; default 10s")
 	readConcurrency := flags.Int("read-concurrency", 0, "read-window requires explicit independent workers: 1 or 4")
-	readWindow := flags.Duration("read-window", 60*time.Second, "read-window measured admission interval, 1s..60s")
+	readWindow := flags.Duration("read-window", 60*time.Second, "measured admission interval, 1s..60s; mixed-window up to300s")
 	readWarmup := flags.Int("read-warmup", 64, "read-window warmup attempts outside measurement, 0..1024")
 	readMaxAttempts := flags.Int("read-max-attempts", 65536, "read-window measured attempt cap, 1..65536; hitting cap refuses verdict")
 	readOutputBytes := flags.Int("read-output-bytes", 128<<20, "read-window aggregate planned/result byte cap, 1MiB..256MiB")
 	readResourceGateDir := flags.String("read-resource-gate-dir", "", "optional fresh trusted run-local directory for ready/done resource sampling acknowledgments")
 	pacedInserts := flags.Int("paced-inserts", 6, "paced-window distinct ordinary insert slots, 1..10")
 	mixedProfile := flags.String("mixed-profile", "", "optional changing-top10 profile; omitted preserves invariant top10")
-	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window six serial writer slots, interval1s..8s; 5*interval+2*rpc-timeout must be less than60s")
+	mixedOriginals := flags.Int("mixed-originals", 6, "mixed-window total serial originals, 6..63; default6")
+	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window serial writer interval1s..8s; (originals-1)*interval+2*rpc-timeout must fit the window")
 	pacedInterval := flags.Duration("paced-interval", 5*time.Second, "paced-window minimum interval between serial insert invocation starts")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -583,10 +584,13 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 		freshFlag = freshFlag || f.Name == "fresh-inserts"
 	})
 	if *mode == "mixed-window" {
+		if *mixedOriginals < 6 || *mixedOriginals > 63 {
+			return errors.New("mixed-originals must be6..63")
+		}
 		if freshFlag || pacedFlags || flags.NArg() != 0 {
 			return errors.New("mixed-window refuses insert/pace/positional flags")
 		}
-		return runMixedWindow(parent, mixedOptions{Profile: *mixedProfile, Window: windowOptions{Admission: recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout}, Concurrency: *readConcurrency, Warmup: *readWarmup, Duration: *readWindow, MaxAttempts: *readMaxAttempts, OutputBytes: *readOutputBytes, ResourceGateDir: *readResourceGateDir}, Interval: *mixedInterval}, output)
+		return runMixedWindow(parent, mixedOptions{Profile: *mixedProfile, Originals: *mixedOriginals, Window: windowOptions{Admission: recallOptions{Config: *configPath, Bootstrap: *bootstrapPath, Dataset: *dataset, Provenance: *provenance, Probe: *probe, Phase: *phase, RunID: *runID, Timeout: *timeout, RPCTimeout: *rpcTimeout}, Concurrency: *readConcurrency, Warmup: *readWarmup, Duration: *readWindow, MaxAttempts: *readMaxAttempts, OutputBytes: *readOutputBytes, ResourceGateDir: *readResourceGateDir}, Interval: *mixedInterval}, output)
 	}
 	if mixedFlags {
 		return errors.New("mixed flags require -mode mixed-window")
