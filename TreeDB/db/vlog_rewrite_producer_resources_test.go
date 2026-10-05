@@ -21,10 +21,21 @@ import (
 // Exercise the ordinary public COW rewrite, rather than only calling the
 // stable append API directly. Byte lookup alone cannot authorize publication.
 func TestRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
+			testRewriteExactClosureDictionarySwitchProducerAuthority(t, replay)
+		})
+	}
+}
+
+func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, replay bool) {
 	for _, fallback := range []bool{false, true} {
 		for _, authority := range []bool{false, true} {
 			t.Run(fmt.Sprintf("fallback=%v/authority=%v", fallback, authority), func(t *testing.T) {
 				db, writer, old, fresh := setupExactRewritePair(t)
+				if replay {
+					writer = installExactRewriteReplayLeafProducer(t, db)
+				}
 				pages := [][]byte{buildRewriteLeafPageFixture(t, "dictionary-a"), buildRewriteLeafPageFixture(t, "dictionary-b"), buildRewriteLeafPageFixture(t, "dictionary-c")}
 				compact := make([][]byte, len(pages))
 				for i := range pages {
@@ -122,7 +133,18 @@ func TestRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T) {
 }
 
 func TestRewriteExactClosureTemplateProducerAuthority(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
+			testRewriteExactClosureTemplateProducerAuthority(t, replay)
+		})
+	}
+}
+
+func testRewriteExactClosureTemplateProducerAuthority(t *testing.T, replay bool) {
 	db, writer, old, fresh := setupExactRewritePairWithValueLogOptions(t, ValueLogOptions{})
+	if replay {
+		writer = installExactRewriteReplayLeafProducer(t, db)
+	}
 	// A COW page changes its page identity/checksum and pointer bytes. Use an
 	// invariant inline payload anchor rather than the old page's mutable header.
 	anchor := bytes.Repeat([]byte("stable-template-inline-payload|"), 4)
@@ -216,5 +238,77 @@ func TestRewriteExactClosureTemplateProducerAuthority(t *testing.T) {
 	closeNoErr(t, db)
 	if provider.releaseCalls.Load() != provider.captureCalls.Load() {
 		t.Fatalf("closed template captures=%d releases=%d", provider.captureCalls.Load(), provider.releaseCalls.Load())
+	}
+}
+
+// Install the real command-WAL producer seam, including its RID owner and
+// ordinary lane/record-length wrappers. The unchanged fixture remains readable
+// through the previous generation; subsequent COW pages use this producer.
+func installExactRewriteReplayLeafProducer(t *testing.T, db *DB) *rewriteWriter {
+	t.Helper()
+	if err := db.leafPageLog.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	segments, err := listValueLogSegments(db.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRID, err := nextReplayAppenderRIDStart(segments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appender, err := newReplayInlineAppenderWithNextRID(db, segments, nextRID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetValueLogAppender(appender)
+	db.SetLeafPageLog(replayInlineLeafPageLog{appender: appender})
+	t.Cleanup(func() { _ = appender.close() })
+	return appender.writer
+}
+
+func TestRewriteExactClosureReplayLeafProducerSharesRIDNamespace(t *testing.T) {
+	db, _, _, _ := setupExactRewritePair(t)
+	installExactRewriteReplayLeafProducer(t, db)
+	appender := db.currentValueLogAppender().(*replayInlineAppender)
+	startRID := appender.nextRID
+	value, err := appender.append([]byte("ordinary-value-before-stable-leaves"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := [][]byte{buildRewriteLeafPageFixture(t, "replay-rid-a"), buildRewriteLeafPageFixture(t, "replay-rid-b")}
+	stable := db.leafPageLog.(LeafPageStableBatchLog)
+	ptrs, resources, err := stable.AppendLeafPagesWithStableResources(pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := db.leafPageLog.AppendLeafPage(buildRewriteLeafPageFixture(t, "replay-rid-c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appender.nextRID != startRID+4 {
+		t.Fatalf("shared RID frontier=%d want %d", appender.nextRID, startRID+4)
+	}
+	if err := appender.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	segments, err := listValueLogSegments(db.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byRID, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []page.ValuePtr{value, ptrs[0].ValuePtr(), ptrs[1].ValuePtr(), ordinary.ValuePtr()}
+	for i, ptr := range want {
+		got, ok := byRID[startRID+uint64(i)]
+		if !ok || got.FileID != ptr.FileID || got.Offset != ptr.Offset || page.ValuePtrIsGrouped(got) != page.ValuePtrIsGrouped(ptr) || page.ValuePtrSubIndex(got) != page.ValuePtrSubIndex(ptr) {
+			t.Fatalf("RID %d resolved=%+v found=%v want %+v", startRID+uint64(i), got, ok, ptr)
+		}
 	}
 }

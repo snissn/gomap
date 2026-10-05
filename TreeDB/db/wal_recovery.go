@@ -1071,11 +1071,12 @@ func newReplayInlineAppenderWithNextRID(db *DB, segments []logSegment, nextRID u
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
-	return &replayInlineAppender{
-		db:      db,
-		writer:  writer,
-		nextRID: nextRID,
-	}, nil
+	appender := &replayInlineAppender{db: db, writer: writer, nextRID: nextRID}
+	// Stable leaf siblings reuse the writer capture path, but must reserve from
+	// the same RID namespace as ordinary replay/value appends. Writer calls are
+	// serialized by appender.mu; this callback therefore uses the locked helper.
+	writer.ridAlloc = newRewriteRIDAllocator(nextRID, appender.reserveAppendRIDsLocked)
+	return appender, nil
 }
 
 func nextReplayAppenderRIDStart(segments []logSegment) (uint64, error) {
@@ -1241,6 +1242,34 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 	return leafPtr, nil
 }
 
+// appendLeafPagesWithStableResources retains producer authority through the
+// replay wrapper. Registration failure releases the set; success transfers it
+// to the COW publication collector, whose existing abort/success paths own it.
+func (a *replayInlineAppender) appendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if a == nil {
+		return nil, nil, fmt.Errorf("commitlog: replay leaf-page log unavailable")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return nil, nil, fmt.Errorf("commitlog: replay leaf-page log unavailable")
+	}
+	ptrs, resources, err := a.writer.AppendLeafPagesWithStableResources(leafPages)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ptr := range ptrs {
+		if err := a.registerProducedPointerLocked(ptr.ValuePtr()); err != nil {
+			resources.Release()
+			return nil, nil, err
+		}
+	}
+	if len(ptrs) != 0 {
+		a.dirty = true
+	}
+	return ptrs, resources, nil
+}
+
 func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) error {
 	if a == nil || a.db == nil || a.db.valueLogManager == nil || ptr.FileID == 0 {
 		return nil
@@ -1392,6 +1421,43 @@ type replayInlineLeafPageLog struct {
 }
 
 var _ LeafPageLogSequenceReserver = replayInlineLeafPageLog{}
+
+var _ LeafPageStableLog = replayInlineLeafPageLog{}
+var _ LeafPageStableBatchLog = replayInlineLeafPageLog{}
+var _ leafPageLogStableRegistryBinder = replayInlineLeafPageLog{}
+var _ leafPageLogStableDictionaryBinder = replayInlineLeafPageLog{}
+
+// Forward the existing installation authority before the underlying writer can
+// open a leaf segment. Byte lookup never substitutes for a stable provider.
+func (l replayInlineLeafPageLog) bindStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
+	if l.appender == nil {
+		return rootpublication.ErrUnresolvedResource
+	}
+	l.appender.mu.Lock()
+	defer l.appender.mu.Unlock()
+	return l.appender.writer.bindStableResourcePinRegistry(registry)
+}
+
+func (l replayInlineLeafPageLog) bindStableDictionaryResourceProvider(provider func() StableDictionaryResourceProvider) error {
+	if l.appender == nil {
+		return rootpublication.ErrUnresolvedResource
+	}
+	l.appender.mu.Lock()
+	defer l.appender.mu.Unlock()
+	return l.appender.writer.bindStableDictionaryResourceProvider(provider)
+}
+
+func (l replayInlineLeafPageLog) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	ptrs, resources, err := l.AppendLeafPagesWithStableResources([][]byte{leafPage})
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	return ptrs[0], resources, nil
+}
+
+func (l replayInlineLeafPageLog) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appender.appendLeafPagesWithStableResources(leafPages)
+}
 
 func (l replayInlineLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l.appender == nil {

@@ -369,7 +369,7 @@ func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
 		t.Fatalf("Close after rewrite: %v", err)
 	}
 
-	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{ReadOnly: true})
 	defer func() { _ = reopen.Close() }()
 	reopenedCol := openColumnRetainedPlacementCollection(t, reopen, "events")
 	if got, err := reopenedCol.Get([]byte("doc-b")); err != nil {
@@ -1312,7 +1312,7 @@ func TestColumnRetainedPayloadSemanticStreamV1SideRootRewrite(t *testing.T) {
 		t.Fatalf("Close after rewrite: %v", err)
 	}
 
-	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{ReadOnly: true})
 	defer func() { _ = reopen.Close() }()
 	reopenedCol := openColumnRetainedPlacementCollection(t, reopen, "events")
 	if got, err := reopenedCol.Get(ids[8]); err != nil {
