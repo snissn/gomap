@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -51,6 +52,49 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 	// Extending mixed duration must not extend the ordinary read-window mode.
 	if err := windowValidate(base.Window); err == nil {
 		t.Fatal("ordinary read-window accepted 300 seconds")
+	}
+}
+
+func TestMixedRejectedAdmissionReportsRequestedCampaignV1(t *testing.T) {
+	for _, originals := range []int{0, 6, 58, 63} {
+		for _, profile := range []string{"", mixedProfileChangingTop10} {
+			t.Run(fmt.Sprintf("originals%d-profile%s", originals, profile), func(t *testing.T) {
+				o := mixedOptions{Originals: originals, Profile: profile, Window: windowOptions{Admission: recallOptions{Timeout: 10 * time.Minute, RPCTimeout: 3 * time.Second}, Concurrency: 1, Warmup: 64, MaxAttempts: 65536, OutputBytes: 128 << 20, Duration: time.Second}, Interval: 5 * time.Second}
+				var output bytes.Buffer
+				if err := runMixedWindow(context.Background(), o, &output); err == nil || !strings.Contains(err.Error(), "final slot") {
+					t.Fatalf("want admission headroom refusal, got %v", err)
+				}
+				var event struct {
+					Event  string
+					Report mixedReport
+				}
+				decoder := json.NewDecoder(&output)
+				if err := decoder.Decode(&event); err != nil {
+					t.Fatal(err)
+				}
+				r := &event.Report
+				want := mixedOriginalCount(originals)
+				if event.Event != "result" || r.Verdict != "FAILED" || r.Error == "" || r.WriteCounts.Planned != want || r.WriteCounts.Unissued != want || r.WriteCounts.Attempted != 0 || len(r.Writes) != 0 {
+					t.Fatalf("failed campaign accounting: event%q report%+v", event.Event, r)
+				}
+				if r.Profile != profile || r.RequestedDuration != o.Window.Duration || r.PaceInterval != o.Interval {
+					t.Fatalf("requested campaign metadata lost: %+v", r)
+				}
+				if want > 6 {
+					if r.Originals != want || strings.Contains(r.Scope+r.Schedule+r.LatencyBasis+r.AuthorityBoundary, "six") {
+						t.Fatalf("extended campaign mislabeled: %+v", r)
+					}
+				} else if r.Originals != 0 || !strings.Contains(r.Schedule, "six") {
+					t.Fatalf("default six report changed: %+v", r)
+				}
+				if profile == mixedProfileChangingTop10 && !strings.Contains(r.Scope, "changing") {
+					t.Fatalf("changing profile missing from scope: %q", r.Scope)
+				}
+				if err := decoder.Decode(&event); err != io.EOF {
+					t.Fatalf("admission failure emitted extra output: %v", err)
+				}
+			})
+		}
 	}
 }
 
