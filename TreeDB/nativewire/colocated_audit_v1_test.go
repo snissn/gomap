@@ -169,8 +169,6 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			t.Fatal("audit accepted missing current-FSM binding")
 		}
 		t.Run("ConcurrentFollowerApply", func(t *testing.T) {
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
 			ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			leader, err := node.client.leader(ctx, node.config.Groups[0])
