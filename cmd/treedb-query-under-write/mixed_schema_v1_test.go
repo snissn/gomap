@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -64,6 +66,24 @@ func TestMixedChangingProfileSchemaV2(t *testing.T) {
 	report := schema["properties"].(map[string]any)["Report"].(map[string]any)["properties"].(map[string]any)
 	if report["Profile"].(map[string]any)["const"] != mixedProfileChangingTop10 {
 		t.Fatal("profile schema drift")
+	}
+	var rejected bytes.Buffer
+	err = runArgs(context.Background(), []string{"-mode", "mixed-window", "-mixed-profile", "invalid"}, &rejected)
+	if err == nil {
+		t.Fatal("invalid profile accepted")
+	}
+	var failure struct {
+		Event  string
+		Report map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(rejected.Bytes(), &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Event != "result" || string(failure.Report["Verdict"]) != `"FAILED"` || len(failure.Report["Error"]) == 0 {
+		t.Fatal("configuration failure evidence missing")
+	}
+	if _, present := failure.Report["Profile"]; present {
+		t.Fatal("rejected profile violates the report schema")
 	}
 	prefix := report["ReadPrefixes"].(map[string]any)["items"].(map[string]any)
 	encoded, err := json.Marshal(mixedReadPrefix{CompatibleMask: 3, RecallAt10: .9})
