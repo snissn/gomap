@@ -10,13 +10,42 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/collections"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
+	"io"
 	"math"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type colocatedAuditVisibilityTransportV1 struct {
+	*http.Transport
+	visibilityCalls atomic.Int64
+	mu              sync.Mutex
+	lastToken       []byte
+}
+
+func (t *colocatedAuditVisibilityTransportV1) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/v1/vector-mutation-visibility" {
+		t.visibilityCalls.Add(1)
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer body.Close()
+		var payload fixedPeerRequestV1
+		if err := json.NewDecoder(io.LimitReader(body, 32<<10)).Decode(&payload); err != nil {
+			return nil, err
+		}
+		t.mu.Lock()
+		t.lastToken = bytes.Clone(payload.VectorMutationVisibility)
+		t.mu.Unlock()
+	}
+	return t.Transport.RoundTrip(request)
+}
 
 func TestColocatedAuditPlanBoundsV1(t *testing.T) {
 	for _, p := range []ColocatedAuditPlanV1{{}, {Version: 1, RunID: "run"}, {Version: 2, RunID: "run", Writes: make([]ColocatedAuditWriteV1, 6)}} {
@@ -136,9 +165,26 @@ func testFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T, originals int) 
 		for _, n := range nodes {
 			// CLI/client attachment goes through the EXISTING authenticated diagnostics
 			// operation and validates actual per-voter current-FSM state.
+			leader, err := n.client.leader(ctx, n.config.Groups[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			transport := &colocatedAuditVisibilityTransportV1{Transport: n.client.http.Transport.(*http.Transport)}
+			n.client.http.Transport = transport
 			report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, p)
+			n.client.http.Transport = transport.Transport
 			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != uint64(originals) || len(report.ColocatedAudit.Witnesses) != originals || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
 				t.Fatalf("audit voter%s=%+v err%v", n.config.NodeID, report.ColocatedAudit, err)
+			}
+			wantCalls := int64(1)
+			if leader == n.config.NodeID {
+				wantCalls = 0
+			}
+			if got := transport.visibilityCalls.Load(); got != wantCalls {
+				t.Fatalf("audit voter%s made%d visibility RPCs for%d witnesses; want%d", n.config.NodeID, got, originals, wantCalls)
+			}
+			if wantCalls != 0 && !bytes.Equal(transport.lastToken, p.Writes[len(p.Writes)-1].Response.VisibilityToken) {
+				t.Fatal("audit forwarded an earlier visibility token")
 			}
 		}
 		legacy := p
@@ -156,8 +202,13 @@ func testFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T, originals int) 
 		token.Outcome.CommandDigest[0] ^= 1
 		encoded, _ := json.Marshal(token)
 		bad.Writes[0].Response.VisibilityToken = append([]byte(colocatedVectorVisibilityMagicV1), encoded...)
-		if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, node.config.NodeID, bad); err == nil {
-			t.Fatal("forged command digest admitted")
+		if err := ValidateColocatedAuditPlanV1(ctx, bad); err != nil {
+			t.Fatal("earlier digest forgery must exercise current witness verification:", err)
+		}
+		for _, n := range nodes {
+			if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, bad); err == nil {
+				t.Fatalf("forged earlier command digest admitted on voter%s", n.config.NodeID)
+			}
 		}
 		_ = json.Unmarshal(raw, &bad)
 		bad.Writes[0].Replace.Vector[0] = 1
