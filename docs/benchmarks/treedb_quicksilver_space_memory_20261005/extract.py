@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 
 HERE = Path(__file__).resolve().parent
-INPUTS_SHA256 = "c42d1b4827ced0c4de612149a9d0c3badf7dab9998014f0870b53ba2c2e308f9"
+INPUTS_SHA256 = "bb664a3fcda88958938ef12c218f054d19e3c811e604a5a4de71761a99bb3a68"
 BASE = "maintenance/maintenance-baseline-3m/"
 FAILED = "maintenance/maintenance-baseline-3m-batch8192/"
 DIAG = "maintenance/maintenance-3m-diagnostic/"
@@ -246,6 +246,16 @@ def extract(contract, raw):
             and leaf_stdout["engine"] == "treedb" and leaf_stdout["gomaxprocs"] == 12
             and leaf_stdout["verified_keys"] == contract["verified_keys"]
             and leaf_stdout["verified_misses"] == contract["verified_misses"], "leaf diagnostic fixture differs")
+    pending_packets = {}
+    for name, expected in contract["pending_packets"].items():
+        plan = read("pending-plans/" + name)
+        require(plan["repeats"] * len(plan["cells"]) == expected["expected_rows"], "pending plan row count differs")
+        require(len({cell["label"] for cell in plan["cells"]}) == len(plan["cells"])
+                and {cell["source"] for cell in plan["cells"]} == set(expected["sources"])
+                and all(cell["profiled"] is expected["profiled"] for cell in plan["cells"]), "pending plan class differs")
+        pending_packets[name] = dict(expected, observed_rows=0, status="PENDING",
+                                     repeats=plan["repeats"], cells=plan["cells"],
+                                     plan_sha256=sha(raw["pending-plans/" + name]))
     before, after = storage[1], storage[2]
     return {"schema_version": 1, "publication_status": "PROVISIONAL", "pending": contract["pending"],
             "inputs_sha256": INPUTS_SHA256, "raw_files": contract["raw_files"],
@@ -255,7 +265,7 @@ def extract(contract, raw):
                            "compiled_project_input_count": len(source["compiled_project_inputs"]),
                            "maintenance_binary_sha256": contract["treemap_binary_sha256"],
                            "maintenance_binary_binding": "post-measurement bit-identical reconstruction; original build receipt missing"},
-            "fixture": baseline["config"], "storage": storage,
+            "fixture": baseline["config"], "storage": storage, "pending_packets": pending_packets,
             "full_reduction": {"apparent_excluding_wal_bytes": before["apparent_excluding_wal"]-after["apparent_excluding_wal"],
                                "percent": 100*(1-after["apparent_excluding_wal"]/before["apparent_excluding_wal"]),
                                "oracle_apparent_delta_bytes": storage[3]["apparent"]-after["apparent"],
@@ -273,7 +283,7 @@ def extract(contract, raw):
                            "retained_profile": contract["retained_large_profile"]}}
 
 
-REPORT_PROSE_SHA256 = "a672d370409b9309ab64f35f025423c989a7905055869dcf9314c45fcd3e9015"
+REPORT_PROSE_SHA256 = "153b75b1fef01208c6b48ed6da65708abe25e9915d9de082c56512e83d3c74f9"
 
 
 def report(result, template=None):
@@ -298,13 +308,13 @@ def report(result, template=None):
     mem = rss["peak_sample"]["memory"]
     source = result["provenance"]
     blocks = {
-        "summary": f"Full reduced apparent WAL-excluded bytes by {reduction['percent']:.2f}%, from {storage[1]['apparent_excluding_wal']:,} to {storage[2]['apparent_excluding_wal']:,}. All three completion flags remained false. Default Exhaustive reached its 1800-second limit, so minimum attainable size remains unknown.",
+        "summary": f"Full reduced apparent WAL-excluded bytes by {reduction['percent']:.2f}%, from {storage[1]['apparent_excluding_wal']:,} to {storage[2]['apparent_excluding_wal']:,}.",
         "oracle_delta": f"The Full oracle changed total apparent bytes by {reduction['oracle_apparent_delta_bytes']:,} and allocated bytes by {reduction['oracle_allocated_delta_bytes']:,}. All-value verification covered 3,000,000 present keys and 6,040,000 misses.",
         "debt": f"Full reported leaf-GC debt of {debt['leaf_gc_bytes']:,} bytes in {debt['leaf_gc_generations']} generation. `fully_compacted=false`, `policy_fully_compacted=false`, and `byte_minimized=false` are preserved. Debt is not automatically safe to delete: recoverable roots and stable resources remain protected.",
-        "failed": f"The failed 8192 attempt used a restored copy: its initial writable oracle changed apparent WAL-excluded bytes from {failed_states[0]['apparent_excluding_wal']:,} to {failed_states[1]['apparent_excluding_wal']:,}. It failed with an incompatible duplicate dictionary stable identity; its 11.39-second failure time cannot be compared as a successful batch-speed result. Both the timed-out original and failed copy passed read-only full-fixture verification without census changes. R's causal regression and production repair remain pending in this packet.",
+        "failed": f"The failed 8192 attempt's initial writable oracle changed apparent WAL-excluded bytes from {failed_states[0]['apparent_excluding_wal']:,} to {failed_states[1]['apparent_excluding_wal']:,}.",
         "rss": f"The baseline observer retained {rss['samples']} samples of one process. Maximum observed kernel VmHWM was {rss['observed_kernel_hwm_bytes']:,} bytes; maximum sampled RSS was {rss['sampled_rss_peak_bytes']:,}. At that RSS sample, anonymous/file/shared bytes were {mem['RssAnon']:,} / {mem['RssFile']:,} / {mem['RssShmem']:,}. Independent component maxima remain separate in RESULTS.json and must not be added together.",
-        "diagnostic": f"The intentionally terminated 60-second diagnostic CPU profile attributed {result['diagnostic']['candidate_closure_cumulative_percent']:.2f}% cumulatively to candidate external-reference closure scans and {result['diagnostic']['zstd_decode_cumulative_percent']:.2f}% to nested Zstd decoding. These overlapping cumulative shares must not be added. They describe this interval on a rebound diagnostic copy, not an accepted optimization or full-run scaling result.",
-        "source": f"Frozen source `{source['source_head']}` has whole-tree equality with landed `{source['landed_head']}`. Hash-bound source/build/native/runner receipts and the actual collector command are retained under raw/maintenance. The publication does not claim that its documentation head was measured. The original pre-measurement maintenance build receipt is missing: a separate post-measurement reconstruction from frozen source produced a bit-identical treemap binary (`{source['maintenance_binary_sha256']}`). That reconstruction supplements preserved command logs; it does not become a pre-measurement receipt.",
+        "diagnostic": f"The diagnostic CPU profile attributed {result['diagnostic']['candidate_closure_cumulative_percent']:.2f}% cumulatively to candidate external-reference closure scans and {result['diagnostic']['zstd_decode_cumulative_percent']:.2f}% to nested Zstd decoding.",
+        "source": f"Frozen source `{source['source_head']}` has whole-tree equality with landed `{source['landed_head']}`. The separate post-measurement reconstruction produced a bit-identical treemap binary (`{source['maintenance_binary_sha256']}`).",
         "pending": "\n".join("- " + item for item in result["pending"]),
     }
     leaf_rss = result["memory"]["leaf256_diagnostic"]["rss"]
@@ -319,6 +329,10 @@ def report(result, template=None):
     blocks["maintenance_table"] = table(["Attempt", "Outcome", "GNU time elapsed (s)", "Receipt elapsed (s)", "Process RSS high-water bytes", "Sampled apparent / allocated disk maximum, including WAL"], rows)
     rows = [[p["name"], p["process_heap_alloc_before"], p["process_heap_alloc_after"], p["process_allocated_bytes"], f"{p['process_bytes_per_op']:.3f}"] for p in result["memory"]["profiled_baseline_phases"]]
     blocks["memory_table"] = table(["Profiled phase", "HeapAlloc before", "HeapAlloc after", "Allocated bytes in bracket", "Bytes per operation"], rows)
+    blocks["planned_inputs"] = table(["Pending plan", "Expected rows", "Imported result rows", "Class"],
+        [[name, packet["expected_rows"], packet["observed_rows"], "profiled structural diagnostic" if "structural" in name else
+          ("profiled public pair" if packet["profiled"] else "unprofiled public pairs")]
+         for name, packet in result["pending_packets"].items()])
     names = [match[1] for match in pattern.finditer(text)]
     require(len(names) == len(blocks) and set(names) == set(blocks), "report block inventory differs")
     return pattern.sub(lambda match: "<!-- BEGIN " + match[1] + " -->\n" + blocks[match[1]] + "\n<!-- END " + match[1] + " -->", text)

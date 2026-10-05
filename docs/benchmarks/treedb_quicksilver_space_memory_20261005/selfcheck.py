@@ -78,6 +78,13 @@ def main():
     checks.append(rejected("leaf diagnostic oracle count changed", lambda:
         extract.extract(contract, dict(raw, **{"leaf256/stdout.json": extract.encoded([
             dict(json.loads(raw["leaf256/stdout.json"])[0], verified_keys=2999999)])}))))
+    checks.append(rejected("pending matrix repeat count changed", lambda:
+        extract.extract(contract, altered("pending-plans/offsets-3m-matched-plan.json", "repeats", 2))))
+    pending_plan = json.loads(raw["pending-plans/offsets-3m-structural-diagnostic-plan.json"])
+    pending_plan["cells"][0]["profiled"] = False
+    checks.append(rejected("structural diagnostic class changed", lambda:
+        extract.extract(contract, dict(raw, **{"pending-plans/offsets-3m-structural-diagnostic-plan.json":
+                                               extract.encoded(pending_plan)}))))
     prose = (extract.HERE / "REPORT.md").read_text()
     checks.append(rejected("publication prose changed", lambda:
         extract.report(result, prose.replace("Candidate acceptance and final publication remain pending.",

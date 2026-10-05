@@ -35,6 +35,32 @@
     "Accept the missing original maintenance build receipt as a documented reconstruction limitation",
     "Independent artifact review, latest-head CI, mature Codex review, and final source reconciliation"
   ],
+  "pending_packets": {
+    "offsets-3m-matched-plan.json": {
+      "expected_rows": 18,
+      "profiled": false,
+      "sources": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "offsets-3m-profile-paired-plan.json": {
+      "expected_rows": 6,
+      "profiled": true,
+      "sources": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "offsets-3m-structural-diagnostic-plan.json": {
+      "expected_rows": 2,
+      "profiled": true,
+      "sources": [
+        "diag-baseline",
+        "diag-candidate"
+      ]
+    }
+  },
   "publication_status": "PROVISIONAL",
   "raw_files": {
     "ALGORITHM_TRACE.md": "c78275127f7b9faa097f6cbfb7a989507acf3c2e79b339a592efb6cd1baabff1",
@@ -117,6 +143,9 @@
     "maintenance/run.json": "c414e41e86ff9b65f3ff38eb4e10aab703de8bfa406a7941b80e5dfcba6e89f8",
     "measurement-plan.md": "52d5ee762dc83cac8c7167f6cc0f0ea4c0bdc2b0ec7fcc57d2b37a2ccb89e7dc",
     "observe.py": "c9aad6466d4cb1d307067fe45662ddaf401169ee9f1a285f2ee7d720f7a08d3a",
+    "pending-plans/offsets-3m-matched-plan.json": "5eeeb51832dcda4d56e09c1cb9aa29ae931d4418ecf5e1020e9a5392009cc824",
+    "pending-plans/offsets-3m-profile-paired-plan.json": "6c6f4f677571517734f4c0f8b02163fb508152a75aed571fc9e243f61c6c2e18",
+    "pending-plans/offsets-3m-structural-diagnostic-plan.json": "5f65fe77b2258e6cf7f9a21477992e034dc89e7159f6102d44cb8a81476c89e7",
     "verify-failed-copy.py": "e269e870fe48caf8296ae96518876b560f3e931c779376cfcd5441024367a0ca"
   },
   "retained_large_profile": {
