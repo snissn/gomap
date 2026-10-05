@@ -113,6 +113,11 @@ def check_policy(policy, *, allow_unreviewed=False):
             raise ContractError('unreviewed-member-owner')
     if {m['workflow'] for m in members} != set(workflows):
         raise ContractError('incomplete-workflow-policy')
+    declared_jobs = {(workflow, job) for workflow, contract in workflows.items()
+                     for job in contract['jobs']}
+    represented_jobs = {(m['workflow'], m['job']) for m in members}
+    if represented_jobs != declared_jobs:
+        raise ContractError('incomplete-job-member-policy')
     selectors = set(workflows) | {m['workflow'] + '/' + m['job'] for m in members}
     for rule in policy['rules']:
         if not rule.get('glob') or not rule.get('reason') or not rule.get('consumers'):

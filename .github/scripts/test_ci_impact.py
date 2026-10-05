@@ -151,6 +151,25 @@ class ImpactContract(unittest.TestCase):
         with self.assertRaises(ci_impact.ContractError):
             ci_impact.check_policy(policy)
 
+    def test_each_inventoried_job_requires_a_member_even_with_same_workflow_retained(self):
+        policy = json.loads((self.repo / '.github/ci/ci_impact.json').read_text())
+        policy['members'] = [m for m in policy['members']
+                             if not (m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet')]
+        self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' for m in policy['members']))
+        with self.assertRaises(ci_impact.ContractError):
+            ci_impact.check_policy(policy)
+        # A malformed accepted policy must not shrink the reported universe.
+        self.write('.github/ci/ci_impact.json', json.dumps(policy))
+        self.base = self.commit()
+        receipt = self.plan(self.event())
+        self.assertFull(receipt, 'bootstrap-no-accepted-policy')
+        self.assertEqual(len(receipt['members']), 56)
+        self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet'
+                            for m in receipt['members']))
+        policy['workflows']['treedb-tests.yml']['jobs'] = {}
+        with self.assertRaises(ci_impact.ContractError):
+            ci_impact.check_policy(policy)
+
     def test_missing_duplicate_unknown_member_or_forged_binding_fails_validation(self):
         event = self.event()
         receipt = self.plan(event)
