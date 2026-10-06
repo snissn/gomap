@@ -1,0 +1,31 @@
+{
+  "status": "PASS",
+  "source_drift": {},
+  "actual_test_events": {
+    "test_refresh_ci_impact_inventory": {
+      "tests": 15,
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "5beae1de1ade6dd32a7091ebd9bb3418c5e3a1aa4e399f4fd221e3a5e9200212"
+    },
+    "test_ci_impact": {
+      "tests": 21,
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "65f6b1c5ff80e01dc84855de2b0a9ededf51fb7f99037ae1fdec10492b7985f2"
+    },
+    "test_treedb_ci_contract": {
+      "tests": 6,
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371"
+    },
+    "test_treedb_windows_core_headroom": {
+      "tests": 16,
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "88f7851f10379853901274b70cfdf5afe278d72a0669a6fc4648fbeafa125fad"
+    }
+  },
+  "limits": "CI policy logic checks at recorded pre/post source identity. Final publication fingerprint refresh will be independently checked; tests do not establish hosted OS/performance runtime."
+}

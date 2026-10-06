@@ -3,6 +3,7 @@ package merging
 import (
 	"bytes"
 	"errors"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -153,6 +154,28 @@ type MergingIterator struct {
 	err     error
 	start   []byte
 	end     []byte
+}
+
+// ForwardAllocationSizes describes the raw retained wrapper and heap sizes of
+// NewMergingIteratorWithFixedHeap. Callers round each allocation independently
+// and admit them before constructing source iterators.
+func ForwardAllocationSizes(sourceCount int) (wrapper, heap uint64) {
+	if sourceCount == 2 {
+		return uint64(unsafe.Sizeof(TwoWayMerger{})), 0
+	}
+	return uint64(unsafe.Sizeof(MergingIterator{})), uint64(sourceCount) * uint64(unsafe.Sizeof(heapItem{}))
+}
+
+// NewMergingIteratorWithFixedHeap allocates exactly one source-bounded heap.
+// Seek reuses that storage; no geometric growth arrays need separate ownership.
+func NewMergingIteratorWithFixedHeap(sources []IteratorSource, start, end []byte) Iterator {
+	if len(sources) == 2 {
+		return NewTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
+	}
+	mi := &MergingIterator{sources: sources, h: make(iteratorHeap, 0, len(sources)), start: start, end: end}
+	mi.rebuildHeap()
+	mi.advance()
+	return mi
 }
 
 func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {

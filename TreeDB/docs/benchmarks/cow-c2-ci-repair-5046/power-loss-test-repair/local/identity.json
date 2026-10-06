@@ -1,0 +1,14 @@
+{
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "git_tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "allowed_delta": [
+    "TreeDB/cow_power_loss_test.go"
+  ],
+  "base_test_sha256": "b9c8b406409431618f78eedf92e101427c5d44a3346e18ffd63e165dbbe1faad",
+  "repaired_test_sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+  "tracked_file_count": 8057,
+  "pre_manifest_sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+  "post_manifest_sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+  "execution_delta_paths": [],
+  "git_diff_check_exit": 0
+}

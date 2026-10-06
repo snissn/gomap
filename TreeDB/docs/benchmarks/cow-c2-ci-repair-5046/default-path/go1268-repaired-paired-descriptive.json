@@ -1,0 +1,55 @@
+{
+  "get": {
+    "ns": {
+      "base_median": 628.95,
+      "candidate_median": 628.1500000000001,
+      "paired_geomean": 1.0272770526184056,
+      "paired_median": 0.9786297537851771,
+      "paired_min": 0.7986518808436617,
+      "paired_max": 1.5043424317617866
+    },
+    "bytes": {
+      "base_median": 0.0,
+      "candidate_median": 0.0,
+      "paired_geomean": null,
+      "paired_median": null,
+      "paired_min": null,
+      "paired_max": null
+    },
+    "allocs": {
+      "base_median": 0.0,
+      "candidate_median": 0.0,
+      "paired_geomean": null,
+      "paired_median": null,
+      "paired_min": null,
+      "paired_max": null
+    }
+  },
+  "tiny": {
+    "ns": {
+      "base_median": 6455991.5,
+      "candidate_median": 6431756.5,
+      "paired_geomean": 1.0312368697224175,
+      "paired_median": 0.9948826879547561,
+      "paired_min": 0.819372518141146,
+      "paired_max": 1.7382792669991942
+    },
+    "bytes": {
+      "base_median": 4765.0,
+      "candidate_median": 4768.0,
+      "paired_geomean": 1.002846090203924,
+      "paired_median": 0.9999998676775046,
+      "paired_min": 0.9898001665278934,
+      "paired_max": 1.0348154362416107
+    },
+    "allocs": {
+      "base_median": 17.0,
+      "candidate_median": 17.0,
+      "paired_geomean": 1.0,
+      "paired_median": 1.0,
+      "paired_min": 1.0,
+      "paired_max": 1.0
+    }
+  },
+  "qualification": "All8pairs retained, high shared-host spread; diagnostic only, hosted strict gate remains authority. No trimming or threshold waiver."
+}

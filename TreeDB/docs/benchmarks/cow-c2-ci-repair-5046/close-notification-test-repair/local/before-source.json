@@ -1,0 +1,11 @@
+{
+  "commit": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "files": {
+    "TreeDB/cow_close_notification_test.go": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+    "TreeDB/public.go": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65"
+  },
+  "original_failure": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-014-windows-core3-failure.log",
+    "sha256": "27131c64bae66d140c8ad89237a4389f43433a756beb29d9317b099f7a8b1583"
+  }
+}

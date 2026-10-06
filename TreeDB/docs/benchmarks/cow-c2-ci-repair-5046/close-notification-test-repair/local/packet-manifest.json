@@ -1,0 +1,22 @@
+{
+  "files": {
+    "after-source.json": "711a5c3b0fb0fc8e281d76c769d5ecdd2317ff1beed93cc9fedccdaa841696dd",
+    "before-source.json": "e7c545a75a94552cb28079576d19eec70b9289e1e27c73544b83a85b72b7879d",
+    "before.go.txt": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+    "completion-source-proof.json": "6260af30b597c54b789c77077533b97896e92bf34f231bcccbea34f1e7297a3a",
+    "diagnosis-and-change.md": "7aeff30267f70d0ed646550c45b42c8679b64d4697ae2cae6833ab8c6524289b",
+    "event-summary.json": "0f6fed252ccdab0239829a5f2445f6c71a9b900114179f01f01311d48bf02cfc",
+    "execution-receipts.json": "f67e715174cc6867a6dd4b36a999d75ad7918060cf9c36730aca3eace20a5ce3",
+    "go-environment.json": "570e98b02f271d04447529d7f7221b7ccf34e8a562e05935fc9dfeffde427fc4",
+    "handoff.md": "bb64e8d6d40d548643a579b8c2729f7dfa92e1487f97c33bf5c1631a401bee52",
+    "normal.json": "2f63f01ce62ad7814e6aa950d2629d9e4b79554429ca380406ec7c637e5b3cf8",
+    "normal.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-windows-failure-events.json": "5588313102446e6a592c076e4e2da101eb12f7c38b4b22384120a3770a4c756c",
+    "race.json": "f07cee9c92ec51befd9cad41a97ecc1a50ebe4e544d3e4da1018c3a6e40b81c5",
+    "race.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "run-targeted.py": "b1c0b0229bd1333844ba5a76dd2e1e3df24582f8c558563aafb8c2e39f754525",
+    "runtime.diff": "dc4eebe1a5e3fa6484eb74e785ec15efa00ce8306445799fddb9049c28f90be3",
+    "safe.json": "792bb18ba9628442c079db1c7b3463fecb36a818f583e6de4fcb832e11c37483",
+    "safe.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

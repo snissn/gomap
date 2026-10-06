@@ -1,0 +1,216 @@
+{
+  "checked_at": "2026-10-06T08:11:51.352957+00:00",
+  "status": "PASS with explicit hash-bound literal-evidence whitespace exceptions",
+  "docs_checked": [
+    "TreeDB/README.md",
+    "TreeDB/docs/spec/README.md",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "TreeDB/docs/spec/cow-memtable-ownership.md",
+    "TreeDB/docs/spec/architecture.md",
+    "TreeDB/docs/spec/contracts.md",
+    "TreeDB/docs/spec/write-path-and-durability.md",
+    "TreeDB/docs/spec/command-wal-durable-write-contract.md",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/docs/spec/verification.md",
+    "docs/TREEDB_WRITE_PATHS.md",
+    "docs/TREEDB_RECOVERY.md",
+    "docs/contracts/CONCURRENCY.md",
+    "cmd/unified_bench/README.md",
+    "cmd/benchprof/README.md",
+    "TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/cost-report.md"
+  ],
+  "relative_links_checked": 100,
+  "missing_links": [],
+  "docs_content_sha256": {
+    "TreeDB/README.md": "e8814c2a7a34931a400304b0cb4d535e5abe3bb8f96e6da16a77186b0ae2757d",
+    "TreeDB/docs/spec/README.md": "7aa241e9ec1b8c957b240d1e02bc207587d3379038fd5134fa90044813c9a712",
+    "TreeDB/docs/spec/cow-cache-publication.md": "91024e950b970ad8c9171fec835cc61cc0d52d84228eb16cb54948c00fbb09a0",
+    "TreeDB/docs/spec/cow-memtable-ownership.md": "f335b92bc894afa5f8b5f13eddcaf74a2c608d3282f599463a940c3d463ae76a",
+    "TreeDB/docs/spec/architecture.md": "cae1798cd84c8d1e2e132c8b48cb238a7733b42e50853611799f9bad4d6ef022",
+    "TreeDB/docs/spec/contracts.md": "763cb6bd297496cd494790bb2e1f0768ab511008c08585c21b54530b0a0b0a3e",
+    "TreeDB/docs/spec/write-path-and-durability.md": "2008ec03fdbab90abc21a73e8dfd16197ebbb82c0e7246c5a6e29464f072026f",
+    "TreeDB/docs/spec/command-wal-durable-write-contract.md": "f7e3d3c3c6bc21759abe50c8dc0a43560f1399707dd637ba4099e4ff833e9251",
+    "TreeDB/docs/spec/recovery.md": "f831de78d0dd936c4ffe37243b5505cc7d744dc1b7d00bb1cb63fdc21c111477",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "840b964b7bcf2226bbffc290cc912c3b086e6405c7fd281871096c9b1e25ed55",
+    "TreeDB/docs/spec/verification.md": "31d0e474cf8fcbae4eefa347771fb5159e5180a6b2ddbd6bbec00e2fca1643d1",
+    "docs/TREEDB_WRITE_PATHS.md": "0c57a97409b7aa885d7c3c544271fb39b43d21d96c0af8f091e79e3852ecde70",
+    "docs/TREEDB_RECOVERY.md": "12c8f3aed55894decff0d56f6d294acc257d37c06cebbe168d8950764483e046",
+    "docs/contracts/CONCURRENCY.md": "04b95a6f5f1776c49694c57dfe47a336324ac25c8f3896592bf3b5c721c5e277",
+    "cmd/unified_bench/README.md": "a749f47249b35c14d80456a61627996c87bbc2aa0ee45a994c45ec93e608ce3f",
+    "cmd/benchprof/README.md": "1a9791d02f27c8c19166d1f858d328d649547c9124f5a3ca1de09acf623fd28a",
+    "TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md": "bcfffa3489a25bb837b38d7d4ec50df7c4b9c9a00f1fe4a5cd873101db6e7d4b",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md": "c366108355a05f8fcaa6b0a3b3eb4bdd953c5fbb2cc5ccbd69d8fe7a900d198d",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/cost-report.md": "691cd025b9652c7b0cb267c4a4cd771538d1e989a191d67b64abcaeaa6028002"
+  },
+  "diff_check_command": [
+    "git",
+    "diff",
+    "--cached",
+    "--check",
+    "2f626cb4f40e44736257537e38359ad003939ab9"
+  ],
+  "diff_check_actual_exit": 2,
+  "literal_whitespace_exceptions": [
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/base-capture-assembly.txt",
+      "sha256": "62f7e928301f383cf0316dd75e65dc11276733309949f2b80e09484622d78f71",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-base-capture-assembly.txt",
+      "sha256": "a1276b2bd83ec23d99d578e3da04741ca6f933f87d05cc32df8ae29a669fb34d",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-base-db-buildinfo.txt",
+      "sha256": "164eb4567cb87abe8d289ce93ff9001b908e2daa4445aa08859be2c43153cef0",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-base-public-buildinfo.txt",
+      "sha256": "b02d2f55f44895704ce750dd60c8daeb4b31129dace67949b9a3b88ff4aaec4f",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-repaired-v3-capture-assembly.txt",
+      "sha256": "292922077c475b73b359342de9261974b2d8f64785434adcf2828bada472ecd1",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-repaired-v3-db-buildinfo.txt",
+      "sha256": "8a8b2797b7bfd30eeda3b3464e2d96c205f62fec4d2c12094206dcc1e4f4d6b1",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/go1268-repaired-v3-public-buildinfo.txt",
+      "sha256": "8cd60be5ab4924a25fedddbaa2e158715425c7ff9c3c0513fd02f8f29eb18d96",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/original-capture-assembly.txt",
+      "sha256": "3477338aee0815117585c5b0d5427c10207eee8f7c33fd567c7eaf26590af239",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/repair-runtime.patch",
+      "sha256": "daa18f744a78c283e05d3333e7e12643b0f629545b32e5003fc879202da6d054",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/repair-v2-runtime.patch",
+      "sha256": "3950de2fa3f9e8aad64bc3ed3e282592bba8040dadfd2697e59a762ab458fe03",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/repair-v3-runtime.patch",
+      "sha256": "4d5bbbcfd9689d60cb7b735ad8971c407a8b1a2a78a7ac8bba7db982405284d2",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/default-path/repaired-v1-owned-hang-termination.txt",
+      "sha256": "88c14c1f20582aa287011b3091ad0aaff7e33e462a33277845e0513be98a5857",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/first-ci/raw-path/baseline.txt",
+      "sha256": "e047a63bbd16e17a3dfafd5cd14efc38b1bfa55cfd4d9cd1ba6312352faa4ae2",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/first-ci/raw-path/candidate.txt",
+      "sha256": "62f939d6923f9e2843bc2c6b5368013ac2dd214659c8246e4026c4f699de3c63",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/mvcc/binary-buildinfo.txt",
+      "sha256": "34ebde0a866495264b9d0f090d99ea10176c8401f5f94bad8bfd1c8b60f0f8f9",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/platform/crosscompile-v4/runtime.patch",
+      "sha256": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/platform/validation-v1/runtime.patch",
+      "sha256": "a7c5d5c81ecf757e5d05c66e464243226b3cb36128688c96bc7d7bf7a83f4dd2",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/platform/validation-v2/runtime.patch",
+      "sha256": "d8980e87be038590d761cb030831308d276f3079334a8ed03313d646f55520ee",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/platform/validation-v3/runtime.patch",
+      "sha256": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/platform/validation-v4-admission/runtime.patch",
+      "sha256": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/rawkv/binary-buildinfo.txt",
+      "sha256": "4f53b5b03f29577dd2ad06f4f69cc6c11e3982020e93e81c3ff0ba096219eb38",
+      "basis": "current literal copy matches retained source provenance"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/before/mvcc/binary-buildinfo.txt",
+      "sha256": "3e494a07593033b2f4bb949a4dd1ef94bc31b4866d8873d13ace28e5a29e7693",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/before/rawkv/binary-buildinfo.txt",
+      "sha256": "b0b2d9e000a0b437b7ec00afbbfbac6c5e4428f7cde1c704240144bb69e3e793",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/default-read-guard/candidate/binary-buildinfo.txt",
+      "sha256": "f6e704986863ce4c387985062f11d40ba5364f49b5845ece74b522ac58b4d24d",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/default-read-guard/main/binary-buildinfo.txt",
+      "sha256": "b5b45b3e254a531446d88f60444482e8bda6c78dfd8d4ea489a04218a59e7616",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/functional/second-minimization-37aa/runtime.patch",
+      "sha256": "3f480cb29961f0ae65afd4781841fb83adb40e5c1837bbbe482b71c337b9c79f",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/functional/successor-minimization-4add47/runtime.patch",
+      "sha256": "50575350ac27ca7eac7eda124b9f4a9f7a76c8b019cac88f60dc4db6c3d5253b",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/intermediate/mvcc/binary-buildinfo.txt",
+      "sha256": "182da335bfb9d3be772ad5893b2d3f7be3840d981405a72d30cc8a4ee402a2eb",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/intermediate/rawkv/binary-buildinfo.txt",
+      "sha256": "04ea5488ca1d411822e3c481d6c91dc6d0cb946058488714e1aa9b4fc1216883",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/mvcc/binary-buildinfo.txt",
+      "sha256": "965779f03b978b3557d1443e50c44955abc50198064e807e98db7a937fbf0745",
+      "basis": "previously published immutable literal"
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-integration-5046/rawkv/binary-buildinfo.txt",
+      "sha256": "5b2839fd2d2563cf991b6ad13b953420b58562bd3df04e3f131e2e82739021ae",
+      "basis": "previously published immutable literal"
+    }
+  ],
+  "all_other_changed_paths_clean": true,
+  "raw_diff_check_stdout_sha256": "78cabf18e223baf3f8a2d0a59213c0d2504994e246251c89572f91fbdfdeecc7",
+  "scope": "Owning/current report file links only; no claim of remote URL or Markdown-fragment availability."
+}

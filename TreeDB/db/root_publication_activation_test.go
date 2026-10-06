@@ -684,6 +684,12 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	if !CommitPublicationAccepted(err) {
 		t.Fatalf("accepted build-group wait error=%v was not marked post-acceptance", err)
 	}
+	if !group.Accepted() {
+		t.Fatal("accepted build-group error lost its coverage receipt")
+	}
+	if closeErr := group.Close(); closeErr != nil || !group.Accepted() {
+		t.Fatalf("coverage receipt after close: accepted=%t err=%v", group.Accepted(), closeErr)
+	}
 	if errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
 	}

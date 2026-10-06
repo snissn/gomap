@@ -16,6 +16,12 @@ func (s *Snapshot) beginRead() error {
 			return backenddb.ErrClosed
 		}
 		if s.readState.CompareAndSwap(state, state+1) {
+			if s.cowCache != nil && !s.cowCache.beginRead() {
+				if s.readState.Add(^uint64(0)) == snapshotReadClosedBit {
+					_ = s.finalizeCloseIfUnreferenced()
+				}
+				return backenddb.ErrClosed
+			}
 			return nil
 		}
 	}
@@ -24,6 +30,9 @@ func (s *Snapshot) beginRead() error {
 func (s *Snapshot) endRead() {
 	if s == nil {
 		return
+	}
+	if s.cowCache != nil {
+		s.cowCache.endRead()
 	}
 	if s.readState.Add(^uint64(0)) == snapshotReadClosedBit {
 		_ = s.finalizeCloseIfUnreferenced()

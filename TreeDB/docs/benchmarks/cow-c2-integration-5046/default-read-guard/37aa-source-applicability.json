@@ -1,0 +1,24 @@
+{
+  "recorded_utc": "2026-10-06T05:37:23.062631+00:00",
+  "current_candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "current_source_tree_sha256": "1c49e130fdf3bb9a84cb4fc8574215108a7a8982907cb95d6a003057dcc6db5d",
+  "measured_candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "guard_disposition": "reuse applicable for the three original measured default public-read cases",
+  "new_timing_claim": false,
+  "root_accepts_applicability": true,
+  "reason": "The only two changed C2 production functions are exclusive COW iterator construction and COW command preparation/changed-size calculation. The main integration changes standalone R1 CLI, docs, tests and advisory CI, with no changed TreeDB library runtime, module definitions or benchmark fixtures. The original three default public-read fixtures and their lifecycle selectors/non-COW cached/backend read callees remain unchanged. Reuse retains original b9 timing labels; new COW costs are collected separately.",
+  "bindings": {
+    "default-read-guard-b9e5587/root-limited-disposition.json": "23b39b7f91229f457e1ee47072da8f4c7a4f0af303466e61e401d58d64826e47",
+    "default-read-guard-ce808-applicability.json": "0b19a9c105c9a37045eca107f1e64f9e5f2d08e4bf2716e0cf9d922305cce4e1",
+    "candidate-37aa-root-root-source-check.json": "2ca92001bfea6ffff8dc441e026927b66827ad86815a1074b0149ce4189685b5",
+    "second-minimization-37aa/retained-source-applicability.json": "7cfef773a9bcea4c055ba200660972448ee6d44bf67f16f1530631c4639fd980",
+    "candidate-11474-independent-review/37aa-second-minimization-source-review.md": "0cf4a6bfee4bb581b21aecb3b06db13eb4287f510fc8ca62b77f8d2ff8a66525"
+  },
+  "limits": [
+    "source applicability reuses original b9 timings without relabeling them",
+    "three measured cases only; no default-writer/all-profile/sustained or persistence/drain claim",
+    "about7ns inline lifecycle selector cost remains disclosed",
+    "WholeC2 cost acceptance remains held until actual37aa matrix and explicit residual disposition"
+  ],
+  "preceding_applicability_candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1"
+}

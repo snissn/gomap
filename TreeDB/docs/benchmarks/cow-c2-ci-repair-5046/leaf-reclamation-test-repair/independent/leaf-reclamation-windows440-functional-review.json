@@ -1,0 +1,281 @@
+{
+  "actual_streams": {
+    "normal": {
+      "actual_deferred_removal_observed": false,
+      "fail_events": 0,
+      "package_pass_events": 1,
+      "physical_removal_receipts": [
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=46.625\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.375\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=21.125\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.458\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.542\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.583\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=29.125\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=57.042\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.375\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        }
+      ],
+      "raw_sha256": "e83a12738182ecdf27ea7d4a8d1e3fc841ba6da850db4f3a076e7250cdda537f",
+      "skip_events": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_pass_events": 12
+    },
+    "race": {
+      "actual_deferred_removal_observed": false,
+      "fail_events": 0,
+      "package_pass_events": 1,
+      "physical_removal_receipts": [
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=151.042\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=150.375\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=170\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=151.334\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=148.5\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=140.125\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=163.625\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=142.666\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=140.958\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        }
+      ],
+      "raw_sha256": "64ba7f7502932da1a6181ad4ebad84cfc993e0213a821bf0a41bdf168ba38fbb",
+      "skip_events": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_pass_events": 12
+    },
+    "safe": {
+      "actual_deferred_removal_observed": false,
+      "fail_events": 0,
+      "package_pass_events": 1,
+      "physical_removal_receipts": [
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=20\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.542\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.875\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=22.125\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.041\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=18.875\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=25.875\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=18.542\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed"
+        },
+        {
+          "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=20.709\u00b5s",
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast"
+        }
+      ],
+      "raw_sha256": "b5c12d929713a3940c63d6eccd50b1d73768d1b624d132135cd946569149702a",
+      "skip_events": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_pass_events": 12
+    }
+  },
+  "base_commit": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "base_tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "commands_and_exits": [
+    {
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=3",
+        "-run",
+        "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+        "./TreeDB"
+      ],
+      "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "elapsed_seconds": 7.376506090164185,
+      "env_overrides": {
+        "GOWORK": "off",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_code": 0,
+      "label": "normal"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-race",
+        "-count=3",
+        "-run",
+        "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+        "./TreeDB"
+      ],
+      "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "elapsed_seconds": 10.394418001174927,
+      "env_overrides": {
+        "GOWORK": "off",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_code": 0,
+      "label": "race"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-tags",
+        "treedb_safe",
+        "-count=3",
+        "-run",
+        "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+        "./TreeDB"
+      ],
+      "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "elapsed_seconds": 6.1901538372039795,
+      "env_overrides": {
+        "GOWORK": "off",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_code": 0,
+      "label": "safe"
+    }
+  ],
+  "commands_and_exits_sha256": "972bb9c4aa55d3e8f2c8c4ca140845856e90c77d8c3cae73e4efd6c721ec453a",
+  "concrete_blockers_in_scoped_review": [],
+  "disposition": "ACCEPT_SCOPED_SOURCE_AND_LOCAL_FUNCTIONAL",
+  "environment": {
+    "go_env": {
+      "GOARCH": "arm64",
+      "GOCACHE": "/Users/michaelseiler/Library/Caches/go-build",
+      "GOMODCACHE": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod",
+      "GOOS": "darwin",
+      "GOROOT": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64",
+      "GOVERSION": "go1.26.0",
+      "GOWORK": "off"
+    },
+    "go_version": "go version go1.26.0 darwin/arm64"
+  },
+  "limitations": [
+    "All27 local receipts observed immediate deletion (polls1); delayed Windows retry branch was not exercised by these actual local runs.",
+    "Five-second polling deadline does not forcibly interrupt a blocked snapshot read or os.Stat syscall.",
+    "Actual original Windows interleaving remains inferred from source and failure evidence, not traced.",
+    "New exact-head Windows runtime, strict CI, and hosted review remain required merge gates.",
+    "Test-only source applicability permits retaining prior runtime/cost evidence at its recorded source identity; compiled test binary equality is not claimed."
+  ],
+  "original_failed_evidence_bindings": {
+    "original_json": {
+      "bytes": 1955172,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failed-packet/treedb-test.jsonl",
+      "sha256": "0570f197b365dc69759302b66a9b886719d091a9cda5dafb8ac426fe2283daa8"
+    },
+    "original_log": {
+      "bytes": 2249532,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failure.log",
+      "sha256": "a02a226e3740ea0d1d485ae9de0cfe3000174030526a7cf1309a82d5ae2950fb"
+    },
+    "original_provenance": {
+      "bytes": 707,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failed-packet/artifact-provenance.json",
+      "sha256": "1fd1433bf8bd5e39e3057a2c998cdae711886e18e0d7adf7cde9a3b6af6d3434"
+    }
+  },
+  "original_test_sha256": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+  "packet_directory": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/leaf-reclamation-windows440-repair",
+  "packet_inventory_exact": true,
+  "packet_manifest_sha256": "456061807c89ff3c72c06064a191beca1b8b56a0d01269642e65aa0be5087fb7",
+  "packet_regular_file_count_including_manifest": 23,
+  "pre_post_byte_drift": 0,
+  "reviewed_test_path": "TreeDB/cow_public_review_regression_test.go",
+  "reviewed_test_sha256": "068b828c9639f6e47733746522bf6685fe554f0c5905219a0e3107e0cdb68f48",
+  "runtime_source_bindings": {
+    "TreeDB/caching/cow_cut.go": "9071ad33c1a9e957781fcedb95b1069f5606d1cd9e249ab40aaf2b9bf4448ff5",
+    "TreeDB/caching/cow_flush.go": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+    "TreeDB/db/bounded_read_owner.go": "6b5d4621c36c4596721fa991b7cc2fe891e9ded24b22a787b0786d68df031e2d",
+    "TreeDB/db/db.go": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+    "TreeDB/db/leaf_generation_gc.go": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+    "TreeDB/db/leaf_generation_gc_test.go": "744413c1dbe47e6304f991d9e4e72f60e6abd7390aad3a018c787bf2319f79df",
+    "TreeDB/internal/valuelog/manager.go": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+    "TreeDB/internal/valuelog/stable_resource.go": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8"
+  },
+  "source_calibration": "Includes intentional staged parent power-loss/docs/CI changes. No blanket untracked, ignored-extra, or regular-file-type immutability assertion. Native/cache runtime binding checks are exact content checks versus committed440.",
+  "source_invariants": [
+    "One CompactStorage invocation; no retry of maintenance.",
+    "All three profiles retained.",
+    "Old user cut remains alive and reads the original value before, during every poll, and after actual unrelated-file absence.",
+    "Only os.IsNotExist proves deletion; all other stat errors immediately fail.",
+    "Five-second deadline and ten-millisecond polling bound observation policy.",
+    "Actual later write/checkpoint/Close/reopen assertions retained.",
+    "No runtime, ownership, registry, producer, M7, admission, or cost-fixture modification in this repair."
+  ],
+  "source_post_sha256": "3b48738ac7a4343ff7b63fe4f287293da91faf330c25fbc42e85d30311aaa5fc",
+  "source_pre_sha256": "3b48738ac7a4343ff7b63fe4f287293da91faf330c25fbc42e85d30311aaa5fc",
+  "tracked_working_byte_paths": 8161,
+  "verified_packet_bindings": 22,
+  "whole_C2_merge_disposition": "HELD_PENDING_FINAL_HEAD_HOSTED_GATES"
+}

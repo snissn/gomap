@@ -1,0 +1,56 @@
+{
+  "runtime_candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "git_source_files": 6476,
+  "ce808_vs_b9": {
+    "unchanged_git_source_files": 6452,
+    "changed_or_new": [
+      "TreeDB/caching/cow_batch.go",
+      "TreeDB/caching/cow_cost_minimization_test.go",
+      "TreeDB/caching/cow_read.go",
+      "TreeDB/caching/cow_read_workspace.go",
+      "TreeDB/db/bounded_read_owner.go",
+      "TreeDB/db/command_wal_raw.go",
+      "TreeDB/db/command_wal_raw_finalize_test.go",
+      "TreeDB/internal/valuelog/cow_block_owner_test.go",
+      "TreeDB/internal/valuelog/cow_reader.go",
+      "TreeDB/tree/owned_iterator.go"
+    ],
+    "qualification": "new nineteen-file minimization packet executes the changed COW callees; retained packets remain labeled with original sources"
+  },
+  "intermediate_cost_candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "intermediate_disposition": "historical held descriptive packet; no final candidate acceptance",
+  "second_candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "second_cost_state": "planned37aa driver unexecuted",
+  "successor_qualification": "exact23-file packet covers new same-cut successor and zero-byte owned-entry normalization; original8d743 initial-only failure retained",
+  "before_cost_candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "before_cost_disposition": "HELD diagnostic before packet; complete streams retained, not accepted as the final candidate cost",
+  "b9_vs_730": {
+    "unchanged_git_source_files": 6457,
+    "changed_or_new": [
+      "TreeDB/cow_close_notification_test.go",
+      "TreeDB/docs/spec/cow-cache-publication.md",
+      "TreeDB/public.go"
+    ],
+    "qualification": "730 seven-package runtime gates reused only for unchanged paths; b9 focused affected gates cover the lock delta"
+  },
+  "private_packet_bindings": {
+    "minimization_ce808": 19,
+    "second_37aa": 32,
+    "successor_4add47": 23,
+    "notify": 19,
+    "read": 17,
+    "omitted_public_notify_input": "processes-at-release.txt"
+  },
+  "core_source": "8f47c8e3d536f0f8e8d8894d4e8aaf95bdc683dd",
+  "core_qualification": "historical source-bound coverage; later repairs have their own delta gates, not relabeled execution",
+  "scoped_limit": "Inherited Print/FragmentationReport diagnostics require caller synchronization with Close; ordinary C2 point/forward/snapshot Close-race contract is covered",
+  "public_exclusions": [
+    "binaries",
+    "complete compiled dependency graphs",
+    "process listings/foreign argv",
+    "synthetic analyzer/render fixtures"
+  ],
+  "cost_scope": "bounded fixed-count diagnostics; unchanged MVCC Store fences; no sustained C3/C4 or statistical significance claim",
+  "artifact_descendant_rule": "any subsequent commit must explicitly prove runtime/harness unchanged; never relabel measured commit"
+}

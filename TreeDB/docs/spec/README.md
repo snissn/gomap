@@ -110,6 +110,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - system model, components, directory layout, side stores, lock model.
 - `TreeDB/docs/spec/contracts.md`
   - API-level behavioral contracts (reads/writes, iteration, snapshots, concurrency, locking).
+- `TreeDB/docs/spec/cow-cache-publication.md`
+  - opt-in immutable cache publication, finite admission, read ownership,
+    checkpoint handoff, and qualification boundaries for `cow_btree`.
 - `TreeDB/docs/spec/conditional-kv-adapter-readiness.md`
   - downstream adapter closeout for native `EntryRevision` cache tokens,
     conditional transaction conflict mapping, command-WAL/fail-closed surfaces,
@@ -419,6 +422,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical external-ref context. |
 | Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future typed-storage docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
+| Immutable COW cache publication and ownership | `cow-cache-publication.md` | `architecture.md`, `contracts.md`, `write-path-and-durability.md`, `recovery.md`, `value-log-lifecycle.md`, `verification.md`. |
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Single-group Raft provider/storage boundary | `raftcluster.md` | `native-query-raft-roadmap.md`, `storage-format.md`, `user-command-wal.md`. |

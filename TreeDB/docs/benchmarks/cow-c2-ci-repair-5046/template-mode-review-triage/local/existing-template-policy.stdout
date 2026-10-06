@@ -1,0 +1,16 @@
+{"Time":"2026-10-05T23:03:30.225065-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Time":"2026-10-05T23:03:30.744853-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored"}
+{"Time":"2026-10-05T23:03:30.744899-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"=== RUN   TestSideStoreChunkSize_TemplateModeRequestIsIgnored\n"}
+{"Time":"2026-10-05T23:03:30.935359-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"--- PASS: TestSideStoreChunkSize_TemplateModeRequestIsIgnored (0.19s)\n"}
+{"Time":"2026-10-05T23:03:30.935495-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Elapsed":0.19}
+{"Time":"2026-10-05T23:03:30.936293-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored"}
+{"Time":"2026-10-05T23:03:30.936319-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"=== RUN   TestSideStoreChunkSize_TemplateModeRequestIsIgnored\n"}
+{"Time":"2026-10-05T23:03:31.025843-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"--- PASS: TestSideStoreChunkSize_TemplateModeRequestIsIgnored (0.09s)\n"}
+{"Time":"2026-10-05T23:03:31.025908-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Elapsed":0.09}
+{"Time":"2026-10-05T23:03:31.025941-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored"}
+{"Time":"2026-10-05T23:03:31.025954-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"=== RUN   TestSideStoreChunkSize_TemplateModeRequestIsIgnored\n"}
+{"Time":"2026-10-05T23:03:31.167058-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Output":"--- PASS: TestSideStoreChunkSize_TemplateModeRequestIsIgnored (0.14s)\n"}
+{"Time":"2026-10-05T23:03:31.167096-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSideStoreChunkSize_TemplateModeRequestIsIgnored","Elapsed":0.14}
+{"Time":"2026-10-05T23:03:31.167116-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Time":"2026-10-05T23:03:31.169364-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"ok  \tgithub.com/snissn/gomap/TreeDB\t0.944s\n"}
+{"Time":"2026-10-05T23:03:31.16939-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Elapsed":0.944}

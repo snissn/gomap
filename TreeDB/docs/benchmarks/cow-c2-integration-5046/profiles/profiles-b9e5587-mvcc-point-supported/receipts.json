@@ -1,0 +1,76 @@
+[
+  {
+    "label": "mvcc-btree--point",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^no_wal_fast$/^btree$/^point$",
+      "-test.benchtime=256x",
+      "-test.count=16",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-mvcc-point-supported/mvcc-btree--point.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-mvcc-point-supported/mvcc-btree--point.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:48:21.807977+00:00",
+    "completed_utc": "2026-10-06T04:48:26.262681+00:00",
+    "elapsed_seconds": 4.454717988148332,
+    "load_before": [
+      4.17626953125,
+      3.44140625,
+      2.79638671875
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "491ff818e9547185ad3aa2373506e84dfaaf4a79f03127a12512ebdfa0b3cc29",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "mvcc-btree--point.heap.pprof": "78cab5b54fb435ec033e252a8acda2bdb2848fb66459a8fe404f9da9e3f3e867",
+      "mvcc-btree--point.alloc-top.txt": "d3701fef98ec80c43c5a8f376a3094a1ed898926a02404da405e32e6b8ce7ba4",
+      "mvcc-btree--point.cpu-top.txt": "78a5385d34d4982d95352dff697d30001b4a605165011edf59bc9c2557587e6a",
+      "mvcc-btree--point.cpu.pprof": "c25a3c78ed879166e5698ab4c50dcac28e7aec5005da14e218329d845b23a19e",
+      "mvcc-btree--point.alloc-cum.txt": "1c97c630ef3826db8ab5e71af9ca12f37d3e6f5e3ac31ec68727b1e0b75aa4e4",
+      "mvcc-btree--point.cpu-cum.txt": "51c2f42ca360c737cec7d470d9fbc08179fec944e15144ffdafb9977e59eefa1",
+      "mvcc-btree--point.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mvcc-btree--point.log": "491ff818e9547185ad3aa2373506e84dfaaf4a79f03127a12512ebdfa0b3cc29"
+    }
+  },
+  {
+    "label": "mvcc-cow_btree--point",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^no_wal_fast$/^cow_btree$/^point$",
+      "-test.benchtime=256x",
+      "-test.count=16",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-mvcc-point-supported/mvcc-cow_btree--point.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-mvcc-point-supported/mvcc-cow_btree--point.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:48:26.501912+00:00",
+    "completed_utc": "2026-10-06T04:48:31.129628+00:00",
+    "elapsed_seconds": 4.627720866817981,
+    "load_before": [
+      4.08203125,
+      3.43359375,
+      2.7978515625
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "a7d5809a81796213047c3254ad76fe3344bef3ab6550d763353e70009d81945f",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "mvcc-cow_btree--point.alloc-top.txt": "c029303e9acac3cfc5b094b7c40e6f44db1ae3c5e034dd310f23f638302c1323",
+      "mvcc-cow_btree--point.log": "a7d5809a81796213047c3254ad76fe3344bef3ab6550d763353e70009d81945f",
+      "mvcc-cow_btree--point.alloc-cum.txt": "5d37ae7d6832b4c227ac33d41423862b55f274a53228a75a8ca53270e82b3c08",
+      "mvcc-cow_btree--point.heap.pprof": "ebf6d3757865a11be02735b7816fda5ee573364337f59e904dbf41d62f96c5c5",
+      "mvcc-cow_btree--point.cpu-top.txt": "ddcc8ce486ca43beb199cc4b419da28abdce1a7eda499d21cd3b9313c6b53836",
+      "mvcc-cow_btree--point.cpu-cum.txt": "addfba7461d6b2828f3540c1001b558a8a999705cf1ad7c71bc40012a237a9fa",
+      "mvcc-cow_btree--point.cpu.pprof": "c19ed7d865ba4d596a8a7747e381fce8e25d73b213e3ed2769a76557931c008d",
+      "mvcc-cow_btree--point.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+]

@@ -1,0 +1,218 @@
+[
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "role": "main",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          472.6,
+          474.2,
+          471.7
+        ],
+        "min": 471.7,
+        "median": 472.6,
+        "max": 474.2
+      },
+      "B/op": {
+        "samples": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "min": 128.0,
+        "median": 128.0,
+        "max": 128.0
+      },
+      "allocs/op": {
+        "samples": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "min": 1.0,
+        "median": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "role": "candidate",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          480.4,
+          481.1,
+          479.3
+        ],
+        "min": 479.3,
+        "median": 480.4,
+        "max": 481.1
+      },
+      "B/op": {
+        "samples": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "min": 128.0,
+        "median": 128.0,
+        "max": 128.0
+      },
+      "allocs/op": {
+        "samples": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "min": 1.0,
+        "median": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "role": "main",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          2889.0,
+          2869.0,
+          2891.0
+        ],
+        "min": 2869.0,
+        "median": 2889.0,
+        "max": 2891.0
+      },
+      "B/op": {
+        "samples": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "min": 256.0,
+        "median": 256.0,
+        "max": 256.0
+      },
+      "allocs/op": {
+        "samples": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "min": 1.0,
+        "median": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "role": "candidate",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          2846.0,
+          2888.0,
+          2897.0
+        ],
+        "min": 2846.0,
+        "median": 2888.0,
+        "max": 2897.0
+      },
+      "B/op": {
+        "samples": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "min": 256.0,
+        "median": 256.0,
+        "max": 256.0
+      },
+      "allocs/op": {
+        "samples": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "min": 1.0,
+        "median": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "role": "main",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          2798.0,
+          2844.0,
+          2838.0
+        ],
+        "min": 2798.0,
+        "median": 2838.0,
+        "max": 2844.0
+      },
+      "B/op": {
+        "samples": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      },
+      "allocs/op": {
+        "samples": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "role": "candidate",
+    "metrics": {
+      "ns/op": {
+        "samples": [
+          2798.0,
+          2763.0,
+          2778.0
+        ],
+        "min": 2763.0,
+        "median": 2778.0,
+        "max": 2798.0
+      },
+      "B/op": {
+        "samples": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      },
+      "allocs/op": {
+        "samples": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      }
+    }
+  }
+]

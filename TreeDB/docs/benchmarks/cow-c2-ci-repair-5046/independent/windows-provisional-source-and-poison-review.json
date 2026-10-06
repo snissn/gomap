@@ -1,0 +1,65 @@
+{
+  "disposition": "PROVISIONAL SOURCE READY; frozen integrated identity and functional/hosted Windows evidence pending",
+  "base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "uncommitted_lane": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair",
+  "reviewed_provisional_source_sha256": {
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "99242ff020facf6d6f1bbe46b5f9107da1e50724242a137085c29a407a9b30e4",
+    "TreeDB/caching/cow_pointer_read_test.go": "d0f75793711599f421ad53803b510c75fbbdfb7cabb906a3371f48d446308ba5",
+    "TreeDB/caching/cow_read_metadata_admission_test.go": "a1661554237dabaa209d2ff1688d1cefe07ed6082b34650232ea96c9b57c8568",
+    "TreeDB/caching/cow_read_workspace.go": "56dc92be58a19b178bac99cdcfd72c7142928adc44bac8f4d3373b57476e4496",
+    "TreeDB/cow_public_review_regression_test.go": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "TreeDB/docs/spec/cow-cache-publication.md": "eebaacf6878444b0df3a43008c81f545a5509ac52874c542b146c1e4c39f85cd",
+    "TreeDB/internal/valuelog/cow_inspection_heap.go": "d26852c5d004a13722f5a83107a432ef28b2e673ea2598021328007e71257d1e",
+    "TreeDB/internal/valuelog/cow_inspection_stack.go": "1c309e708dbda7272f7a2d2bb66c19437718511b7d6c18e90fb880caa18340c5",
+    "TreeDB/internal/valuelog/cow_namespace_contract_test.go": "333c70d5bacec8f6eb2b8103038380f056b8e453bab8c9de41cd2f062066d982",
+    "TreeDB/internal/valuelog/cow_reader.go": "60f33db8f089d9a1f889656b815dd082dfc37ee358975b9dc24ba7a54474d858",
+    "TreeDB/internal/valuelog/cow_reader_test.go": "0d8793e468cdceaff5ee5fe454d2ef6a70fdf4505ca4363a009605c209c17504",
+    "TreeDB/internal/valuelog/leaf_page_payload.go": "bc851c40b262583d0f5194d973ba489a6270035ea72af26f3415193921fc6364"
+  },
+  "go1_26_8_filepathlite_sha256": {
+    "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/src/internal/filepathlite/path.go": "dd1a0138328d6353d089d6ba8e04905d9e951bedfef1b85913c64de2ca2fd223",
+    "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/src/internal/filepathlite/path_windows.go": "ad313fae9fd1e150df082ad7f43c34b0830ce79433d0eef89c7724fdb07d06bb"
+  },
+  "metadata": {
+    "raw_sizes": [
+      20,
+      3076,
+      12
+    ],
+    "separate_rounded_charge": 4144,
+    "before_inspection": true,
+    "held_until": "Snapshot active reads and iterators drain, then existing workspace lease Close",
+    "Linux_normal_charge_change": 0,
+    "new_budget_refusal_test": "real shared envelope minus one byte, identical stats on refusal, exact reserved delta, same workspace reuse, release to retained-cut baseline"
+  },
+  "namespace": {
+    "fallback": "Keep original path when stripped tail has nonempty VolumeName",
+    "witnesses": "Differential lexical contract table includes duplicate drive/UNC separators, nested volumes, share roots, mixed separators, dots, device prefixes and non-leaf IDs; canonical-only zero allocation fixture",
+    "limitation": "Native retained paths must satisfy documented canonical-path caller contract; arbitrary noncanonical lexical paths can allocate."
+  },
+  "maintenance": {
+    "Windows_supported_acceptance": "Native CompactIndex; both root_page and commit_seq must change before capture/install pressure is applied",
+    "refusal_and_retry": "Real finite budget exhaustion, accepted report plus ErrCOWCapacity, persistent refresh gate, retained old basis, old pointers/revision/tombstone/empty/current precedence, denied point/batch, released-pressure retry installs basis",
+    "unsupported": "Both online-vacuum routes retain explicit unsupported refusal; public leaf-pack promotion checks exact namespace unsupported error and continues latewrite/reopen"
+  },
+  "power_loss_advice": {
+    "exact_source_sha256": {
+      "TreeDB/cow_power_loss_test.go": "a6798d54b8c42ac004cacb99412736ac182ba8f95c03cce52a6e464140611984",
+      "TreeDB/db/command_wal_raw.go": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+      "TreeDB/db/durable_root_runtime.go": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+      "TreeDB/db/root_publication_activation.go": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+      "TreeDB/command_wal_public_cached.go": "6b8c31db3c5d34a3a8defff0d468d7913207d4fd6fd62360daa40c1468d455cb"
+    },
+    "original_failure_log_sha256": "af409d450e467ac6099af73f7f7ce3ea7679fa2c32c7d9a5bd5c443c522471db",
+    "predicate": "errors.Is(err, cutErr) || (cut != nil && point == AfterMetaWrite && resource == ResourceMeta && errors.Is(err, backenddb.ErrRecoveryRequired))",
+    "cause_trace": "Meta write sets mutated; observer error causes failAmbiguousSeal to retain cause plus recovery sentinel and set publicationPoisoned. Subsequent command WAL readiness/flush gate returns publicationPoisonedError, which intentionally returns only recovery sentinel wrapper.",
+    "preserve": "All other cut direct-cause checks, actual stable image reopen, no-partial-group, durable acknowledged group, NoWAL pre-sync absence, AfterMetaSync presence assertions",
+    "runtime_change_needed": false
+  },
+  "limitations": [
+    "No Go execution, remote jobs, source edits or GitHub mutation by reviewer.",
+    "This packet binds a read-only capture of provisional files, not an immutable committed candidate.",
+    "Actual Windows runtime remains unverified until repaired hosted CI.",
+    "Original RED receipts must remain retained and distinguish v1 test errors from actual Windows failures."
+  ]
+}
