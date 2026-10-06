@@ -61,7 +61,8 @@ for an applicable scan/aggregate workload; see the
 `Get` and `GetInto` return the complete reconstructed JSON row, including declared
 strings and residual fields. `GetInto(id, dst)` may reuse `dst` capacity; keep the
 returned slice for reuse and clone it before the next buffer reuse if retaining
-that result. A missing or deleted ID returns `found=false`.
+that result. For a missing or deleted ID, `Get` returns `(nil, nil)` and
+`GetInto` returns `found=false`.
 
 `FindDocumentsByIndexRange` returns owned IDs and complete documents in ascending
 index order. Supply a positive `Limit` and inspect `truncated` for more visible
@@ -98,9 +99,9 @@ its captured state.
 Native replacement and upsert supply all declared columns plus complete residual
 JSON. `UpdateBatch` reconstructs a complete current row and accepts a complete
 replacement or a no-op; it can change indexed strings and residual null/missing
-fields. That route incurs materialization and replacement work. `UpdateMeta` and
-`UpdateMetaBatch` are restricted to `meta.*`, so use the generic callback for the
-selected top-level fields.
+fields. That route incurs materialization and replacement work.
+`UpdateTypedMetadataByID` is restricted to `meta.*`, so use the generic callback
+for the selected top-level fields.
 
 Duplicate inputs or unique conflicts reject the batch without partial visible
 primary/index changes. Unique ownership handoffs within a valid batch use its

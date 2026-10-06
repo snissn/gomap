@@ -28,7 +28,7 @@ visitor IDs are borrowed until callback return. `GetInto` can reuse the caller's
 buffer, so clone output before reusing that buffer when you need to retain it.
 
 `UpdateBatch` uses complete-document callbacks for top-level field changes;
-`UpdateMeta` and `UpdateMetaBatch` are scoped to `meta.*`. Native replacement
+`UpdateTypedMetadataByID` is scoped to `meta.*`. Native replacement
 requires all declared columns, while upsert atomically inserts missing IDs and
 replaces existing ones. The example stops on all errors and never blindly retries
 `ErrCommitAmbiguous`: reopen and reconcile the whole command's IDs and indexes.
