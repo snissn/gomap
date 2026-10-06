@@ -161,9 +161,11 @@ for logical typed history folding or proof that this row workload is bounded.
 See the [value/leaf-log lifecycle](../spec/value-log-lifecycle.md) and the
 [R1 maintenance scope](../spec/r1-row-lifecycle.md).
 
-Immutable leaf-manifest revision GC keeps at most 16 exact deletion handles and
-one transient scan child, but validates the full directory for each batch while
-holding writer and snapshot-admission locks for the whole explicit GC call.
+Immutable leaf-manifest revision GC keeps at most 16 selected deletion handles,
+one scan child or quarantine placeholder, and one temporary link-validation
+handle (at most 18 GC child descriptors, separate from existing parent/manager
+and other process descriptors). It validates the full directory for each batch
+while holding writer and snapshot-admission locks for the whole explicit GC call.
 Worst-case repeated scanning is O(N²/16); footprint admission limits are not
 cumulative work or pause budgets. Assess the recorded finite-workload maintenance
 cost and remaining physical bytes before claiming sustained capacity.
