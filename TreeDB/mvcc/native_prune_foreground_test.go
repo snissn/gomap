@@ -46,7 +46,44 @@ func (h *foregroundLatency) add(d time.Duration) {
 	h.Buckets[i]++
 }
 
+// Raw durations have a fixed storage ceiling. A full recorder rejects retained
+// qualification; it never silently drops a sample. Each worker owns its buffers.
+const foregroundSampleCapacity = 65536
+
+// The retained driver requires this many real post-writer reads per run.
+const foregroundDrainMinimumSamples = 1000
+
+type foregroundSamples struct {
+	DurationsNS             []uint64
+	FirstStartNS, LastEndNS uint64
+	Overflow                bool
+}
+
+func (h *foregroundSamples) init() { h.DurationsNS = make([]uint64, 0, foregroundSampleCapacity) }
+func (h *foregroundSamples) add(start, end time.Time, origin time.Time) {
+	if len(h.DurationsNS) == foregroundSampleCapacity {
+		h.Overflow = true
+		return
+	}
+	if len(h.DurationsNS) == 0 {
+		h.FirstStartNS = uint64(start.Sub(origin))
+	}
+	h.LastEndNS = uint64(end.Sub(origin))
+	h.DurationsNS = append(h.DurationsNS, uint64(end.Sub(start)))
+}
+
+type foregroundRetained struct {
+	SetupBuckets                                                                                         [8]uint64
+	Clock, PhaseRule                                                                                     string
+	Capacity                                                                                             int
+	SetupCalls, SetupTotalNS, SetupMaxNS, WriterStopNS, WorkersJoinedNS, CleanupEndNS, CleanupDurationNS uint64
+	DBDir                                                                                                string
+	OwnersClosed                                                                                         bool
+	ReadActive, ReadDrain, WriteActive, QuantumActive, QuantumDrain                                      foregroundSamples
+	AfterWorkers, AfterCleanup                                                                           foregroundMetrics
+}
 type foregroundResult struct {
+	Retained                                                                                                                                         *foregroundRetained `json:"retained,omitempty"`
 	AcceptanceCausePresent                                                                                                                           bool
 	AcceptanceCauseType, AcceptanceCauseText                                                                                                         string
 	LastCOWPhase, LastCOWSet, LastCOWItem                                                                                                            int
@@ -102,8 +139,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		t.Skip("opt-in driver only")
 	}
 	n, e := strconv.Atoi(os.Getenv("MVCC_FOREGROUND_N"))
-	if e != nil || n < 64 || n > 128 {
-		t.Fatal("N64/128 causal pilot only")
+	retained := os.Getenv("MVCC_FOREGROUND_RETAINED") == "1"
+	if e != nil || n < 64 || (!retained && n > 128) || (retained && n > 8192) {
+		t.Fatal("pilot N64/128; retained N64..8192 only")
 	}
 	mode, algorithm := os.Getenv("MVCC_FOREGROUND_MODE"), os.Getenv("MVCC_FOREGROUND_ALGORITHM")
 	if mode != "burst" && mode != "growth" && mode != "churn" {
@@ -113,6 +151,16 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		t.Fatal("algorithm")
 	}
 	r := foregroundResult{ReadersStopWithWriter: os.Getenv("MVCC_FOREGROUND_READER_STOP_WITH_WRITER") == "1", ForcedBudgetError: os.Getenv("MVCC_FOREGROUND_FORCE_BUDGET_ERROR") == "1", Schema: "gomap-native-foreground-v2", N: n, Mode: mode, Algorithm: algorithm, PID: os.Getpid()}
+	if retained {
+		if !foregroundMetricsEnabled {
+			t.Fatal("retained mode requires mvcc_native_prune tag and unmerged native observer/runtime dependency")
+		}
+		r.Schema = "gomap-native-foreground-retained-v1"
+		r.Retained = &foregroundRetained{Clock: "Go time.Now monotonic duration in nanoseconds", PhaseRule: "read start before writerDone closes = active; read start after writerDone closes = drain; quantum active flag sampled at entry; writes active; setup excluded; cleanup after workers join includes oracles checkpoint reopen and final close", Capacity: foregroundSampleCapacity}
+		for _, h := range []*foregroundSamples{&r.Retained.ReadActive, &r.Retained.ReadDrain, &r.Retained.WriteActive, &r.Retained.QuantumActive, &r.Retained.QuantumDrain} {
+			h.init()
+		}
+	}
 	defer func() {
 		data, err := json.MarshalIndent(r, "", "  ")
 		if err != nil {
@@ -125,6 +173,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	}()
 	fail := func(err error) { r.Error = err.Error(); t.Fatal(err) }
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	if retained {
+		r.Retained.DBDir = opts.Dir
+	}
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.PointerThreshold = 2048
 	db, err := treedb.Open(opts)
@@ -174,6 +225,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	foregroundStarted := false
 	var active atomic.Bool
 	var inQuantum, readInCall, writeInCall atomic.Bool
+	var measurementStart time.Time
 	quantum := func() (PruneStats, error, bool) {
 		before := cursor
 		opts := PruneOptions{BatchSize: 1, Mode: CommitRelaxed, Cursor: cursor}
@@ -181,6 +233,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			opts.WorkRecords = 32
 			opts.WorkBytes = 1 << 20
 		}
+		startedActive := active.Load()
 		start := time.Now()
 		if foregroundStarted {
 			if foregroundEntryBoundary(&inQuantum, func() bool { return readInCall.Load() || writeInCall.Load() }) {
@@ -190,7 +243,15 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		stats, err := s.PruneVersions(opts)
 		// Keep the first post-return activity snapshot for ACK/completion attribution.
 		writerActiveAtReturn := foregroundReturnBoundary(&inQuantum, &active)
-		r.QuantumLatency.add(time.Since(start))
+		end := time.Now()
+		r.QuantumLatency.add(end.Sub(start))
+		if retained && foregroundStarted {
+			h := &r.Retained.QuantumDrain
+			if startedActive {
+				h = &r.Retained.QuantumActive
+			}
+			h.add(start, end, measurementStart)
+		}
 		r.Calls++
 		r.FinalWorkRecords = stats.WorkRecords
 		r.FinalWorkBytes = stats.WorkBytes
@@ -262,8 +323,21 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	writerDone := make(chan struct{})
 	readerDone := make(chan struct{})
 	postWriterRead := make(chan struct{})
+	drainReadTarget := uint64(1)
+	if retained {
+		drainReadTarget = foregroundDrainMinimumSamples
+	}
 	writerStarted := make(chan struct{})
 	errCh := make(chan error, 2)
+	if retained {
+		r.Retained.SetupCalls = r.Calls
+		r.Retained.SetupTotalNS = r.QuantumLatency.TotalNS
+		r.Retained.SetupMaxNS = r.QuantumLatency.MaxNS
+		r.Retained.SetupBuckets = r.QuantumLatency.Buckets
+		foregroundMetricsBegin()
+		defer foregroundMetricsStop()
+	}
+	measurementStart = time.Now()
 	wg.Add(2)
 	defer func() {
 		stopReads.Store(true)
@@ -281,7 +355,13 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		if mode == "churn" {
 			limit = 1024
 		}
+		if retained && mode != "burst" {
+			limit = 8192
+		}
 		duration := 120 * time.Millisecond
+		if retained {
+			duration = time.Second
+		}
 		for i := uint64(1); i <= limit; i++ {
 			ts := uint64(n + 1)
 			if mode != "churn" {
@@ -303,8 +383,14 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			if terminal {
 				active.Store(false)
 				r.WriterDurationNS = uint64(end.Sub(writerStart))
+				if retained {
+					r.Retained.WriterStopNS = uint64(end.Sub(measurementStart))
+				}
 			}
 			r.WriteLatency.add(end.Sub(start))
+			if retained {
+				r.Retained.WriteActive.add(start, end, measurementStart)
+			}
 			if overlap {
 				r.WriteIntervalsOverlappingQuantum++
 			}
@@ -354,7 +440,15 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			overlap := foregroundEntryBoundary(&readInCall, inQuantum.Load)
 			v, e := s.GetAt(writer, ^uint64(0))
 			overlap = foregroundReturnBoundary(&readInCall, &inQuantum) || overlap
-			r.ReadLatency.add(time.Since(start))
+			end := time.Now()
+			r.ReadLatency.add(end.Sub(start))
+			if retained {
+				h := &r.Retained.ReadActive
+				if afterWriter {
+					h = &r.Retained.ReadDrain
+				}
+				h.add(start, end, measurementStart)
+			}
 			if overlap {
 				r.ReadIntervalsOverlappingQuantum++
 			}
@@ -369,7 +463,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.Reads++
 			if afterWriter {
 				r.ReadsAfterWriterStop++
-				if r.ReadsAfterWriterStop == 1 {
+				if r.ReadsAfterWriterStop == drainReadTarget {
 					close(postWriterRead)
 				}
 			}
@@ -409,6 +503,10 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	}
 	stopReads.Store(true)
 	wg.Wait()
+	if retained {
+		r.Retained.WorkersJoinedNS = uint64(time.Since(measurementStart))
+		r.Retained.AfterWorkers = foregroundMetricsSnapshot()
+	}
 	close(errCh)
 	for e := range errCh {
 		if e != nil {
@@ -573,6 +671,16 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		fail(e)
 	}
 	r.PointerOracle = true
+	if retained {
+		if err = db.Close(); err != nil {
+			fail(err)
+		}
+		r.Retained.OwnersClosed = true
+		r.Retained.CleanupEndNS = uint64(time.Since(measurementStart))
+		r.Retained.CleanupDurationNS = r.Retained.CleanupEndNS - r.Retained.WorkersJoinedNS
+		r.Retained.AfterCleanup = foregroundMetricsSnapshot()
+		foregroundMetricsStop()
+	}
 	if r.Error != "" {
 		t.Error(r.Error)
 	}
@@ -602,6 +710,56 @@ func TestNativePruneForegroundBudgetErrorJoinsWorkers(t *testing.T) {
 	}
 	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || result.ReadsAfterWriterStop == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
 		t.Fatalf("error did not reach joined cleanup/oracles: %+v\n%s", result, raw)
+	}
+}
+
+// Run the real continuing-reader fixture and require its retained drain phase
+// to meet the driver's coverage gate before joining workers. Unbounded pruning
+// isolates this harness check from bounded M7 publication qualification.
+func TestNativePruneForegroundRetainedDrainCoverage(t *testing.T) {
+	if !foregroundMetricsEnabled {
+		t.Skip("retained fixture requires mvcc_native_prune observer")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"growth", "churn"} {
+		t.Run(mode, func(t *testing.T) {
+			out := t.TempDir() + "/retained-drain.json"
+			command := exec.Command(binary, "-test.run=^TestNativePruneForegroundPilot$", "-test.count=1", "-test.timeout=30s", "-test.v")
+			command.Env = append(os.Environ(), "MVCC_FOREGROUND_RESULT="+out, "MVCC_FOREGROUND_N=64", "MVCC_FOREGROUND_MODE="+mode, "MVCC_FOREGROUND_ALGORITHM=unbounded", "MVCC_FOREGROUND_RETAINED=1", "MVCC_FOREGROUND_READER_STOP_WITH_WRITER=0", "MVCC_FOREGROUND_FORCE_BUDGET_ERROR=0")
+			raw, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("retained fixture failed: %v\n%s", err, raw)
+			}
+			data, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result foregroundResult
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Error != "" || result.Retained == nil || result.ReadersStopWithWriter || result.ReadsAfterWriterStop < foregroundDrainMinimumSamples || uint64(len(result.Retained.ReadDrain.DurationsNS)) != result.ReadsAfterWriterStop || result.Retained.ReadDrain.Overflow || !result.Retained.OwnersClosed || !result.ReopenOracle {
+				t.Fatalf("incomplete reader drain: %+v\n%s", result, raw)
+			}
+		})
+	}
+}
+
+func TestNativePruneForegroundRecorderBounds(t *testing.T) {
+	h := foregroundSamples{}
+	h.init()
+	begin := time.Now()
+	h.add(begin, begin.Add(time.Nanosecond), begin)
+	if len(h.DurationsNS) != 1 || h.DurationsNS[0] != 1 || h.FirstStartNS != 0 || h.LastEndNS != 1 || h.Overflow {
+		t.Fatal("monotonic raw interval")
+	}
+	h.DurationsNS = h.DurationsNS[:foregroundSampleCapacity]
+	h.add(begin, begin.Add(time.Nanosecond), begin)
+	if !h.Overflow || len(h.DurationsNS) != foregroundSampleCapacity || cap(h.DurationsNS) != foregroundSampleCapacity {
+		t.Fatal("recorder must reject overflow without allocation")
 	}
 }
 

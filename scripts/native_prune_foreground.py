@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import tempfile
-"""Fresh-process foreground causal pilot; no retained latency qualification."""
+"""Fresh-process v2 causal pilot and opt-in retained-v1 duration/fence capture."""
 import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -13,6 +14,11 @@ import sys
 import time
 
 C = 'gomap-native-foreground-v2'
+R = 'gomap-native-foreground-retained-v1'
+PHASES = ('ReadActive', 'ReadDrain', 'WriteActive', 'QuantumActive', 'QuantumDrain')
+POLICY = {'quantile': 'nearest-rank ceil(p*count), p95 and p99', 'minimum_samples': 1000, 'repetitions': 3, 'maximum_quantile_spread_ratio': 1.25, 'coverage': 'ReadActive ReadDrain WriteActive each run; quantum phases descriptive', 'reference': 'unbounded is descriptive; unmatched starting custody'}
+FENCE_SITES = ('store.mu', 'cache.prepare.writeMu', 'cache.rotate.writeMu', 'cache.accept.writeMu', 'backend.source.writeMu', 'backend.apply.writeMu', 'backend.accept.writeMu', 'cache.foreground.writeMu', 'backend.writer.writeMu')
+
 MATRIX = [(n, m, 'bounded') for n in (64, 128) for m in ('burst', 'growth', 'churn')] + [(n, 'burst', 'unbounded') for n in (64, 128)]
 BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOENV', 'HOME', 'PATH')
 FIXED_ENV = {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOENV': 'off'}
@@ -112,6 +118,35 @@ RESULT_TYPES = {
     'schema': 'string',
 }
 LATENCY_FIELDS = {'Count', 'TotalNS', 'MaxNS', 'Buckets'}
+SAMPLE_TYPES = {'DurationsNS': 'durations', 'FirstStartNS': 'uint', 'LastEndNS': 'uint', 'Overflow': 'bool'}
+RETAINED_TYPES = {
+    'SetupBuckets': 'buckets', 'Clock': 'string', 'PhaseRule': 'string', 'Capacity': 'uint',
+    **{k: 'uint' for k in ('SetupCalls', 'SetupTotalNS', 'SetupMaxNS', 'WriterStopNS', 'WorkersJoinedNS', 'CleanupEndNS', 'CleanupDurationNS')},
+    'DBDir': 'string', 'OwnersClosed': 'bool', **{k: 'samples' for k in PHASES},
+    'AfterWorkers': 'metrics', 'AfterCleanup': 'metrics',
+}
+METRIC_TYPES = {
+    'Scope': 'string', 'Fences': 'fences',
+    **{k: 'uint' for k in ('FileAttempts', 'FileFailures', 'NamespaceAttempts', 'NamespaceFailures', 'MmapAttempts', 'MmapFailures', 'DurableWriteAttempts', 'DurableWriteFailures', 'StorageSyncCount', 'FenceWaitMaxNS', 'FenceHoldMaxNS')},
+}
+FENCE_TYPES = {'Site': 'string', **{k: 'uint' for k in ('ForegroundAttempts', 'ForegroundWaitMaxNS', 'MaintenanceHolds', 'MaintenanceHoldMaxNS', 'WriterAttempts', 'WriterWaitMaxNS')}}
+
+def typed_schema(value, fields, label):
+    need(type(value) is dict and set(value) == set(fields), 'complete ' + label + ' schema')
+    for key, kind in fields.items():
+        v = value[key]
+        if kind == 'uint':
+            ok = uint(v) and v < 1 << 64
+        elif kind == 'bool':
+            ok = type(v) is bool
+        elif kind == 'string':
+            ok = type(v) is str
+        elif kind in ('durations', 'buckets', 'fences'):
+            ok = type(v) is list
+        else:
+            ok = type(v) is dict
+        need(ok, label + ' type ' + key)
+
 
 def need(x, message):
     if not x:
@@ -121,8 +156,9 @@ def uint(x):
     return type(x) is int and x >= 0
 
 
-def measurement_labels():
+def measurement_labels(retained=False):
     labels = {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}
+    if retained: labels['latency'] = 'actual public operation intervals including lock wait; raw monotonic durations and nearest-rank p95/p99; coverage/noise policy recorded'
     return labels
 
 def sha(p):
@@ -281,8 +317,8 @@ def validate_latency(h, count):
     maximum_total = sum(v * min(upper[i], maximum) for i, v in enumerate(h['Buckets']))
     need(minimum_total <= h['TotalNS'] <= maximum_total, 'histogram total feasibility')
 
-def validate(x, n, mode, algorithm):
-    need(type(x) is dict and set(x) == set(RESULT_TYPES), 'complete foreground result schema')
+def validate(x, n, mode, algorithm, retained=False):
+    need(type(x) is dict and set(x) == set(RESULT_TYPES) | ({'retained'} if retained else set()), 'complete foreground result schema')
     for k, kind in RESULT_TYPES.items():
         v = x[k]
         if kind == 'string':
@@ -295,7 +331,7 @@ def validate(x, n, mode, algorithm):
             need(uint(v) and v < 1 << (8 if kind == 'byte' else 64), 'counter ' + k)
         else:
             need(type(v) is dict and set(v) == LATENCY_FIELDS, 'complete latency schema ' + k)
-    need(x['n'] == n and (x['schema'], x['Mode'], x['Algorithm']) == (C, mode, algorithm), 'identity')
+    need(x['n'] == n and (x['schema'], x['Mode'], x['Algorithm']) == (R if retained else C, mode, algorithm), 'identity')
     need(0 < x['PID'] < 1 << 63, 'PID')
     need(0 < x['ReadsAfterWriterStop'] <= x['Reads'], 'post-writer completed read witness')
     need(x['ReadersStopWithWriter'] is False and x['ForcedBudgetError'] is False, 'continuing-reader measurement only')
@@ -305,7 +341,7 @@ def validate(x, n, mode, algorithm):
     need(x['ForegroundIntervalsAtQuantumStart'] + x['ReadIntervalsOverlappingQuantum'] + x['WriteIntervalsOverlappingQuantum'] > 0, 'operation interval overlap')
     need(all(x[k] is True for k in ('PhysicalOracle', 'WriterOracle', 'PointerOracle', 'OldReaderOracle', 'ReopenOracle')), 'oracles')
     need(x['CompletedWhileWriterActive'] != x['CompletedAfterStop'], 'completion distinction')
-    need(x['Writes'] <= {'burst': 16, 'growth': 256, 'churn': 1024}[mode], 'write ceiling')
+    need(x['Writes'] <= ({'burst': 16, 'growth': 8192, 'churn': 8192} if retained else {'burst': 16, 'growth': 256, 'churn': 1024})[mode], 'write ceiling')
     need(x['WriterStopReason'] in ('finite-burst', 'write-cap', 'observation-duration'), 'writer stop reason')
     need(0 < x['WriterDurationNS'], 'writer duration')
     need(x['ACKAfterWriterStop'] == 0 or x['DrainCalls'] > 0, 'after-stop ACK without drain call')
@@ -324,9 +360,9 @@ def validate(x, n, mode, algorithm):
     if mode != 'burst':
         need(x['WriterStopReason'] != 'finite-burst', 'nonburst stop shape')
         if x['WriterStopReason'] == 'write-cap':
-            need(x['Writes'] == {'growth': 256, 'churn': 1024}[mode], 'write-cap shape')
+            need(x['Writes'] == (8192 if retained else {'growth': 256, 'churn': 1024}[mode]), 'write-cap shape')
         else:
-            need(x['WriterDurationNS'] >= 120_000_000, 'observation duration shape')
+            need(x['WriterDurationNS'] >= (1_000_000_000 if retained else 120_000_000), 'observation duration shape')
     if mode == 'burst':
         need(x['Writes'] == 16 and x['WriterStopReason'] == 'finite-burst', 'burst shape')
     need(x['PartialPrivateOutput'] == (algorithm == 'bounded'), 'algorithm private-output witness')
@@ -334,6 +370,102 @@ def validate(x, n, mode, algorithm):
         need(x['MaxRecords'] <= 32 and x['MaxBytes'] <= 1 << 20 and x['PartialPrivateOutput'] is True, 'bounded actual private output')
     for name, count in [('ReadLatency', x['Reads']), ('WriteLatency', x['Writes']), ('QuantumLatency', x['Calls'])]:
         validate_latency(x[name], count)
+
+    if retained:
+        validate_retained(x)
+    else:
+        need('retained' not in x, 'v2 pilot has no retained extension')
+
+def metrics(m):
+    typed_schema(m, METRIC_TYPES, 'observer')
+    need(m['Scope'] == 'combined_process_events_since_begin_including_ack_reopen_cleanup_close', 'observer scope')
+    need(len(m['Fences']) == len(FENCE_SITES), 'fence sites')
+    for f, site in zip(m['Fences'], FENCE_SITES):
+        typed_schema(f, FENCE_TYPES, 'fence')
+        need(f['Site'] == site, 'per-site metric')
+        for count, maximum in [('ForegroundAttempts', 'ForegroundWaitMaxNS'), ('MaintenanceHolds', 'MaintenanceHoldMaxNS'), ('WriterAttempts', 'WriterWaitMaxNS')]:
+            need(f[count] > 0 or f[maximum] == 0, 'fence count/max consistency')
+    need(m['FenceWaitMaxNS'] == max(f['ForegroundWaitMaxNS'] for f in m['Fences']) and m['FenceHoldMaxNS'] == max(f['MaintenanceHoldMaxNS'] for f in m['Fences']), 'aggregate maxima must be maxima')
+    need(m['StorageSyncCount'] == sum(m[k + 'Attempts'] for k in ('File', 'Namespace', 'Mmap', 'DurableWrite')), 'physical attempts sum')
+    need(all(m[k + 'Failures'] <= m[k + 'Attempts'] for k in ('File', 'Namespace', 'Mmap', 'DurableWrite')), 'physical failures')
+
+def samples(h, joined):
+    typed_schema(h, SAMPLE_TYPES, 'samples')
+    need(type(h['DurationsNS']) is list and len(h['DurationsNS']) <= 65536 and all(uint(v) and 0 < v < 1 << 64 for v in h['DurationsNS']), 'raw durations')
+    need(h['Overflow'] is False and uint(h['FirstStartNS']) and uint(h['LastEndNS']), 'recorder overflow/types')
+    if h['DurationsNS']:
+        need(h['FirstStartNS'] <= h['LastEndNS'] <= joined and sum(h['DurationsNS']) <= h['LastEndNS'] - h['FirstStartNS'], 'clock/count duration bounds')
+    else:
+        need(h['FirstStartNS'] == h['LastEndNS'] == 0, 'empty phase interval')
+    v = sorted(h['DurationsNS'])
+    return {'count': len(v), 'total_ns': sum(v), 'max_ns': max(v, default=0), 'p95_ns': v[math.ceil(.95*len(v))-1] if v else None, 'p99_ns': v[math.ceil(.99*len(v))-1] if v else None}
+
+def validate_retained(x):
+    r = x['retained']
+    typed_schema(r, RETAINED_TYPES, 'retained')
+    validate_latency({'Count': r['SetupCalls'], 'TotalNS': r['SetupTotalNS'], 'MaxNS': r['SetupMaxNS'], 'Buckets': r['SetupBuckets']}, r['SetupCalls'])
+    need(type(r) is dict and r['Capacity'] == 65536 and type(r['Clock']) is str and r['Clock'] == 'Go time.Now monotonic duration in nanoseconds', 'recorder contract')
+    need(r['PhaseRule'] == 'read start before writerDone closes = active; read start after writerDone closes = drain; quantum active flag sampled at entry; writes active; setup excluded; cleanup after workers join includes oracles checkpoint reopen and final close', 'phase rule')
+    for k in ('SetupCalls', 'SetupTotalNS', 'SetupMaxNS', 'WriterStopNS', 'WorkersJoinedNS', 'CleanupEndNS', 'CleanupDurationNS'):
+        need(uint(r[k]), 'phase timestamp')
+    need(0 < r['WriterStopNS'] <= r['WorkersJoinedNS'] < r['CleanupEndNS'] and r['CleanupDurationNS'] == r['CleanupEndNS'] - r['WorkersJoinedNS'], 'phase ordering/cleanup duration')
+    need(r['OwnersClosed'] is True and type(r['DBDir']) is str and pathlib.Path(r['DBDir']).is_absolute(), 'owner release')
+    h = {k: samples(r[k], r['WorkersJoinedNS']) for k in PHASES}
+    for k in ('ReadDrain','QuantumDrain'):
+        need(not r[k]['DurationsNS'] or r[k]['FirstStartNS'] >= r['WriterStopNS'], 'post-stop phase clock')
+    need(r['WriteActive']['LastEndNS'] <= r['WriterStopNS'], 'writer stop boundary')
+    need(r['SetupCalls'] > 0 and 0 < r['SetupMaxNS'] <= r['SetupTotalNS'], 'bounded private setup timing')
+    need(h['ReadActive']['count'] + h['ReadDrain']['count'] == x['Reads'] and h['ReadDrain']['count'] == x['ReadsAfterWriterStop'], 'read phase accounting')
+    need(h['WriteActive']['count'] == x['Writes'], 'write phase accounting')
+    need(h['QuantumActive']['count'] + h['QuantumDrain']['count'] + r['SetupCalls'] == x['Calls'], 'quantum phase accounting')
+    for name, phases, setup in [('ReadLatency', ('ReadActive','ReadDrain'),0), ('WriteLatency',('WriteActive',),0), ('QuantumLatency',('QuantumActive','QuantumDrain'),r['SetupTotalNS'])]:
+        need(sum(h[k]['total_ns'] for k in phases) + setup == x[name]['TotalNS'], 'raw duration total ' + name)
+        need(max([h[k]['max_ns'] for k in phases] + ([r['SetupMaxNS']] if name == 'QuantumLatency' else [])) == x[name]['MaxNS'], 'raw maximum ' + name)
+        buckets = [0]*8
+        for k in phases:
+            for d in r[k]['DurationsNS']:
+                i=sum(d > limit for limit in (10000,100000,1000000,5000000,10000000,50000000,100000000))
+                buckets[i]+=1
+        if name == 'QuantumLatency':
+            need(type(r['SetupBuckets']) is list and len(r['SetupBuckets']) == 8 and all(uint(v) for v in r['SetupBuckets']) and sum(r['SetupBuckets']) == r['SetupCalls'], 'setup histogram')
+            buckets=[a+b for a,b in zip(buckets,r['SetupBuckets'])]
+        need(buckets == x[name]['Buckets'], 'raw bucket consistency ' + name)
+    metrics(r['AfterWorkers']); metrics(r['AfterCleanup'])
+    before, after = r['AfterWorkers'], r['AfterCleanup']
+    need(all(after[k] >= v for k, v in before.items() if k not in ('Scope','Fences')), 'cumulative observer scalars')
+    for a, b in zip(before['Fences'], after['Fences']):
+        need(all(b[k] >= v for k,v in a.items() if k != 'Site'), 'cumulative per-site metrics')
+    need(before['Fences'][0]['ForegroundAttempts'] > 0 and before['Fences'][0]['MaintenanceHolds'] > 0 and before['FenceWaitMaxNS'] > 0 and before['FenceHoldMaxNS'] > 0, 'genuine foreground/fence observation')
+    return h
+
+def retained_matrix(cases, n, repetitions, smoke):
+    need(type(n) is int and 64 <= n <= 4096 and type(repetitions) is int and 1 <= repetitions <= 10 and type(smoke) is bool, 'retained dimensions')
+    need(all(type(c['n']) is int and type(c['repetition']) is int and type(c['mode']) is str and type(c['algorithm']) is str for c in cases), 'retained case types')
+    expected = [(n, 'churn', 'bounded', 0)] if smoke else [(size, mode, 'bounded', rep) for size in (n, 2*n) for mode in ('growth','churn') for rep in range(repetitions)]
+    need(len(cases) == len(expected) and [(c['n'],c['mode'],c['algorithm'],c['repetition']) for c in cases] == expected, 'retained matrix')
+    need(all(type(c['exit_code']) is int and c['exit_code'] == 0 for c in cases), 'retained child status')
+
+def phase_coverage(cases):
+    for c in cases:
+        need(all(c['quantiles'][k]['count'] >= POLICY['minimum_samples'] for k in ('ReadActive','ReadDrain','WriteActive')), 'insufficient phase sample coverage')
+
+def spread(values):
+    need(min(values) > 0 and max(values)/min(values) <= POLICY['maximum_quantile_spread_ratio'], 'excess repetition quantile spread')
+
+def qualification(r):
+    need(r['contract'] == R and not r['race'] and not r['smoke'], 'retained nonrace full coverage only')
+    need(r['runtime_status'] == 'integrated-reviewed' and valid_sha(r['expected_source_digest']) and r['expected_source_digest'] == r['source_digest'], 'reviewed integrated expected runtime dependency')
+    need(r['policy'] == POLICY and r['repetitions'] >= POLICY['repetitions'], 'predeclared repetition/noise policy')
+    retained_matrix(r['cases'], r['n'], r['repetitions'], False)
+    phase_coverage(r['cases'])
+    for size in (r['n'], 2*r['n']):
+        for mode in ('growth','churn'):
+            group = [c for c in r['cases'] if (c['n'],c['mode']) == (size,mode)]
+            for phase in ('ReadActive','ReadDrain','WriteActive'):
+                for q in ('p95_ns','p99_ns'):
+                    v = [c['quantiles'][phase][q] for c in group]
+                    spread(v)
+    return True
 
 def matrix(cases):
     need(type(cases) is list and len(cases) == 8, 'eight cases')
@@ -487,19 +619,24 @@ def packet(out, root=None, receipt=None):
     r = receipt if receipt is not None else json.loads((out / 'receipt.json').read_text())
     source = json.loads((out / 'source-bindings.json').read_text())
     need(type(source) is dict and all(type(k) is str and valid_sha(v) for k, v in source.items()), 'source hashes')
-    need(r['contract'] == C and digest(source) == r['source_digest'] and r['source_stable'] is True and type(r['source_count']) is int and r['source_count'] == len(source), 'source receipt')
-    need(r.get('labels') == measurement_labels(), 'noncanonical foreground scope labels')
+    retained = r['contract'] == R
+    need(r['contract'] in (C, R) and digest(source) == r['source_digest'] and r['source_stable'] is True and type(r['source_count']) is int and r['source_count'] == len(source), 'source receipt')
+    need(r.get('labels') == measurement_labels(retained), 'noncanonical foreground scope labels')
     need(r['errors'] == [] and type(r['race']) is bool, 'receipt errors/race')
     if root:
         need(source == bindings(root), 'source drift')
-    matrix(r['cases'])
+    if retained:
+        need(r['policy'] == POLICY and type(r['smoke']) is bool and r['runtime_status'] in ('unmerged-candidate-overlay','integrated-reviewed'), 'retained policy/dependency')
+        retained_matrix(r['cases'], r['n'], r['repetitions'], r['smoke'])
+    else:
+        matrix(r['cases'])
     need(type(r['capture_out']) is str and pathlib.Path(r['capture_out']).is_absolute(), 'capture directory')
     capture = pathlib.Path(r['capture_out'])
     for file, key in [('foreground.test', 'binary_sha256'), ('build-command.json', 'build_command_sha256'), ('build.log', 'build_log_sha256')]:
         need(valid_sha(r[key]) and sha(out / file) == r[key], 'build binding ' + file)
     build = json.loads((out / 'build-command.json').read_text())
     need(build['go'] == r['go'] and build['argv'][0] == r['go']['path'] and type(r['go']['version']) is str and r['go']['version'].startswith('go version ') and valid_sha(r['go']['sha256']), 'Go identity')
-    need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(capture / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
+    need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground' + (',mvcc_native_prune' if retained else '')] + (['-race'] if r['race'] else []) + ['-o', str(capture / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
     need(build['env'] == r['build_env'], 'build environment binding')
     validate_environment(r['build_env'], r['go']['path'])
     validate_version(out, r)
@@ -509,9 +646,12 @@ def packet(out, root=None, receipt=None):
             need(type(c[key]) is str and pathlib.Path(c[key]).name == c[key] and valid_sha(c[key + '_sha256']) and sha(out / c[key]) == c[key + '_sha256'], 'case binding ' + key)
         need(c['binary_before_sha256'] == c['binary_after_sha256'] == r['binary_sha256'], 'case binary stability')
         cmd = json.loads((out / c['command']).read_text())
-        need(cmd['env'] == dict(r['build_env'], MVCC_FOREGROUND_RESULT=str(capture / c['result']), MVCC_FOREGROUND_N=str(c['n']), MVCC_FOREGROUND_MODE=c['mode'], MVCC_FOREGROUND_ALGORITHM=c['algorithm'], MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0'), 'case environment')
+        need(cmd['env'] == dict(r['build_env'], MVCC_FOREGROUND_RESULT=str(capture / c['result']), MVCC_FOREGROUND_N=str(c['n']), MVCC_FOREGROUND_MODE=c['mode'], MVCC_FOREGROUND_ALGORITHM=c['algorithm'], MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0', **({'MVCC_FOREGROUND_RETAINED': '1'} if retained else {})), 'case environment')
         need(cmd['argv'] == [str(capture / 'foreground.test'), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v'] and cmd['cwd'] == build['cwd'], 'case invocation/cwd')
-        validate(json.loads((out / c['result']).read_text()), c['n'], c['mode'], c['algorithm'])
+        x = json.loads((out / c['result']).read_text())
+        validate(x, c['n'], c['mode'], c['algorithm'], retained)
+        if retained:
+            need(c['quantiles'] == validate_retained(x) and c['db_disposed'] is True and not pathlib.Path(x['retained']['DBDir']).exists(), 'quantile/raw binding and disposable DB release')
     return r
 
 def contract_self_test(out, r):
@@ -606,7 +746,7 @@ def contract_self_test(out, r):
             altered = json.loads(original)
             altered['PartialPrivateOutput'] = not altered['PartialPrivateOutput']
             try:
-                validate(altered, case['n'], case['mode'], case['algorithm'])
+                validate(altered, case['n'], case['mode'], case['algorithm'], r['contract'] == R)
             except ValueError as error:
                 need(str(error) == 'algorithm private-output witness', 'wrong algorithm case refusal')
             else:
@@ -627,6 +767,7 @@ def contract_self_test(out, r):
 
 def self_test(out, root):
     build_input_self_test()
+    preflight_self_test()
     r = packet(out, root)
     environment_self_test(out, r)
     ack_drain_self_test(out, r)
@@ -636,7 +777,7 @@ def self_test(out, root):
     for mutate in probes:
         y = copy.deepcopy(x); mutate(y)
         try:
-            validate(y, c['n'], c['mode'], c['algorithm'])
+            validate(y, c['n'], c['mode'], c['algorithm'], r['contract'] == R)
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative result accepted')
@@ -648,8 +789,157 @@ def self_test(out, root):
         except (ValueError, KeyError, TypeError):
             continue
         raise ValueError('negative receipt accepted')
-    print('seventeen in-memory negative checks PASS; retained measurements unchanged')
-    contract_self_test(out, r)
+    if r['contract'] == R:
+        retained_contract_self_test(out, r, x, c)
+        retained_self_test(out, root, r, x, c)
+    else:
+        contract_self_test(out, r)
+    print('seventeen base in-memory negative checks PASS; retained measurements unchanged')
+
+def retained_contract_self_test(out, receipt, original, case):
+    # Mutations retain the original capture/runtime identity and refresh only the
+    # result checksum in a disposable archive. They are parser probes, not runs.
+    import tempfile
+    schemas = [((), RESULT_TYPES), (('retained',), RETAINED_TYPES)]
+    schemas += [((name,), {k: 'buckets' if k == 'Buckets' else 'uint' for k in LATENCY_FIELDS}) for name in ('ReadLatency', 'WriteLatency', 'QuantumLatency')]
+    schemas += [(('retained', phase), SAMPLE_TYPES) for phase in PHASES]
+    for name in ('AfterWorkers', 'AfterCleanup'):
+        schemas.append((('retained', name), METRIC_TYPES))
+        schemas += [(('retained', name, 'Fences', i), FENCE_TYPES) for i in range(len(FENCE_SITES))]
+    def at(value, path):
+        for key in path:
+            value = value[key]
+        return value
+    probes = []
+    for path, fields in schemas:
+        for key, kind in fields.items():
+            probes.append((path, key, 'delete', None))
+            bad = False if kind in ('uint', 'byte', 'signed') else 0 if kind in ('bool', 'string') else {} if kind in ('buckets', 'durations', 'fences') else []
+            probes.append((path, key, 'type', bad))
+            if kind in ('uint', 'byte', 'signed'):
+                probes.append((path, key, 'overflow', 1 << (8 if kind == 'byte' else 63 if kind == 'signed' else 64)))
+        probes.append((path, 'UnexpectedField', 'extra', 0))
+    probes += [(('retained', 'ReadActive', 'DurationsNS'), 0, 'overflow', 1 << 64),
+               (('retained', 'SetupBuckets'), 0, 'type', False)]
+    count = 0
+    with tempfile.TemporaryDirectory(prefix='native-retained-contract-') as folder:
+        archive = pathlib.Path(folder)
+        for file in out.iterdir():
+            if file.is_file():
+                shutil.copyfile(file, archive / file.name)
+        for path, key, action, bad in probes:
+            altered = copy.deepcopy(original)
+            value = at(altered, path)
+            if action == 'delete':
+                value.pop(key)
+            else:
+                value[key] = bad
+            try:
+                validate(altered, case['n'], case['mode'], case['algorithm'], True)
+            except ValueError as error:
+                reason = str(error)
+            else:
+                raise ValueError('retained schema mutation accepted ' + repr((path, key, action)))
+            target = archive / case['result']
+            target.write_text(json.dumps(altered, indent=2) + '\n')
+            changed = copy.deepcopy(receipt)
+            changed['cases'][0]['result_sha256'] = sha(target)
+            try:
+                packet(archive, receipt=changed)
+            except ValueError as error:
+                need(str(error) == reason, 'retained coupled rejection mismatch')
+            else:
+                raise ValueError('retained coupled schema mutation accepted')
+            count += 1
+    print(f'{count} checksum-refreshed retained/base schema and integer-bound refusals PASS; original runtime identity preserved')
+
+def retained_self_test(out, root, r, x, c):
+    probes = [
+        lambda y: y['retained']['ReadActive'].update(Overflow=True),
+        lambda y: y['retained']['ReadDrain'].update(DurationsNS=[]),
+        lambda y: y['retained']['AfterWorkers'].update(FenceWaitMaxNS=0),
+        lambda y: y['retained']['AfterWorkers'].update(StorageSyncCount=999999),
+        lambda y: y['retained'].update(WorkersJoinedNS=0),
+        lambda y: y['retained'].update(OwnersClosed=False),
+        lambda y: y['retained']['WriteActive']['DurationsNS'].__setitem__(0, False),
+        lambda y: y['retained'].pop('AfterCleanup'),
+        lambda y: y['ReadLatency'].update(MaxNS=y['ReadLatency']['MaxNS']+1),
+        lambda y: y['WriteLatency']['Buckets'].__setitem__(0,y['WriteLatency']['Buckets'][0]+1)]
+    results=[]
+    for i, mutate in enumerate(probes):
+        y=copy.deepcopy(x);mutate(y)
+        (out/f'retained-negative-result-{i}.json').write_text(json.dumps(y,indent=2)+'\n')
+        try: validate(y,c['n'],c['mode'],c['algorithm'],True)
+        except (ValueError,KeyError,TypeError) as e: results.append({'probe':i,'rejected':str(e)});continue
+        raise ValueError('retained negative result accepted')
+    for name, mutate in [('race',lambda y:y.update(race=True)),('insufficient-samples',lambda y:y['cases'][0]['quantiles']['ReadDrain'].update(count=0)),('unmerged-dependency',lambda y:y.update(runtime_status='unmerged-candidate-overlay'))]:
+        y=copy.deepcopy(r);y.update(smoke=False,runtime_status='integrated-reviewed',expected_source_digest=y['source_digest'],repetitions=3)
+        # Coverage alone must refuse even if other prerequisite declarations pass.
+        mutate(y)
+        try: qualification(y)
+        except (ValueError,KeyError,TypeError) as e: results.append({'probe':name,'rejected':str(e)});continue
+        raise ValueError('unqualified packet accepted')
+    y=copy.deepcopy(r['cases']);y[0]['quantiles']['ReadDrain']['count']=0
+    try: phase_coverage(y)
+    except ValueError as e: results.append({'probe':'isolated-insufficient-drain-coverage','rejected':str(e)})
+    else: raise ValueError('insufficient drain coverage accepted')
+    v=c['quantiles']['WriteActive']['p99_ns']
+    try: spread([v,2*v])
+    except ValueError as e: results.append({'probe':'isolated-excess-spread','rejected':str(e)})
+    else: raise ValueError('excess spread accepted')
+    (out/'retained-validator-negative.json').write_text(json.dumps(results,indent=2)+'\n')
+    print('fifteen retained negative checks PASS; rejection evidence saved')
+
+def expected_bindings(path, source):
+    expected = json.loads(path.read_text())
+    need(type(expected) is dict and bool(expected) and all(type(k) is str and valid_sha(v) for k, v in expected.items()), 'expected source hash map')
+    need(expected == source, 'expected reviewed source mismatch')
+    return expected
+
+def preflight_self_test():
+    # Exercise main, not just the map helper. No filesystem writes or Go jobs.
+    from unittest import mock
+    current = {'fixture.go': '0' * 64}
+    argv = ['driver', '--root', '/preflight/source', '--out', '/preflight/output',
+            '--retained', '--qualify', '--runtime-status', 'integrated-reviewed',
+            '--expected-source', '/preflight/expected.json']
+    probes = [
+        ('nonexistent', FileNotFoundError('expected manifest absent'), None),
+        ('malformed', None, '{'),
+        ('wrong-source', None, json.dumps({'fixture.go': '1' * 64})),
+        ('not-map', None, '[]'),
+        ('bad-hash', None, json.dumps({'fixture.go': True}))]
+    results = []
+    for name, error, text in probes:
+        with mock.patch.object(sys, 'argv', argv), \
+             mock.patch.dict(globals(), bindings=lambda root: current), \
+             mock.patch.object(pathlib.Path, 'read_text', side_effect=error, return_value=text) as read, \
+             mock.patch.object(pathlib.Path, 'mkdir') as mkdir, \
+             mock.patch.object(pathlib.Path, 'write_text') as write, \
+             mock.patch.object(subprocess, 'run') as run:
+            try:
+                main()
+            except (ValueError, OSError) as e:
+                need(read.call_count == 1 and not mkdir.called and not write.called and not run.called, 'invalid expected manifest entered collection')
+                results.append({'case': name, 'refusal': str(e), 'output_calls': mkdir.call_count + write.call_count, 'subprocess_calls': run.call_count})
+            else:
+                raise ValueError('invalid expected manifest accepted')
+    class Admitted(Exception):
+        pass
+    with mock.patch.object(sys, 'argv', argv), \
+         mock.patch.dict(globals(), bindings=lambda root: current), \
+         mock.patch.object(pathlib.Path, 'read_text', return_value=json.dumps(current)) as read, \
+         mock.patch.object(pathlib.Path, 'mkdir', side_effect=Admitted('valid manifest reached output gate')) as mkdir, \
+         mock.patch.object(pathlib.Path, 'write_text') as write, \
+         mock.patch.object(subprocess, 'run') as run:
+        try:
+            main()
+        except Admitted:
+            need(read.call_count == 1 and mkdir.call_count == 1 and not write.called and not run.called, 'valid expected preflight admission')
+        else:
+            raise ValueError('valid expected manifest refused')
+    print(json.dumps({'expected_manifest_preflight': results, 'matching_map_admitted_before_build': True}, indent=2))
+    return results
 
 
 def ack_drain_self_test(out, receipt):
@@ -747,21 +1037,32 @@ def final_bindings(root, errors):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1]); p.add_argument('--out', type=pathlib.Path, required=True)
+    p.add_argument('--retained', action='store_true'); p.add_argument('--smoke', action='store_true'); p.add_argument('--n', type=int, default=512); p.add_argument('--repetitions', type=int, default=3); p.add_argument('--qualify', action='store_true'); p.add_argument('--runtime-status', choices=('unmerged-candidate-overlay','integrated-reviewed'), default='unmerged-candidate-overlay'); p.add_argument('--expected-source', type=pathlib.Path)
     p.add_argument('--go', default='go'); p.add_argument('--race', action='store_true'); p.add_argument('--validate', action='store_true'); p.add_argument('--self-test', action='store_true')
     args = p.parse_args(); root = args.root.resolve(); out = args.out.resolve()
+    source = bindings(root) if args.expected_source is not None else None
+    expected = expected_bindings(args.expected_source, source) if args.expected_source is not None else None
     if args.validate or args.self_test:
         if args.self_test:
             self_test(out, root)
         else:
-            packet(out, root); print('source-bound packet PASS')
+            r = packet(out, root)
+            if expected is not None: need(digest(expected) == r['source_digest'], 'expected reviewed packet mismatch')
+            if args.qualify: qualification(r)
+            print('source-bound packet PASS' + ('; retained qualification policy PASS' if args.qualify else ''))
         return
+    need(not args.smoke or args.retained, 'smoke requires retained mode')
+    need(not args.qualify or args.retained, 'v2 pilot cannot qualify')
+    need(not args.qualify or (not args.race and not args.smoke and args.repetitions >= POLICY['repetitions'] and args.runtime_status == 'integrated-reviewed' and args.expected_source is not None), 'qualification capture requires nonrace complete repetitions and expected reviewed integrated source before collection')
+    need(64 <= args.n <= 4096 and 1 <= args.repetitions <= 10, 'bounded retained dimensions')
+    if source is None: source = bindings(root)
     out.mkdir(exist_ok=False, parents=True)
-    source = bindings(root); (out / 'source-bindings.json').write_text(json.dumps(source, indent=2) + '\n')
+    (out / 'source-bindings.json').write_text(json.dumps(source, indent=2) + '\n')
     go_path = pathlib.Path(shutil.which(args.go) or args.go).resolve()
     env = controlled_environment(go_path)
     cases = []; errors = []; binary_sha = None; source_stable = True
     go, build_env, version_metadata, source_stable = capture_version(go_path, root, env, out, errors)
-    binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
+    binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground' + (',mvcc_native_prune' if args.retained else '')] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
     (out / 'build-command.json').write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'go': go, 'env': build_env}, indent=2) + '\n')
     inventory_build = list(cmd)
     build_inventory = None; build_queries = {}
@@ -779,7 +1080,8 @@ def main():
         after_inventory, build_queries['inputs-after'] = capture_build_inputs(inventory_build, root, env, out, 'inputs-after', go['sha256'], errors)
         if build_inventory != after_inventory:
             source_stable = False; errors.append('compiled build-input graph drift after build')
-    for n, mode, algorithm in (MATRIX if not errors else []):
+    runs = [(args.n,'churn','bounded',0)] if args.smoke else ([(n,m,'bounded',rep) for n in (args.n,2*args.n) for m in ('growth','churn') for rep in range(args.repetitions)] if args.retained else [(n,m,a,0) for n,m,a in MATRIX])
+    for n, mode, algorithm, repetition in (runs if not errors else []):
         try:
             stable = build_inputs_stable(build_inventory, root) and source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
         except (OSError, ValueError):
@@ -788,8 +1090,9 @@ def main():
             source_stable = False
             errors.append(f'source/executable drift before {algorithm}-{mode}-{n}')
             break
-        name = f'{algorithm}-{mode}-{n}'; output = out / (name + '.json'); raw = out / (name + '.log'); command = out / (name + '-command.json')
+        name = f'{algorithm}-{mode}-{n}' + (f'-r{repetition}' if args.retained else ''); output = out / (name + '.json'); raw = out / (name + '.log'); command = out / (name + '-command.json')
         ee = dict(env); ee.update(MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0', MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
+        if args.retained: ee['MVCC_FOREGROUND_RETAINED'] = '1'
         cmd = [str(binary), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v']
         (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(ee)}, indent=2) + '\n')
         start = time.monotonic()
@@ -802,6 +1105,7 @@ def main():
         c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'process_error': process_error, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': artifact_sha(binary)}
         for key, file in [('raw', raw), ('result', output), ('command', command)]:
             c[key] = file.name; c[key + '_sha256'] = artifact_sha(file)
+        if args.retained: c['repetition'] = repetition
         cases.append(c)
         if not stable:
             source_stable = False
@@ -809,7 +1113,10 @@ def main():
             break
         case_accepted = False
         try:
-            need(result.returncode == 0, 'process ' + name); validate(json.loads(output.read_text()), n, mode, algorithm)
+            need(result.returncode == 0, 'process ' + name); x=json.loads(output.read_text()); validate(x, n, mode, algorithm, args.retained)
+            if args.retained:
+                c.update(repetition=repetition, quantiles=validate_retained(x), db_disposed=not pathlib.Path(x['retained']['DBDir']).exists())
+                need(c['db_disposed'], 'DB not disposed after child release')
             case_accepted = True
         except (ValueError, KeyError, TypeError, OSError) as e:
             errors.append(str(e))
@@ -817,16 +1124,20 @@ def main():
         if not case_accepted: break
     final_source = final_bindings(root, errors)
     if source != final_source: source_stable = False; errors.append('source drift after collection')
+    if expected is not None and expected != final_source: errors.append('expected reviewed source drift after collection')
     if not errors:
         final_inventory, build_queries['inputs-final'] = capture_build_inputs(inventory_build, root, env, out, 'inputs-final', go['sha256'], errors)
         if build_inventory != final_inventory:
             source_stable = False; errors.append('compiled build-input graph drift after collection')
-    receipt = {'build_input_contract': BUILD_INPUT_CONTRACT, 'build_input_queries': build_queries, 'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels(), **version_metadata}
+    receipt = {'build_input_contract': BUILD_INPUT_CONTRACT, 'build_input_queries': build_queries, 'capture_out': str(out), 'contract': R if args.retained else C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels(args.retained), **version_metadata}
+    if args.retained:
+        receipt.update(policy=POLICY,n=args.n,repetitions=args.repetitions,smoke=args.smoke,runtime_status=args.runtime_status,expected_source_digest=digest(expected) if expected is not None else None)
     if not errors:
         try: validate_version(out, receipt)
         except (OSError,ValueError,KeyError,TypeError) as error: errors.append('version capture invalid: '+str(error))
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n'); need(not errors, 'causal failures ' + repr(errors)); packet(out, root)
-    print('causal packet PASS; retained latency qualification outstanding')
+    if args.qualify: qualification(receipt)
+    print('source-bound retained capture PASS; qualification requires coverage and integrated reviewed runtime' if args.retained else 'causal packet PASS; retained latency qualification outstanding')
 
 if __name__ == '__main__':
     try:
