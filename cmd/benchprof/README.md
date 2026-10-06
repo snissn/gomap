@@ -798,7 +798,7 @@ Use a fresh process per leaf with fixed `-benchtime=128x` for smoke or `1024x` f
 matched collection; retain Go benchmark stdout, command, exit status, source,
 module/toolchain and binary identities. Setup/Close are excluded and history/output
 are fixed. Reproduction and allocation ownership are documented in
-[the fixture contract](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
+[the fixture contract](../../TreeDB/docs/benchmarks/cow-c3-read-evidence.md).
 These Go package benchmark logs/profiles are not benchprof inputs.
 
 ```sh
@@ -806,3 +806,6 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission/command_wal_relaxed/cow_btree/inline/point$' \
   -benchtime=1024x -count=1 -benchmem
 ```
+
+The C3-read capability and allocation audit are documented in
+[the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
