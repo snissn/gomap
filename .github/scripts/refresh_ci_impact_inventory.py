@@ -24,11 +24,11 @@ def source_workflows(root, inputs):
     workflows = {}
     for filename, full_path in sorted(ci_impact.workflow_paths(inputs).items()):
         path = Path(filename)
-        raw = ci_impact.git(root, 'cat-file', 'blob', inputs[full_path])
+        raw = ci_impact.git(root, 'cat-file', 'blob', inputs[full_path]['git_blob'])
         source = yaml.safe_load(raw)
         nodes = mapping(mapping(yaml.compose(raw))['jobs'])
         workflows[path.name] = {'sha256': ci_impact.digest(raw),
-                                'git_blob': inputs[full_path],
+                                'git_blob': inputs[full_path]['git_blob'],
                                 'events': source.get('on', source.get(True)),
                                 'coverage': 'existing execution only; triggers/path filters are unchanged', 'jobs': {}}
         for name, job in source['jobs'].items():
@@ -68,7 +68,7 @@ def check_source_contracts(root, policy, inputs, *, allow_unreviewed=False):
         raise ci_impact.ContractError('workflow-source-contract-mismatch')
     if policy['discovery_source_sha256'] != ci_impact.discovery_digest(inputs):
         raise ci_impact.ContractError('consumer-discovery-drift')
-    if any(inputs.get(path) != oid for path, oid in policy['harness_inputs'].items()):
+    if any(inputs.get(path) != descriptor for path, descriptor in policy['harness_inputs'].items()):
         raise ci_impact.ContractError('harness-contract-drift')
 
 
@@ -84,13 +84,14 @@ def refresh(root):
     policy['members'] = [dict(m, owner=previous.get(m['id'], {}).get('owner', 'UNREVIEWED: assign affected owner'))
                          for m in ci_impact.expected_members(policy['workflows'])]
     paths = policy['harness_inputs']
-    # The old reviewed path list can be migrated, but runtime policy requires a
-    # valid path=>blob map. Removed nonplanner paths stay a policy review choice.
+    # Reviewed older policies can be upgraded here; runtime never trusts their
+    # blob-only bindings. Removed nonplanner paths stay a policy review choice.
     if not isinstance(paths, (list, dict)) or len(paths) != len(set(paths)) or ci_impact.PLANNER not in paths:
         raise ci_impact.ContractError('malformed-harness-binding')
     if any(path not in inputs for path in paths):
         raise ci_impact.ContractError('missing-harness-input')
     policy['harness_inputs'] = {path: inputs[path] for path in paths}
+    policy['schema_version'] = ci_impact.SCHEMA
     policy['discovery_source_sha256'] = ci_impact.discovery_digest(inputs)
     # Newly discovered members remain visibly unresolved in the output. Runtime
     # qualification rejects this marker until a reviewer assigns an owner.

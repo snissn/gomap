@@ -64,7 +64,7 @@ class RefreshSnapshotContract(unittest.TestCase):
                  if Path(p).parent == Path('.github/workflows') and Path(p).suffix in ('.yml', '.yaml')}
         self.assertEqual(set(policy['workflows']), names)
         for name, workflow in policy['workflows'].items():
-            blob = inventory['.github/workflows/' + name]
+            blob = inventory['.github/workflows/' + name]['git_blob']
             self.assertEqual(workflow['git_blob'], blob)
             self.assertEqual(workflow['sha256'], ci_impact.digest(ci_impact.git(self.repo, 'cat-file', 'blob', blob)))
 
@@ -152,7 +152,7 @@ class RefreshSnapshotContract(unittest.TestCase):
         self.write(path, '# unrelated unstaged weights\n')
         policy = self.refresh()
         self.assertIsInstance(policy['harness_inputs'], dict)
-        self.assertEqual(policy['harness_inputs'][path], expected)
+        self.assertEqual(policy['harness_inputs'][path], {'git_blob': expected, 'mode': '100644'})
         self.assertCommittedSnapshot(policy)
         self.assertEqual(self.git('rev-parse', 'HEAD:' + path), expected)
         self.assertEqual((self.repo / path).read_text(), '# unrelated unstaged weights\n')
@@ -163,6 +163,59 @@ class RefreshSnapshotContract(unittest.TestCase):
         with self.assertRaises(ci_impact.ContractError):
             self.refresh()
         self.assertEqual(self.manifest.read_bytes(), before)
+
+    def test_staged_harness_chmod_ignores_worktree_permissions(self):
+        path = '.github/ci/treedb_unix_weighted_shards.tsv'
+        blob = self.git('rev-parse', ':' + path)
+        self.git('update-index', '--chmod=+x', path)
+        (self.repo / path).chmod(0o644)
+        policy = self.refresh()
+        self.assertEqual(policy['harness_inputs'][path], {'git_blob': blob, 'mode': '100755'})
+        self.assertCommittedSnapshot(policy)
+        self.git('update-index', '--chmod=-x', path)
+        (self.repo / path).chmod(0o755)
+        policy = self.refresh()
+        self.assertEqual(policy['harness_inputs'][path], {'git_blob': blob, 'mode': '100644'})
+        self.assertCommittedSnapshot(policy)
+
+    def test_refresh_upgrades_blob_only_policy_and_restores_later_docs_qualification(self):
+        path = '.github/ci/treedb_windows_caching_heavy_tests.txt'
+        self.write('docs/retained/RESULTS.json', '{}\n')
+        self.git('add', 'docs/retained/RESULTS.json')
+        policy = json.loads(self.manifest.read_text())
+        policy['schema_version'] = 1
+        policy['harness_inputs'] = {p: self.git('rev-parse', ':' + p) for p in policy['harness_inputs']}
+        self.manifest.write_text(json.dumps(policy))
+        policy = self.refresh()
+        self.assertEqual(policy['schema_version'], ci_impact.SCHEMA)
+        self.assertIsInstance(policy['harness_inputs'][path], dict)
+        self.assertCommittedSnapshot(policy)
+        (self.repo / path).chmod(0o755)
+        self.git('add', path)
+        self.git('commit', '-qm', 'unreviewed executable mode change')
+
+        def forecast():
+            base = self.git('rev-parse', 'HEAD')
+            self.write('docs/retained/RESULTS.json', base + '\n')
+            self.git('add', 'docs/retained/RESULTS.json')
+            self.git('commit', '-qm', 'docs candidate')
+            head = self.git('rev-parse', 'HEAD')
+            candidate = self.git('commit-tree', self.git('write-tree'), '-p', base, '-p', head, '-m', 'merge')
+            event = dict(event_name='pull_request', base=base, head=head, candidate=candidate,
+                         run_id='123', run_attempt='1', repository='snissn/gomap', workflow_ref='fixture',
+                         pr_number=1, event_sha256='fixture')
+            environment = dict(runner_image='fixture', python='fixture', platform='linux', gowork='off', runner_os='Linux')
+            receipt = ci_impact.plan(self.repo, event, environment)
+            self.git('checkout', '-q', '--detach', base)
+            return receipt
+
+        stale = forecast()
+        self.assertFalse(stale['forecast_qualified'])
+        self.assertIn('harness-contract-drift', stale['fallback'])
+        policy = self.refresh()
+        self.assertCommittedSnapshot(policy)
+        fresh = forecast()
+        self.assertTrue(fresh['forecast_qualified'], fresh['fallback'])
 
     def test_coordinated_matrix_metadata_and_members_cannot_pass_source_check(self):
         original = self.refresh()

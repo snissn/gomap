@@ -17,7 +17,7 @@ import sys
 POLICY = '.github/ci/ci_impact.json'
 PLANNER = '.github/scripts/ci_impact.py'
 CONTROL_JOB = ('treedb-tests.yml', 'impact-shadow')
-SCHEMA = 1
+SCHEMA = 2
 SHA = re.compile(r'^[0-9a-f]{40}$')
 
 
@@ -34,7 +34,7 @@ def blob_id(data):
 
 
 def typed_json(value):
-    """JSON comparison preserves bool/int/float distinctions in variants."""
+    """JSON comparison preserves bool/int/float distinctions throughout receipts."""
     try:
         return json.dumps(value, sort_keys=True, allow_nan=False)
     except (TypeError, ValueError) as error:
@@ -113,8 +113,11 @@ def expected_members(workflows, *, member_limit=None):
 def check_harness_bindings(bindings):
     if not isinstance(bindings, dict) or PLANNER not in bindings:
         raise ContractError('missing-reviewed-planner-binding')
-    for path, oid in bindings.items():
-        if not isinstance(path, str) or path_text(path.encode()) != path or not isinstance(oid, str) or not SHA.fullmatch(oid):
+    for path, descriptor in bindings.items():
+        if (not isinstance(path, str) or path_text(path.encode()) != path or
+                not isinstance(descriptor, dict) or set(descriptor) != {'git_blob', 'mode'} or
+                not isinstance(descriptor['git_blob'], str) or not SHA.fullmatch(descriptor['git_blob']) or
+                descriptor['mode'] not in ('100644', '100755')):
             raise ContractError('malformed-harness-binding')
     return bindings
 
@@ -183,7 +186,7 @@ def tree_inventory(repo, commit):
             raise ContractError('unsupported-tree-entry')
         if path in inventory:
             raise ContractError('duplicate-tree-path')
-        inventory[path] = oid
+        inventory[path] = {'git_blob': oid, 'mode': mode}
     if not inventory:
         raise ContractError('empty-tree-discovery')
     return inventory, digest(raw)
@@ -238,11 +241,14 @@ def discovery_digest(inventory):
     # Code can add a dynamic docs/fixture consumer without changing imports.
     # Reviewed source binding keeps stale footprints conservative on later PRs.
     hasher = hashlib.sha256()
-    for path, oid in inventory.items():
-        if is_discovery_source(path):
+    for path, descriptor in inventory.items():
+        # Include extensionless executable readers as well as source classes.
+        if is_discovery_source(path) or descriptor['mode'] == '100755':
             hasher.update(path.encode())
             hasher.update(b'\0')
-            hasher.update(oid.encode())
+            hasher.update(descriptor['mode'].encode())
+            hasher.update(b'\0')
+            hasher.update(descriptor['git_blob'].encode())
             hasher.update(b'\0')
     return hasher.hexdigest()
 
@@ -324,15 +330,15 @@ def plan(repo, event, environment):
             if set(workflow_paths(files)) != set(policy['workflows']):
                 fallback.add('workflow-discovery-drift')
             for name, contract in policy['workflows'].items():
-                if files.get('.github/workflows/' + name) != contract['git_blob']:
+                if files.get('.github/workflows/' + name, {}).get('git_blob') != contract['git_blob']:
                     fallback.add('workflow-contract-drift')
-            for path, expected_blob in policy['harness_inputs'].items():
-                if files.get(path) != expected_blob:
+            for path, expected_descriptor in policy['harness_inputs'].items():
+                if files.get(path) != expected_descriptor:
                     fallback.add('harness-contract-drift')
                 if path not in files:
                     fallback.add('missing-harness-input')
         identity['harness'] = {p: candidate_files[p] for p in policy['harness_inputs'] if p in candidate_files}
-        if blob_id(runtime_raw) != policy['harness_inputs'][PLANNER]:
+        if blob_id(runtime_raw) != policy['harness_inputs'][PLANNER]['git_blob']:
             fallback.add('planner-runtime-drift')
         raw = git(repo, 'diff', '--name-status', '-z', '--find-renames', '--no-ext-diff',
                   '--no-textconv', event['base'], event['candidate'], '--')
@@ -388,7 +394,7 @@ def plan(repo, event, environment):
 
 def validate(repo, event, environment, receipt):
     """Exact recomputation rejects missing/duplicate/forged decisions and identity."""
-    if receipt != plan(repo, event, environment):
+    if typed_json(receipt) != typed_json(plan(repo, event, environment)):
         raise ContractError('receipt does not match event, source, policy, inventory, and decisions')
 
 

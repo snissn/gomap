@@ -9,7 +9,7 @@
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
   ],
-  "discovery_source_sha256": "444405e0014da5771afb02a243c3d2e93ed891e2217f37bba93e2415154f537a",
+  "discovery_source_sha256": "2ac16c30ee55452d30cfcb7e46f5df180b00581dec0992b9ba741f1c116a24c9",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -103,17 +103,50 @@
     "**/AGENTS.md"
   ],
   "harness_inputs": {
-    ".github/ci/treedb_race_weighted_shards.tsv": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
-    ".github/ci/treedb_unix_weighted_shards.tsv": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
-    ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": "4ff4384449ae2679fe9ceb893cd5f9420e277f6f",
-    ".github/ci/treedb_windows_caching_heavy_tests.txt": "1e0f9db92bad7db7a47400cf6134240944f6e017",
-    ".github/ci/treedb_windows_core_weighted_shards.tsv": "7fed595f028cc2ecdd3f97946a3c3698de7d219f",
-    ".github/scripts/ci_impact.py": "632182ce18bf2cb4bc903fc4bd87a7c091ccba5f",
-    ".github/scripts/test_ci_impact.py": "2522e16597c3d6374098015dd0935acdc1f922b9",
-    ".github/scripts/test_treedb_ci_contract.py": "a5b1deea04dbc3f190678431c3078e808b94c5a8",
-    ".github/scripts/test_treedb_windows_core_headroom.py": "13b475679f2258435cd0d6407ff9eea2f7b1ac92",
-    "go.mod": "9c50190970e42029aebab51af84002c17341053e",
-    "go.sum": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a"
+    ".github/ci/treedb_race_weighted_shards.tsv": {
+      "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_unix_weighted_shards.tsv": {
+      "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": {
+      "git_blob": "4ff4384449ae2679fe9ceb893cd5f9420e277f6f",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_caching_heavy_tests.txt": {
+      "git_blob": "1e0f9db92bad7db7a47400cf6134240944f6e017",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_core_weighted_shards.tsv": {
+      "git_blob": "7fed595f028cc2ecdd3f97946a3c3698de7d219f",
+      "mode": "100644"
+    },
+    ".github/scripts/ci_impact.py": {
+      "git_blob": "20aa94a867598da1501cedca36f7c91fab5d18ed",
+      "mode": "100644"
+    },
+    ".github/scripts/test_ci_impact.py": {
+      "git_blob": "f355bf70328d9e085ddefd479d87090f23380259",
+      "mode": "100644"
+    },
+    ".github/scripts/test_treedb_ci_contract.py": {
+      "git_blob": "a5b1deea04dbc3f190678431c3078e808b94c5a8",
+      "mode": "100644"
+    },
+    ".github/scripts/test_treedb_windows_core_headroom.py": {
+      "git_blob": "13b475679f2258435cd0d6407ff9eea2f7b1ac92",
+      "mode": "100644"
+    },
+    "go.mod": {
+      "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+      "mode": "100644"
+    },
+    "go.sum": {
+      "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+      "mode": "100644"
+    }
   },
   "members": [
     {
@@ -1282,7 +1315,7 @@
       "reason": "replacement-module-input"
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "workflows": {
     "format.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

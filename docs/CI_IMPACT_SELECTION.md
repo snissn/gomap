@@ -68,9 +68,11 @@ caching heavy/rest partitions, power-loss route, and dedicated race routes remai
 the execution authority. Assignment is on the full inventory before any future
 intersection; affected packages retain every named partition.
 
-The manifest's discovery-source fingerprint covers tracked Go/Python/shell,
+The manifest's discovery-source fingerprint binds each path, Git mode, and blob
+for tracked Go/Python/shell,
 assembly/C/C++/Objective-C/header sources, native objects, module files, and
-Makefile across the repository, including executable `.github/` harnesses.
+Makefile across the repository, including executable `.github/` harnesses. It
+also covers every tracked `100755` blob, including extensionless executables.
 An accepted later source edit can introduce a new dynamic consumer. Until the
 inventory is reviewed and refreshed, source drift chooses full on later events,
 even if those events only edit docs. This conservative behavior can reduce the
@@ -84,7 +86,13 @@ coverage supplied by the planner. Full fallback means full **existing** executio
 ## Artifacts and replay
 
 The artifact is `ci-impact-shadow-<run_id>-<origin_run_attempt>` and contains
-`receipt.json` (schema version 1), the raw `event.json`, and `environment.json`.
+`receipt.json` (schema version 2), the raw `event.json`, and `environment.json`.
+Its `identity.harness` maps each reviewed path to
+`{"git_blob": "<40-hex Git blob>", "mode": "100644"}` (`100755` for executable blobs). Validation
+recomputes the complete receipt and compares typed JSON; substituting numeric
+zero for `false`, or a floating-point number for an integer, fails validation
+at any nesting level. Version 1 receipts/policies require their original runtime
+for historical replay and cannot qualify with this version 2 runtime.
 Retention is 30 days. Original attempts remain distinct; a rerun's current API
 attempt number does not rename earlier successful job or receipt lineage.
 
@@ -168,11 +176,17 @@ comparison preserves boolean/integer/float distinctions. Only the exact
 The maintenance `--check` reads the staged workflow blobs independently and
 rejects coordinated edits to job metadata and members that contradict the YAML.
 
-`harness_inputs` is the reviewed path-to-Git-blob map, refreshed from the same
-staged tree; missing inputs fail before writing. Both event-base and candidate
+`harness_inputs` is the reviewed path-to-`{git_blob, mode}` map, refreshed from the same
+staged tree; missing inputs fail before writing. Git modes `100644` and `100755`
+are supported; worktree permissions do not supply intended commit authority.
+Stage intended chmod changes as well as bytes before refresh. Both event-base and candidate
 trees must match every reviewed harness and workflow binding and the complete
 workflow set. The planner binding is mandatory, and the actual loaded planner
-bytes must match its accepted-base blob, beyond recording a runtime digest.
+bytes must match its accepted-base descriptor's blob, beyond recording a runtime digest.
+Workflow YAML contracts bind blob bytes; GitHub reads them rather than executing
+their Git mode. A stale accepted base still forces full when the candidate restores
+the original harness mode. Refresh can upgrade an older reviewed blob-only map
+to descriptors, but runtime policy never treats that older map as authority.
 Missing/stale bindings choose full or reject a malformed reporting inventory.
 Removal of another harness binding remains an explicit policy review decision;
 refresh never invents a second mandatory harness list. Discovery freshness also

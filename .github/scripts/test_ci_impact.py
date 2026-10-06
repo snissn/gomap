@@ -105,6 +105,74 @@ class ImpactContract(unittest.TestCase):
     def event_data(self, receipt):
         return receipt['identity']['event']
 
+    def review_inputs(self):
+        self.git('add', '.')
+        files, _ = ci_impact.tree_inventory(self.repo, self.git('write-tree'))
+        policy = json.loads((self.repo / ci_impact.POLICY).read_text())
+        policy['harness_inputs'] = {p: files[p] for p in policy['harness_inputs']}
+        policy['discovery_source_sha256'] = ci_impact.discovery_digest(files)
+        self.write(ci_impact.POLICY, json.dumps(policy))
+        self.base = self.commit()
+
+    def test_qualified_receipt_rejects_equal_value_different_json_types(self):
+        receipt = self.plan(self.event())
+        self.assertTrue(receipt['forecast_qualified'], receipt['fallback'])
+        mutations = [(('schema_version',), float(ci_impact.SCHEMA)),
+                     (('omission_authority',), 0), (('forecast_qualified',), 1),
+                     (('identity', 'event', 'pr_number'), True),
+                     (('inventory', 'base_files'), float(receipt['inventory']['base_files'])),
+                     (('members', 0, 'variant', 'race'), int(receipt['members'][0]['variant']['race']))]
+        for path, value in mutations:
+            with self.subTest(path=path):
+                forged = copy.deepcopy(receipt)
+                target = forged
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                with self.assertRaises(ci_impact.ContractError):
+                    ci_impact.validate(self.repo, self.event_data(receipt), ENV, forged)
+
+    def test_source_and_extensionless_executable_mode_drift_survives_later_docs(self):
+        initial = self.base
+        for path in ('scripts/generate.sh', 'tools/extensionless-reader'):
+            with self.subTest(path=path):
+                self.git('checkout', '-q', initial)
+                self.write(path, '# unchanged dynamic reader\n')
+                (self.repo / path).chmod(0o755)
+                self.review_inputs()
+                before = self.git('rev-parse', 'HEAD:' + path)
+                (self.repo / path).chmod(0o644)
+                self.base = self.commit()
+                self.assertEqual(self.git('rev-parse', 'HEAD:' + path), before)
+                self.assertFull(self.plan(self.event()), 'consumer-discovery-drift')
+                # A restored candidate cannot repair the stale accepted base.
+                self.git('checkout', '-q', self.base)
+                (self.repo / path).chmod(0o755)
+                self.assertFull(self.plan(self.event()), 'consumer-discovery-drift')
+
+    def test_noncode_harness_mode_binding_and_legacy_blob_policy_fail_closed(self):
+        initial = self.base
+        for path in ('.github/ci/treedb_unix_weighted_shards.tsv',
+                     '.github/ci/treedb_windows_caching_heavy_tests.txt'):
+            with self.subTest(path=path):
+                self.git('checkout', '-q', initial)
+                before = self.git('rev-parse', 'HEAD:' + path)
+                (self.repo / path).chmod(0o755)
+                self.base = self.commit()
+                self.assertEqual(self.git('rev-parse', 'HEAD:' + path), before)
+                self.assertFull(self.plan(self.event()), 'harness-contract-drift')
+                self.git('checkout', '-q', self.base)
+                (self.repo / path).chmod(0o644)
+                self.assertFull(self.plan(self.event()), 'harness-contract-drift')
+        self.git('checkout', '-q', initial)
+        policy = json.loads((self.repo / ci_impact.POLICY).read_text())
+        policy['harness_inputs'] = {p: self.git('rev-parse', 'HEAD:' + p) for p in policy['harness_inputs']}
+        with self.assertRaises(ci_impact.ContractError):
+            ci_impact.check_policy(policy)
+        self.write(ci_impact.POLICY, json.dumps(policy))
+        self.base = self.commit()
+        self.assertFull(self.plan(self.event()), 'bootstrap-no-accepted-policy')
+
     def test_global_test_scripts_new_globs_platform_and_nested_inputs_are_full(self):
         paths = ['go.mod', 'go.sum', '.github/ci/ci_impact.json', '.github/workflows/race.yml',
                  'TreeDB/witness_test.go', 'TreeDB/thing_windows.go', 'TreeDB/thing_linux.go',
@@ -246,7 +314,12 @@ class ImpactContract(unittest.TestCase):
     def test_invalid_harness_map_and_missing_planner_binding_are_rejected(self):
         original = json.loads((self.repo / ci_impact.POLICY).read_text())
         for bindings in ([], {}, {'../escape': 'a' * 40}, {'.github/scripts/ci_impact.py': 'invalid'},
-                         {'.github/scripts/ci_impact.py': True}, {'go.mod': 'a' * 40}):
+                         {'.github/scripts/ci_impact.py': True}, {'go.mod': 'a' * 40},
+                         {ci_impact.PLANNER: {'git_blob': 'a' * 40}},
+                         {ci_impact.PLANNER: {'git_blob': True, 'mode': '100644'}},
+                         {ci_impact.PLANNER: {'git_blob': 'a' * 40, 'mode': 100644}},
+                         {ci_impact.PLANNER: {'git_blob': 'a' * 40, 'mode': '120000'}},
+                         {ci_impact.PLANNER: {'git_blob': 'a' * 40, 'mode': '100644', 'extra': True}}):
             with self.subTest(bindings=bindings):
                 policy = copy.deepcopy(original)
                 policy['harness_inputs'] = bindings
