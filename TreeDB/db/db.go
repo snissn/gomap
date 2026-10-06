@@ -166,6 +166,7 @@ type DB struct {
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
 	stableDictionaryResourcesMu    sync.RWMutex
 	stableDictionaryResources      StableDictionaryResourceProvider
+	dictionaryIndexGenerationLease func(rootpublication.DependencyManifestEntryV1) (func(), error)
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -1159,6 +1160,11 @@ type Options struct {
 	// and template stores. A missing owner refuses deferred export of an existing
 	// side index. Only "dictdb" and "templatedb" names are admitted.
 	PhysicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
+	// DictionaryIndexGenerationLease is supplied by the concrete dictdb owner
+	// before main recovery. It validates and fences the expected physical index
+	// generation; byte lookups alone do not establish maintenance authority.
+	// The owner must outlive the main backend and every returned resource view.
+	DictionaryIndexGenerationLease func(rootpublication.DependencyManifestEntryV1) (func(), error)
 
 	// ResolvedProfile is the canonical public durability contract selected by
 	// the TreeDB profile resolver. Public constructors populate it before any
@@ -2265,6 +2271,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db := &DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
+		dictionaryIndexGenerationLease:     opts.DictionaryIndexGenerationLease,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,

@@ -453,6 +453,26 @@ surviving fence ends once at the final handle release. The DB's own `ResourceInd
 to use the token-local maintenance lease, so durable candidate clones do not
 introduce a persistent fence against the DB's own index vacuum.
 
+Recovery recognizes dictdb's canonical mutable index digest before accepting its
+lane, ID, path, namespace and single dictionary-generation reachability field.
+The public, backend and restored Raft constructors install the concrete side
+backend's expected-generation lease before main durable-slot selection; side
+options clear inherited parent hooks. A missing owner or malformed canonical
+claim fails closed. Custom immutable dictionary producers and template resources
+keep their existing recovery contract.
+
+Under the side backend's maintenance lock, this lease validates the currently
+owned exact index handle, parent/child namespace identity and required frontier,
+then reserves only the stable-index maintenance counter. Persisted generation
+labels do not substitute for physical identity or have to match a reopened
+backend's runtime generation number. The recovered token transfers the lease to
+one exact shared handle family, including retained slots and physical-only
+views. Acquisition or validation failures unwind it; the final handle release
+ends it exactly once. This holds no snapshot, reader, DB state or historical
+Apply group and performs no nested checkpoint, lookup or publication. Recovery
+cannot let a registry pin alone authorize dictdb vacuum's namespace replacement.
+The side owner remains open through main backend and resource-view teardown.
+
 The Apply wrapper also forwards the installed producer's prepared-payload
 capability and the zipper-compatible lane bridge. A hint wrapper exposing an
 optional stable method does not authorize unsupported prepared output; concurrent

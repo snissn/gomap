@@ -116,6 +116,7 @@ func wireRaftSnapshotDictLookupV1(rootDir string, opts *backenddb.Options, close
 		return fmt.Errorf("raftfsm: open restored dictdb: %w", err)
 	}
 	*closers = append(*closers, dictBackend.Close)
+	opts.DictionaryIndexGenerationLease = dictBackend.AcquireDictionaryIndexGenerationLease
 	previousCapture := opts.PhysicalSnapshotSideStoreCapture
 	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*backenddb.PhysicalSnapshotCutV1, error) {
 		if name == "dictdb" {
@@ -224,6 +225,7 @@ func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, c
 
 func scrubRaftSnapshotSideStoreOptionsV1(opts *backenddb.Options) {
 	opts.PhysicalSnapshotSideStoreCapture = nil
+	opts.DictionaryIndexGenerationLease = nil
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.DictLookup = nil
 	opts.ValueLog.DictTrain = compression.TrainConfig{TrainBytes: -1}

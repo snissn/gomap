@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	dictionaryIndexPhysicalDigest    = sha256.Sum256([]byte("dictdb-index-v1"))
+	dictionaryIndexPhysicalDigest    = rootpublication.DictionaryIndexPhysicalDigestV1()
 	dictionaryValueLogPhysicalDigest = sha256.Sum256([]byte("dictdb-value-log-v1"))
 )
 
