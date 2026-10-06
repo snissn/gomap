@@ -10,7 +10,7 @@ wire/retention accounting. All imported sources are inert and hash-pinned.
 import argparse, ast, hashlib, importlib.util, json, math, struct, sys
 from pathlib import Path
 READ=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_read.py')
-READ_SHA='736b15cdc11454eabad782b9993b9b71bb8a60045006f2f5ac3691ff2c445fcd'
+READ_SHA='6f4530fa70a6bacd21cbd4ebbfd6268dff585b41e340712e9c9298e697aed28b'
 AUDIT=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_audit.py')
 AUDIT_SHA='8199998cdee169b849755ae35bfb8a204ef86804151ccae54d62925c85d07240'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')

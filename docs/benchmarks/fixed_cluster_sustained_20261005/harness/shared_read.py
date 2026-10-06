@@ -36,6 +36,15 @@ LIMITATIONS=[
 def numeric(v,label):
  need(type(v) in (int,float) and math.isfinite(v),label+' finite number');return v
 
+def producer_recall_mean(values):
+ """Match Go float64 += in successful ledger order, then divide by count.
+ Python 3.12+ sum uses compensation and can produce different aggregate bits.
+ Callers authenticate every finite per-attempt recall before this reduction.
+ """
+ total=0.0
+ for value in values:total+=value
+ return total/len(values)
+
 def interval(x,label,limit=420_000_000_000):
  s,e=x['StartNS'],x['EndNS']
  need(type(s)is int and type(e)is int and 0<=s<e<=limit and e-s<=RPC,label+' actual bounded call interval')
@@ -106,7 +115,7 @@ def paired(rec,raw,base,baseq,state,prefixtruth,phase,index,minrec):
   need(c.same_truth(q['Truth'],prefixtruth[i]),'paired full canonical truth bits')
   value=c.native(q['Response'],q['Request'],state,prefixtruth[i]);numeric(q['RecallAt10'],'paired recall');need(q['RecallAt10']==value,'paired exact recall');values.append(value)
   hashes.append((wirehash,c.sha(response_raw.encode())))
- mean=sum(values)/16;numeric(rec['MeanRecallAt10'],'paired mean recall');need(rec['MeanRecallAt10']==mean and mean>=minrec,'paired configured mean recall threshold')
+ mean=producer_recall_mean(values);numeric(rec['MeanRecallAt10'],'paired mean recall');need(rec['MeanRecallAt10']==mean and mean>=minrec,'paired configured mean recall threshold')
  return {'mean_recall_at_10':mean,'raw_query_ledger_sha256':c.sha(raw.encode()),'wire_response_hash_pairs':hashes}
 
 def config_epoch(raw,a):
@@ -200,7 +209,7 @@ def verifier(a,p,r,ptext,text,states,mean_recall_floor=None):
  need(r['SuccessLatency']==c.percent(latency) and r['FailureLatency']==c.percent([]),'exact nearest-rank measured latency populations')
  qps=len(latency)/(duration/1e9)
  need(math.isclose(numeric(r['AttemptsQPS'],'attempt QPS'),qps,rel_tol=1e-14) and math.isclose(numeric(r['SuccessfulQPS'],'successful QPS'),qps,rel_tol=1e-14),'attempt/success QPS includes actual drain')
- mean=sum(recalls)/len(recalls);numeric(r['MeanRecallAt10'],'measured mean recall');need(r['MeanRecallAt10']==mean and mean>=minimum,'configured measured mean recall threshold')
+ mean=producer_recall_mean(recalls);numeric(r['MeanRecallAt10'],'measured mean recall');need(r['MeanRecallAt10']==mean and mean>=minimum,'configured measured mean recall threshold')
  need(r['OverlappingSearches']==overlap and r['CompletedSearchesDuringMutation']==completed and completed>0,'exact client call overlap/contained completed search accounting')
  need(r['WriterLatencyNs']==[w['EndNS']-w['StartNS'] for w in r['Writes']],'six actual writer latencies')
  need(len(r['Visibility'])==len(r['VisibilityEvidence'])==len(r['VisibilityOriginUTC'])==count,'six post-ACK exact-token read proofs retained')

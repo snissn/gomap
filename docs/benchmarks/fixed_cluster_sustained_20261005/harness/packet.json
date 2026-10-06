@@ -26,11 +26,12 @@
       },
       "output": {
         "path": "shared_read.py",
-        "sha256": "736b15cdc11454eabad782b9993b9b71bb8a60045006f2f5ac3691ff2c445fcd"
+        "sha256": "6f4530fa70a6bacd21cbd4ebbfd6268dff585b41e340712e9c9298e697aed28b"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
-        "read RPC3s/window300s/overall420s; completed claim joins by unique ordinal; actual serial minimum spacing5s"
+        "read RPC3s/window300s/overall420s; completed claim joins by unique ordinal; actual serial minimum spacing5s",
+        "Measured and paired recall use producer-order zero-initialized sequential binary64 addition; exact equality and thresholds unchanged"
       ]
     },
     "shared_audit": {
@@ -282,7 +283,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "9d3df783a607c387bc211fdb9948de536d8aa8968f51782fa69083eacbeec0d8"
+        "sha256": "4603b534c431becac178eb2f3fa089285b64420ab0888b43d4e8e947a364bf49"
       },
       "changes": [
         [
