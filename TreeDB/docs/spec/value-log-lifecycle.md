@@ -442,9 +442,14 @@ counter follows the exact shared file-handle family through
 renaming/unlinking the namespace generation while candidate, queued, pending,
 or physical-only coordinator views still name it. Logical filtering preserves
 the same handle family. Coalescing overlapping captures retains one physical
-representative and ends the discarded capture's fence; it never unions lists
-of prior Apply owners or retains prior snapshot state. The surviving fence ends
-once at the final handle release. The DB's own `ResourceIndex` capture continues
+representative and ends the discarded capture's fence. If the existing
+representative has namespace authority but no inherited generation fence,
+coalescing selects the fresh fenced representative; certified append falls back
+to exact composition for this replacement. Selection preserves both namespace
+and generation authority. Incomparable generic authorities fail before source
+ownership transfers rather than silently dropping either protection. Coalescing
+never unions lists of prior Apply owners or retains prior snapshot state. The
+surviving fence ends once at the final handle release. The DB's own `ResourceIndex` capture continues
 to use the token-local maintenance lease, so durable candidate clones do not
 introduce a persistent fence against the DB's own index vacuum.
 
