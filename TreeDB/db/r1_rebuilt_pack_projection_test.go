@@ -17,7 +17,7 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 	dir := t.TempDir()
 	opts := leafGenerationPackPublicationTestOptions(dir)
 	opts.CommandWAL = true
-	opts.Durability = DurabilityWALOn
+	opts.Durability = DurabilityDurable
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
