@@ -56,6 +56,12 @@ func (l *cachingLeafPageLog) LeafPageLogForApply(raw func([]page.ValuePtr, []*ro
 	return &view, true, nil
 }
 
+func (l *cachingLeafPageLog) ReleaseLeafPageLogApplyResources() {
+	if l != nil {
+		l.handoff.release()
+	}
+}
+
 func (l *cachingLeafPageLog) ProtectedLeafGenerationRootIDs() []uint64 {
 	if l == nil || l.db == nil {
 		return nil

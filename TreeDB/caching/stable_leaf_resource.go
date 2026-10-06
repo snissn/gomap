@@ -3,6 +3,7 @@ package caching
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -37,8 +38,92 @@ func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
 // applyLeafTokenHandoff belongs to one joined Apply attempt. Raw consumes all
 // supplied tokens on every outcome; child moves a validated set on success.
 type applyLeafTokenHandoff struct {
-	raw   func([]page.ValuePtr, []*rootpublication.StableResourceToken) error
-	child func(*rootpublication.StableResourceSet) error
+	raw      func([]page.ValuePtr, []*rootpublication.StableResourceToken) error
+	child    func(*rootpublication.StableResourceSet) error
+	mu       sync.Mutex
+	families map[*lane]*applyOuterLeafResourceFamily
+	closed   bool
+}
+
+func (handoff *applyLeafTokenHandoff) release() {
+	if handoff == nil {
+		return
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	for _, slot := range handoff.families {
+		slot.mu.Lock()
+		slot.family.Release()
+		slot.mu.Unlock()
+	}
+	handoff.families = nil
+	handoff.closed = true
+}
+
+type applyOuterLeafResourceFamily struct {
+	mu     sync.Mutex
+	family *valuelog.StableOuterLeafResourceFamily
+}
+
+func (handoff *applyLeafTokenHandoff) checkOpen() error {
+	if handoff == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	if handoff.closed {
+		return rootpublication.ErrResourceOwnership
+	}
+	return nil
+}
+
+func (handoff *applyLeafTokenHandoff) capture(writer stableValueWriter, appendLane *lane, registration valuelog.StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	// Only the concrete writer supplies family authority. Wrappers and
+	// unknown writer implementations retain their validated public constructor.
+	producer, ok := writer.(*valuelog.Writer)
+	if !ok {
+		if err := handoff.checkOpen(); err != nil {
+			return nil, err
+		}
+		return writer.StableResourceToken(registration)
+	}
+	handoff.mu.Lock()
+	if handoff.closed {
+		handoff.mu.Unlock()
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	if handoff.families == nil {
+		handoff.families = make(map[*lane]*applyOuterLeafResourceFamily)
+	}
+	slot := handoff.families[appendLane]
+	if slot == nil {
+		slot = &applyOuterLeafResourceFamily{}
+		handoff.families[appendLane] = slot
+	}
+	slot.mu.Lock()
+	handoff.mu.Unlock()
+	defer slot.mu.Unlock()
+	previous := slot.family
+	token, family, err := producer.StableOuterLeafResourceTokenForApply(registration, previous)
+	if err != nil {
+		token.Release()
+		if family != previous {
+			family.Release()
+		}
+		return nil, err
+	}
+	if family == nil || token == nil {
+		token.Release()
+		if family != previous {
+			family.Release()
+		}
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	slot.family = family
+	if family != previous {
+		previous.Release()
+	}
+	return token, nil
 }
 
 func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, namespace rootpublication.NamespaceOperation) (valuelog.StableResourceRegistration, error) {
@@ -141,7 +226,12 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 	if err != nil {
 		return err
 	}
-	token, err := stableWriter.StableResourceToken(registration)
+	var token *rootpublication.StableResourceToken
+	if capture.handoff != nil {
+		token, err = capture.handoff.capture(stableWriter, capture.lane, registration)
+	} else {
+		token, err = stableWriter.StableResourceToken(registration)
+	}
 	if err != nil {
 		return err
 	}

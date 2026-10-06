@@ -17541,10 +17541,14 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 }
 
 func (db *DB) appendValueLogForApply(l *lane, records []valuelog.Record, handoff *applyLeafTokenHandoff) ([]page.ValuePtr, error) {
+	if err := handoff.checkOpen(); err != nil {
+		return nil, err
+	}
 	capture := &stableOuterLeafCapture{db: db, lane: l, handoff: handoff}
 	ptrs, _, err := db.appendValueLogInternal(l, 0, nil, records, journalDurabilityNone, capture)
 	if err != nil {
 		capture.abandon()
+		handoff.release()
 	}
 	return ptrs, err
 }

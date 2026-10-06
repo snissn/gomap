@@ -5,6 +5,8 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,105 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type genericApplyFamilyWriter struct{ *valuelog.Writer }
+
+func TestCachingLeafPageLogApplyProducerFamilyUnknownWriterFallback(t *testing.T) {
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := valuelog.NewWriterWithStableResourcePinRegistry(filepath.Join(t.TempDir(), "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	epoch, err := writer.StableNamespaceParentGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := valuelog.StableResourceRegistration{Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "outer-leaf-0", Generation: 1, DiagnosticPath: "leaf/000001.vlog", Reachability: rootpublication.ReachabilityOuterLeafRawPointer, ParentGeneration: epoch, NamespaceOperation: rootpublication.NamespaceCreate, PinRegistry: registry}
+	handoff := &applyLeafTokenHandoff{}
+	defer handoff.release()
+	// The wrapper even promotes the new method. Interface presence alone must
+	// not select concrete writer-family authority for an unknown implementation.
+	token, err := handoff.capture(&genericApplyFamilyWriter{writer}, &lane{}, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handoff.families) != 0 {
+		t.Fatal("unknown writer wrapper gained family authority")
+	}
+	if err := token.ValidateStableNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	token.Release()
+	if registry.Stats().ActivePins != 0 {
+		t.Fatal("public fallback leaked pins")
+	}
+}
+
+func TestCachingLeafPageLogApplyProducerFamilyRepeatedFrontiers(t *testing.T) {
+	cached := openApplyHandoffCache(t)
+	cached.valueLogMaxSegmentBytes = 1 << 30 // Keep this witness on one real writer.
+	var tokens []*rootpublication.StableResourceToken
+	log, supported, err := newCachingLeafPageLog(cached, &cached.leafLog).(backenddb.LeafPageLogApplyTokenProvider).LeafPageLogForApply(func(_ []page.ValuePtr, incoming []*rootpublication.StableResourceToken) error {
+		tokens = append(tokens, incoming...)
+		return nil
+	}, func(*rootpublication.StableResourceSet) error { return errors.New("unexpected child") })
+	if err != nil || !supported {
+		t.Fatalf("factory=%v %v", supported, err)
+	}
+	defer func() {
+		if owner, ok := log.(interface{ ReleaseLeafPageLogApplyResources() }); ok {
+			owner.ReleaseLeafPageLogApplyResources()
+		}
+		for _, token := range tokens {
+			token.Release()
+		}
+	}()
+	leaf := buildSparseLeafPageForLeafLogTestWithTag(t, 'r')
+	if _, err := log.AppendLeafPage(leaf); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("first tokens=%d", len(tokens))
+	}
+	firstFrontier := tokens[0].Frontier().Bytes
+	if _, err := log.AppendLeafPage(leaf); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("second tokens=%d", len(tokens))
+	}
+	if err := tokens[0].WithPinnedFile(func(first *os.File) error {
+		return tokens[1].WithPinnedFile(func(second *os.File) error {
+			if first != second {
+				return errors.New("repeated same-writer captures reconstructed the physical handle instead of sharing its family")
+			}
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tokens[0].Frontier().Bytes != firstFrontier || tokens[1].Frontier().Bytes <= firstFrontier {
+		t.Fatal("frontiers are mutable or did not cover the second flushed append")
+	}
+	owner, ok := log.(interface{ ReleaseLeafPageLogApplyResources() })
+	if !ok {
+		t.Fatal("missing joined attempt owner")
+	}
+	owner.ReleaseLeafPageLogApplyResources()
+	if err := tokens[1].WithPinnedFile(func(f *os.File) error { _, err := f.Stat(); return err }); err != nil {
+		t.Fatalf("attempt release closed independent output: %v", err)
+	}
+	for _, token := range tokens {
+		token.Release()
+	}
+	if cached.valueLogIdentityPins.Stats().ActivePins != 0 {
+		t.Fatal("last certificate release leaked physical pins")
+	}
+	if _, err := log.AppendLeafPage(leaf); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("terminal attempt append=%v", err)
+	}
+}
 
 func openApplyHandoffCache(t *testing.T) *DB {
 	t.Helper()
@@ -145,6 +246,7 @@ func TestCachingLeafPageLogApplyTokenHandoffConcurrentPreparedLanes(t *testing.T
 	if tokens[0].Frontier().Bytes != frontier {
 		t.Fatal("later append changed immutable captured frontier")
 	}
+	log.(backenddb.LeafPageLogApplyResourceOwner).ReleaseLeafPageLogApplyResources()
 	set.Release()
 	if got := cached.valueLogIdentityPins.Stats().ActivePins; got != 0 {
 		t.Fatalf("final raw pins=%d want 0", got)
@@ -193,6 +295,7 @@ func TestCachingLeafPageLogApplyTokenHandoffFailureConsumesAndRetries(t *testing
 	if _, err := retry.AppendLeafPage(leaf); err != nil {
 		t.Fatal(err)
 	}
+	retry.(backenddb.LeafPageLogApplyResourceOwner).ReleaseLeafPageLogApplyResources()
 	builder.Abandon() // Simulate an optimistic conflict/abort after successful append.
 	if cached.valueLogIdentityPins.Stats().ActivePins != 0 {
 		t.Fatal("retry abort leaked pins")

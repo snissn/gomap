@@ -130,6 +130,21 @@ type LeafPageLogApplyTokenProvider interface {
 	LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error)
 }
 
+// LeafPageLogApplyResourceOwner releases private producer families after every
+// appender has joined. Output tokens independently retain their physical pins.
+// Call once on freeze or abandon; public stable APIs have no borrowed lifetime.
+type LeafPageLogApplyResourceOwner interface {
+	ReleaseLeafPageLogApplyResources()
+}
+
+func (l *leafPageLogWithRecordLengthHints) ReleaseLeafPageLogApplyResources() {
+	if l != nil {
+		if owner, ok := l.inner.(LeafPageLogApplyResourceOwner); ok {
+			owner.ReleaseLeafPageLogApplyResources()
+		}
+	}
+}
+
 func (l *leafPageLogWithRecordLengthHints) LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error) {
 	if l == nil {
 		return nil, false, nil

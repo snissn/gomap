@@ -832,6 +832,32 @@ continues to reject dictionary-dependent publication, including scanner fallback
 
 ### Apply-scoped caching leaf token handoff
 
+The concrete cached value-log writer can retain one physical producer family
+per selected lane within that same Apply owner. The first capture uses the full
+stable producer constructor. Repeated captures flush the actual same writer,
+validate its exact handle identity and retained namespace, and read its current
+file size to issue a new immutable frontier certificate. Ordinary pinned-view
+cloning alone cannot certify frontier growth. Each certificate acquires its own
+registry pin and shared-handle/namespace reference; it inherits no arbitrary
+caller callback or dictionary snapshot owner. A changed writer handle, file ID,
+or complete registration constructs a fresh family before releasing the old
+attempt reference. Rotation's closed/current authority remains independently
+captured, and final candidate membership still recaptures registered resources.
+
+The private view explicitly implements `LeafPageLogApplyResourceOwner`. Group
+and lane views share its bounded family slots, and record-length hint adapters
+forward that ownership. After all appenders join, freeze or abandon releases
+each attempt reference. Output certificates retain the exact physical handle
+independently until their existing builder/candidate ownership ends. Append
+failure closes the private owner; retry creates a new attempt. A terminal private
+view rejects further appends. Per-lane certificate operations remain independent,
+and release synchronizes with in-flight family operations. Public stable APIs
+still construct full owned resources on every call; unknown writer implementations
+use that original validated path. Dictionary/template capture, generation fences,
+durability barriers and final closure validation are unchanged. This reduces
+handle and namespace construction by current writer generations per attempt,
+while frontier validation and token ownership remain per append.
+
 The concrete caching outer-leaf producer explicitly implements
 `LeafPageLogApplyTokenProvider`. Its attempt-bound regular appenders, including
 prepared batches, ChildRefs and group lanes, deliver each append's raw tokens to
@@ -842,7 +868,7 @@ append path. Public stable APIs on an attempt-bound view still return complete
 owned resource sets.
 
 Each append retains the same writer preflight, namespace-creation certification,
-rotation capture and `StableResourceToken` flush. This is a token ownership
+rotation capture and the actual writer flush. This is a token ownership
 handoff. Each token's captured segment frontier remains immutable. The receiver
 checks all pointer generations and overflow-safe record ends, complete frontier
 coverage, raw resource kinds/reachability, and exact retained namespace bindings

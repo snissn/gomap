@@ -673,6 +673,47 @@ func (token *StableResourceToken) ValidateStableNamespace() error {
 	return token.namespace.validateStable()
 }
 
+// CertifyFlushedOuterLeafResource issues a new immutable byte certificate from
+// the authoritative producer's just-flushed exact handle. Unlike ordinary
+// clones, this boundary validates physical identity and reads the new frontier.
+// It only supports raw outer-leaf families without caller lifetime callbacks.
+// The caller serializes the writer and retains token through this operation.
+func (token *StableResourceToken) CertifyFlushedOuterLeafResource(file *os.File) (*StableResourceToken, error) {
+	if token == nil || token.released.Load() || file == nil {
+		return nil, ErrResourceOwnership
+	}
+	if token.kind != ResourceOuterLeafLog || token.reachability != ReachabilityOuterLeafRawPointer ||
+		token.identityPin == nil || token.onRelease != nil || token.onLastPinnedRelease != nil ||
+		token.directory != nil || token.hasSyncedFrontier || token.digest != ([32]byte{}) ||
+		len(token.logicalObligations) != 0 || token.frontier != (DurableFrontier{Bytes: token.frontier.Bytes}) {
+		return nil, fmt.Errorf("%w: unsupported outer-leaf producer family", ErrUnresolvedResource)
+	}
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if identity.Generation != 0 && identity.Generation != token.generation {
+		return nil, fmt.Errorf("%w: outer-leaf producer generation changed", ErrResourceConflict)
+	}
+	identity.Generation = token.generation
+	if identity != token.identity {
+		return nil, fmt.Errorf("%w: outer-leaf producer handle changed", ErrResourceConflict)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() < 0 || uint64(info.Size()) < token.frontier.Bytes {
+		return nil, fmt.Errorf("%w: outer-leaf producer frontier regressed", ErrResourceConflict)
+	}
+	if err := token.ValidateStableNamespace(); err != nil {
+		return nil, err
+	}
+	frontier := cloneDurableFrontier(token.frontier)
+	frontier.Bytes = uint64(info.Size())
+	return token.cloneSharedPinned(token.logicalLane, token.resourceID, token.diagnosticPath, frontier, token.reachability, token.logicalObligations, nil)
+}
+
 func (token *StableResourceToken) Kind() ResourceKind       { return token.kind }
 func (token *StableResourceToken) LogicalLane() string      { return token.logicalLane }
 func (token *StableResourceToken) ResourceID() string       { return token.resourceID }

@@ -1096,6 +1096,71 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 	return w.stableResourceTokenAfterFlush(registration)
 }
 
+// StableOuterLeafResourceFamily is owned by one joined private Apply attempt.
+// It keeps one exact current writer generation, never a history of captures.
+// Writer serialization and attempt join precede capture and Release respectively.
+type StableOuterLeafResourceFamily struct {
+	writer       *Writer
+	file         *os.File
+	fileID       uint32
+	registration StableResourceRegistration
+	token        *rootpublication.StableResourceToken
+	frontier     uint64
+}
+
+func (family *StableOuterLeafResourceFamily) Release() {
+	if family != nil {
+		family.token.Release()
+		family.token = nil
+	}
+}
+
+// StableOuterLeafResourceTokenForApply retains physical ownership across repeated
+// captures, but obtains every frontier from this writer's actual flushed file.
+// The caller owns returned tokens independently and releases replaced families.
+func (w *Writer) StableOuterLeafResourceTokenForApply(registration StableResourceRegistration, family *StableOuterLeafResourceFamily) (*rootpublication.StableResourceToken, *StableOuterLeafResourceFamily, error) {
+	if w == nil || w.f == nil {
+		return nil, family, rootpublication.ErrResourceOwnership
+	}
+	if registration.Kind != rootpublication.ResourceOuterLeafLog || registration.Reachability != rootpublication.ReachabilityOuterLeafRawPointer || registration.Digest != ([32]byte{}) || len(registration.ExternalRIDs) != 0 {
+		return nil, family, rootpublication.ErrUnresolvedResource
+	}
+	if err := w.bindStableResourcePinRegistry(&registration); err != nil {
+		return nil, family, err
+	}
+	if family != nil && family.token == nil {
+		return nil, family, rootpublication.ErrResourceOwnership
+	}
+	if family == nil || family.writer != w || family.file != w.f || family.fileID != w.fileID || !sameStableResourceRegistration(family.registration, registration) {
+		base, err := w.StableResourceToken(registration)
+		if err != nil {
+			return nil, family, err
+		}
+		next := &StableOuterLeafResourceFamily{writer: w, file: w.f, fileID: w.fileID, registration: cloneStableResourceRegistration(registration), token: base}
+		token, err := base.CertifyFlushedOuterLeafResource(w.f)
+		if err != nil {
+			next.Release()
+			return nil, family, err
+		}
+		next.frontier = token.Frontier().Bytes
+		return token, next, nil
+	}
+	if err := w.Flush(); err != nil {
+		return nil, family, err
+	}
+	token, err := family.token.CertifyFlushedOuterLeafResource(w.f)
+	if err != nil {
+		return nil, family, err
+	}
+	frontier := token.Frontier().Bytes
+	if frontier < family.frontier {
+		token.Release()
+		return nil, family, fmt.Errorf("%w: Apply writer frontier regressed", rootpublication.ErrResourceConflict)
+	}
+	family.frontier = frontier
+	return token, family, nil
+}
+
 func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
 	return w.stableResourceTokenAfterFlushWithContentState(registration, false)
 }

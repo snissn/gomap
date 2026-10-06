@@ -15,9 +15,10 @@ import (
 // share this builder. Aborted/conflicting applies abandon it; successful applies
 // transfer the frozen set through the existing finalize ownership boundary.
 type applyLeafResourceCapture struct {
-	mu           sync.Mutex
-	builder      *rootpublication.StableResourceSetBuilder
-	dictionaries applyLeafDictionaryCapture
+	mu             sync.Mutex
+	builder        *rootpublication.StableResourceSetBuilder
+	dictionaries   applyLeafDictionaryCapture
+	producerOwners []LeafPageLogApplyResourceOwner
 }
 
 type applyLeafResourceLog struct {
@@ -55,6 +56,11 @@ func bindApplyLeafResourceLog(log LeafPageLog, capture *applyLeafResourceCapture
 				return nil, rootpublication.ErrResourceOwnership
 			}
 			result.direct = direct
+			if owner, ok := direct.(LeafPageLogApplyResourceOwner); ok {
+				capture.mu.Lock()
+				capture.producerOwners = append(capture.producerOwners, owner)
+				capture.mu.Unlock()
+			}
 		}
 	}
 	return result, nil
@@ -304,8 +310,19 @@ func (l *applyLeafResourceLog) LeafPageLogLaneAny(worker int) (any, bool) {
 func (l *applyLeafResourceLog) Flush() error { return l.inner.Flush() }
 func (l *applyLeafResourceLog) Sync() error  { return l.inner.Sync() }
 
+func (capture *applyLeafResourceCapture) releaseProducerOwners() {
+	capture.mu.Lock()
+	owners := capture.producerOwners
+	capture.producerOwners = nil
+	capture.mu.Unlock()
+	for _, owner := range owners {
+		owner.ReleaseLeafPageLogApplyResources()
+	}
+}
+
 func (l *applyLeafResourceLog) abandon() {
 	if l != nil {
+		l.capture.releaseProducerOwners()
 		l.capture.dictionaries.release()
 	}
 	if l != nil && l.capture.builder != nil {
@@ -321,6 +338,7 @@ func (l *applyLeafResourceLog) freeze() (*rootpublication.StableResourceSet, err
 	if l.capture.builder == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
+	defer l.capture.releaseProducerOwners()
 	defer l.capture.dictionaries.release()
 	resources, err := l.capture.builder.Freeze()
 	if err != nil {
