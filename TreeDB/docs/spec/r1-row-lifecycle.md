@@ -151,3 +151,95 @@ debt. A successful no-op, blocked remap or reader release must not be counted as
 reclaimed storage. Preserve failed and partial runs, unsupported comparison
 cells, fixture equality, cache/durability settings and provenance. Final cost
 and sustained capacity acceptance remain pending that retained evidence.
+
+## Source-bound standalone capture
+
+`scripts/r1_lifecycle_capture.sh` produces a `gomap-r1-lifecycle-packet-v1`
+packet, raw build and process logs, the test binary, exact source manifests,
+actual Go/CGO/build/environment/host/load identities, and `summary.md`. Defaults
+are five fresh OS processes, each with five final epochs, 4,096 documents and
+1,024 calls per epoch. Processes run sequentially. No concurrent writer or
+comparator runs in this diagnostic. The caller must provide an otherwise quiet
+runner; actual before/after load and CPU affinity are retained rather than
+assuming an idle host. Spread across final process results is descriptive and
+supplies no automatic capacity threshold.
+
+The fixture is frozen by the compiled `r1MutationRow5059` recipe and a SHA-256
+of its ascending-ID JSON rows (newline delimited), not assumed equal to the
+#5057 fixture. Load batches contain 32 rows. The deterministic ordinal stride
+is 37; there is no random seed. Each eight-call block performs ordinary get,
+fresh-view prepared get, indexed update, native replacement, delete, native
+insert, native upsert, and post-upsert ordinary get once each. Recorded actual
+counts must equal epochs × calls/epoch, with each operation exactly one eighth
+of the total. The live population is restored after every delete/insert pair.
+Environment dimensions `GOMAP_R1_LIFECYCLE_DOCUMENTS` (multiple of 32) and
+`GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH` (multiple of 8) support bounded rehearsals;
+each must lie between its multiple and 1,048,576. Retained capture accepts only
+the default dimensions, exactly five epochs and at least five repetitions.
+
+The benchmark emits one `gomap-r1-lifecycle-result-v1` JSON marker per Go
+benchmark invocation. Go's initial one-epoch calibration is preserved in raw
+logs, validated, and excluded from final process summaries. The final requested
+epoch result must exist exactly once and agree with Go's printed metrics.
+A one-epoch rehearsal emits one result. Phase component inventories, heap
+samples, checkpoint/maintenance times, actual overlay results, typed and
+value-log deletion/retention/debt are retained for every final epoch. File sizes
+are logical lengths. Maintenance no-ops remain visible. The benchmark's
+ordinary value-log GC is measured here; the separate correctness tests exercise
+typed rewrite/remap and lawful reclaimed-segment proof.
+
+Per-call latency starts after ordinal/ID/current-row preparation and includes
+caller encoding, callback work, full-row decoding/oracle and mutation-map
+bookkeeping. Epoch ns/op also includes ID preparation, latency sample insertion
+and operation-count bookkeeping. Loop allocation deltas cover the whole call
+loop. Sample storage is preallocated before timing. Full phase row/posting
+oracles, storage walks, checkpoint and maintenance are outside both call and
+epoch timers. Prepared reads include opening/closing their own view, not warmed
+reuse. The post-GC heap snapshot deliberately keeps `want`, `known`, `captured`
+and latency samples alive; it includes these diagnostic objects. Heap high is
+sampled only at epoch boundaries. RSS, allocated blocks and unsampled peaks
+remain unavailable.
+
+Lifecycle harness identity binds **all compiled collection test files** from
+`go list` (including fixture/oracle helpers and external-package tests), the
+capture/validator/tests, and the imported reviewed #5057 source helper. Runtime
+identity reuses that helper's committed production blob inventory and also
+hashes actual working-file bytes. Before/after equality covers committed and
+actual runtime, lifecycle harness, cleanliness and binary bytes. Docs and
+artifacts do not enter runtime/harness identities. A provisional #5057 source
+helper change requires a refreshed lifecycle harness freeze; its identity is
+not assumed permanent. External modules bind through go.sum and binary build
+information; compiler/CGO configuration is retained separately.
+
+Small pre-review rehearsal, explicitly nonqualifying:
+
+```sh
+scripts/r1_lifecycle_capture.sh --qualification rehearsal \
+  --out /tmp/r1-lifecycle-rehearsal --repetitions 2 --epochs 2 \
+  --documents 32 --calls-per-epoch 8
+R1_LIFECYCLE_TEST_PACKET=/tmp/r1-lifecycle-rehearsal/packet.json \
+  python3 scripts/r1_lifecycle_validate_test.py -v
+python3 scripts/r1_lifecycle_validate.py /tmp/r1-lifecycle-rehearsal/packet.json
+```
+
+After independent focused review and landing, freeze the accepted product and
+harness source and supply `--qualification retained --source-commit SHA
+--runtime-sha256 HASH --harness-sha256 HASH --landed-tooling-commit SHA
+--review-url https://github.com/... --out /durable/new-directory`. The capture
+checks the declared landed tooling commit is an ancestor of the measured clean
+source; coordinator review verifies the declaration against actual landing.
+Defaults supply the retained five-by-five dimensions. A distinct output directory
+is mandatory and must be outside the source checkout. Binary and raw logs are
+retained for independent validation. Failed/partial builds or processes keep
+their existing output and cannot produce a successful summary.
+
+Validation rejects changed/malformed source manifests, binary/raw hash drift,
+failed processes, missing metrics or phases, calibration/final confusion,
+incorrect operation or epoch denominators, and relabeled tiny rehearsals.
+`--expected-runtime`, `--expected-harness` and `--expected-commit` additionally
+bind a packet to the coordinator's independently frozen identities. The real
+rehearsal rejection suite deliberately alters raw semantic values and rebinds
+raw checksums, so those failures exercise the semantic gate. This packet is
+standalone lifecycle evidence and is neither a #5057 comparator packet nor a
+benchprof profile input. Review and landing still precede expensive collection;
+a valid rehearsal does not satisfy retained acceptance.

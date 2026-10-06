@@ -2,14 +2,17 @@ package collections
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +21,26 @@ import (
 )
 
 // This is standalone diagnostic tooling, not a comparator or a retained R1
-// packet. Freeze reviewed/landed tooling and the accepted final base before
-// retained capture. B/op and allocs/op use epochs of 1024 public calls.
+// comparator packet. Freeze reviewed/landed tooling before retained capture.
+// B/op and allocs/op use epochs of callsPerEpoch public calls.
 func BenchmarkR1Lifecycle5060(b *testing.B) {
 	requireStandaloneColumnProductionAuthorityTest(b)
-	const documents, callsPerEpoch = 4096, 1024
+	documents := r1LifecycleDimension5060(b, "DOCUMENTS", 4096, 32)
+	callsPerEpoch := r1LifecycleDimension5060(b, "CALLS_PER_EPOCH", 1024, 8)
+	result := r1LifecycleResult5060{Schema: "gomap-r1-lifecycle-result-v1", Epochs: b.N, Documents: documents, CallsPerEpoch: callsPerEpoch}
+	result.PID, result.GOMAXPROCS = os.Getpid(), runtime.GOMAXPROCS(0)
+	operations := []string{"ordinary_get", "prepared_get", "indexed_update", "typed_replace", "delete", "typed_insert", "typed_upsert", "post_upsert_get"}
+	result.Operations = make(map[string]uint64, len(operations))
 	_, db, col := r1MutationOpen5059(b, true)
 	defer func() { _ = db.Close() }()
 	want, known := make(map[string]map[string]any, documents), r1MutationKnown5059()
+	fixture := sha256.New()
 	for start := 0; start < documents; start += 32 {
 		rows := make([]map[string]any, 32)
 		for i := range rows {
 			rows[i] = r1MutationRow5059(start + i)
+			fixture.Write(r1MutationJSON5059(b, rows[i]))
+			fixture.Write([]byte{'\n'})
 			want[rows[i]["id"].(string)] = rows[i]
 		}
 		ids, retained, columns := r1MutationBatch5059(b, rows...)
@@ -49,9 +60,10 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		captured[id] = r1MutationCopy5059(row)
 	}
 	r1LifecycleAssert5060(b, held, captured, known)
-	r1LifecycleCensus5060(b, db.Dir(), "ingest")
+	result.FixtureSHA256 = fmt.Sprintf("%x", fixture.Sum(nil))
+	result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "ingest"))
 
-	samples := make([]int64, 0, callsPerEpoch)
+	samples := make([]int64, 0, callsPerEpoch*b.N)
 	var heapHigh, loopBytes, loopAllocs, apiElapsed, totalCalls uint64
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -155,6 +167,7 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			samples = append(samples, int64(elapsed))
 			apiElapsed += elapsed
 			totalCalls++
+			result.Operations[operations[(call/2)%4*2+call%2]]++
 		}
 		b.StopTimer()
 		var after runtime.MemStats
@@ -166,13 +179,14 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		if epoch == 0 {
 			r1LifecycleAssert5060(b, held, captured, known)
 		}
-		r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("churn-%d", epoch))
+		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("churn-%d", epoch)))
 		started := time.Now()
 		if err := db.Checkpoint(); err != nil {
 			b.Fatal(err)
 		}
-		b.Logf("epoch=%d checkpoint_ns=%d", epoch, time.Since(started).Nanoseconds())
-		r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("checkpoint-%d", epoch))
+		checkpointNS := time.Since(started).Nanoseconds()
+		b.Logf("epoch=%d checkpoint_ns=%d", epoch, checkpointNS)
+		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("checkpoint-%d", epoch)))
 		started = time.Now()
 		compact, err := col.CompactRootOverlays(context.Background())
 		if err != nil {
@@ -186,9 +200,11 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		b.Logf("epoch=%d maintenance_ns=%d overlay=%+v typed_deleted=%d typed_retained=%d typed_rewrite_debt=%d vlog_deleted=%d vlog_pending=%d vlog_retained=%d", epoch, time.Since(started).Nanoseconds(), compact, gc.SegmentsDeleted, gc.BytesRetained, gc.Plan.RewriteDebtBytes, vlog.SegmentsDeleted, vlog.SegmentsPending, vlog.BytesReferenced+vlog.BytesProtected)
+		maintenanceNS := time.Since(started).Nanoseconds()
+		b.Logf("epoch=%d maintenance_ns=%d overlay=%+v typed_deleted=%d typed_retained=%d typed_rewrite_debt=%d vlog_deleted=%d vlog_pending=%d vlog_retained=%d", epoch, maintenanceNS, compact, gc.SegmentsDeleted, gc.BytesRetained, gc.Plan.RewriteDebtBytes, vlog.SegmentsDeleted, vlog.SegmentsPending, vlog.BytesReferenced+vlog.BytesProtected)
+		result.Maintenance = append(result.Maintenance, r1LifecycleMaintenanceRecord5060{Epoch: epoch, CheckpointNS: checkpointNS, MaintenanceNS: maintenanceNS, Overlay: compact, TypedDeleted: uint64(gc.SegmentsDeleted), TypedRetained: uint64(gc.BytesRetained), TypedRewriteDebt: uint64(gc.Plan.RewriteDebtBytes), VlogDeleted: uint64(vlog.SegmentsDeleted), VlogPending: uint64(vlog.SegmentsPending), VlogRetained: uint64(vlog.BytesReferenced + vlog.BytesProtected)})
 		r1LifecycleCurrent5060(b, col, want, known)
-		r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("maintenance-%d", epoch))
+		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("maintenance-%d", epoch)))
 		if epoch == 0 {
 			r1LifecycleAssert5060(b, held, captured, known)
 			if err := held.Close(); err != nil {
@@ -200,7 +216,7 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); err != nil {
 				b.Fatal(err)
 			}
-			r1LifecycleCensus5060(b, db.Dir(), "after_view_release")
+			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "after_view_release"))
 		}
 		b.StartTimer()
 	}
@@ -224,17 +240,29 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		b.Fatal(err)
 	}
 	r1LifecycleCurrent5060(b, col, want, known)
-	r1LifecycleCensus5060(b, dir, "reopen")
+	result.Census = append(result.Census, r1LifecycleCensus5060(b, dir, "reopen"))
 	runtime.GC()
 	var retained runtime.MemStats
 	runtime.ReadMemStats(&retained)
+	runtime.KeepAlive(want)
+	runtime.KeepAlive(known)
+	runtime.KeepAlive(captured)
+	runtime.KeepAlive(samples)
 	b.ReportMetric(float64(retained.HeapAlloc), "process-retained-heap-B")
+	result.TotalCalls, result.CallNS, result.LoopBytes, result.LoopAllocs = totalCalls, apiElapsed, loopBytes, loopAllocs
+	result.P95NS, result.P99NS = uint64(samples[(len(samples)-1)*95/100]), uint64(samples[(len(samples)-1)*99/100])
+	result.SampledHeapHigh, result.ProcessRetainedHeap = heapHigh, retained.HeapAlloc
+	raw, err := json.Marshal(result)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Logf("R1_LIFECYCLE_RESULT %s", raw)
 	b.Log("heap high is sampled after each call epoch, not an exact peak; retained heap includes benchmark oracle and latency samples; RSS and unsampled peak unavailable; timings/allocations include caller encoding and oracle bookkeeping; maintenance and phase oracle excluded from call timers")
 }
 
 // Logical lengths, not allocated blocks; the walk includes every regular file
 // once and preserves unknown files as other rather than silently dropping them.
-func r1LifecycleCensus5060(b *testing.B, dir, phase string) {
+func r1LifecycleCensus5060(b *testing.B, dir, phase string) r1LifecycleCensusRecord5060 {
 	b.Helper()
 	bytes, files := make(map[string]int64), make(map[string]int)
 	for _, component := range []string{"index", "persistent_vlog", "persistent_leaf_log", "typed_assets", "redo_wal", "other"} {
@@ -280,4 +308,62 @@ func r1LifecycleCensus5060(b *testing.B, dir, phase string) {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	b.Logf("phase=%s process_heap_alloc=%d heap_inuse=%d heap_objects=%d num_gc=%d (sampled, no forced GC)", phase, memory.HeapAlloc, memory.HeapInuse, memory.HeapObjects, memory.NumGC)
+	return r1LifecycleCensusRecord5060{Phase: phase, LogicalBytes: bytes, RegularFiles: files, HeapAlloc: memory.HeapAlloc, HeapInuse: memory.HeapInuse, HeapObjects: memory.HeapObjects, NumGC: memory.NumGC}
+}
+
+func r1LifecycleDimension5060(b *testing.B, suffix string, fallback, multiple int) int {
+	b.Helper()
+	key := "GOMAP_R1_LIFECYCLE_" + suffix
+	if value := os.Getenv(key); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < multiple || n%multiple != 0 || n > 1<<20 {
+			b.Fatalf("%s must be a multiple of %d in [%d,1048576]", key, multiple, multiple)
+		}
+		return n
+	}
+	return fallback
+}
+
+type r1LifecycleResult5060 struct {
+	PID                 int                                `json:"pid"`
+	GOMAXPROCS          int                                `json:"gomaxprocs"`
+	Schema              string                             `json:"schema"`
+	Epochs              int                                `json:"epochs"`
+	Documents           int                                `json:"documents"`
+	CallsPerEpoch       int                                `json:"calls_per_epoch"`
+	FixtureSHA256       string                             `json:"fixture_sha256"`
+	TotalCalls          uint64                             `json:"total_calls"`
+	CallNS              uint64                             `json:"call_ns"`
+	LoopBytes           uint64                             `json:"loop_bytes"`
+	LoopAllocs          uint64                             `json:"loop_allocs"`
+	P95NS               uint64                             `json:"p95_ns"`
+	P99NS               uint64                             `json:"p99_ns"`
+	SampledHeapHigh     uint64                             `json:"sampled_heap_high_bytes"`
+	ProcessRetainedHeap uint64                             `json:"process_retained_heap_bytes"`
+	Census              []r1LifecycleCensusRecord5060      `json:"census"`
+	Maintenance         []r1LifecycleMaintenanceRecord5060 `json:"maintenance"`
+	Operations          map[string]uint64                  `json:"operations"`
+}
+
+type r1LifecycleCensusRecord5060 struct {
+	Phase        string           `json:"phase"`
+	LogicalBytes map[string]int64 `json:"logical_bytes"`
+	RegularFiles map[string]int   `json:"regular_files"`
+	HeapAlloc    uint64           `json:"heap_alloc"`
+	HeapInuse    uint64           `json:"heap_inuse"`
+	HeapObjects  uint64           `json:"heap_objects"`
+	NumGC        uint32           `json:"num_gc"`
+}
+
+type r1LifecycleMaintenanceRecord5060 struct {
+	Epoch            int    `json:"epoch"`
+	CheckpointNS     int64  `json:"checkpoint_ns"`
+	MaintenanceNS    int64  `json:"maintenance_ns"`
+	Overlay          any    `json:"overlay"`
+	TypedDeleted     uint64 `json:"typed_deleted_segments"`
+	TypedRetained    uint64 `json:"typed_retained_bytes"`
+	TypedRewriteDebt uint64 `json:"typed_rewrite_debt_bytes"`
+	VlogDeleted      uint64 `json:"vlog_deleted_segments"`
+	VlogPending      uint64 `json:"vlog_pending_segments"`
+	VlogRetained     uint64 `json:"vlog_retained_bytes"`
 }
