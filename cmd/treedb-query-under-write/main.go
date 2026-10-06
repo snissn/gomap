@@ -571,7 +571,7 @@ func runArgs(parent context.Context, args []string, output io.Writer) (runErr er
 	pacedInserts := flags.Int("paced-inserts", 6, "paced-window distinct ordinary insert slots, 1..10")
 	mixedProfile := flags.String("mixed-profile", "", "optional changing-top10 profile; omitted preserves invariant top10")
 	mixedOriginals := flags.Int("mixed-originals", 6, "mixed-window total serial originals, 6..63; default6")
-	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window serial writer interval1s..8s; (originals-1)*interval+2*rpc-timeout must fit the window")
+	mixedInterval := flags.Duration("mixed-interval", 5*time.Second, "mixed-window serial writer interval1s..8s; (originals-1)*max(interval,2*rpc-timeout)+2*rpc-timeout must fit the window")
 	pacedInterval := flags.Duration("paced-interval", 5*time.Second, "paced-window minimum interval between serial insert invocation starts")
 	if err := flags.Parse(args); err != nil {
 		return err

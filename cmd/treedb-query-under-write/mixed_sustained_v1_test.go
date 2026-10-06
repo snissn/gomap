@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -25,7 +26,8 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 		rpc       time.Duration
 		want      bool
 	}{
-		{"planned-58", 58, 300 * time.Second, 3 * time.Second, true},
+		{"superseded-58", 58, 300 * time.Second, 3 * time.Second, false},
+		{"planned-48", 48, 300 * time.Second, 3 * time.Second, true},
 		{"maximum-63", 63, 300 * time.Second, time.Second, true},
 		{"default-six", 6, time.Minute, 3 * time.Second, true},
 		{"too-few", 5, time.Minute, 3 * time.Second, false},
@@ -37,7 +39,9 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := base
 			o.Window.Duration, o.Window.Admission.RPCTimeout = tc.duration, tc.rpc
-			if tc.name == "maximum-63" {
+			if tc.name == "planned-48" {
+				o.Interval = 6 * time.Second
+			} else if tc.name == "maximum-63" {
 				o.Interval = 4 * time.Second
 			}
 			if err := json.Unmarshal([]byte(fmt.Sprintf(`{"Originals":%d}`, tc.originals)), &o); err != nil {
@@ -51,6 +55,88 @@ func TestMixedSustainedAdmissionV1(t *testing.T) {
 	// Extending mixed duration must not extend the ordinary read-window mode.
 	if err := windowValidate(base.Window); err == nil {
 		t.Fatal("ordinary read-window accepted 300 seconds")
+	}
+}
+
+func TestMixedCumulativeRPCBudgetV1(t *testing.T) {
+	base := mixedOptions{Window: windowOptions{Admission: recallOptions{Timeout: 10 * time.Minute, RPCTimeout: 3 * time.Second}, Concurrency: 1, Warmup: 64, MaxAttempts: 65536, OutputBytes: 128 << 20, Duration: 300 * time.Second}, Interval: 5 * time.Second}
+	for _, tc := range []struct {
+		name      string
+		originals int
+		window    time.Duration
+		interval  time.Duration
+		rpc       time.Duration
+		wantOK    bool
+	}{
+		{"superseded-58-needs348s", 58, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"revised-48-leaves12s", 48, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
+		{"revised-48-interval6s", 48, 300 * time.Second, 6 * time.Second, 3 * time.Second, true},
+		{"49-leaves6s", 49, 300 * time.Second, 5 * time.Second, 3 * time.Second, true},
+		{"50-has-no-headroom", 50, 300 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"48-at-cumulative-equality", 48, 288 * time.Second, 5 * time.Second, 3 * time.Second, false},
+		{"spacing-dominates", 58, 300 * time.Second, 5 * time.Second, 2500 * time.Millisecond, true},
+		{"spacing-equality", 58, 290 * time.Second, 5 * time.Second, 2500 * time.Millisecond, false},
+		{"omitted-six-needs120s", 0, time.Minute, 5 * time.Second, 10 * time.Second, false},
+		{"explicit-six-needs120s", 6, time.Minute, 5 * time.Second, 10 * time.Second, false},
+		{"six-at-cumulative-equality", 6, time.Minute, 5 * time.Second, 5 * time.Second, false},
+		{"six-feasible-rpc", 6, time.Minute, 5 * time.Second, 3 * time.Second, true},
+		{"six-spacing-dominates", 6, time.Minute, 8 * time.Second, 3 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := base
+			o.Originals, o.Window.Duration, o.Interval, o.Window.Admission.RPCTimeout = tc.originals, tc.window, tc.interval, tc.rpc
+			if err := mixedValidate(o); (err == nil) != tc.wantOK {
+				t.Fatalf("originals%d window%v interval%v rpc%v: %v", tc.originals, tc.window, tc.interval, tc.rpc, err)
+			}
+		})
+	}
+	var output bytes.Buffer
+	err := runArgs(context.Background(), []string{"-mode", "mixed-window", "-mixed-originals", "58", "-read-window", "300s", "-mixed-interval", "5s", "-rpc-timeout", "3s", "-timeout", "420s", "-read-concurrency", "1"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "positive headroom") {
+		t.Fatalf("cumulative budget must refuse before input or network access: %v", err)
+	}
+}
+
+func TestMixedRejectedAdmissionReportsRequestedCampaignV1(t *testing.T) {
+	for _, originals := range []int{0, 6, 58, 63} {
+		for _, profile := range []string{"", mixedProfileChangingTop10} {
+			t.Run(fmt.Sprintf("originals%d-profile%s", originals, profile), func(t *testing.T) {
+				o := mixedOptions{Originals: originals, Profile: profile, Window: windowOptions{Admission: recallOptions{Timeout: 10 * time.Minute, RPCTimeout: 3 * time.Second}, Concurrency: 1, Warmup: 64, MaxAttempts: 65536, OutputBytes: 128 << 20, Duration: time.Second}, Interval: 5 * time.Second}
+				var output bytes.Buffer
+				if err := runMixedWindow(context.Background(), o, &output); err == nil || !strings.Contains(err.Error(), "final slot") {
+					t.Fatalf("want admission headroom refusal, got %v", err)
+				}
+				var event struct {
+					Event  string
+					Report mixedReport
+				}
+				decoder := json.NewDecoder(&output)
+				if err := decoder.Decode(&event); err != nil {
+					t.Fatal(err)
+				}
+				r := &event.Report
+				want := mixedOriginalCount(originals)
+				if event.Event != "result" || r.Verdict != "FAILED" || r.Error == "" || r.WriteCounts.Planned != want || r.WriteCounts.Unissued != want || r.WriteCounts.Attempted != 0 || len(r.Writes) != 0 {
+					t.Fatalf("failed campaign accounting: event%q report%+v", event.Event, r)
+				}
+				if r.Profile != profile || r.RequestedDuration != o.Window.Duration || r.PaceInterval != o.Interval {
+					t.Fatalf("requested campaign metadata lost: %+v", r)
+				}
+				if want > 6 {
+					if r.Originals != want || strings.Contains(r.Scope+r.Schedule+r.LatencyBasis+r.AuthorityBoundary, "six") {
+						t.Fatalf("extended campaign mislabeled: %+v", r)
+					}
+				} else if r.Originals != 0 || !strings.Contains(r.Schedule, "six") {
+					t.Fatalf("default six report changed: %+v", r)
+				}
+				if profile == mixedProfileChangingTop10 && !strings.Contains(r.Scope, "changing") {
+					t.Fatalf("changing profile missing from scope: %q", r.Scope)
+				}
+				if err := decoder.Decode(&event); err != io.EOF {
+					t.Fatalf("admission failure emitted extra output: %v", err)
+				}
+			})
+		}
 	}
 }
 

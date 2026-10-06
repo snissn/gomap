@@ -117,10 +117,15 @@ The separate [`treedb-query-under-write` mixed driver](../../../cmd/treedb-query
 preserves its six-original/60s default. Its optional extended mode admits 6..63
 originals and at most 300s, with all native full-population prefix truths frozen
 before mixed activation and all original outcomes audited on all four live
-voters before the first stop. The planned qualification is C1, 300s, 58
-originals at minimum 5s spacing, 3s RPC budgets, 64 warmups, 65536 measured
-attempts and 128MiB retained-output budget. These are proposed bounds, not an
-achieved rate or evidence that resource caps fit.
+voters before the first stop. The revised qualification is C1, 300s, 48
+originals at explicit6s spacing, 3s per-RPC budgets, 49 native prefixes, 64
+warmups, 65536 measured attempts and128MiB retained-output budget. Admission
+requires `(N-1)*max(interval,2*rpc-timeout)+2*rpc-timeout < window` for the
+serial write-plus-visibility pairs. The superseded58/300s/5s/3s proposal needs348s;
+the revised workload needs288s, leaving12s arithmetic headroom and ideal starts
+through282s. These are proposed bounds, not an achieved rate or evidence that
+resource caps fit. The six/60s defaults remain, but mixed mode must explicitly
+use a feasible RPC budget rather than the shared10s default.
 
 Use fresh stores, credentials, actual sealed input/oracles and reviewed
 source/ELF/image/collector pins. Initial and final complete source populations
