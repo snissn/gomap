@@ -191,8 +191,8 @@ bounded grace; Go's benchmark timeout alone is insufficient. Child elapsed,
 CPU and maximum RSS exclude collector postchecks and hashing. RSS is Linux
 wait4 ru_maxrss in KiB and covers setup/Close, separately from Go timed B/op.
 
-The offline analyzer binds accepted build receipts, all eleven provenance
-artifacts (including Git-object source authority and Go tool inventory), source manifests, scripts,
+The offline analyzer binds accepted build receipts, all twelve provenance
+artifacts (including pre-build selected inputs, Git-object source authority and Go tool inventory), source manifests, scripts,
 raw streams, exact schedule and equal
 declared logical work. It retains all six measured samples per variant and
 three cycle means and makes a descriptive comparison, with no statistical
