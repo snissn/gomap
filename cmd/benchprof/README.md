@@ -674,6 +674,20 @@ produces a `gomap-r1-row-v1` packet and summary through
 `scripts/r1_collection_capture.sh`. These dedicated workload artifacts are not
 benchprof inputs and do not change the unified-bench profile filename contract.
 
+The [R1 mutation width and request-size sweep](../collection_workload_bench/README.md#r1-mutation-width-and-request-size-sweep)
+uses `R1_MODE=r1-mutation-sweep scripts/r1_collection_capture.sh` and the separate
+`gomap-r1-mutation-sweep-v1` packet. A nonqualifying rehearsal uses
+`-documents 32 -operations 2 -repetitions 1 -qualification rehearsal`.
+It measures public cached durable acknowledgement costs and separate flush
+counters across field widths and actual mutation request sizes. Its JSON,
+source manifest and validator output are separate from benchprof inputs;
+profile filenames and parsers are unchanged.
+The producer's `r1-mutation-sweep-validate -semantic-only` result is always
+`UNQUALIFIED`. Retained replay requires independent source, exact landing,
+executing-binary and original-packet receipt pins; see the linked sweep contract
+for all six required flags. Recorded physical file-sync calls must cover the
+serial requests and written WAL bytes must be positive.
+
 Native capture build provenance uses two separate maps. `source-bindings.json`
 is the offline Go/module/policy/driver preflight map. The drivers also require
 `gomap-in-repo-build-inputs-v2`: exact-tool/environment/tag/race `go list -deps
