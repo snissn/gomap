@@ -331,6 +331,8 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// The R1 user guide names the retained public logical compaction API.
+	{path: "TreeDB/docs/guides/typed-row-store.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// R1 logical folding measures the retained public compaction API.
 	{path: "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/docs/spec/r1-row-lifecycle.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
