@@ -27,13 +27,18 @@ performance acceptance evidence.
 
 ## Capability matrix at the starting source
 
+This matrix records the frozen pre-repair baseline. The supported repaired
+ordinary point and complete bounded-range behavior is specified in
+[R1 complete-row reads](r1-row-reads.md). Retain the starting residual-only range
+rejection rather than treating that incomplete output as an equivalent cost.
+
 | Capability | Retained JSON / template-v1 / BSON | Typed row plus residual JSON | SQLite comparator |
 |---|---|---|---|
 | Authoritative stored fields | Complete retained document | Required non-null strings in `typed_row_asset`; remaining fields in residual JSON | Complete JSON document, or native string columns plus residual JSON |
 | Complete owned point output | `GetInto`; decode stored template/BSON to ordinary JSON | `GetInto` reconstructs declared fields | SQL select owns complete result bytes |
 | Complete prepared batch output | `CollectionReadView.FetchDocumentsByID`; template/BSON conversion included | Same API reconstructs owned complete JSON and reports locator/materialization work | Prepared `IN` select; native fields reconstruct complete JSON |
 | Indexes selected here | Unique string email; nonunique string city | Same declared string indexes maintained immediately | Same unique email / city indexes; JSON comparator uses stored generated columns |
-| Bounded index range | Ascending, positive limit; full retained document API exists | Ordinary `FindDocumentsByIndexRange` currently returns residual only; R1.2 owns parity repair | Ascending `city,id`, limit 10 |
+| Bounded index range | Ascending, positive limit; full retained document API exists | Starting `FindDocumentsByIndexRange` returns residual only; R1.2 reconstructs complete rows | Ascending `city,id`, limit 10 |
 | Baseline range fallback | Quiescent ID selection then prepared full fetch | Same quiescent decomposition; not a concurrent same-snapshot range guarantee | Same decomposition |
 | Insert | `InsertBatch`, atomic batch | `InsertTypedBatchWithStats`, atomic batch | One SQL transaction per same batch |
 | Update / replace | Generic callback `UpdateBatch` / `Replace`, single explicit existing ID | Generic `UpdateBatch` reconstructs complete JSON then projects changed authoritative fields; replace uses `ReplaceTypedBatch` | One SQL `UPDATE` transaction |
@@ -90,7 +95,8 @@ qualify same-snapshot ranges under concurrent publication. `VisitIndexValueIDs`
 is a same-view exact-value visit; a future bounded range capability must be
 explicitly implemented and tested rather than assumed. The packet records the
 ordinary typed range's residual-only rejection separately from the complete
-fallback. R1.2 must remove that rejection through a production parity fix.
+fallback. R1.2 removes that rejection through the shared captured materializer;
+the repaired runtime enables the unchanged full public range timer.
 
 ## Timer and evidence boundaries
 

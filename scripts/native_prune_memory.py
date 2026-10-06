@@ -64,7 +64,7 @@ def bindings(root):
 
 # The offline source map above admits reviewed Go/module/policy/driver bytes.
 # Go resolves the separate compiled-input graph; do not parse go:embed ourselves.
-BUILD_INPUT_CONTRACT = 'gomap-in-repo-build-inputs-v1'
+BUILD_INPUT_CONTRACT = 'gomap-in-repo-build-inputs-v2'
 BUILD_INPUT_FIELDS = ('GoFiles', 'CgoFiles', 'CFiles', 'CXXFiles', 'MFiles',
                       'HFiles', 'FFiles', 'SFiles', 'SwigFiles', 'SwigCXXFiles',
                       'SysoFiles', 'TestGoFiles', 'XTestGoFiles', 'EmbedFiles',
@@ -138,6 +138,7 @@ def capture_build_inputs(build, root, env, out, name, go_sha, errors):
         errors.append('Go executable drift before ' + name)
     else:
         process, process_error = run_logged(command['argv'], root, env, out / (name + '.log'), 180)
+        (out / (name + '.stdout')).write_bytes(process.stdout or b'')
         if process.returncode != 0:
             errors.append('Go build inventory failed: ' + (process_error or str(process.returncode)))
         else:
@@ -150,7 +151,7 @@ def capture_build_inputs(build, root, env, out, name, go_sha, errors):
     if artifact_sha(pathlib.Path(build[0])) != go_sha:
         errors.append('Go executable drift after ' + name)
     metadata = {key: artifact_sha(out / (name + suffix)) for key, suffix in
-                (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('inventory_sha256', '.json'))}
+                (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('stdout_sha256', '.stdout'), ('inventory_sha256', '.json'))}
     return inventory, metadata
 
 def build_inputs_stable(inventory, root):
@@ -162,13 +163,13 @@ def validate_build_inputs(out, receipt, build, root=None):
     require(type(queries) is dict and set(queries) == {'inputs-before', 'inputs-after', 'inputs-final'}, 'missing compiled build-input queries')
     inventories = []
     for name, metadata in queries.items():
-        require(type(metadata) is dict and set(metadata) == {'command_sha256', 'raw_sha256', 'inventory_sha256'}, 'compiled build-input query bindings')
-        for key, suffix in (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('inventory_sha256', '.json')):
+        require(type(metadata) is dict and set(metadata) == {'command_sha256', 'raw_sha256', 'stdout_sha256', 'inventory_sha256'}, 'compiled build-input query bindings')
+        for key, suffix in (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('stdout_sha256', '.stdout'), ('inventory_sha256', '.json')):
             require(type(metadata[key]) is str and len(metadata[key]) == 64 and all(c in '0123456789abcdef' for c in metadata[key]) and sha(out / (name + suffix)) == metadata[key], 'compiled build-input artifact ' + key)
         command = json.loads((out / (name + '-command.json')).read_text())
         require(command == {'cwd': receipt['source_root'], 'argv': build_input_argv(build['argv']), 'env': receipt['build_env'], 'go_sha256': receipt['go']['sha256']}, 'compiled build-input invocation')
         inventory = json.loads((out / (name + '.json')).read_text())
-        paths = build_input_paths((out / (name + '.log')).read_text(), pathlib.Path(receipt['source_root']))
+        paths = build_input_paths((out / (name + '.stdout')).read_text(), pathlib.Path(receipt['source_root']))
         require(type(inventory) is dict and set(inventory) == {'schema', 'packages', 'files'} and type(inventory['files']) is dict, 'compiled build-input inventory')
         require(dict(inventory, files=sorted(inventory['files'])) == paths and all(type(v) is str and len(v) == 64 and all(c in '0123456789abcdef' for c in v) for v in inventory['files'].values()), 'compiled build-input metadata/map binding')
         inventories.append(inventory)
@@ -334,8 +335,9 @@ def build_input_self_test():
         out = pathlib.Path(temporary) / 'packet'; out.mkdir()
         errors = []; queries = {}
         def logged(argv, cwd, environment, log, timeout):
-            log.write_bytes(raw)
-            return subprocess.CompletedProcess(argv, 0, raw), ''
+            diagnostic = b'go: downloading fixture/dependency v1.0.0\n'
+            log.write_bytes(raw + diagnostic)
+            return subprocess.CompletedProcess(argv, 0, raw, diagnostic), ''
         with mock.patch.dict(globals(), run_logged=logged):
             for name in ('inputs-before', 'inputs-after', 'inputs-final'):
                 inventory, queries[name] = capture_build_inputs(build, root, env, out, name, sha(go), errors)
@@ -362,7 +364,15 @@ def build_input_self_test():
             path.unlink(); refused(field + ' deletion', 'missing input'); path.write_bytes(original)
         original_contract = receipt.pop('build_input_contract')
         refused('old receipt', 'missing compiled build-input contract', None)
+        receipt['build_input_contract'] = 'gomap-in-repo-build-inputs-v1'
+        refused('v1 archived contract', 'missing compiled build-input contract', None)
         receipt['build_input_contract'] = original_contract
+        for name in queries:
+            path = out / (name + '.stdout'); original = path.read_bytes()
+            path.unlink(); refused(name + ' missing stdout', 'missing input', None)
+            path.write_bytes(b'changed stdout')
+            refused(name + ' stdout drift', 'compiled build-input artifact stdout_sha256', None)
+            path.write_bytes(original)
         for field, value in (('cwd', '/other'), ('argv', [str(go), 'version']), ('env', {'inherited': 'bad'}), ('go_sha256', '0' * 64)):
             name = 'inputs-before'; path = out / (name + '-command.json'); original = path.read_bytes()
             command = json.loads(original); command[field] = value; path.write_text(json.dumps(command))
@@ -371,17 +381,17 @@ def build_input_self_test():
             path.write_bytes(original); queries[name]['command_sha256'] = sha(path)
         # Refresh both metadata and inventory checksums, so a rewritten
         # selected input must reach graph equality rather than hash refusal.
-        name = 'inputs-before'; raw_path = out / (name + '.log'); map_path = out / (name + '.json')
+        name = 'inputs-before'; raw_path = out / (name + '.stdout'); map_path = out / (name + '.json')
         raw_original = raw_path.read_bytes(); map_original = map_path.read_bytes()
         altered = dict(listing); altered['EmbedFiles'] = []
         raw_path.write_text(json.dumps(altered))
         altered_map = build_input_paths(raw_path.read_text(), root)
         altered_map['files'] = hash_build_inputs(altered_map['files'], root)
         map_path.write_text(json.dumps(altered_map))
-        queries[name]['raw_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
+        queries[name]['stdout_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
         refused('refreshed embed removal', 'compiled build-input graph drift', None)
         raw_path.write_bytes(raw_original); map_path.write_bytes(map_original)
-        queries[name]['raw_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
+        queries[name]['stdout_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
         # A newly selected embed/native input changes graph membership even
         # when every previously archived input still has its original bytes.
         changed = dict(listing); changed['EmbedFiles'] = names['EmbedFiles'] + ['new.asset']
@@ -515,7 +525,8 @@ def self_test(out):
     # Parser fixtures copy the complete real packet; measurements stay untouched.
     with tempfile.TemporaryDirectory(prefix='native-memory-validator-') as tmp:
         tmp=pathlib.Path(tmp)
-        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log','version-command.json','version.log','summary.json'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
+        query_artifacts={name+suffix for name in r['build_input_queries'] for suffix in ('-command.json','.log','.stdout','.json')}
+        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log','version-command.json','version.log','summary.json'} | {c[k] for c in r['cases'] for k in ('raw','result','command')} | query_artifacts:
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
@@ -889,7 +900,7 @@ def artifact_sha(path):
 def run_logged(cmd, root, env, log, timeout):
     process_error = ''
     try:
-        p = subprocess.run(cmd, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        p = subprocess.run(cmd, cwd=root, env=env, capture_output=True, timeout=timeout)
     except (subprocess.TimeoutExpired, OSError) as e:
         process_error = str(e)
         p = subprocess.CompletedProcess(cmd, -1, getattr(e, 'stdout', None) or b'', getattr(e, 'stderr', None) or b'')

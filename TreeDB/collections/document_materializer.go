@@ -194,6 +194,8 @@ type CollectionReadView struct {
 	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
 	pointRowProjection              *columnPhysicalScanProjection
+	orderedPointRowRefs             bool // ephemeral GetInto and bounded range views avoid a full part lookup map
+	validatedPointRowRefs           *columnPhysicalScanSnapshotView
 	forceAssetReadAtFallbackForTest bool
 }
 
@@ -592,7 +594,7 @@ func (v *CollectionReadView) assetCounters() documentMaterializerAssetCounters {
 		out.servingBorrows += stats.ServingBorrows
 	}
 	if v.assetManager != nil {
-		out.activeHandles = v.assetManager.Stats().ActiveHandles
+		out.activeHandles = v.assetManager.ActiveHandles()
 	}
 	return out
 }
@@ -652,6 +654,7 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 		v.typedColumnReconstructionCache.Prepared = nil
 	}
 	v.pointRowRefs = nil
+	v.validatedPointRowRefs = nil
 	v.pointRowProjection = nil
 }
 
@@ -1040,6 +1043,17 @@ func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotVie
 	var ok bool
 	if v.preparedMaterializer != nil {
 		assetRef, ok = materializerPartRef(v.preparedMaterializer.AssetRefs, ref.Generation, ref.PartID)
+	} else if v.orderedPointRowRefs {
+		// Manifest keys are ordered by generation/part. Validate the entire
+		// immutable snapshot once, including unrelated entries, before using
+		// binary search for any row. Derived-cache resets invalidate this mark.
+		if v.columnSnapshotView == nil || v.validatedPointRowRefs != v.columnSnapshotView {
+			if err := validateOrderedDocumentPartRefs(view.AssetRefs); err != nil {
+				return columnManifestAssetRefForScan{}, err
+			}
+			v.validatedPointRowRefs = v.columnSnapshotView
+		}
+		assetRef, ok = materializerPartRef(view.AssetRefs, ref.Generation, ref.PartID)
 	} else {
 		if v.pointRowRefs == nil {
 			v.pointRowRefs = make(map[documentRowPartKey]columnManifestAssetRefForScan, len(view.AssetRefs))
@@ -1060,6 +1074,24 @@ func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotVie
 		return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref for id %q generation=%d part_id=%d is not present in snapshot", string(ref.DocumentID), ref.Generation, ref.PartID)
 	}
 	return assetRef, nil
+}
+
+func validateOrderedDocumentPartRefs(refs []columnManifestAssetRefForScan) error {
+	for i, candidate := range refs {
+		if candidate.Ref.Kind != ColumnAssetKindTCS1PartImage {
+			return fmt.Errorf("collections: document row ref unsupported asset kind %q", candidate.Ref.Kind)
+		}
+		if i > 0 {
+			order := compareMaterializerPartRefs(refs[i-1], candidate)
+			if order == 0 {
+				return fmt.Errorf("collections: duplicate document row ref asset generation=%d part_id=%d", candidate.Ref.Generation, candidate.Ref.PartID)
+			}
+			if order > 0 {
+				return errors.New("collections: document row ref assets are not ordered by generation/part")
+			}
+		}
+	}
+	return nil
 }
 
 func compareMaterializerPartRefs(a, b columnManifestAssetRefForScan) int {
@@ -1492,6 +1524,57 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		return response, err
 	}
 	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, documentRowRefResolved)
+}
+
+// materializeRetainedTypedDocument reuses this view's locator and point decoder
+// when the caller has already read the primary payload on the same snapshot.
+// The result owns its bytes; the input ID and payload are borrowed for this call.
+func (v *CollectionReadView) materializeRetainedTypedDocument(id, retained []byte) (document []byte, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	var response DocumentFetchResponse
+	defer func() {
+		w := documentMaterializationWork(response.Stats)
+		w.Requested = 1
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
+	if err := v.validateOpen(); err != nil {
+		return nil, err
+	}
+	if v.catalog.rootID(collectionColumnRowLocatorRootName(v.catalog.meta.Name)) == 0 || v.catalog.meta.Options.ColumnStore.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+		var diag columnDocumentReconstructionDiagnostics
+		document, diag, err = v.collection.reconstructColumnDocumentAtSnapshotWithDiagnostics(v.snapshot, v.catalog, id, retained)
+		response.Stats.DocumentsRequested = 1
+		response.Stats.VisibilityRows = uint64(diag.VisibilityRows)
+		response.Stats.VisibilityPhysicalBytes = diag.PhysicalBytesScanned
+		response.Stats.JSONReconstructionRows = uint64(diag.ReconstructionRows)
+		if v.catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
+			response.Stats.RowRefFallbackScans = 1
+			response.Stats.VisibilityScans = 1
+		}
+		if err == nil {
+			response.Stats.DocumentsFetched = 1
+			response.Stats.DocumentBytes = uint64(len(document))
+			response.Stats.OutputBytes = uint64(len(document))
+		}
+		return document, err
+	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(v.catalog.meta.Options.ColumnStore) {
+		retained, err = resolveColumnRetainedPayloadAtSnapshot(v.snapshot, v.catalog, *v.catalog.meta.Options.ColumnStore, retained)
+		if err != nil {
+			return nil, err
+		}
+	}
+	results := [1]DocumentFetchResult{{ID: id, Found: true}}
+	ids := [1][]byte{id}
+	payloads := [1][]byte{retained}
+	response.Results = results[:]
+	response.Stats.DocumentsRequested = 1
+	response, err = v.fetchColumnStoreDocumentsByID(response, ids[:], payloads[:], nil, DocumentFetchOptions{}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return response.Results[0].Document, nil
 }
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {

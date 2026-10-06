@@ -648,7 +648,7 @@ benchprof inputs and do not change the unified-bench profile filename contract.
 
 Native capture build provenance uses two separate maps. `source-bindings.json`
 is the offline Go/module/policy/driver preflight map. The drivers also require
-`gomap-in-repo-build-inputs-v1`: exact-tool/environment/tag/race `go list -deps
+`gomap-in-repo-build-inputs-v2`: exact-tool/environment/tag/race `go list -deps
 -test -json` commands, raw metadata, and the resolved in-repo input hashes before
 and after build and after collection. This includes ordinary/test/external-test
 Go sources, cgo/native/assembly/SWIG/system-object fields, and main/test/external-test
@@ -663,3 +663,24 @@ files or arbitrary compiler includes outside Go's package metadata. Original
 receipts with only the offline map remain unchanged and require their archived
 validator; they do not prove this newer compiled-input boundary. Runtime result
 schemas and earlier measured results retain their original source identities.
+
+Compiled-input contract v2 separately hashes each query’s JSON stdout in
+`<query>.stdout` / `stdout_sha256`, while preserving the full combined
+stdout/stderr diagnostic log and its `raw_sha256`. Offline validation parses
+only the bound stdout; successful dependency-download diagnostics do not become
+JSON metadata. Archive self-tests retain every required query command, stdout,
+raw log, and input inventory. Historical compiled-input v1 packets require their
+archived validator and are not migrated or relabeled as v2 evidence. Runtime
+RESULT schemas and previously recorded measurements are unchanged.
+
+The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
+with the `gomap-r1-lifecycle-packet-v2` format, raw calibration/final process logs
+and strict source/count validation. For a small nonqualifying rehearsal, use
+`--qualification rehearsal --out /tmp/r1-lifecycle --repetitions 2 --epochs 3
+--documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
+These artifacts are separate from unified-bench profiles and benchprof inputs.
+
+Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
+live direct-backend online vacuum with before/after census; cached-wrapper
+overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
+GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.
