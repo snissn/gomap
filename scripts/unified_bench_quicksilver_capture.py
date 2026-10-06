@@ -13,6 +13,10 @@ the dynamic loader. Only LD_LIBRARY_PATH may be nonempty among LD_* controls.
 Source linkage defaults to dynamic; linkage=static explicitly requires a static
 ldd result. Benchmark binaries must be Linux ELF executables, not scripts.
 Raw ldd output and actual loader environment are retained per cell.
+The measured environment inherits only PATH, LANG, LC_ALL, LC_CTYPE, TZ,
+GLIBC_TUNABLES and LD_*; other controls require explicit manifest build_env.
+Frozen controls override the manifest. run.json records the entire sanitized
+child env under environment_policy=sanitized-full-v1, without ambient credentials.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
 commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns, churn_shape, measure_dir, rss_sample_interval_ms}]. Defaults match
@@ -44,10 +48,47 @@ import traceback
 import owned_process_rss
 from owned_process_rss import run_with_rss
 
+if not __debug__:
+    raise RuntimeError('capture validation requires Python assertions; do not use -O')
+
 PHASES = ['quicksilver_hits', 'quicksilver_misses', 'quicksilver_mixed', 'quicksilver_concurrent']
 CONTRACTS = {'durable': ('command_wal_durable', 'wal_on_sync', 'durable_wal_prefix'),
              'fast': ('no_wal_fast', 'wal_off_relaxed_sync', 'relaxed'),
              'wal_on_fast': ('command_wal_relaxed', 'wal_on_relaxed_sync', 'relaxed')}
+ENVIRONMENT_POLICY = 'sanitized-full-v1'
+
+
+def capture_environment(build_env, temporary_directory, inherited=None):
+    # Do not inherit credentials or undeclared allocator/runtime controls. Keep
+    # loader controls visible so validate_native still rejects injections.
+    inherited = os.environ if inherited is None else inherited
+    assert isinstance(build_env, dict), 'invalid manifest environment'
+    assert all(isinstance(k, str) and k and '=' not in k and '\0' not in k and
+               isinstance(v, str) and '\0' not in v for k, v in build_env.items()), 'invalid manifest environment'
+    env = {k: v for k, v in inherited.items()
+           if k in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'GLIBC_TUNABLES') or k.startswith('LD_')}
+    env.update(build_env)
+    assert env.get('GOWORK') == 'off', 'workspace drift'
+    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='off',
+               TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(temporary_directory))
+    assert all(isinstance(k, str) and k and '=' not in k and '\0' not in k and
+               isinstance(v, str) and '\0' not in v for k, v in env.items()), 'invalid process environment'
+    return env
+
+
+def validate_environment_receipt(metadata, manifest):
+    assert metadata.get('environment_policy') == ENVIRONMENT_POLICY, 'incomplete environment receipt'
+    env = metadata.get('env')
+    assert isinstance(env, dict) and all(isinstance(k, str) and isinstance(v, str)
+                                        for k, v in env.items()), 'invalid effective environment'
+    command = metadata.get('command')
+    assert isinstance(command, list) and command and isinstance(command[0], str), 'invalid environment root command'
+    binary = pathlib.Path(command[0])
+    assert binary.is_absolute() and binary.parent.name == 'bin', 'environment root command drift'
+    # Use the captured executable's original root so evidence remains replayable
+    # after copying its capture directory; never adopt the analyzer's environment.
+    expected = capture_environment(manifest['build_env'], binary.parent.parent/'working-dbs', inherited=env)
+    assert env == expected, 'effective environment drift'
 
 
 def sha256(path):
@@ -160,6 +201,9 @@ def capture_wall_limit(cell):
 
 
 def validate(reports, cell, directory, fixtures, metadata):
+    manifest_path = directory.parent/'manifest.json'
+    assert sha256(manifest_path) == metadata['manifest_sha256'], 'manifest drift'
+    validate_environment_receipt(metadata, json.loads(manifest_path.read_bytes()))
     assert len(reports) == 1
     r, c = reports[0], reports[0]['config']
     keys, reads = cell.get('keys', 3000000), cell.get('reads', 6000000)
@@ -246,6 +290,7 @@ def validate(reports, cell, directory, fixtures, metadata):
         assert churn['label'] == 'bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound'
         assert churn['leaf_generation_pack_maintenance_env'] == metadata['env'].get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '')
         assert len(churn['rounds']) == rounds
+        previous_pause_end = 0
         for index, round in enumerate(churn['rounds'], 1):
             assert (round['round'], round['restored_keys'], round['mutation_targets']) == (index, updates-(updates+1)//4 if c['churn_shape'] == 'sparse' else keys, updates)
             assert round['restore_commit_batches'] == math.ceil((updates if c['churn_shape'] == 'sparse' else keys)/1000)
@@ -255,6 +300,12 @@ def validate(reports, cell, directory, fixtures, metadata):
             assert all(math.isfinite(v) and v >= 0 for v in times)
             assert math.isfinite(round['wall_seconds']) and round['wall_seconds'] >= sum(times)
             assert round['pause_seconds'] >= pause/1e9
+            pause_start, pause_end = round['pause_started_unix_nano'], round['pause_finished_unix_nano']
+            assert type(pause_start) is int and type(pause_end) is int and 0 < pause_start <= pause_end <= 9223372036854775807, 'invalid pause boundaries'
+            assert previous_pause_end <= pause_start, 'overlapping or unordered round pauses'
+            previous_pause_end = pause_end
+            assert round['before']['captured_at_unix_nano'] <= pause_start <= pause_end <= round['after']['captured_at_unix_nano'], 'pause outside round snapshots'
+            assert abs((pause_end-pause_start)/1e9-round['pause_seconds']) <= 1e-3, 'pause wall/monotonic duration mismatch'
             for snapshot in (round['before'], round['after']):
                 assert type(snapshot['captured_at_unix_nano']) is int and snapshot['captured_at_unix_nano'] > 0
                 assert type(snapshot['process_rss_supported']) is bool
@@ -328,8 +379,6 @@ def validate(reports, cell, directory, fixtures, metadata):
 
 
 def main():
-    if not __debug__:
-        raise RuntimeError('capture validation requires Python assertions; do not use -O')
     manifest_path, plan_path = map(pathlib.Path, sys.argv[1:])
     assert manifest_path.is_absolute() and plan_path.is_absolute()
     root = manifest_path.parent
@@ -348,12 +397,10 @@ def main():
         (out/(role+'-receipt.json')).write_bytes(raw)
     for lib, identity in manifest['libraries'].items():
         assert pathlib.Path(lib).is_absolute() and sha256(pathlib.Path(lib)) == identity['sha256'], lib
-    env = {k: v for k, v in os.environ.items() if not k.startswith('TREEDB_')}
-    env.update(manifest['build_env'])
-    assert env['GOWORK'] == 'off'
+    env = capture_environment(manifest['build_env'], root/'working-dbs')
     assert env.get('TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE', '') in ('', '0', '1'), 'maintenance manifest env must be unset, 0 or 1'
-    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='2GiB',
-               TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
+    # Apply identical controls to fresh, online/churn and retained final-read
+    # cells: no benchmark-imposed Go heap limit; retain normal GC and mapping cap.
     (root/'working-dbs').mkdir(exist_ok=True)
     assert plan.get('repeats', 1) >= 1 and plan['cells']
     assert all(isinstance(cell.get('keep', False), bool) for cell in plan['cells']), 'keep must be boolean'
@@ -398,9 +445,7 @@ def main():
                             manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(), plan_sha256=hashlib.sha256(plan_raw).hexdigest(),
                             collector_sha256=sha256(pathlib.Path(__file__)),
                             rss_observer_sha256=sha256(pathlib.Path(owned_process_rss.__file__)),
-                            env={k: v for k, v in env.items() if k.startswith(('TREEDB_', 'LD_')) or k in
-                                 ('GOROOT', 'GOWORK', 'GOGC', 'GODEBUG', 'GOMAXPROCS', 'GOMEMLIMIT', 'TMPDIR', 'LD_LIBRARY_PATH',
-                                  'GLIBC_TUNABLES', 'PATH', 'CGO_ENABLED', 'GOFLAGS', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_LDFLAGS')},
+                            environment_policy=ENVIRONMENT_POLICY, env=dict(env),
                             load_before=os.getloadavg(), started=time.time())
             metadata_path = directory/'run.json'
             metadata_path.write_text(json.dumps(metadata, indent=2)+'\n')
