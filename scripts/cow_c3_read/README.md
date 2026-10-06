@@ -263,3 +263,16 @@ configuration, process, source/object/mode, module, binary, tooling and host
 corruption must all refuse. This refusal smoke and actual Linux normal/race
 fixture execution remain distinct gates. Standalone JSON/Go logs are not
 benchprof profile-dir inputs and introduce no benchprof filename changes.
+
+The C4 schema v2 finite construction disables generational maintenance and all
+three background checkpoint triggers plus background index vacuum using actual
+requested options. Every real Stats boundary must resolve to that policy with
+zero background work. Manual checkpoint deltas are exact, including zero during
+pin release and one at preclose. The separate untimed
+`TestCOWSustainedPublicMVCCManualMaintenancePins` holds real persistent-pointer
+seed owners for 3.2 seconds, checks every observed tick and reopens the payloads;
+`TestCOWSustainedPublicMVCCMaintenanceAdmissionRefusal` rejects each changed
+requested control and an actual Open with generational HotWarmCold. Retain
+`-cow-c4-maintenance-output-dir` receipts separately from benchmark lifecycles.
+A controller must reparse every normal, race and maximum-epoch lifecycle before
+reporting PASS. No retained worker window or extra checkpoint is tolerated.

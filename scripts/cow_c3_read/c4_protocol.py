@@ -8,7 +8,7 @@ import re
 
 from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products
 
-SCHEMA = "gomap-cow-sustained-public-v1"
+SCHEMA = "gomap-cow-sustained-public-v2"
 PROFILES = ("command_wal_durable", "command_wal_relaxed", "no_wal_fast")
 MODES = ("cow_btree", "append_only", "btree")
 LAYOUTS = ("inline", "forced_pointer")
@@ -16,6 +16,8 @@ SIZES = (512, 1024)
 SCRIPTS = ("protocol.py", "build.py", "collect.py", "analyze.py", "c4_protocol.py", "prepare_c4_config.py", "c4_analyze.py", "c4_packet_smoke.py", "prepare_config.py")
 LIMITS = {"MaxViews":256,"MaxGenerations":64,"MaxSources":32,"MaxResources":256,
           "MaxGenerationBytes":256<<20,"MaxTotalBytes":2<<30,"MaxRetiredBytes":2<<30,"MaxInFlightBytes":64<<20}
+MAINTENANCE_OPTIONS = {"value_log_generation_policy":1,"background_checkpoint_interval":-1,"background_checkpoint_idle_duration":-1,"max_wal_bytes":-1,"background_index_vacuum_interval":-1}
+MAINTENANCE_STATS = {'treedb.cache.vlog_generation.policy': '1', 'treedb.cache.vlog_generation.enabled': 'false', 'treedb.cache.vlog_generation.scheduler_state': 'disabled', 'treedb.cache.vlog_generation.maintenance.active': 'false', 'treedb.cache.vlog_generation.checkpoint_kick.active': 'false', 'treedb.cache.vlog_generation.checkpoint_kick.pending': 'false', 'treedb.cache.vlog_generation.rewrite.queue.pending': 'false', 'treedb.cache.vlog_generation.rewrite.queue.running': 'false', 'treedb.bg_vacuum.enabled': 'false', 'treedb.cache.auto_checkpoint.count': '0', 'treedb.bg_vacuum.runs': '0', 'treedb.bg_vacuum.vacuums': '0', 'treedb.bg_vacuum.vacuum_attempts': '0', 'treedb.cache.vlog_generation.checkpoint_kick.runs': '0', 'treedb.cache.vlog_generation.maintenance.attempts': '0', 'treedb.cache.vlog_generation.maintenance.acquired': '0', 'treedb.cache.vlog_generation.maintenance.passes.noop': '0', 'treedb.cache.vlog_generation.maintenance.passes.with_rewrite': '0', 'treedb.cache.vlog_generation.maintenance.passes.with_gc': '0', 'treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack': '0', 'treedb.cache.vlog_generation.gc.runs': '0', 'treedb.cache.vlog_generation.rewrite.runs': '0', 'treedb.cache.vlog_generation.vacuum.runs': '0'}
 ACK = {"command_wal_durable":"durable_wal_prefix", "command_wal_relaxed":"relaxed", "no_wal_fast":"relaxed"}
 ACK_ROUTE = {
     "treedb.command_wal.enabled":"true",
@@ -52,7 +54,7 @@ def case_names(case):
 
 def workload(keys, epochs):
     return {"keys":keys,"epochs":epochs,"group_width":16,"pin_ring":2,"shards":4,
-            "seed_timestamp":1,"epoch_timestamp_stride":10,"growth_offsets":[1,2,3],
+            "maintenance_options":MAINTENANCE_OPTIONS,"seed_timestamp":1,"epoch_timestamp_stride":10,"growth_offsets":[1,2,3],
             "tombstone_offset":2,"value_bytes":256,"writers":1,"point_readers":1,
             "history_readers":1,"same_timestamp_replacement":True,"checkpoint_each_epoch":True,
             "representation_diagnostics":{"stages":list(LAYOUT_PHASES),"seed_entries":keys,"final_entries":keys*(1+3*epochs),"logical_tombstones_checked":True},
@@ -210,22 +212,23 @@ def validate_ordinary_ack(boundaries,profile,keys,epochs):
     released=boundaries["released"]
     need(all(int(released[k])==int(previous[k]) for k in fields),"pin release/prune changed WAL/checkpoint counters")
     preclose=boundaries["preclose"]
-    need(int(preclose[append])==int(released[append]) and int(preclose[checkpoints])>=int(released[checkpoints])+1,"released checkpoint missing or changed ordinary append")
+    need(int(preclose[append])==int(released[append]) and int(preclose[checkpoints])==int(released[checkpoints])+1,"released checkpoint missing or changed ordinary append")
     need(all(int(boundaries["reopened"][k])==0 for k in fields),"reopened read oracle changed WAL/checkpoint counters")
     if profile=="no_wal_fast":need(all(int(s[append])==int(s[sync])==0 for s in boundaries.values()),"NoWAL observed WAL effects")
 
-RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profile","mode","layout","keys","epochs","group_width","pin_ring","recorder_capacity","limits","shards","flush_threshold","background_checkpoint_interval","disable_side_stores","pointer_threshold","force_pointers","ordinary_ack","read_cut_capability","calls","boundaries","layout_proofs","oracle_receipts","native_eligibility","whole_maintenance_charge","qualification","overlapping_readers")
+RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profile","mode","layout","keys","epochs","group_width","pin_ring","recorder_capacity","limits","shards","flush_threshold","background_checkpoint_interval","background_checkpoint_idle_duration","max_wal_bytes","background_index_vacuum_interval","value_log_generation_policy","disable_side_stores","pointer_threshold","force_pointers","ordinary_ack","read_cut_capability","calls","boundaries","layout_proofs","oracle_receipts","native_eligibility","whole_maintenance_charge","qualification","overlapping_readers")
 CALL_FIELDS=("phase","operation","input","output","start_ns","completion_ns","duration_ns","outcome","error")
 COW_COUNTERS=("total_bytes","history_bytes","reserved_bytes","retired_bytes","peak_bytes","control_bytes","deferred_bytes","external_bytes","views","generations","sources","external_leases","active_cuts","current_roots","frozen_roots","capture_calls_total","prepare_calls_total","publications_total","rollovers_total","handoffs_total")
 
 def validate_raw(r,case,epochs):
     exact(r,RAW_FIELDS,"raw lifecycle")
-    need(type(r["schema_version"]) is int and r["schema_version"]==1 and r["lifecycle_outcome"]=="success" and r["lifecycle_error"]=="","failed lifecycle")
+    need(type(r["schema_version"]) is int and r["schema_version"]==2 and r["lifecycle_outcome"]=="success" and r["lifecycle_error"]=="","failed lifecycle")
     for k in ("profile","mode","layout","keys"):need(type(r[k]) is type(case[k]) and r[k]==case[k],"raw case mismatch "+k)
     finite(r["epochs"],"raw epochs",True,True)
     finite(r["overlapping_readers"],"raw overlap",True,True)
     n=case["keys"];mode=case["mode"];need(r["leaf"]==case["benchmark"].split("/",1)[1] and r["epochs"]==epochs,"raw leaf/epochs mismatch")
     fixed={"group_width":16,"pin_ring":2,"shards":4,"flush_threshold":16<<20,"background_checkpoint_interval":-1,"disable_side_stores":True,"limits":LIMITS,"recorder_capacity":n*(epochs*8+8)+512+n*(3+6*epochs)+6,"force_pointers":case["layout"]=="forced_pointer","pointer_threshold":1 if case["layout"]=="forced_pointer" else 1<<30,"read_cut_capability":mode=="cow_btree"}
+    fixed.update(MAINTENANCE_OPTIONS)
     for k,v in fixed.items():need(type(r[k]) is type(v) and r[k]==v,"raw option mismatch "+k)
     need(r["ordinary_ack"]==ACK[case["profile"]],"wrong resolved ordinary ACK")
     need(r["native_eligibility"]==r["whole_maintenance_charge"]=="PENDING" and r["qualification"]=="pending_native_observations","native qualification unavailable")
@@ -271,6 +274,7 @@ def validate_raw(r,case,epochs):
     for boundary in r["boundaries"]:
         exact(boundary,("phase","stats"),"boundary");stats=boundary["stats"];need(type(stats) is dict,"raw Stats map")
         if boundary["phase"]=="reopen_counter_reset":need(stats=={},"invalid reopened counter reset");previous={};continue
+        need(all(stats.get(k)==v for k,v in MAINTENANCE_STATS.items()),"resolved manual maintenance mismatch")
         for k in required:
             value=stats.get(k);need(type(value) is str and re.fullmatch(r"[0-9]+",value),"missing/invalid required counter "+k)
             if k.endswith("_total") and k in previous:need(int(value)>=int(previous[k]),"counter regression "+k)

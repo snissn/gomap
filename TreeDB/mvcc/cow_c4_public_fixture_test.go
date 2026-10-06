@@ -2,10 +2,14 @@ package mvcc
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -362,5 +366,188 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// This sentinel is deliberately untimed: it crosses periodic and idle defaults
+// while real persistent-pointer seed owners survive a changed current image.
+var c4MaintenanceOutputDir = flag.String("cow-c4-maintenance-output-dir", "", "new existing absolute directory for untimed maintenance admission receipts")
+
+func TestCOWSustainedPublicMVCCManualMaintenancePins(t *testing.T) {
+	for _, p := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(p), func(t *testing.T) {
+			opts := c4Options(p, "cow_btree", true, t.TempDir())
+			if err := c4AdmitOptions(opts); err != nil {
+				t.Fatal(err)
+			}
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			store := New(db)
+			keys := c4Keys(16)
+			var snapshots []c4Boundary
+			observe := func(phase string) map[string]string {
+				stats := db.Stats()
+				if e := c4AdmitMaintenance(stats); e != nil {
+					t.Fatal(e)
+				}
+				if e := cowPublicACKRouting(p, stats); e != nil {
+					t.Fatal(e)
+				}
+				snapshots = append(snapshots, c4Boundary{phase, stats})
+				return stats
+			}
+			observe("opened")
+			muts := make([]Mutation, len(keys))
+			for i, k := range keys {
+				muts[i] = Mutation{Key: k, Value: c4Value(0)}
+			}
+			if err = store.CommitAt(1, muts, CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			layoutRecord := &c4Record{Mode: "cow_btree", Calls: make([]c4Call, 0, 32), origin: time.Now()}
+			if err = layoutRecord.proveLayout(db, "seed_layout", c4Expected(keys, 0), true); err != nil {
+				t.Fatal(err)
+			}
+			pins := make([]*VersionIterator, 2)
+			for i := range pins {
+				pins[i], err = store.IterateVersions(VersionIteratorOptions{ReadTimestamp: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer pins[i].Close()
+			}
+			for i, k := range keys {
+				muts[i] = Mutation{Key: k, Value: c4Value(1)}
+			}
+			if err = store.CommitAt(2, muts, CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			before := observe("pinned_before_ticks")
+			begin := time.Now()
+			timer := time.NewTimer(3200 * time.Millisecond)
+			defer timer.Stop()
+			ticker := time.NewTicker(400 * time.Millisecond)
+			defer ticker.Stop()
+		holding:
+			for {
+				select {
+				case <-timer.C:
+					break holding
+				case <-ticker.C:
+					stats := observe("pinned_tick")
+					for _, k := range []string{"treedb.cache.checkpoint.runs", "treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total", "treedb.commit_seq"} {
+						if stats[k] != before[k] {
+							t.Fatalf("untimed tick changed %s", k)
+						}
+					}
+					got, e := store.GetAt(keys[0], 100)
+					if e != nil || got.Timestamp != 2 || !bytes.Equal(got.Value, c4Value(1)) {
+						t.Fatalf("current pointer oracle %+v %v", got, e)
+					}
+				}
+			}
+			elapsed := time.Since(begin)
+			if elapsed < 3200*time.Millisecond {
+				t.Fatal("sentinel did not cross maintenance ticks")
+			}
+			for _, pin := range pins {
+				if _, err = c4CheckIterator(pin, c4Expected(keys, 0)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			released := observe("released")
+			for _, k := range []string{"treedb.cache.checkpoint.runs", "treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total"} {
+				if released[k] != before[k] {
+					t.Fatalf("pin release changed %s", k)
+				}
+			}
+			if released["treedb.cache.cow.views"] != "0" {
+				t.Fatal("seed owner leak")
+			}
+			if err = db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			preclose := observe("preclose")
+			a, e := strconv.ParseUint(released["treedb.cache.checkpoint.runs"], 10, 64)
+			b, f := strconv.ParseUint(preclose["treedb.cache.checkpoint.runs"], 10, 64)
+			if e != nil || f != nil || b != a+1 {
+				t.Fatal("manual preclose checkpoint count")
+			}
+			if err = db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			store = New(db)
+			for _, k := range keys {
+				got, e := store.GetAt(k, 100)
+				if e != nil || got.Timestamp != 2 || !bytes.Equal(got.Value, c4Value(1)) {
+					t.Fatalf("reopen pointer oracle %+v %v", got, e)
+				}
+			}
+			reopened := observe("reopened")
+			if reopened["treedb.cache.checkpoint.runs"] != "0" {
+				t.Fatal("reopen read checkpoint")
+			}
+			if err = db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if *c4MaintenanceOutputDir != "" {
+				dir := *c4MaintenanceOutputDir
+				info, e := os.Lstat(dir)
+				if e != nil || !filepath.IsAbs(dir) || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+					t.Fatal("invalid sentinel receipt directory")
+				}
+				receipt := map[string]any{"schema_version": 2, "profile": p, "requested_options": map[string]any{"value_log_generation_policy": opts.ValueLog.Generational.Policy, "background_checkpoint_interval": int64(opts.BackgroundCheckpointInterval), "background_checkpoint_idle_duration": int64(opts.BackgroundCheckpointIdleDuration), "max_wal_bytes": opts.MaxWALBytes, "background_index_vacuum_interval": int64(opts.BackgroundIndexVacuumInterval)}, "elapsed_ns": elapsed.Nanoseconds(), "boundaries": snapshots, "old_pin_history": "immutable_seed", "layout_proofs": layoutRecord.LayoutProofs, "diagnostic_calls": layoutRecord.Calls, "reopened_pointer_payloads": len(keys), "final_close": "success", "timed_claim": false}
+				data, e := json.MarshalIndent(receipt, "", "  ")
+				if e != nil {
+					t.Fatal(e)
+				}
+				file, e := os.OpenFile(filepath.Join(dir, string(p)+".json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+				if e != nil {
+					t.Fatal(e)
+				}
+				_, e = file.Write(data)
+				e = errors.Join(e, file.Close())
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+		})
+	}
+}
+func TestCOWSustainedPublicMVCCMaintenanceAdmissionRefusal(t *testing.T) {
+	base := c4Options(treedb.ProfileNoWALFast, "cow_btree", true, t.TempDir())
+	changes := []func(*treedb.Options){func(o *treedb.Options) { o.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold }, func(o *treedb.Options) { o.BackgroundCheckpointInterval = 0 }, func(o *treedb.Options) { o.BackgroundCheckpointIdleDuration = 0 }, func(o *treedb.Options) { o.MaxWALBytes = 0 }, func(o *treedb.Options) { o.BackgroundIndexVacuumInterval = 0 }}
+	for i, change := range changes {
+		opts := base
+		change(&opts)
+		if c4AdmitOptions(opts) == nil {
+			t.Fatalf("requested option %d accepted", i)
+		}
+	}
+	// Real Open resolves the incompatible policy; actual Stats must be rejected.
+	actual := base
+	actual.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+	db, err := treedb.Open(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := c4AdmitMaintenance(db.Stats())
+	closeErr := db.Close()
+	if admission == nil || closeErr != nil {
+		t.Fatalf("actual resolved refusal %v close %v", admission, closeErr)
 	}
 }

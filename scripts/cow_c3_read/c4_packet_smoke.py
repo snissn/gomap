@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 
 from c4_analyze import analyze
-from c4_protocol import load,need,sha
+from c4_protocol import load,need,sha,MAINTENANCE_OPTIONS,MAINTENANCE_STATS
 
 
 def replace_json(path,value):
@@ -151,6 +151,13 @@ def main():
         "source-manifest-corruption":artifact_corruption("candidate-source-manifest.json"),
         "tooling-drift":artifact_corruption("c4_protocol.py"),
     }
+    for key in MAINTENANCE_OPTIONS:
+        cases["requested-maintenance-"+key]=raw_mutation(lambda r,k=key:r.update({k:0}))
+    for key,value in MAINTENANCE_STATS.items():
+        cases["missing-maintenance-"+key]=raw_mutation(lambda r,k=key:r["boundaries"][0]["stats"].pop(k))
+        cases["wrong-maintenance-"+key]=raw_mutation(lambda r,k=key,v=value:r["boundaries"][0]["stats"].update({k:"1" if v=="0" else "unexpected"}))
+    for phase in ("released","preclose"):
+        cases["extra-checkpoint-"+phase]=raw_mutation(lambda r,p=phase:next(b for b in r["boundaries"] if b["phase"]==p)["stats"].update({"treedb.cache.checkpoint.runs":str(int(next(b for b in r["boundaries"] if b["phase"]==p)["stats"]["treedb.cache.checkpoint.runs"])+1)}))
     results=[]
     for name,change in cases.items():
         packet=out/name;copy_packet(positive,packet);change(packet)

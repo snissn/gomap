@@ -56,7 +56,8 @@ floor, WAL, capture and publication effects; no private maintenance producer is
 invoked.
 
 Options are explicit: four shards, 16 MiB flush threshold, disabled background
-checkpoint and side stores; COW limits are 256 views, 64 generations, 32 sources,
+checkpoint interval, idle trigger, WAL-size trigger and background index vacuum,
+with generational policy explicitly Off and side stores disabled; COW limits are 256 views, 64 generations, 32 sources,
 256 resources, 256 MiB generation, 64 MiB in-flight and 2 GiB total/retired
 bytes. These finite constructor ceilings accommodate conservative COW path-copy
 charges within an epoch and the retained seed generation. They do not waive
@@ -113,9 +114,15 @@ All profiles require parseable actual counters and effective command-WAL/redo
 routing: command profiles use external command WAL with cached redo disabled;
 NoWAL uses disabled command WAL and disabled-unsafe cached redo. NoWAL does not
 disable persistent value-log storage. A checkpoint counter change inside
-these windows refuses attribution. Explicit checkpoint and later read-cleanup
-windows remain separate observations; read cleanup can trigger additional
-automatic checkpoints, whose run counts remain retained.
+these windows refuses attribution. Each declared public checkpoint must advance
+its run count by exactly one; pin release advances none and preclose advances
+exactly one. Actual options, rather than fixed labels, are recorded. Every real
+boundary requires resolved generational Off, disabled scheduler/vacuum, no active
+or pending worker and zero automatic checkpoint/maintenance runs. The untimed
+3.2-second persistent-pointer pin sentinel crosses multiple periodic ticks and
+the default idle interval, then verifies old payloads, exact release/preclose
+windows, Close and reopen. Incompatible requested options and an actual Open
+with HotWarmCold policy must be refused. Schema v2 packets cannot accept v1.
 
 Call intervals must also follow the finite lifecycle order. Each caller's calls
 are sequential, all three overlap workers finish before their epoch checkpoint,

@@ -52,37 +52,41 @@ type c4LayoutProof struct {
 	OwnersAfter  map[string]string `json:"owners_after"`
 }
 type c4Record struct {
-	LifecycleOutcome             string                   `json:"lifecycle_outcome"`
-	LifecycleError               string                   `json:"lifecycle_error"`
-	SchemaVersion                int                      `json:"schema_version"`
-	Leaf                         string                   `json:"leaf"`
-	Profile                      string                   `json:"profile"`
-	Mode                         string                   `json:"mode"`
-	Layout                       string                   `json:"layout"`
-	Keys                         int                      `json:"keys"`
-	Epochs                       int                      `json:"epochs"`
-	GroupWidth                   int                      `json:"group_width"`
-	PinRing                      int                      `json:"pin_ring"`
-	RecorderCapacity             int                      `json:"recorder_capacity"`
-	Options                      treedb.COWMemtableLimits `json:"limits"`
-	Shards                       int                      `json:"shards"`
-	FlushThreshold               int                      `json:"flush_threshold"`
-	BackgroundCheckpointInterval int64                    `json:"background_checkpoint_interval"`
-	DisableSideStores            bool                     `json:"disable_side_stores"`
-	PointerThreshold             int                      `json:"pointer_threshold"`
-	ForcePointers                bool                     `json:"force_pointers"`
-	OrdinaryACK                  string                   `json:"ordinary_ack"`
-	ReadCutCapability            bool                     `json:"read_cut_capability"`
-	Calls                        []c4Call                 `json:"calls"`
-	Boundaries                   []c4Boundary             `json:"boundaries"`
-	LayoutProofs                 []c4LayoutProof          `json:"layout_proofs"`
-	OracleReceipts               []string                 `json:"oracle_receipts"`
-	NativeEligibility            string                   `json:"native_eligibility"`
-	WholeMaintenanceCharge       string                   `json:"whole_maintenance_charge"`
-	Qualification                string                   `json:"qualification"`
-	OverlappingReaders           uint64                   `json:"overlapping_readers"`
-	mu                           sync.Mutex
-	origin                       time.Time
+	LifecycleOutcome                 string                   `json:"lifecycle_outcome"`
+	LifecycleError                   string                   `json:"lifecycle_error"`
+	SchemaVersion                    int                      `json:"schema_version"`
+	Leaf                             string                   `json:"leaf"`
+	Profile                          string                   `json:"profile"`
+	Mode                             string                   `json:"mode"`
+	Layout                           string                   `json:"layout"`
+	Keys                             int                      `json:"keys"`
+	Epochs                           int                      `json:"epochs"`
+	GroupWidth                       int                      `json:"group_width"`
+	PinRing                          int                      `json:"pin_ring"`
+	RecorderCapacity                 int                      `json:"recorder_capacity"`
+	Options                          treedb.COWMemtableLimits `json:"limits"`
+	Shards                           int                      `json:"shards"`
+	FlushThreshold                   int                      `json:"flush_threshold"`
+	BackgroundCheckpointInterval     int64                    `json:"background_checkpoint_interval"`
+	BackgroundCheckpointIdleDuration int64                    `json:"background_checkpoint_idle_duration"`
+	MaxWALBytes                      int64                    `json:"max_wal_bytes"`
+	BackgroundIndexVacuumInterval    int64                    `json:"background_index_vacuum_interval"`
+	ValueLogGenerationPolicy         uint8                    `json:"value_log_generation_policy"`
+	DisableSideStores                bool                     `json:"disable_side_stores"`
+	PointerThreshold                 int                      `json:"pointer_threshold"`
+	ForcePointers                    bool                     `json:"force_pointers"`
+	OrdinaryACK                      string                   `json:"ordinary_ack"`
+	ReadCutCapability                bool                     `json:"read_cut_capability"`
+	Calls                            []c4Call                 `json:"calls"`
+	Boundaries                       []c4Boundary             `json:"boundaries"`
+	LayoutProofs                     []c4LayoutProof          `json:"layout_proofs"`
+	OracleReceipts                   []string                 `json:"oracle_receipts"`
+	NativeEligibility                string                   `json:"native_eligibility"`
+	WholeMaintenanceCharge           string                   `json:"whole_maintenance_charge"`
+	Qualification                    string                   `json:"qualification"`
+	OverlappingReaders               uint64                   `json:"overlapping_readers"`
+	mu                               sync.Mutex
+	origin                           time.Time
 }
 
 func (r *c4Record) call(phase, op string, input uint64, fn func() (uint64, error)) error {
@@ -111,6 +115,10 @@ func c4Options(profile treedb.Profile, mode string, pointers bool, dir string) t
 	o.MemtableShards = 4
 	o.DisableSideStores = true
 	o.BackgroundCheckpointInterval = -1
+	o.BackgroundCheckpointIdleDuration = -1
+	o.MaxWALBytes = -1
+	o.BackgroundIndexVacuumInterval = -1
+	o.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
 	o.FlushThreshold = 16 << 20
 	o.COWMemtableLimits = c4Limits()
 	o.ValueLog.ForcePointers = pointers
@@ -120,6 +128,49 @@ func c4Options(profile treedb.Profile, mode string, pointers bool, dir string) t
 	}
 	return o
 }
+
+// Finite construction owns every checkpoint window; background maintenance is
+// explicitly disabled for every comparator and reopen, while storage stays persistent.
+func c4AdmitOptions(o treedb.Options) error {
+	if o.ValueLog.Generational.Policy != treedb.ValueLogGenerationOff || o.BackgroundCheckpointInterval != -1 || o.BackgroundCheckpointIdleDuration != -1 || o.MaxWALBytes != -1 || o.BackgroundIndexVacuumInterval != -1 {
+		return errors.New("requested manual maintenance options mismatch")
+	}
+	return nil
+}
+func c4AdmitMaintenance(stats map[string]string) error {
+	expected := map[string]string{
+		"treedb.cache.vlog_generation.policy":                            "1",
+		"treedb.cache.vlog_generation.enabled":                           "false",
+		"treedb.cache.vlog_generation.scheduler_state":                   "disabled",
+		"treedb.cache.vlog_generation.maintenance.active":                "false",
+		"treedb.cache.vlog_generation.checkpoint_kick.active":            "false",
+		"treedb.cache.vlog_generation.checkpoint_kick.pending":           "false",
+		"treedb.cache.vlog_generation.rewrite.queue.pending":             "false",
+		"treedb.cache.vlog_generation.rewrite.queue.running":             "false",
+		"treedb.bg_vacuum.enabled":                                       "false",
+		"treedb.cache.auto_checkpoint.count":                             "0",
+		"treedb.bg_vacuum.runs":                                          "0",
+		"treedb.bg_vacuum.vacuums":                                       "0",
+		"treedb.bg_vacuum.vacuum_attempts":                               "0",
+		"treedb.cache.vlog_generation.checkpoint_kick.runs":              "0",
+		"treedb.cache.vlog_generation.maintenance.attempts":              "0",
+		"treedb.cache.vlog_generation.maintenance.acquired":              "0",
+		"treedb.cache.vlog_generation.maintenance.passes.noop":           "0",
+		"treedb.cache.vlog_generation.maintenance.passes.with_rewrite":   "0",
+		"treedb.cache.vlog_generation.maintenance.passes.with_gc":        "0",
+		"treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack": "0",
+		"treedb.cache.vlog_generation.gc.runs":                           "0",
+		"treedb.cache.vlog_generation.rewrite.runs":                      "0",
+		"treedb.cache.vlog_generation.vacuum.runs":                       "0",
+	}
+	for k, want := range expected {
+		if stats[k] != want {
+			return fmt.Errorf("resolved manual maintenance %s: got %q want %q", k, stats[k], want)
+		}
+	}
+	return nil
+}
+
 func c4Keys(n int) [][]byte {
 	keys := make([][]byte, n)
 	for i := range keys {
@@ -193,6 +244,28 @@ func c4History(s *Store, want []Version, ts uint64) (uint64, error) {
 }
 func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 	stats := db.Stats()
+	if err := c4AdmitMaintenance(stats); err != nil {
+		return err
+	}
+	checkpointKey := "treedb.cache.checkpoint.runs"
+	checkpointCount, parseErr := strconv.ParseUint(stats[checkpointKey], 10, 64)
+	if parseErr != nil {
+		return fmt.Errorf("required checkpoint counter: %w", parseErr)
+	}
+	var expectedCheckpoints uint64
+	if len(r.Boundaries) > 0 && r.Boundaries[len(r.Boundaries)-1].Phase != "reopen_counter_reset" {
+		previous, e := strconv.ParseUint(r.Boundaries[len(r.Boundaries)-1].Stats[checkpointKey], 10, 64)
+		if e != nil {
+			return e
+		}
+		expectedCheckpoints = previous
+		if phase == "pinned_checkpoint" || phase == "preclose" || strings.HasSuffix(phase, "_checkpoint") {
+			expectedCheckpoints++
+		}
+	}
+	if checkpointCount != expectedCheckpoints {
+		return fmt.Errorf("manual checkpoint window %s: got %d want %d", phase, checkpointCount, expectedCheckpoints)
+	}
 	if err := cowPublicACKRouting(treedb.Profile(r.Profile), stats); err != nil {
 		return err
 	}
@@ -383,7 +456,10 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		layout = "forced_pointer"
 	}
 	capacity := n*(epochs*8+8) + 512 + n*(3+6*epochs) + 6
-	r := &c4Record{LifecycleOutcome: "success", SchemaVersion: 1, Leaf: fmt.Sprintf("%s/%s/%s/N%d", p, mode, layout, n), Profile: string(p), Mode: mode, Layout: layout, Keys: n, Epochs: epochs, GroupWidth: c4GroupWidth, PinRing: 2, RecorderCapacity: capacity, Options: opts.COWMemtableLimits, Shards: 4, FlushThreshold: 16 << 20, BackgroundCheckpointInterval: -1, DisableSideStores: true, PointerThreshold: opts.ValueLog.PointerThreshold, ForcePointers: ptr, OrdinaryACK: p.OrdinaryAckClass(), ReadCutCapability: mode == "cow_btree", NativeEligibility: "PENDING", WholeMaintenanceCharge: "PENDING", Qualification: "pending_native_observations", Calls: make([]c4Call, 0, capacity), Boundaries: make([]c4Boundary, 0, epochs*8+16), origin: time.Now()}
+	r := &c4Record{LifecycleOutcome: "success", SchemaVersion: 2, Leaf: fmt.Sprintf("%s/%s/%s/N%d", p, mode, layout, n), Profile: string(p), Mode: mode, Layout: layout, Keys: n, Epochs: epochs, GroupWidth: c4GroupWidth, PinRing: 2, RecorderCapacity: capacity, Options: opts.COWMemtableLimits, Shards: opts.MemtableShards, FlushThreshold: opts.FlushThreshold, BackgroundCheckpointInterval: int64(opts.BackgroundCheckpointInterval), BackgroundCheckpointIdleDuration: int64(opts.BackgroundCheckpointIdleDuration), MaxWALBytes: opts.MaxWALBytes, BackgroundIndexVacuumInterval: int64(opts.BackgroundIndexVacuumInterval), ValueLogGenerationPolicy: uint8(opts.ValueLog.Generational.Policy), DisableSideStores: opts.DisableSideStores, PointerThreshold: opts.ValueLog.PointerThreshold, ForcePointers: opts.ValueLog.ForcePointers, OrdinaryACK: p.OrdinaryAckClass(), ReadCutCapability: mode == "cow_btree", NativeEligibility: "PENDING", WholeMaintenanceCharge: "PENDING", Qualification: "pending_native_observations", Calls: make([]c4Call, 0, capacity), Boundaries: make([]c4Boundary, 0, epochs*8+16), origin: time.Now()}
+	if err := c4AdmitOptions(opts); err != nil {
+		return r, err
+	}
 	var db *treedb.DB
 	var pins []*VersionIterator
 	bench, _ := t.(*testing.B)
