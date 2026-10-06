@@ -130,6 +130,25 @@ var c4Payloads = func() [c4MaxEpochs + 1][]byte {
 }()
 
 func c4Value(epoch int) []byte { return c4Payloads[epoch] }
+
+// Full retained history follows logical-key order and descending timestamps.
+// Equal-timestamp ordinary/grouped replacements retain one record; each epoch
+// adds exactly its insert, tombstone, and reinsert to the immutable seed.
+func c4Expected(keys [][]byte, epochs int) []Version {
+	want := make([]Version, 0, len(keys)*(1+3*epochs))
+	for _, key := range keys {
+		for e := epochs; e > 0; e-- {
+			ts := uint64(10 * e)
+			want = append(want,
+				Version{Key: key, Value: c4Value(e), Timestamp: ts + 3, State: Present},
+				Version{Key: key, Timestamp: ts + 2, State: Tombstone},
+				Version{Key: key, Value: c4Value(e), Timestamp: ts + 1, State: Present})
+		}
+		want = append(want, Version{Key: key, Value: c4Value(0), Timestamp: 1, State: Present})
+	}
+	return want
+}
+
 func c4CheckIterator(it *VersionIterator, want []Version) (uint64, error) {
 	var n uint64
 	var err error
