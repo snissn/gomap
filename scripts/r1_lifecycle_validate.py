@@ -16,6 +16,32 @@ METRICS = {'ns/op', 'B/op', 'allocs/op', 'calls/op', 'loop-ns/call', 'mixed-call
 SCOPE = {'backend': 'direct', 'profile': 'command_wal_durable', 'cached_wrapper': False,
          'command_wal': True, 'disable_background_prune': True}
 SCHEDULE = 'direct-backend-fold-rewrite-vacuum-v1'
+# Complete scalar field set of db.VacuumOnlineStats. A source change that adds
+# attribution must update this contract before its capture can qualify.
+VACUUM_NUMBERS = {
+    'AttemptID', 'TotalDuration', 'UserTreeDuration', 'SystemReserveDuration',
+    'CollectionBasisDuration', 'PreflushDuration', 'CutoverDuration',
+    'SystemTreeDuration', 'FinalPagerSyncDuration', 'SwapPublishDuration',
+    'MaxWriterPause', 'PrecloneTraversalPages', 'RecloneTraversalPages',
+    'CutoverCloneTraversalPages', 'DirtyDescriptors', 'UserTailMutations',
+    'UserTailPointMutations', 'UserTailRangeMutations', 'DeferredCutovers',
+    'ConcurrentMutationAborts', 'RecoverableSetCaptureDuration',
+    'RecoverableSetCaptureAttempts', 'RecoverableSetCaptures',
+    'RecoverableSetRecaptureAttempts', 'RecoverableSetRecaptures',
+    'RecoverableRoots', 'OlderRootRebuildDuration', 'OlderRootRebuilds',
+    'OlderRootDurableResourceCaptureDuration', 'OlderRootDurableResourceCaptures',
+    'OlderRootDurableResourceDescriptors', 'OlderRootDurableResourceBytes',
+    'OlderRootExactCandidateScans', 'OlderRootProjections',
+    'OlderRootProjectionFallbacks', 'OlderRootReusedNonValueLogDescriptors',
+    'OlderRootUniqueExternalSegments', 'DurableResourceCaptureDuration',
+    'DurableResourceCaptures', 'DurableResourceDescriptors', 'DurableResourceBytes',
+    'DurableResourceExactCandidateScans', 'DurableResourceProjections',
+    'DurableResourceProjectionFallbacks', 'OlderRootRebuiltPages',
+    'ReplacementPagerPages', 'ReusedNonValueLogDescriptors', 'UniqueExternalSegments',
+}
+VACUUM_STRINGS = {'Phase', 'OlderRootProjectionFallbackReason',
+                  'DurableResourceProjectionFallbackReason'}
+VACUUM_BOOLS = {'ExactCandidateScan', 'WorkCompleted', 'Canceled'}
 
 
 def require(condition, message):
@@ -87,6 +113,16 @@ def vlog_gc_valid(stats):
     require(stats['SegmentsDeleted'] <= stats['SegmentsEligible'] and stats['BytesDeleted'] <= stats['BytesEligible'], 'value-log deletion exceeds eligibility')
 
 
+def vacuum_valid(stats):
+    require(type(stats) is dict and set(stats) == VACUUM_NUMBERS | VACUUM_STRINGS | VACUUM_BOOLS,
+            'missing or unexpected vacuum attribution fields')
+    require(all(integer(stats[key]) for key in VACUUM_NUMBERS), 'malformed vacuum counters')
+    require(all(type(stats[key]) is str for key in VACUUM_STRINGS), 'malformed vacuum strings')
+    require(all(type(stats[key]) is bool for key in VACUUM_BOOLS), 'malformed vacuum flags')
+    require(stats['WorkCompleted'] is True and stats['Canceled'] is False and bool(stats['Phase']),
+            'vacuum did not complete')
+
+
 def rewrite_valid(stats, dry_run):
     require(stats['DryRun'] is dry_run, 'mislabeled rewrite probe/work')
     reachability_valid(stats['Plan'])
@@ -142,10 +178,7 @@ def maintenance_valid(row, documents):
     reclaim_valid(row['reclaim'])
     require(row['reclaim']['plan_gc']['Plan']['Sources']['ActiveManifestRefs'] < row['before_fold_gc']['Plan']['Sources']['ActiveManifestRefs'], 'fold did not reset active manifest lineage')
     vlog_gc_valid(row['vlog_gc'])
-    vacuum = row['vacuum']
-    require(vacuum['WorkCompleted'] is True and vacuum['Canceled'] is False and bool(vacuum['Phase']), 'vacuum did not complete')
-    counters_valid({key: value for key, value in vacuum.items() if type(value) is not str and type(value) is not bool},
-                   ('AttemptID', 'TotalDuration', 'RecoverableRoots', 'ReplacementPagerPages'), 'vacuum')
+    vacuum_valid(row['vacuum'])
     elapsed = sum(row[key] for key in required_timers)
     elapsed += sum(row['reclaim'][key] for key in ('plan_ns', 'probe_ns', 'rewrite_ns', 'checkpoint_ns', 'gc_ns'))
     require(integer(row['maintenance_ns'], 1) and row['maintenance_ns'] == elapsed, 'maintenance API timer sum mismatch')

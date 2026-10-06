@@ -23,6 +23,10 @@ class RealPacketTests(unittest.TestCase):
         for name in ['build.log', *[row['log'] for row in self.original['runs']]]:
             shutil.copyfile(source.parent / name, self.path.parent / name)
         self.packet = copy.deepcopy(self.original)
+        raw = (source.parent / self.original['runs'][0]['log']).read_text()
+        result_line = next(line for line in raw.splitlines() if 'R1_LIFECYCLE_RESULT ' in line)
+        self.actual_vacuum = decode(result_line.split('R1_LIFECYCLE_RESULT ', 1)[1])['maintenance'][0]['vacuum']
+        self.original_source = source
 
     def save(self):
         self.path.write_text(json.dumps(self.packet))
@@ -139,6 +143,45 @@ class RealPacketTests(unittest.TestCase):
 
     def test_missing_vacuum_completion_with_rebound_raw_hash(self):
         self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update(WorkCompleted=False))
+        self.reject()
+
+    def reset_raw_packet(self):
+        self.packet = copy.deepcopy(self.original)
+        for row in self.original['runs']:
+            shutil.copyfile(self.original_source.parent / row['log'], self.path.parent / row['log'])
+
+    def test_every_actual_vacuum_field_required_with_rebound_raw_hash(self):
+        # Enumerate the actual emitted Go record, independently of validator constants.
+        for field in self.actual_vacuum:
+            with self.subTest(field=field):
+                self.reset_raw_packet()
+                self.edit_results(lambda result: result['maintenance'][0]['vacuum'].pop(field))
+                self.reject()
+
+    def test_every_actual_vacuum_scalar_type_with_rebound_raw_hash(self):
+        for field, value in self.actual_vacuum.items():
+            with self.subTest(field=field):
+                self.reset_raw_packet()
+                wrong = 0 if type(value) is bool else False
+                self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update({field: wrong}))
+                self.reject()
+
+    def test_actual_vacuum_counters_nonnegative_integer_with_rebound_raw_hash(self):
+        for field, value in self.actual_vacuum.items():
+            if type(value) is not int:
+                continue
+            for wrong in (-1, 0.5):
+                with self.subTest(field=field, value=wrong):
+                    self.reset_raw_packet()
+                    self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update({field: wrong}))
+                    self.reject()
+
+    def test_nonfinite_vacuum_counter_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update(TotalDuration=float('nan')))
+        self.reject()
+
+    def test_unclassified_vacuum_field_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update(UnclassifiedCounter=0))
         self.reject()
 
     def test_protected_rewrite_counted_as_work_with_rebound_raw_hash(self):
