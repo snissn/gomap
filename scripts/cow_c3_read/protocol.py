@@ -14,6 +14,36 @@ MODES = {"append_only", "btree", "cow_btree"}
 LAYOUTS = {"inline", "pointer"}
 WORKLOADS = {"point", "group_all_versions", "concurrent"}
 CONTROLS = {"GOROOT", "GOCACHE", "GOMODCACHE", "GOWORK", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOFLAGS", "TMPDIR"}
+C3_FIXTURE = "TreeDB/mvcc/cow_c3_public_bench_test.go"
+
+def variant_paths(variant, *, live=False):
+    """Keep declared custody paths verbatim; offline packets need no live paths."""
+    paths = {}
+    for key in ("source", "binary", "manifest", "build_receipt"):
+        value = variant[key]
+        need(isinstance(value, str), "noncanonical variant path " + key)
+        path = Path(value)
+        need(path.is_absolute() and path.anchor == "/" and str(path) == value and ".." not in path.parts,
+             "noncanonical variant path " + key)
+        if live:
+            need(path.exists() and not path.is_symlink() and path.resolve() == path,
+                 "noncanonical live variant path " + key)
+        paths[key] = path
+    return paths
+
+def variant_git_ids(variant):
+    head, tree = variant["production_commit"], variant["production_git_tree"]
+    need(isinstance(head, str) and isinstance(tree, str)
+         and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head)
+         and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", tree)
+         and len(head) == len(tree), "missing exact Git revision/tree")
+
+def fixture_manifest(fixtures, ident):
+    """Bind the declared workload bytes in each retained source inventory."""
+    files = {item["path"]: item["sha256"] for item in ident["files"]}
+    for fixture in fixtures:
+        need(files.get(fixture["path"]) == fixture["sha256"],
+             "fixture differs from frozen source: " + fixture["path"])
 
 def case_names(case):
     shape = "forced_pointer" if case["layout"] == "pointer" else "inline"
@@ -108,9 +138,15 @@ def config(path):
         need(math.isfinite(noise[key]) and 0 < noise[key] < 1, "predeclare noise/regression bounds")
     need(noise["exclusions"] == "none; retain and stop on contamination", "no post-hoc exclusions")
     need(c["fixtures"] and c["comparison_metrics"] and c["cases"], "missing frozen fixture/metric/cases")
+    need(isinstance(c["fixtures"], list) and len(c["fixtures"]) == 1
+         and set(c["fixtures"][0]) == {"path", "sha256"}
+         and c["fixtures"][0]["path"] == C3_FIXTURE
+         and isinstance(c["fixtures"][0]["sha256"], str)
+         and re.fullmatch(r"[0-9a-f]{64}", c["fixtures"][0]["sha256"]), "canonical C3 fixture required")
     need(set(c["variants"]) == {"baseline", "candidate"}, "two exact variants required")
     for variant in c["variants"].values():
-        need(re.fullmatch(r"[0-9a-f]{40}", variant["production_commit"]) and re.fullmatch(r"[0-9a-f]{40}", variant["production_git_tree"]), "missing exact Git revision/tree")
+        variant_git_ids(variant)
+        variant_paths(variant)
     cases = c["cases"]
     need(len({x["id"] for x in cases}) == len(cases), "duplicate case ids")
     coverage = {(x["profile"], x["layout"], x["workload"], x["mode"]) for x in cases}

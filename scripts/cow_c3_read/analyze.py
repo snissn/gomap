@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest
 from collect import host_gate
 from build import verify_git_receipt
 
@@ -51,6 +51,7 @@ def main():
         need(observed["manifest_sha256"] == declaration["manifest_sha256"] and observed["tree_sha256"] == declaration["source_tree_sha256"], "unbound source manifest")
         need(observed["original_manifest"]["git_head"] == declaration["production_commit"] and observed["original_manifest"]["git_tree"] == declaration["production_git_tree"], "unbound production Git revision/tree")
         verify_git_receipt(None, observed["original_manifest"], json.loads((packet / (variant + "-git_source.raw")).read_text()))
+        fixture_manifest(c["fixtures"], observed)
         source_files = {item["path"]: item["sha256"] for item in observed["files"]}
         for name, value in script_hashes.items():
             need(source_files.get("scripts/cow_c3_read/" + name) == value, "retained tooling differs from frozen source: " + name)

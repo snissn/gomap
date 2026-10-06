@@ -18,11 +18,11 @@ def git(repository, *args):
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     return subprocess.check_output(["git", "-C", str(repository), *args], env=env, stderr=subprocess.PIPE)
 
-def fixture(root):
+def fixture(root, object_format="sha1"):
     """Return actual repository and detached archive, not a synthetic receipt."""
     repository, source = root / "repository", root / "export"
     repository.mkdir(); source.mkdir()
-    git(repository, "init", "-q", "--object-format=sha1")
+    git(repository, "init", "-q", "--object-format=" + object_format)
     (repository / "nested").mkdir()
     (repository / "nested" / "fixture.go").write_bytes(b"package fixture\n")
     (repository / "binary.dat").write_bytes(b"\0\xffretained\n")
@@ -121,6 +121,17 @@ def main():
         refusal("source-tmpdir", lambda: admit_tmpdir({"TMPDIR": str(source)}, source, root / "build-output"))
         (root / "tmp-link").symlink_to(tmpdir, target_is_directory=True)
         refusal("symlink-tmpdir", lambda: admit_tmpdir({"TMPDIR": str(root / "tmp-link")}, source, root / "build-output"))
+        sha256_root = root / "sha256-objects"
+        sha256_root.mkdir()
+        repository256, source256, head256, tree256 = fixture(sha256_root, "sha256")
+        manifest256, receipt256 = git_source_authority(source256, repository256, head256, tree256)
+        verify_git_receipt(source256, manifest256, receipt256)
+        verify_git_receipt(None, manifest256, receipt256)
+        write(sha256_root / "source-manifest.json", manifest256)
+        write(sha256_root / "git-source-authority.json", receipt256)
+        from protocol import variant_git_ids
+        variant_git_ids({"production_commit": head256, "production_git_tree": tree256})
+        results.append({"case": "valid-sha256-git-live-offline-and-config-ids", "status": "accepted", "git_head": head256, "git_tree": tree256})
     except BaseException as error:
         write(root / "failure.json", {"type": type(error).__name__, "error": str(error), "completed_results": results})
         raise

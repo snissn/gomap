@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from collect import host_gate, host_snapshot
 from prepare_config import draft
-from protocol import config, process_environment, sha, write
+from protocol import config, process_environment, sha, write, variant_paths
 
 def main():
     parser = argparse.ArgumentParser()
@@ -24,6 +24,8 @@ def main():
     value["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     for variant in value["variants"].values():
         variant.update(production_commit="1" * 40, production_git_tree="2" * 40)
+        variant.update({key: "/synthetic/absent/" + key for key in ("source", "binary", "manifest", "build_receipt")})
+    value["fixtures"][0]["sha256"] = "3" * 64
     path = out / "config.json"
     write(path, value)
     assert len(config(path)["cases"]) == 54
@@ -55,6 +57,44 @@ def main():
     refuse("unbound-tmpdir", lambda c: c["host"].update(tmpdir="/other"), "unbound temporary database filesystem")
     refuse("extra-control", lambda c: c["environment"].update(EXTRA="1"), "missing/extra explicit environment controls")
     refuse("missing-tree", lambda c: c["variants"]["baseline"].update(production_git_tree="0"), "missing exact Git revision/tree")
+    for label, fixtures in (("wrong-fixture", [{"path": "go.mod", "sha256": "3" * 64}]),
+                            ("external-fixture", [{"path": "/external/fixture.go", "sha256": "3" * 64}]),
+                            ("duplicate-fixture", value["fixtures"] * 2),
+                            ("invalid-fixture-hash", [{**value["fixtures"][0], "sha256": "3" * 40}])):
+        refuse(label, lambda c, f=fixtures: c.update(fixtures=f), "canonical C3 fixture required")
+    for variant in ("baseline", "candidate"):
+        for key in ("source", "binary", "manifest", "build_receipt"):
+            for label, replacement in (("relative", "relative/path"), ("trailing-slash", "/synthetic/path/"),
+                                       ("dot", "/synthetic/./path"), ("dotdot", "/synthetic/../path")):
+                refuse(variant + "-" + key + "-" + label,
+                       lambda c, v=variant, k=key, r=replacement: c["variants"][v].update({k: r}), "noncanonical variant path")
+        refuse(variant + "-mixed-git-widths", lambda c, v=variant: c["variants"][v].update(production_git_tree="2" * 64), "missing exact Git revision/tree")
+    # Offline validation keeps canonical absent paths; collection additionally
+    # refuses leaf and ancestor symlinks for all four actual custody paths.
+    valid256 = copy.deepcopy(value)
+    for variant in valid256["variants"].values():
+        variant.update(production_commit="1" * 64, production_git_tree="2" * 64)
+    write(path, valid256)
+    assert len(config(path)["cases"]) == 54
+    live_dir = out / "live-custody"
+    live_dir.mkdir()
+    live = {key: str(live_dir / key) for key in ("source", "binary", "manifest", "build_receipt")}
+    for path_value in live.values():
+        Path(path_value).touch()
+    variant_paths(live, live=True)
+    parent_link = out / "linked-parent"
+    parent_link.symlink_to(live_dir, target_is_directory=True)
+    for key in live:
+        leaf_link = out / ("linked-" + key)
+        leaf_link.symlink_to(live[key])
+        for label, linked in (("leaf", leaf_link), ("parent", parent_link / key)):
+            try:
+                variant_paths({**live, key: str(linked)}, live=True)
+            except ValueError as error:
+                assert "noncanonical live variant path" in str(error)
+                results.append({"label": key + "-symlink-" + label, "refused": str(error)})
+            else:
+                raise AssertionError("live symlink accepted")
     # ACK authority is mandatory in the frozen protocol, even if someone edits
     # the non-runnable draft before freezing it. Exercise both binary variants.
     for variant_name in ("baseline", "candidate"):
