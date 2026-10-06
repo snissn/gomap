@@ -82,6 +82,38 @@ Report no RSS quota, whole-process zero-allocation or production speedup from
 internal reserve/lookup witnesses. C4 owns sustained public qualification and
 any recommendation to promote the mode.
 
+## External MVCC COW read admission witnesses
+
+`TestC3COWStoreReadersProgressDuringPreparedGroup` retains the actual public
+Store/group-writer preswap window across all three production profiles and
+inline/forced-pointer values. GetAt and IterateVersions finish on the old cut
+before writer release; the fresh complete-group/history oracle follows. Its
+bounded functional observation is not an ops/sec measurement.
+
+`TestC3CapturedCutMaterializesOutsideFloorAdmission` pauses point seek or iterator
+construction after capture, applies same-ts replacement, late history and a
+logical tombstone, then advances the floor before resuming. Forced-pointer cases
+also checkpoint, rewrite and GC while the Store read cut remains pinned.
+`TestC3GroupAdmissionCapabilityAndACK` discriminates resolved atomic capability
+from broad legacy successor-method presence and verifies floor exclusion through
+the admitted write. `TestC3ReadCutFailureAndClose` and
+`TestC3ReadCutCapacityRefusalHasNoFallback` preserve admission/storage/Close errors,
+release pinned ownership and resume after finite refusal. Unsupported prune
+checks preserve the existing floor and WAL/publication/capture counters.
+
+`TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose` exercises physical
+tombstone and retained disk fallback with inline/pointer values. Its captured
+source pause or held-admission helper seam proves actual DB Close queued its
+exclusive read gate before allowing the internal merge to finish. Bounded joins
+and final zero retained cut/charge receipts cover the synchronous merge lifetime.
+
+Run the changed package and public COW contract/lifetime/race tests on frozen
+inputs. The [standalone benchmark](../benchmarks/cow-c3-read-5076/README.md)
+compares the identical fixture on baseline/candidate with matched profiles,
+inline/pointer values and legacy controls. Its ordinary concurrent calls measure
+bounded call overlap; the preswap test establishes phase-specific read progress.
+Neither substitutes for full C3 maintenance or sustained C4 qualification.
+
 ## Additional implementation witnesses
 
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,

@@ -75,6 +75,25 @@ input, ordering, bound, and fuzz properties remain in the codec package.
 | Ownership | Exactly one `mvcc.Store` owns one open TreeDB handle and reserved MVCC namespace. |
 | Errors | Validation, malformed-record, storage, floor, and durability failures remain distinguishable with `errors.Is`. Storage acknowledgement errors may be commit-ambiguous but never expose a partial batch. |
 
+## Explicit COW read milestone
+
+The resolved COW engine supports atomic grouped external-MVCC publication and
+forward snapshot-bound reads with the explicit coherent-cut capability.
+Qualified groups share floor admission through their ordinary ACK; readers pin
+one cut under that admission and decode/construct iterators after release.
+Previously admitted cuts retain earlier same-ts bytes and exclude subsequent
+historical inserts, even after a later floor advance. Point calls remain
+independently fresh. Exact-key bounds, tombstones, empty values and single-Store
+namespace ownership are unchanged.
+
+This scope does not qualify COW reverse scans or pruning: `PruneVersions` refuses
+before floor/WAL effects. The native maintenance producer, integrated C3
+maintenance/replay/lifecycle gates and sustained C4 performance gates remain
+outstanding. The general semantics table above describes eligible legacy modes;
+it does not override this explicit-mode refusal boundary. See
+[the COW contract](cow-cache-publication.md) and
+[bounded public read fixture](../benchmarks/cow-c3-read-5076/README.md).
+
 ## Unsupported or Dgraph-owned semantics
 
 These are not silently emulated by TreeDB MVCC:
