@@ -80,6 +80,56 @@ func TestCOWSuccessorPublicEmptyKeyValue(t *testing.T) {
 			if _, _, found, err := db.SeekGE(nil, nil); err != nil || found {
 				t.Fatalf("deleted empty successor found%t err%v", found, err)
 			}
+			// Fresh and reset batches must preserve the normalized empty key even
+			// when no copied-byte arena is needed. WriteSync then reopen exercises
+			// the actual journal/checkpoint producer in each durability profile.
+			b := db.NewBatchWithSize(1)
+			defer b.Close()
+			if err := b.Set(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Write(); err != nil {
+				t.Fatal(err)
+			}
+			resetter, ok := b.(interface{ Reset() })
+			if !ok {
+				t.Fatal("point batch does not support reset")
+			}
+			resetter.Reset()
+			if err := b.Delete(nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Write(); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, found, err := db.SeekGE(nil, nil); err != nil || found {
+				t.Fatalf("batch-deleted empty successor found%t err%v", found, err)
+			}
+			resetter.Reset()
+			if err := b.Set(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.WriteSync(); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			key, value, found, err := db.SeekGE(nil, nil)
+			if err != nil || !found || len(key) != 0 || len(value) != 0 {
+				t.Fatalf("reopened empty successor=%#v/%#v found%t err%v", key, value, found, err)
+			}
+			if found, err := db.Has(nil); err != nil || !found {
+				t.Fatalf("reopened empty point Has=%t err%v", found, err)
+			}
 		})
 	}
 }
