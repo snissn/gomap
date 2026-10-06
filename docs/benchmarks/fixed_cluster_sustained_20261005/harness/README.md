@@ -305,3 +305,5 @@ read-consumer fixtures, and generated C1/C4 source packets; they qualify neither
 ranking nor runtime artifacts. Collection still requires #5021 actual checkpoint,
 #5068 source landing/freeze, final generated-source review, separate admissions,
 all oracle/resource/lifecycle gates and independent artifact acceptance.
+
+The isolated permission observation switches to `read-window` with an exact `60s` duration, supported by the read-only driver. Its exact argv validator rejects a substituted duration. This does not change the original mixed checkpoint’s `300s` declaration or the matched `60s` C1/C4 workloads. Synthetic argv controls do not prove that credentials were read or that an actual permission observation passed.

@@ -67,6 +67,8 @@ def isolated_arguments(c,a,nonce):
         need(argv.count(flag)==1,"exact removed mixed/gate flag")
         at=argv.index(flag);del argv[at:at+2]
     argv[argv.index("-mode")+1]="read-window"
+    # Isolated credential observation uses the read-only driver's 60s bound.
+    argv[argv.index("-read-window")+1]="60s"
     validate_command(c,a,nonce,argv)
     return argv
 def validate_command(c,a,nonce,argv):
@@ -79,6 +81,7 @@ def validate_command(c,a,nonce,argv):
     for flag in ("-read-resource-gate-dir","-mixed-interval","-mixed-profile","-mixed-originals"):
         at=expected.index(flag);del expected[at:at+2]
     expected[expected.index("-mode")+1]="read-window"
+    expected[expected.index("-read-window")+1]="60s"
     need(argv==expected and a["driver_uid_gid"]=="1000:1000","exact readonly driver argv/user")
     need(re.fullmatch("[0-9a-f]{32}",nonce) is not None,"fresh invocation nonce")
 

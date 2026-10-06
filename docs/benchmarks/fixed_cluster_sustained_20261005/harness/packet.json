@@ -269,7 +269,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "8d0f29b8d7731d261d489349c580b4211ef752425fda7d88eeeccf8b94f62717"
+        "sha256": "f9e7fe729fa5227ff248e540c7208e313036cc0b647e36a0d58a301e5a8930d8"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"

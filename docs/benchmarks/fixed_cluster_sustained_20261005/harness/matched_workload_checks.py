@@ -167,3 +167,42 @@ def matched_controls():
  (root/'integration.json').write_text(json.dumps({'state':'SYNTHETIC_SOURCE_AND_ACTUAL_READ_CONSUMER_ONLY','receipts':receipts,'runtime_started':False,'network_calls':0,'limitations':['Synthetic native-table rows exercise accounting, not actual ranking or campaign acceptance.','Real collection and independent final source/artifact acceptance are outstanding.']},indent=2)+'\n')
 
 matched_controls()
+
+# Permission observation must use the read-only driver's supported duration,
+# independently of the immutable 300s mixed checkpoint or matched C1/C4 arm.
+permission_root=fixtures/'permission-duration-controls';permission_root.mkdir()
+for label,packet in [('original_c1',R),('matched_c1',fixtures/'matched-source-controls/rf4matched5068w01c1'),('matched_c4',fixtures/'matched-source-controls/rf4matched5068w02c4')]:
+ program="""import sys,pathlib,importlib.util,json,copy
+sys.dont_write_bytecode=True
+root=pathlib.Path(sys.argv[1]);sys.path.insert(0,str(root))
+def load(filename,name):
+ spec=importlib.util.spec_from_file_location(name,root/filename);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+c=load('gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py','actual_permission_collector')
+p=load('gomap-trial24-permission-stage-prepare-root-v1.py','actual_permission_producer')
+a={'query_image':'sha256:'+'1'*64,'driver_uid_gid':'1000:1000','driver_sha256':'2'*64};nonce='a'*32
+c.APPROVED=a;c.root=c.ROOT;c.image=a['query_image'];c.launch_nonce=nonce
+mixed=c.driver_arguments();argv=p.isolated_arguments(c,a,nonce)
+assert argv[argv.index('-mode')+1]=='read-window' and argv[argv.index('-read-window')+1]=='60s'
+assert '--network=none' in argv and '--network=host' not in argv
+assert all(argv[argv.index(flag)+1]==value for flag,value in [('-read-concurrency',str(c.W.concurrency)),('-timeout','420s'),('-rpc-timeout','3s'),('-read-warmup','64'),('-read-max-attempts','65536'),('-read-output-bytes','134217728')])
+checks=['supported60s_isolated_actual_argv_and_preserved_caps']
+assert c.driver_arguments()==mixed and mixed[mixed.index('-read-window')+1]==str(c.W.duration)+'s'
+checks.append('mixed_actual_argv_unchanged')
+for label,value in [('unsupported300s','300s'),('unsupported61s','61s'),('substituted59s','59s')]:
+ forged=copy.deepcopy(argv);forged[forged.index('-read-window')+1]=value
+ try:p.validate_command(c,a,nonce,forged)
+ except ValueError:checks.append('reject_'+label)
+ else:raise AssertionError('accepted '+label)
+for label,forged in [('missing_duration',argv[:argv.index('-read-window')]+argv[argv.index('-read-window')+2:]),('extra_duration',argv+['-read-window','60s']),('restored_mixed_mode',copy.deepcopy(argv))]:
+ if label=='restored_mixed_mode':forged[forged.index('-mode')+1]='mixed-window'
+ try:p.validate_command(c,a,nonce,forged)
+ except ValueError:checks.append('reject_'+label)
+ else:raise AssertionError('accepted '+label)
+print(json.dumps({'checks':checks,'mixed_argv':mixed,'permission_argv':argv,'runtime_started':False,'network_calls':0}))
+"""
+ argv=[sys.executable,'-B','-c',program,str(packet)]
+ proc=subprocess.run(argv,capture_output=True,text=True,timeout=20)
+ for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv))]:(permission_root/(label+'.'+suffix)).write_text(value)
+ assert proc.returncode==0,(label,proc.stderr)
+ result=json.loads(proc.stdout);assert len(result['checks'])==8 and not result['runtime_started'] and result['network_calls']==0
+ checks.extend('permission_'+label+'_'+name for name in result['checks'])
