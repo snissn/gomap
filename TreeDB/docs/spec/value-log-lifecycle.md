@@ -660,3 +660,16 @@ fail closed. Dry-run performs no revision unlink. Separate manifest counters and
 Compatibility-only stores retain their segment behavior and explicitly report
 revision GC unsupported. See the precise
 [storage contract](storage-format.md#split-leaf-generation-manifest).
+
+## Native appender creation metadata ownership
+
+The command-WAL replay-inline appender registers each produced primary or leaf
+segment with the value-log manager before returning its pointer. After that
+handoff succeeds and the registered physical identity matches the creation
+witness, the native appender releases that file's creation metadata, including
+its backing storage when empty. Failed or ambiguous handoffs retain their
+records. This bounds successful creation bookkeeping across natural rotations;
+current-segment reporting, pending-pointer protection, root resource closures,
+and segment retirement still use their existing owners. Standalone rewrite
+writers retain their complete created-file history for publication and cleanup.
+This bookkeeping bound does not establish a whole-database physical-space bound.
