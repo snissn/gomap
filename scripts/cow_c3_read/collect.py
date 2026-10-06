@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, row, schedule, sha, write
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write
 from build import verify_git_receipt
 
 def wait_child(child, timeout, grace=3.0):
@@ -39,7 +39,7 @@ def wait_child(child, timeout, grace=3.0):
         child.returncode = os.waitstatus_to_exitcode(status)
         raise
 
-def host_snapshot(out, name, storage, source):
+def host_snapshot(out, name, storage, source, env):
     data = {"at": now(), "uname": platform.uname()._asdict(), "cpu_count": os.cpu_count(),
             "load": list(os.getloadavg()), "storage_path": str(storage),
             "storage_device": Path(storage).stat().st_dev,
@@ -52,7 +52,7 @@ def host_snapshot(out, name, storage, source):
         data[Path(source).name + "_sha256"] = sha(target)
     processes = out / (name + "-processes.txt")
     # comm intentionally avoids collecting unrelated process arguments/secrets.
-    processes.write_bytes(subprocess.check_output(["ps", "-eo", "pid,ppid,etimes,pcpu,rss,comm", "--no-headers"]))
+    processes.write_bytes(subprocess.check_output(["ps", "-eo", "pid,ppid,etimes,pcpu,rss,comm", "--no-headers"], env=env))
     data["processes_sha256"] = sha(processes)
     write(out / (name + "-host.json"), data)
     return data
@@ -81,10 +81,8 @@ def main():
         scripts[name] = sha(out / name)
     write(out / "script-identity.json", scripts)
     state, receipts = {}, []
-    env = os.environ.copy()
-    original = {key: env.get(key) for key in c["environment"]}
-    env.update(c["environment"])
-    write(out / "environment.json", {"effective_controls": c["environment"], "original_controls": original})
+    env = process_environment(c["environment"])
+    write(out / "environment.json", {"effective_controls": c["environment"], "effective_process_environment": env})
     try:
         storage = Path(c["environment"]["TMPDIR"])
         need(storage.is_dir() and not storage.is_symlink() and storage.resolve() == storage and storage.stat().st_uid == os.getuid(), "TMPDIR must be an existing owned real directory")
@@ -110,6 +108,7 @@ def main():
             need(sha(v["build_receipt"]) == v["build_receipt_sha256"], "build receipt drift")
             need(build["binary_sha256"] == v["binary_sha256"] and build["source_tree_sha256"] == ident["tree_sha256"], "unbound build receipt")
             need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "unmatched build controls")
+            need(build.get("effective_process_environment") == env, "build process environment mismatch")
             need(build["go_version"] == c["go_version"] and build["go_binary_sha256"] == c["go_binary_sha256"], "toolchain mismatch")
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
@@ -127,8 +126,8 @@ def main():
             need(build["effective_module_identity"] == frozen_artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
             verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
-            for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE"):
-                need(go_env[key] == c["environment"][key], "actual go env mismatch " + key)
+            for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
+                need(go_env[key] == env[key], "actual go env mismatch " + key)
             need(go_env["GOOS"] == "linux" and go_env["GOARCH"] == "amd64", "actual build platform mismatch")
             shutil.copyfile(v["build_receipt"], out / (variant + "-build-receipt.json"))
             write(out / (variant + "-build-source-after.json"), build_post)
@@ -151,7 +150,7 @@ def main():
             for variant, other in state.items():
                 need(not drift(other["source"], other["identity"]), "source drift before " + name)
                 need(sha(other["binary"]) == c["variants"][variant]["binary_sha256"], "binary drift before " + name)
-            before = host_snapshot(out, name + "-before", storage, s["source"])
+            before = host_snapshot(out, name + "-before", storage, s["source"], env)
             host_gate(before, c["host"])
             argv = command(s["binary"], case, item, c["timeout_seconds"])
             stdout, stderr = out / (name + ".stdout"), out / (name + ".stderr")
@@ -161,7 +160,7 @@ def main():
                 status, usage, timed_out = wait_child(child, c["timeout_seconds"])
             child_elapsed = time.monotonic() - start
             child_completed = now()
-            after = host_snapshot(out, name + "-after", storage, s["source"])
+            after = host_snapshot(out, name + "-after", storage, s["source"], env)
             changes = {v: drift(t["source"], t["identity"]) for v, t in state.items()}
             r = dict(item, label=name, started_utc=started, completed_utc=child_completed, command=argv,
                      cwd=str(s["source"]), exit_code=child.returncode, wait_status=status,

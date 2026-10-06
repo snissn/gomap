@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import identity, sha, write
+from protocol import identity, process_environment, sha, write
 from build import git_source_authority
 
 def main():
@@ -23,7 +23,7 @@ def main():
     original.mkdir()
     config = draft()
     config.update(status="frozen-approved", coordinator_acceptance="synthetic refusal only, never executable collection")
-    config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/mod", TMPDIR=str(root))
+    config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(root))
     config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(root), tmpdir_device=root.stat().st_dev)
     config["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     # Real tiny Git objects exercise offline provenance without pretending the
@@ -62,6 +62,9 @@ def main():
             path = original / (variant + "-" + name + ".raw")
             if name == "git_source":
                 write(path, git_receipt)
+            elif name == "go_env":
+                effective = process_environment(config["environment"])
+                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH")}, "GOOS": "linux", "GOARCH": "amd64"})
             else:
                 path.write_text("synthetic-refusal-input " + name + "\n")
             retained[name] = {"path": path.name, "sha256": sha(path)}
@@ -69,9 +72,10 @@ def main():
         write(original / (variant + "-build-artifacts.json"), retained)
         receipt = original / (variant + "-build-receipt.json")
         write(receipt, {"binary_sha256": declaration["binary_sha256"], "source_tree_sha256": declaration["source_tree_sha256"],
-                        "environment": config["environment"], "race": False, "build_tags": [], "artifacts": artifacts})
+                        "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]), "race": False, "build_tags": [], "artifacts": artifacts})
         declaration.update(build_receipt=str(receipt), build_receipt_sha256=sha(receipt))
     write(original / "config.json", config)
+    write(original / "environment.json", {"effective_controls": config["environment"], "effective_process_environment": process_environment(config["environment"])})
     write(original / "receipts.json", [])
     hashes = {}
     for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
@@ -80,6 +84,35 @@ def main():
     write(original / "script-identity.json", hashes)
     write(original / "completion.json", {"config_sha256": sha(original / "config.json"), "receipts_sha256": sha(original / "receipts.json"),
                                          "script_identity_sha256": sha(original / "script-identity.json"), "runs": 756})
+    def damage_build_environment(packet):
+        receipt = packet / "baseline-build-receipt.json"
+        value = json.loads(receipt.read_text())
+        value["effective_process_environment"]["GOAMD64"] = "v3"
+        write(receipt, value)
+        rebind_receipt(packet, receipt)
+
+    def rebind_receipt(packet, receipt):
+        frozen = json.loads((packet / "config.json").read_text())
+        frozen["variants"]["baseline"]["build_receipt_sha256"] = sha(receipt)
+        write(packet / "config.json", frozen)
+        completion = json.loads((packet / "completion.json").read_text())
+        completion["config_sha256"] = sha(packet / "config.json")
+        write(packet / "completion.json", completion)
+
+    def damage_go_environment(packet):
+        raw = packet / "baseline-go_env.raw"
+        value = json.loads(raw.read_text())
+        value["GOENV"] = "/synthetic/persisted-goenv"
+        write(raw, value)
+        artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
+        artifacts["go_env"]["sha256"] = sha(raw)
+        write(packet / "baseline-build-artifacts.json", artifacts)
+        receipt = packet / "baseline-build-receipt.json"
+        value = json.loads(receipt.read_text())
+        value["artifacts"]["go_env"]["sha256"] = sha(raw)
+        write(receipt, value)
+        rebind_receipt(packet, receipt)
+
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
         ("empty-map", lambda packet: write(packet / "baseline-build-artifacts.json", {}), "missing/extra build provenance map"),
@@ -89,6 +122,9 @@ def main():
         ("changed-manifest", lambda packet: write(packet / "baseline-source-manifest.json", {"files": [{"path": "fixture.go", "sha256": "4" * 64}]}), "source identity drift"),
         ("changed-artifact", lambda packet: (packet / "baseline-compiled_input_closure.raw").write_text("changed\n"), "build provenance drift"),
         ("build-source-drift", lambda packet: write(packet / "baseline-build-source-after.json", {"drift": ["fixture.go"]}), "build source-after drift"),
+        ("captured-process-environment", lambda packet: write(packet / "environment.json", {}), "captured process environment mismatch"),
+        ("build-process-environment", damage_build_environment, "build process environment mismatch"),
+        ("actual-go-environment", damage_go_environment, "actual go env mismatch GOENV"),
     ]
     results = []
     for label, mutation, expected in cases:
@@ -96,7 +132,7 @@ def main():
         shutil.copytree(original, packet)
         if mutation:
             mutation(packet)
-        process = subprocess.run([sys.executable, str(scripts / "analyze.py"), str(packet)], capture_output=True)
+        process = subprocess.run([sys.executable, "-B", str(scripts / "analyze.py"), str(packet)], capture_output=True)
         (root / (label + ".stdout")).write_bytes(process.stdout)
         (root / (label + ".stderr")).write_bytes(process.stderr)
         assert process.returncode != 0 and expected in process.stderr.decode(), (label, process.stderr.decode())

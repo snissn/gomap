@@ -37,13 +37,13 @@ Run the inexpensive fixture smoke before preparing retained collection:
 GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission$' -benchtime=1x -benchmem -count=1 \
   > /tmp/cow-c3-fixture.stdout 2> /tmp/cow-c3-fixture.stderr
-python3 scripts/cow_c3_read/parser_smoke.py \
+python3 -B scripts/cow_c3_read/parser_smoke.py \
   --stdout /tmp/cow-c3-fixture.stdout --out /tmp/cow-c3-parser-smoke
-python3 scripts/cow_c3_read/config_storage_smoke.py --out /tmp/cow-c3-config-storage-smoke
-python3 scripts/cow_c3_read/git_source_smoke.py --out /tmp/cow-c3-git-source-smoke
-python3 scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smoke
-python3 scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
-python3 scripts/cow_c3_read/build_module_smoke.py \
+python3 -B scripts/cow_c3_read/config_storage_smoke.py --out /tmp/cow-c3-config-storage-smoke
+python3 -B scripts/cow_c3_read/git_source_smoke.py --out /tmp/cow-c3-git-source-smoke
+python3 -B scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smoke
+python3 -B scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
+python3 -B scripts/cow_c3_read/build_module_smoke.py \
   --compiled-packages <real-compiled-dependencies.stdout> --out /tmp/cow-c3-module-smoke
 ```
 
@@ -53,6 +53,10 @@ The watchdog smoke covers successful, failed and stuck children, including
 SIGQUIT refusal followed by SIGKILL and complete reaping. The analyzer smoke
 rejects incomplete or changed provenance; it does not fabricate successful
 benchmark packets. Output directories must be new.
+The module smoke also poisons ambient build/runtime settings and a persisted
+GOENV file, then verifies the shared environment helper and an actual env
+child receive only the fixed policy. This construction check runs no Go;
+ordinary Go build/runtime smoke must verify the actual toolchain defaults.
 
 `prepare_config.py --out <draft.json>` produces a deliberately non-runnable
 draft. Each exact leaf and case ID is derived from its profile/mode/layout/workload;
@@ -71,6 +75,16 @@ and build/packet output. Freeze its absolute path and actual filesystem device
 in host.tmpdir/tmpdir_device; all Go builds and benchmark databases use it.
 Free-space admission checks this database-temp filesystem; source filesystem
 path/device/free-space are retained separately.
+Build and benchmark processes inherit no ambient environment variables.
+One shared derivation passes exactly those nine controls plus PATH=os.defpath,
+GOENV=off, GOTOOLCHAIN=local, LC_ALL=C and GOPATH equal to GOMODCACHE's
+parent's parent. Thus persisted Go settings, ambient compiler/build flags and
+runtime GODEBUG settings cannot enter either variant. The full effective
+process environment is retained in both build receipts and the collection
+packet and checked during collection and offline analysis. Actual full
+`go env -json` remains retained, including the toolchain's default settings.
+Each profile also requires exact ordinary WAL counts in both variant rules
+and comparable metrics: durable append/sync 1/1, relaxed 1/0, NoWAL 0/0.
 The builder requires a Git repository containing the declared commit/tree.
 It reads actual commit/tree objects with replacement objects disabled and verifies
 the complete exported source against every Git blob, path and Git executable mode.
@@ -79,7 +93,9 @@ refuse before Go. A retained object proof binds commit to tree to the complete
 manifest; collection rechecks actual source bytes, while offline analysis verifies
 that object proof without requiring the original repository. The proof does not
 replace the retained source-byte and compiled-input audit.
-Its output stays outside source and retains full source manifests, actual
+Invoke Python tools with `-B`, as shown, so importing them does not create
+bytecode files in immutable source exports. Its output stays outside source
+and retains full source manifests, actual
 go env/module graph/compiled dependencies/build streams/buildinfo, complete
 compiled input hashes and explicitly missing transient generated inputs.
 Actual compiled-package/test dependency Module records, selected versions/checksums
@@ -93,11 +109,11 @@ compilation succeeded; retain its original failed command/streams separately. Ex
 require separate frozen-source support and currently refuse.
 
 ```sh
-python3 scripts/cow_c3_read/build.py --source <immutable-source> \
+python3 -B scripts/cow_c3_read/build.py --source <immutable-source> \
   --git-repository <repository-containing-objects> \
   --git-head <commit> --git-tree <tree> --controls <controls.json> --out <new-build-dir>
-python3 scripts/cow_c3_read/collect.py --config <frozen-approved.json> --out <new-packet>
-python3 <new-packet>/analyze.py <new-packet>
+python3 -B scripts/cow_c3_read/collect.py --config <frozen-approved.json> --out <new-packet>
+python3 -B <new-packet>/analyze.py <new-packet>
 ```
 
 Root must review actual source/build closures and canonical module provenance,

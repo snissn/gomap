@@ -5,17 +5,68 @@ This offline check does not compile, contact a network or generate timings.
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
+import subprocess
+from unittest.mock import patch
 
 from build import compiled_modules, objects, canonical_modules
-from protocol import sha, write
+from protocol import process_environment, sha, write
+
+def environment_smoke(out):
+    """Exercise the actual environment helper and a child, without invoking Go."""
+    controls = {"GOROOT": str(out / "toolchain"), "GOCACHE": str(out / "cache"),
+                "GOMODCACHE": str(out / "gopath/pkg/mod"), "GOWORK": "off",
+                "GOMAXPROCS": "4", "GOGC": "100", "GOMEMLIMIT": "off",
+                "GOFLAGS": "", "TMPDIR": str(out / "temporary")}
+    persisted = out / "poisoned-goenv"
+    persisted.write_text("GOAMD64=v4\nGOEXPERIMENT=arenas\nCGO_ENABLED=0\nGOFLAGS=-race\n")
+    poison = {"GOAMD64": "v4", "GOEXPERIMENT": "arenas", "CGO_ENABLED": "0",
+              "GOENV": str(persisted), "GOTOOLCHAIN": "auto", "GOFLAGS": "-race",
+              "GODEBUG": "asyncpreemptoff=1", "GOPATH": "/ambient/gopath",
+              "CC": "/ambient/compiler", "CGO_CFLAGS": "-march=native",
+              "PATH": "/ambient/bin", "HOME": "/ambient/home",
+              "LD_PRELOAD": "/ambient/injection", "UNDECLARED_SENTINEL": "ambient"}
+    expected = dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
+                    GOPATH=str(out / "gopath"), LC_ALL="C")
+    argv = ["/usr/bin/env"]
+    with patch.dict(os.environ, poison, clear=True):
+        env = process_environment(controls)
+        assert env == expected
+        with (out / "environment-child.stdout").open("wb") as stdout, (out / "environment-child.stderr").open("wb") as stderr:
+            child = subprocess.run(argv, env=env, stdout=stdout, stderr=stderr)
+    assert child.returncode == 0 and not (out / "environment-child.stderr").read_bytes()
+    observed = dict(line.split("=", 1) for line in (out / "environment-child.stdout").read_text().splitlines())
+    assert observed == expected
+    checks = [{"label": "ambient-poison-and-persisted-goenv-child", "passed": True,
+               "scope": "actual helper and env executable child; actual Go defaults require ordinary runtime smoke"}]
+    for label, key, value in (("undeclared-goamd64", "GOAMD64", "v4"),
+                              ("declared-goenv-override", "GOENV", str(persisted)),
+                              ("non-string-control", "GOGC", 100),
+                              ("relative-module-cache", "GOMODCACHE", "gopath/pkg/mod"),
+                              ("root-gopath", "GOMODCACHE", "/pkg/mod")):
+        damaged = dict(controls)
+        damaged[key] = value
+        try:
+            process_environment(damaged)
+        except ValueError as error:
+            checks.append({"label": label, "refused": True, "reason": str(error)})
+        else:
+            raise AssertionError("accepted damaged process controls: " + label)
+    write(out / "environment-construction.json", {"controls": controls, "poisoned_ambient": poison,
+          "effective_process_environment": expected, "command": argv, "exit_code": child.returncode,
+          "stdout_sha256": sha(out / "environment-child.stdout"), "stderr_sha256": sha(out / "environment-child.stderr"),
+          "checks": checks})
+    return checks
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiled-packages", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
+    environment_checks = environment_smoke(args.out)
     packages = objects(args.compiled_packages.read_text())
     mains = {p["Module"]["Dir"] for p in packages if p.get("Module", {}).get("Main")}
     assert len(mains) == 1
@@ -55,10 +106,13 @@ def main():
         check("inconsistent-module", inconsistent, "inconsistent compiled module"),
         check("external-local-replacement", outside, "external local replacement"),
     ]
-    write(args.out / "result.json", {"scope": "real compiled-module metadata and synthetic damaged-copy refusal only; no build or timing acceptance",
+    write(args.out / "result.json", {"scope": "real compiled-module metadata, hermetic environment construction and synthetic damaged-copy refusal only; no Go build or timing acceptance",
         "input_sha256": sha(args.compiled_packages), "packages": len(packages), "compiled_modules": canonical,
-        "checks": results, "script_sha256": sha(Path(__file__)), "build_script_sha256": sha(Path(__file__).parent / "build.py")})
-    print(json.dumps({"compiled_modules": len(modules), "refusals": len(results)}))
+        "checks": results, "environment_checks": environment_checks,
+        "script_sha256": sha(Path(__file__)), "build_script_sha256": sha(Path(__file__).parent / "build.py"),
+        "protocol_script_sha256": sha(Path(__file__).parent / "protocol.py")})
+    print(json.dumps({"compiled_modules": len(modules), "module_refusals": len(results),
+                      "environment_checks": len(environment_checks)}))
 
 if __name__ == "__main__":
     main()
