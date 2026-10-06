@@ -29,6 +29,8 @@ def validate_packet(packet, suite="c3-read"):
     need(set(script_hashes) == set(selected_scripts), "missing/extra retained tooling scripts")
     for name, value in script_hashes.items():
         need(sha(packet / name) == value, "collector/analyzer script drift")
+    live_toolchain = json.loads((packet / "live-toolchain.json").read_text())
+    need(live_toolchain["go_version"] == c["go_version"], "live toolchain version mismatch")
     for variant in ("baseline", "candidate"):
         declaration = c["variants"][variant]
         receipt_path = packet / (variant + "-build-receipt.json")
@@ -46,6 +48,7 @@ def validate_packet(packet, suite="c3-read"):
         go_env = json.loads((packet / (variant + "-go_env.raw")).read_text())
         validate_go_environment(go_env, env)
         build_toolchain(build, c, json.loads((packet / (variant + "-toolchain.raw")).read_text()))
+        build_toolchain(build, c, live_toolchain["inventory"])
         validate_no_cgo(objects((packet / (variant + "-compiled_dependencies.raw")).read_text()))
         observed = identity(packet / (variant + "-source-manifest.json"))
         need(observed == json.loads((packet / (variant + "-identity.json")).read_text()), "source identity drift")
