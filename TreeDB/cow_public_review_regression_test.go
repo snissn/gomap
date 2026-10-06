@@ -277,8 +277,12 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := database.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+			compaction, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
+			if err != nil {
 				t.Fatal(err)
+			}
+			if compaction.LeafGenerationGC.FilesDeleted == 0 {
+				t.Fatalf("unused rotated leaf segment was not reclaimed: %+v", compaction.LeafGenerationGC)
 			}
 			cowPublicContractSnapshotValue(t, old, "a", value, true)
 			if err := database.Set([]byte("a"), []byte("after-empty-checkpoint")); err != nil {
