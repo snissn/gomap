@@ -92,6 +92,16 @@ func TestR1PublicPathRehearsalAndRejectPackets(t *testing.T) {
 		{"typed retained-only fallback", func(p *r1Packet) { p.Cells[3].Phases[2].Counters.FieldsReconstructed = 0 }},
 		{"unsupported skipped read", func(p *r1Packet) { p.Cells[0].Phases[1].Skipped = "unsupported" }},
 		{"dirty retained label", func(p *r1Packet) { p.Config.Qualification = "retained" }},
+		{"residual public range mislabeled complete", func(p *r1Packet) {
+			p.Cells[3].Capabilities["ordinary_range"] = "rejected_residual_only_full_row_parity_gap"
+			p.Cells[3].Phases[5] = p.Cells[3].Phases[4]
+			p.Cells[3].Phases[5].Name = "range_public_complete"
+		}},
+		{"measured unsupported public range", func(p *r1Packet) {
+			p.Cells[3].Capabilities["ordinary_range"] = "rejected_residual_only_full_row_parity_gap"
+			p.Cells[3].Phases[5] = r1Measurement{Name: "range_public_complete", Skipped: "ordinary typed range returns residual only", Operations: 1}
+		}},
+		{"illegal public range skip", func(p *r1Packet) { p.Cells[0].Phases[5].Skipped = "ordinary typed range returns residual only" }},
 		{"runtime digest corruption", func(p *r1Packet) { p.Source.RuntimeBlobs["go.mod"] = strings.Repeat("d", 40) }},
 		{"wrong storage boundary", func(p *r1Packet) { p.Cells[0].StorageBoundary = "after_unsupported_upsert" }},
 		{"source missing", func(p *r1Packet) { p.Source.RuntimeSHA256 = "" }},

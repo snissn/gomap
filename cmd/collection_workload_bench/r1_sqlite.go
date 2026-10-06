@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -244,33 +245,12 @@ func (r *r1SQLiteReader) fetch(ids [][]byte) ([][]byte, collections.DocumentMate
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, doc string
-		var d r1Document
-		if r.engine == "sqlite-row" {
-			var residual string
-			e = rows.Scan(&id, &d.Email, &d.City, &d.Name, &d.Bio, &residual)
-			if e == nil {
-				var obj map[string]json.RawMessage
-				e = json.Unmarshal([]byte(residual), &obj)
-				if e == nil {
-					raw, _ := json.Marshal(d)
-					var typed map[string]json.RawMessage
-					_ = json.Unmarshal(raw, &typed)
-					for _, name := range []string{"email", "city", "name", "bio"} {
-						obj[name] = typed[name]
-					}
-					raw, e = json.Marshal(obj)
-					doc = string(raw)
-				}
-			}
-		} else {
-			e = rows.Scan(&id, &doc)
-		}
+		id, doc, e := r1ScanSQLRow(r.engine, rows)
 		if e != nil {
 			return nil, collections.DocumentMaterializationStats{}, e
 		}
 		for _, i := range positions[id] {
-			out[i] = []byte(doc)
+			out[i] = bytes.Clone(doc)
 		}
 	}
 	if e = rows.Err(); e != nil {
@@ -302,4 +282,54 @@ func (s *r1SQLite) point(id []byte) ([]byte, error) {
 }
 func (s *r1SQLite) capabilities([]r1Document) (map[string]string, error) {
 	return map[string]string{"range_decomposition": "quiescent_ids_then_prepared_full_fetch", "ordinary_point": "owned_complete_SQL_select", "ordinary_range": "complete_SQL_row"}, nil
+}
+
+func r1ScanSQLRow(engine string, rows *sql.Rows) (string, []byte, error) {
+	var id, doc string
+	var e error
+	var d r1Document
+	if engine == "sqlite-row" {
+		var residual string
+		e = rows.Scan(&id, &d.Email, &d.City, &d.Name, &d.Bio, &residual)
+		if e == nil {
+			var obj map[string]json.RawMessage
+			e = json.Unmarshal([]byte(residual), &obj)
+			if e == nil {
+				raw, _ := json.Marshal(d)
+				var typed map[string]json.RawMessage
+				_ = json.Unmarshal(raw, &typed)
+				for _, name := range []string{"email", "city", "name", "bio"} {
+					obj[name] = typed[name]
+				}
+				raw, e = json.Marshal(obj)
+				doc = string(raw)
+			}
+		}
+	} else {
+		e = rows.Scan(&id, &doc)
+	}
+	if e != nil {
+		return "", nil, e
+	}
+	return id, []byte(doc), nil
+}
+func (s *r1SQLite) rangeDocuments(city string, limit int) ([][]byte, error) {
+	projection := "id,document"
+	if s.engine == "sqlite-row" {
+		projection = "id,email,city,name,bio,residual"
+	}
+	rows, e := s.db.Query("SELECT "+projection+" FROM rows WHERE city=? ORDER BY city,id LIMIT ?", city, limit)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var out [][]byte
+	for rows.Next() {
+		_, doc, e := r1ScanSQLRow(s.engine, rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, doc)
+	}
+	return out, rows.Err()
 }

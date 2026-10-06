@@ -29,7 +29,7 @@ import (
 const r1Schema = "gomap-r1-row-v1"
 
 var r1Engines = []string{"json", "template-v1", "bson", "typed-row", "sqlite-json", "sqlite-row"}
-var r1Phases = []string{"load", "point_get_into_complete", "point_complete", "batch_complete", "range_complete", "update_nonindexed", "update_indexed", "replace", "delete", "mixed_churn", "checkpoint", "upsert"}
+var r1Phases = []string{"load", "point_get_into_complete", "point_complete", "batch_complete", "range_complete", "range_public_complete", "update_nonindexed", "update_indexed", "replace", "delete", "mixed_churn", "checkpoint", "upsert"}
 
 type r1Config struct {
 	Documents      int      `json:"documents"`
@@ -241,6 +241,7 @@ type r1Backend interface {
 	replace([]r1Document) error
 	update([]r1Document) error
 	point([]byte) ([]byte, error)
+	rangeDocuments(string, int) ([][]byte, error)
 	capabilities([]r1Document) (map[string]string, error)
 	upsert([]r1Document) error
 	supportsUpsert() bool
@@ -475,6 +476,37 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 	cell.Capabilities, err = b.capabilities(fixture)
 	if err != nil {
 		return cell, err
+	}
+	if cell.Capabilities["ordinary_range"] == "rejected_residual_only_full_row_parity_gap" {
+		cell.Phases = append(cell.Phases, r1Measurement{Name: "range_public_complete", Skipped: "ordinary typed range returns residual only"})
+	} else {
+		if err = add("range_public_complete", c.Operations, func(op int) (int, collections.DocumentMaterializationStats, error) {
+			docs, e := b.rangeDocuments(fmt.Sprintf("city-%02d", op%8), 10)
+			return len(docs), collections.DocumentMaterializationStats{}, e
+		}); err != nil {
+			return cell, err
+		}
+		for bucket := 0; bucket < 8; bucket++ {
+			city := fmt.Sprintf("city-%02d", bucket)
+			docs, e := b.rangeDocuments(city, 10)
+			if e != nil {
+				return cell, e
+			}
+			var expected []r1Document
+			for _, d := range fixture {
+				if d.City == city && len(expected) < 10 {
+					expected = append(expected, d)
+				}
+			}
+			if len(docs) != len(expected) {
+				return cell, errors.New("public complete range row count mismatch")
+			}
+			for i, raw := range docs {
+				if e = r1VerifyDocument(raw, expected[i]); e != nil {
+					return cell, e
+				}
+			}
+		}
 	}
 	current := append([]r1Document(nil), fixture...)
 	for _, name := range []string{"update_nonindexed", "update_indexed", "replace", "delete", "mixed_churn", "upsert"} {
@@ -941,10 +973,15 @@ func validateR1Packet(p r1Packet) error {
 				return errors.New("missing/misordered phase")
 			}
 			if m.Skipped != "" {
-				if m.Name != "upsert" || cell.Engine == "typed-row" || strings.HasPrefix(cell.Engine, "sqlite-") {
+				publicRangeSkip := m.Name == "range_public_complete" && cell.Engine == "typed-row" && cell.Capabilities["ordinary_range"] == "rejected_residual_only_full_row_parity_gap" && m.Skipped == "ordinary typed range returns residual only"
+				retainedUpsertSkip := m.Name == "upsert" && cell.Engine != "typed-row" && !strings.HasPrefix(cell.Engine, "sqlite-")
+				if !publicRangeSkip && !retainedUpsertSkip || m.Operations != 0 || m.Rows != 0 || m.NSPerOp != 0 || m.OpsPerSec != 0 {
 					return errors.New("unsupported skip")
 				}
 				continue
+			}
+			if m.Name == "range_public_complete" && cell.Capabilities["ordinary_range"] == "rejected_residual_only_full_row_parity_gap" {
+				return errors.New("residual-only public range mislabeled complete")
 			}
 			expectedOps, expectedRows := c.Operations, c.Operations
 			switch m.Name {
@@ -953,7 +990,7 @@ func validateR1Packet(p r1Packet) error {
 				expectedRows = c.Documents
 			case "batch_complete":
 				expectedRows = c.Operations * c.Batch
-			case "range_complete":
+			case "range_complete", "range_public_complete":
 				expectedRows = 0
 				for op := 0; op < c.Operations; op++ {
 					count := (c.Documents + 7 - op%8) / 8
@@ -980,7 +1017,7 @@ func validateR1Packet(p r1Packet) error {
 			if strings.HasSuffix(m.Name, "_complete") && m.Rows < m.Operations {
 				return errors.New("ID-only/incomplete read measurement")
 			}
-			if strings.HasSuffix(m.Name, "_complete") && m.Name != "point_get_into_complete" && cell.Engine == "typed-row" && m.Counters.FieldsReconstructed == 0 {
+			if strings.HasSuffix(m.Name, "_complete") && m.Name != "point_get_into_complete" && m.Name != "range_public_complete" && cell.Engine == "typed-row" && m.Counters.FieldsReconstructed == 0 {
 				return errors.New("typed full-row path not proven")
 			}
 		}
@@ -1057,12 +1094,50 @@ func (t *r1Tree) point(id []byte) ([]byte, error) {
 		return raw, nil
 	}
 }
+func (t *r1Tree) rangeDocuments(city string, limit int) ([][]byte, error) {
+	records, _, e := t.col.FindDocumentsByIndexRange("city", collections.IndexRangeOptions{Lower: collections.IndexRangeBound{Value: city, Inclusive: true}, Upper: collections.IndexRangeBound{Value: city, Inclusive: true}, Limit: limit})
+	if e != nil {
+		return nil, e
+	}
+	out := make([][]byte, len(records))
+	var materializer *collections.StoredDocumentJSONMaterializer
+	if t.engine == "template-v1" {
+		materializer, e = t.col.NewStoredDocumentJSONMaterializer()
+		if e != nil {
+			return nil, e
+		}
+	}
+	for i, record := range records {
+		raw := record.Document
+		switch t.engine {
+		case "bson":
+			var doc map[string]any
+			e = bson.Unmarshal(raw, &doc)
+			if e == nil {
+				raw, e = json.Marshal(doc)
+			}
+		case "template-v1":
+			raw, e = materializer.StoredDocumentJSON(raw)
+		}
+		if e != nil {
+			if materializer != nil {
+				_ = materializer.Close()
+			}
+			return nil, e
+		}
+		out[i] = raw
+	}
+	if materializer != nil {
+		e = materializer.Close()
+	}
+	return out, e
+}
 func (t *r1Tree) capabilities(fixture []r1Document) (map[string]string, error) {
 	caps := map[string]string{"range_decomposition": "quiescent_ids_then_prepared_full_fetch", "ordinary_range": "complete_retained_document", "ordinary_point": "owned_complete_GetInto"}
 	rejected := false
 	for bucket := 0; bucket < 8; bucket++ {
 		city := fmt.Sprintf("city-%02d", bucket)
-		records, _, e := t.col.FindDocumentsByIndexRange("city", collections.IndexRangeOptions{Lower: collections.IndexRangeBound{Value: city, Inclusive: true}, Upper: collections.IndexRangeBound{Value: city, Inclusive: true}, Limit: 10})
+		docs, e := t.rangeDocuments(city, 10)
 		if e != nil {
 			return nil, e
 		}
@@ -1072,29 +1147,10 @@ func (t *r1Tree) capabilities(fixture []r1Document) (map[string]string, error) {
 				expected = append(expected, d)
 			}
 		}
-		if len(records) != len(expected) {
+		if len(docs) != len(expected) {
 			return nil, errors.New("ordinary range capability row count mismatch")
 		}
-		for i, record := range records {
-			raw := record.Document
-			switch t.engine {
-			case "bson":
-				var doc map[string]any
-				e = bson.Unmarshal(raw, &doc)
-				if e == nil {
-					raw, e = json.Marshal(doc)
-				}
-			case "template-v1":
-				m, openErr := t.col.NewStoredDocumentJSONMaterializer()
-				if openErr != nil {
-					return nil, openErr
-				}
-				raw, e = m.StoredDocumentJSON(raw)
-				e = errors.Join(e, m.Close())
-			}
-			if e != nil {
-				return nil, e
-			}
+		for i, raw := range docs {
 			if t.engine == "typed-row" {
 				var got map[string]any
 				if e = json.Unmarshal(raw, &got); e != nil {

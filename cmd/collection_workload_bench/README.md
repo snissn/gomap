@@ -98,6 +98,9 @@ admission is currently rejected and retained as an unsupported cell. Atomic
 upsert is skipped for ordinary retained-document TreeDB cells. No ID-only cell
 is relabeled full-row output. The prepared range decomposition is restricted to
 a quiescent single-writer workload; it is not a concurrent snapshot API.
+`range_public_complete` measures whole ordinary bounded owned rows (one complete
+SQL range SELECT); starting typed output preserves an unsupported residual-only
+skip. The repaired runtime enables the same phase.
 Storage and engine statistics are observed at the common checkpoint before the
 separate trailing upsert phase; unsupported upsert cannot change common live rows.
 

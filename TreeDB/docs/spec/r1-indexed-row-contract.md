@@ -109,6 +109,11 @@ carrier/residual preparation are inside mutation timers in every cell.
 - `point_complete`, `batch_complete`: prepared full output; setup and first fetch
   remain visible in the same packet. Outside-timer exhaustive verification warms
   the fixture intentionally; these are component costs, not request totals.
+- `range_public_complete`: whole ordinary `FindDocumentsByIndexRange` call plus
+  template/BSON conversion, or one direct bounded complete-row SQL SELECT plus
+  native reconstruction. Every bounded row is verified outside the timer. The
+  starting typed runtime records an explicit residual-only unsupported skip; the
+  repaired runtime enables this same phase without a harness rewrite.
 - `range_complete`: limit-10 exact city bounds through the existing range API,
   followed by complete prepared output; index selection is timed.
 - `update_nonindexed`, `update_indexed`, `replace`, `upsert`, `delete`, `mixed_churn`:
