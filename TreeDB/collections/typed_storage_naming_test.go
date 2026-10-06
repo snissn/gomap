@@ -388,7 +388,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
-	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 72, occurrences: 78},
+	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 73, occurrences: 79},
+	// Complete-row read fixtures use the retained public schema configuration.
+	{path: "TreeDB/collections/r1_reads_5058_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Buffered retained-document reconstruction tests exercise the public
 	// compatibility configuration and typed-column value vocabulary.
 	{path: "TreeDB/collections/api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
@@ -563,7 +565,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
 	{path: "TreeDB/collections/dense_numeric_vector.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 41},
 	{path: "TreeDB/collections/dense_numeric_vector_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 35, occurrences: 38},
-	{path: "TreeDB/collections/document_materializer.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
+	{path: "TreeDB/collections/document_materializer.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 20},
 	{path: "TreeDB/collections/document_materializer_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 32},
 	{path: "TreeDB/collections/document_chunking_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 17},
 	// #4619 typed service, materializer and work-proof controls reuse existing
