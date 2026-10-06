@@ -8,6 +8,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -18,10 +19,11 @@ type cowBackendBasis struct {
 	refs     atomic.Int64
 	snapshot *backenddb.Snapshot
 	lease    *memtable.COWExternalLease
+	pins     []*rootpublication.IdentityPin
 }
 
-func newCOWBackendBasis(s *backenddb.Snapshot, lease *memtable.COWExternalLease) *cowBackendBasis {
-	b := &cowBackendBasis{snapshot: s, lease: lease}
+func newCOWBackendBasis(s *backenddb.Snapshot, lease *memtable.COWExternalLease, pins []*rootpublication.IdentityPin) *cowBackendBasis {
+	b := &cowBackendBasis{snapshot: s, lease: lease, pins: pins}
 	b.refs.Store(1)
 	return b
 }
@@ -29,6 +31,10 @@ func (b *cowBackendBasis) retain() { b.refs.Add(1) }
 func (b *cowBackendBasis) release() {
 	if b.refs.Add(-1) == 0 && b.snapshot != nil {
 		_ = b.snapshot.Close()
+		for _, pin := range b.pins {
+			pin.Release()
+		}
+		b.pins = nil
 		b.lease.Close()
 	}
 }
@@ -65,17 +71,19 @@ func (c *cowReadCut) drain() {
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
-	writerMu     sync.Mutex
-	readMu       sync.RWMutex
-	readClosed   atomic.Bool
-	cutMu        sync.Mutex
-	cut          *cowReadCut
-	writers      []*memtable.COWWriter
-	budget       *memtable.COWBudget
-	closed       bool
-	lease        *memtable.COWExternalLease
-	activeCuts   atomic.Int64
-	closeRetired []memtable.COWRetirement
+	writerMu        sync.Mutex
+	readMu          sync.RWMutex
+	readClosed      atomic.Bool
+	refreshRequired atomic.Bool // maintenance changed the basis before refresh admission
+	cutMu           sync.Mutex
+	cut             *cowReadCut
+	writers         []*memtable.COWWriter
+	budget          *memtable.COWBudget
+	closed          bool
+	lease           *memtable.COWExternalLease
+	activeCuts      atomic.Int64
+	closeRetired    []memtable.COWRetirement
+	handoff         *cowFlushHandoff // serialized by the existing flush coordinator
 }
 
 // Backend wrapper capture uses a separate lease: a basis can outlive every
@@ -114,10 +122,12 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		return nil, err
 	}
 	var basisLease *memtable.COWExternalLease
+	var fileCount int
 	basis, err := bounded.AcquireSnapshotWithAllocationAdmission(func(sizes backenddb.SnapshotAllocationSizes) error {
 		if sizes.ValueLog.MapHint > limits.MaxResources || sizes.ValueLog.FileCount > limits.MaxResources {
 			return memtable.ErrCOWCapacity
 		}
+		fileCount = sizes.ValueLog.FileCount
 		bytes := cowBasisCharge(sizes)
 		var e error
 		basisLease, e = budget.AcquireExternal(bytes)
@@ -133,8 +143,17 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		}
 		return nil, err
 	}
+	pins := make([]*rootpublication.IdentityPin, fileCount)
+	if err = basis.PinValueLogReadFiles(pins); err != nil {
+		_ = basis.Close()
+		basisLease.Close()
+		cutLease.Close()
+		cacheLease.Close()
+		budget.Close()
+		return nil, err
+	}
 	c := &cowCache{budget: budget, writers: make([]*memtable.COWWriter, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
-	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: newCOWBackendBasis(basis, basisLease), lease: cutLease, cache: c}
+	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: newCOWBackendBasis(basis, basisLease, pins), lease: cutLease, cache: c}
 	for i := range c.writers {
 		w, e := memtable.NewCOWWriter(budget)
 		if e != nil {
@@ -142,12 +161,12 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 			break
 		}
 		c.writers[i] = w
-		p, e := w.Prepare(nil, memtable.COWPrepareOptions{})
+		root, resources, e := prepareCOWEmptyRoot(w, budget)
 		if e != nil {
 			err = e
 			break
 		}
-		cut.shards[i] = cowTable{root: p.Publish(), shard: i}
+		cut.shards[i] = cowTable{root: root, shard: i, resources: resources}
 	}
 	if err != nil {
 		for i := range cut.shards {
@@ -174,8 +193,12 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 	return c, nil
 }
 func cowBasisCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
-	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBackendBasis{}))) +
-		memtable.COWAllocationCharge(sizes.Wrapper) + memtable.COWAllocationCharge(sizes.PinSet) +
+	return memtable.COWAllocationCharge(uint64(sizes.ValueLog.FileCount)*uint64(unsafe.Sizeof((*rootpublication.IdentityPin)(nil)))) + uint64(sizes.ValueLog.FileCount)*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.IdentityPin{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBackendBasis{}))) +
+		cowSnapshotRetentionCharge(sizes)
+}
+
+func cowSnapshotRetentionCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
+	return memtable.COWAllocationCharge(sizes.Wrapper) + memtable.COWAllocationCharge(sizes.PinSet) +
 		memtable.COWAllocationCharge(sizes.Refs) + memtable.COWAllocationCharge(sizes.IDs) +
 		uint64(sizes.PinRefCount)*memtable.COWAllocationCharge(sizes.PinRef) +
 		memtable.COWAllocationCharge(sizes.ValueLog.Wrapper) + memtable.COWAllocationCharge(sizes.ValueLog.MapEnvelope) +
@@ -438,6 +461,11 @@ func (c *cowCache) close() {
 	c.writerMu.Unlock()
 	for i := range retired {
 		retired[i].Drain()
+	}
+	if h := c.handoff; h != nil {
+		c.handoff = nil
+		c.releaseCut(h.cut)
+		h.lease.Close()
 	}
 	if last {
 		old.drain()

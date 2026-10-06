@@ -3012,11 +3012,15 @@ func (db *DB) valueLogDictClassRangesForRecords(records []valuelog.Record) []val
 }
 
 func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	return db.appendValueLogForRecordsObserved(l, records, durability, nil)
+}
+
+func (db *DB) appendValueLogForRecordsObserved(l *lane, records []valuelog.Record, durability journalDurability, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	if db != nil && db.dictStore == nil {
-		return db.appendValueLog(l, 0, nil, records, durability)
+		return db.appendValueLogObserved(l, 0, nil, records, durability, observer)
 	}
 	ranges := db.valueLogDictClassRangesForRecords(records)
 	if len(ranges) == 0 {
@@ -3038,6 +3042,11 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 		if err != nil {
 			return 0, err
 		}
+		if observer != nil && id != 0 {
+			if _, ok := db.dictStore.(cowDictionaryReadProvider); !ok {
+				return 0, ErrCOWUnsupported
+			}
+		}
 		cache[classIdx] = id
 		cached[classIdx] = true
 		return id, nil
@@ -3052,7 +3061,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 		if err != nil {
 			return nil, err
 		}
-		return db.appendValueLog(l, dictID, nil, records, durability)
+		return db.appendValueLogObserved(l, dictID, nil, records, durability, observer)
 	}
 	// Highly alternating class layouts can explode contiguous ranges and
 	// degrade batching. Re-pack by class to bound append calls.
@@ -3086,7 +3095,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 				putValueLogPtrs(ptrs)
 				return nil, err
 			}
-			segPtrs, err := db.appendValueLog(l, dictID, nil, recs, durability)
+			segPtrs, err := db.appendValueLogObserved(l, dictID, nil, recs, durability, observer)
 			if err != nil {
 				putValueLogPtrs(ptrs)
 				return nil, err
@@ -3114,7 +3123,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 			putValueLogPtrs(ptrs)
 			return nil, err
 		}
-		segPtrs, err := db.appendValueLog(l, dictID, nil, records[r.start:r.end], durability)
+		segPtrs, err := db.appendValueLogObserved(l, dictID, nil, records[r.start:r.end], durability, observer)
 		if err != nil {
 			putValueLogPtrs(ptrs)
 			return nil, err
@@ -5704,6 +5713,9 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 	if db == nil {
 		return func() {}, nil
 	}
+	if db.cow != nil {
+		return nil, ErrCOWUnsupported
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -7993,6 +8005,19 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 			return err
 		}
 	}
+	if db.cow != nil {
+		db.flushMu.Lock()
+		defer db.flushMu.Unlock()
+		// maintenanceActive denies new admission; drain writers that crossed the
+		// flag before permitting backend root changes, even for skipCheckpoint.
+		db.writeMu.Lock()
+		db.writeMu.Unlock()
+		if err := db.completeCOWHandoff(); err != nil {
+			return err
+		}
+		db.cow.refreshRequired.Store(true)
+	}
+
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
 			return err
@@ -8006,6 +8031,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		return fnErr
 	}
 	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+	if db.cow != nil {
+		return db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr))
+	}
 	if fnErr != nil {
 		if reconcileErr != nil {
 			return errors.Join(fnErr, reconcileErr)
@@ -17545,6 +17573,15 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 }
 
 func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	return db.appendValueLogInternalObserved(l, dictID, dict, records, durability, capture, nil)
+}
+
+func (db *DB) appendValueLogObserved(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, error) {
+	ptrs, _, err := db.appendValueLogInternalObserved(l, dictID, dict, records, durability, nil, observer)
+	return ptrs, err
+}
+
+func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, nil, errWALUnavailable
 	}
@@ -18048,7 +18085,14 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				segmentStartSize = w.Size()
 			}
 			dst := ptrs[pf.start:pf.end]
-			if _, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst); frameErr != nil {
+			oldObserver, observerErr := installCOWProducerObserver(w, observer)
+			if observerErr != nil {
+				err = observerErr
+				break
+			}
+			_, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst)
+			restoreCOWProducerObserver(w, observer, oldObserver)
+			if frameErr != nil {
 				err = frameErr
 				break
 			}
@@ -18085,11 +18129,18 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				stats    valuelog.FrameStats
 				batchErr error
 			)
+			oldObserver, observerErr := installCOWProducerObserver(w, observer)
+			if observerErr != nil {
+				l.vlogMu.Unlock()
+				putValueLogPtrs(ptrs)
+				return nil, nil, observerErr
+			}
 			if preferBufferedRaw {
 				_, stats, batchErr = rawBufferedInto.AppendRawFramesBufferedInto(records, k, ptrs)
 			} else {
 				_, stats, batchErr = rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
 			}
+			restoreCOWProducerObserver(w, observer, oldObserver)
 			if batchErr != nil {
 				err = batchErr
 				putValueLogPtrs(ptrs)
@@ -18200,7 +18251,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 			end = nextValueLogFrameEnd(records, i, k, rawLimit)
 			if hasInto {
 				dst := ptrs[i:end]
+				oldObserver, observerErr := installCOWProducerObserver(w, observer)
+				if observerErr != nil {
+					err = observerErr
+					break
+				}
 				_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], dst)
+				restoreCOWProducerObserver(w, observer, oldObserver)
 				if frameErr != nil {
 					err = frameErr
 					break
@@ -18225,7 +18282,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				continue
 			}
 			if hasStats {
+				oldObserver, observerErr := installCOWProducerObserver(w, observer)
+				if observerErr != nil {
+					err = observerErr
+					break
+				}
 				framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(dictID, dict, records[i:end])
+				restoreCOWProducerObserver(w, observer, oldObserver)
 				if frameErr != nil {
 					err = frameErr
 					break
@@ -18251,7 +18314,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				continue
 			}
 
+			oldObserver, observerErr := installCOWProducerObserver(w, observer)
+			if observerErr != nil {
+				err = observerErr
+				break
+			}
 			framePtrs, frameErr := w.AppendFrame(dictID, dict, records[i:end])
+			restoreCOWProducerObserver(w, observer, oldObserver)
 			if frameErr != nil {
 				err = frameErr
 				break
@@ -18277,7 +18346,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 			syncedBoundary = err == nil
 		default:
-			if db.shouldFlushDeferredValueLog(finalWriteMode, records) {
+			if observer != nil || db.shouldFlushDeferredValueLog(finalWriteMode, records) {
 				// In deferred value-log mode, the index will publish pointers to
 				// value-log records during the flush/commit path. Ensure the value-log
 				// bytes are visible to readers even when durability is "none".
@@ -24295,6 +24364,9 @@ func (db *DB) waitForRangeSpanCheckpointDrain() {
 }
 
 func (db *DB) beginDirectWrite() error {
+	if db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
+		return memtable.ErrCOWCapacity
+	}
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
@@ -24309,6 +24381,10 @@ func (db *DB) beginDirectWrite() error {
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			return backenddb.ErrClosed
+		}
+		if db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
+			db.writeMu.RUnlock()
+			return memtable.ErrCOWCapacity
 		}
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
 			// A writer may have passed its public-wrapper preflight before waiting
@@ -25265,6 +25341,9 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if db.cow != nil {
+		return db.checkpointCOWContext(ctx, automatic)
 	}
 	start := time.Now()
 	defer func() {
@@ -26262,8 +26341,15 @@ func (db *DB) Close() error {
 	// deadlock and tests will time out.
 	db.flushMu.Lock()
 	db.writeMu.Lock()
+	writeMuHeld := true
+	if db.cow != nil {
+		if err := db.closeCOWFrontier(); err != nil {
+			errs = append(errs, err)
+		}
+		writeMuHeld = false
+	}
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.cow == nil && db.mutableBytes.Load() > 0 {
 		hadMemtables = true
 		_ = db.rotateMemtableLocked(true)
 	} else if len(db.queue) > 0 {
@@ -26289,7 +26375,9 @@ func (db *DB) Close() error {
 	}
 
 	close(db.closeCh)
-	db.writeMu.Unlock()
+	if writeMuHeld {
+		db.writeMu.Unlock()
+	}
 	db.flushMu.Unlock()
 	db.wg.Wait()
 	if release := db.releasePoolPressureSampler; release != nil {
@@ -26485,6 +26573,9 @@ func (db *DB) SetSync(key, value []byte) error {
 // the mutation becomes visible in the mutable table. This is for public
 // command-WAL mode, where command WAL durability replaces the cached redo log.
 func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if appendCommand == nil {
@@ -26500,6 +26591,9 @@ func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() e
 // WAL frame is appended so replay can encode the same entry metadata that will
 // become visible in the mutable table.
 func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendCommand func(page.EntryRevision) error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if appendCommand == nil {
@@ -26515,6 +26609,9 @@ func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendComm
 // appendCommand invokes assignRevision. Command-WAL callers use this to assign
 // the exact revision while holding their WAL append serialization boundary.
 func (db *DB) SetAfterCommandWALAppendWithPreparedRevision(key, value []byte, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if appendCommand == nil {
@@ -27044,6 +27141,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 // return quickly and handle any synchronization with other components itself;
 // long-blocking callbacks stall cached writers.
 func (db *DB) DeleteRangeAfterCommandWALAppend(start, end []byte, appendCommand func() error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
@@ -27885,6 +27985,9 @@ func (db *DB) DeleteSync(key []byte) error {
 // DeleteAfterCommandWALAppend applies a point Delete after appendCommand
 // succeeds under the same per-key serialization lock as Delete.
 func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
@@ -27898,6 +28001,9 @@ func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error
 // appendCommand succeeds and passes the assigned tombstone revision to the
 // command-WAL callback before the mutation becomes visible.
 func (db *DB) DeleteAfterCommandWALAppendWithRevision(key []byte, appendCommand func(page.EntryRevision) error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
@@ -27911,6 +28017,9 @@ func (db *DB) DeleteAfterCommandWALAppendWithRevision(key []byte, appendCommand 
 // DeleteAfterCommandWALAppendWithPreparedRevision is the tombstone counterpart
 // to SetAfterCommandWALAppendWithPreparedRevision.
 func (db *DB) DeleteAfterCommandWALAppendWithPreparedRevision(key []byte, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	if db.cow != nil {
+		return ErrCOWUnsupported
+	}
 	key = normalizeRawKVPointKey(key)
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
@@ -29151,6 +29260,10 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 }
 
 func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
+	if db.cow != nil {
+		db.flushCOWBackground(db.flushSyncRequested(reqSync))
+		return
+	}
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
 	origSync := reqSync
@@ -34845,6 +34958,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 type Batch struct {
 	cowPrepared               *cowBatchPreparation
+	cowProducer               *cowFrameCapture
 	db                        *DB
 	entries                   []batch.Entry
 	backend                   batch.Interface
@@ -37677,11 +37791,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
+		capture, err := newCOWFrameCapture(b.db.cow.budget, len(b.entries))
+		if err != nil {
+			unlockWriteMu()
+			return err
+		}
+		b.cowProducer = capture
 		b.db.cow.writerMu.Lock()
 		previousUnlock := unlockWriteMu
 		unlockWriteMu = func() {
 			b.db.cow.writerMu.Unlock()
 			previousUnlock()
+			b.cowProducer = nil
+			capture.close()
 		}
 	}
 	needRotate := false
@@ -37918,7 +38040,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				b.db.debugPtrDenied.Add(int64(eligibleCountTotal))
 			}
 		}
-		multiLanePointers = allowPointers &&
+		multiLanePointers = b.db.cow == nil && allowPointers &&
 			!materializeCommandWALPointers &&
 			b.db.disableJournal &&
 			// journalDurabilityFlush is still an unsynced fast-path write. We widen
@@ -38122,7 +38244,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					}
 				}
 			}
-			ptrs, buildErr = b.db.appendValueLogForRecords(lane, valueRecords, durability)
+			ptrs, buildErr = b.db.appendValueLogForRecordsObserved(lane, valueRecords, durability, b.cowProducedFrameObserver())
 			if buildErr != nil {
 				unlockWriteMu()
 				return buildErr

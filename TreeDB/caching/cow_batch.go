@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -16,9 +17,11 @@ import (
 const cowResourceValueLogFile = 1
 
 type cowBatchPreparation struct {
-	cut     *cowPreparedCut
-	scratch *memtable.COWExternalLease
-	files   [][]uint32
+	cut          *cowPreparedCut
+	scratch      *memtable.COWExternalLease
+	files        [][]uint32
+	resources    []*cowLiveResource
+	dictionaries [][]uint64
 }
 
 // PrepareExternalCommandWALPublication is called under the command append
@@ -31,6 +34,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	if b.cowPrepared != nil {
 		return fmt.Errorf("COW batch already prepared")
 	}
+	if b.cowProducer != nil && b.cowProducer.err != nil {
+		return b.cowProducer.err
+	}
 	c := b.db.cow
 	n := len(b.entries)
 	shards := len(c.writers)
@@ -40,11 +46,15 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
 		uint64(n)*memtable.COWAllocationCharge(4) + memtable.COWAllocationCharge(uint64(shards)*8)
+	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof((*cowLiveResource)(nil))))
+	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
+		uint64(n)*memtable.COWAllocationCharge(8) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return err
 	}
-	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards)}
+	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
 	b.cowPrepared = p // caller drains all cancellation, including partial stage
 	counts := make([]int, shards)
 	for _, e := range b.entries {
@@ -55,6 +65,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	for i, count := range counts {
 		groups[i] = make([]memtable.COWMutation, 0, count)
 		p.files[i] = make([]uint32, 0, count)
+		p.dictionaries[i] = make([]uint64, 0, count)
 	}
 	for _, e := range b.entries {
 		i := b.db.shardIndex(e.Key)
@@ -68,18 +79,22 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 			if e.IsPtr {
 				m.Flags = node.FlagPointer
 				m.Value = nil
+				if b.cowProducer == nil {
+					return ErrCOWUnsupported
+				}
+				header, ok := b.cowProducer.frame(e.ValuePtr)
+				if !ok {
+					return ErrCOWUnsupported
+				}
+				if header.Flags&valuelog.FrameFlagCompressed != 0 && header.DictID != 0 {
+					id := memtable.COWResourceID{Kind: cowResourceDictionary, ID: header.DictID}
+					if !c.writers[i].HasResource(id) {
+						p.dictionaries[i] = append(p.dictionaries[i], header.DictID)
+					}
+				}
 				id := memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(e.ValuePtr.FileID)}
 				if !c.writers[i].HasResource(id) {
-					seen := false
-					for _, old := range p.files[i] {
-						if old == e.ValuePtr.FileID {
-							seen = true
-							break
-						}
-					}
-					if !seen {
-						p.files[i] = append(p.files[i], e.ValuePtr.FileID)
-					}
+					p.files[i] = append(p.files[i], e.ValuePtr.FileID)
 				}
 			}
 		default:
@@ -88,12 +103,43 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		groups[i] = append(groups[i], m)
 	}
 	for i := range opts {
+		slices.Sort(p.files[i])
+		p.files[i] = slices.Compact(p.files[i])
+		slices.Sort(p.dictionaries[i])
+		p.dictionaries[i] = slices.Compact(p.dictionaries[i])
 		opts[i].ResourceSlots = len(p.files[i])
-		// Each distinct file owns its immutable Set, one-slot map (the value-log
-		// owner's 512*(hint+1) Go 1.26 metadata envelope), physical Pin and
-		// release closure. C1 separately owns its copied ID/callback backing.
-		opts[i].ResourceBytes = uint64(len(p.files[i])) * (memtable.COWAllocationCharge(uint64(unsafe.Sizeof(valuelog.Set{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.IdentityPin{}))) +
-			memtable.COWAllocationCharge(1024) + memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))))
+		opts[i].ResourceSlots += len(p.dictionaries[i])
+		if len(p.dictionaries[i]) > 0 {
+			provider, ok := b.db.dictStore.(cowDictionaryReadProvider)
+			if !ok {
+				return ErrCOWUnsupported
+			}
+			for _, id := range p.dictionaries[i] {
+				ownerBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowLiveResource{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+				ownerLease, e := c.budget.AcquireExternal(ownerBytes)
+				if e != nil {
+					return e
+				}
+				resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceDictionary, ID: id}, lease: ownerLease, shard: i}
+				p.resources = append(p.resources, resource)
+				resource.definition, e = provider.PrepareDictionaryReadDefinition(id, c.readLimits(), c.budget.Limits().MaxResources, c.admitDictionaryRead)
+				if e != nil {
+					return e
+				}
+			}
+		}
+		for _, fileID := range p.files[i] {
+			shape, ok := b.db.valueLogReader.RegisteredFileRetentionSizes(fileID)
+			if !ok {
+				return rootpublication.ErrUnresolvedResource
+			}
+			opts[i].ResourceBytes += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowLiveResource{}))) +
+				memtable.COWAllocationCharge(shape.Wrapper) + memtable.COWAllocationCharge(shape.MapEnvelope) +
+				memtable.COWAllocationCharge(shape.FileWrapper) + memtable.COWAllocationCharge(shape.PathEnvelope) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.IdentityPin{}))) +
+				memtable.COWAllocationCharge(512) + // caller's one-entry identity map
+				memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		}
 	}
 	p.cut, err = c.prepare(groups, opts)
 	return err
@@ -115,9 +161,25 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 	if err := validateCOWCanonicalEntries(payload, b.entries, lookup); err != nil {
 		return err
 	}
+	for _, resource := range b.cowPrepared.resources {
+		if resource.id.Kind != cowResourceDictionary {
+			continue
+		}
+		shard := resource.shard
+		if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
+			return err
+		}
+		ids := [1]memtable.COWResourceID{resource.id}
+		if err := b.cowPrepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
+			return err
+		}
+		resource.attached = true
+	}
 	for shard, files := range b.cowPrepared.files {
 		for _, fileID := range files {
 			manager := b.db.valueLogReader
+			resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
+			b.cowPrepared.resources = append(b.cowPrepared.resources, resource)
 			registry := manager.StableResourcePinRegistry()
 			identity, registered := manager.StableSegmentIdentity(fileID)
 			if !registered || registry == nil || registry != b.db.valueLogIdentityPins {
@@ -127,18 +189,20 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 			if err != nil {
 				return err
 			}
+			resource.pin = physicalPin
 			set := b.db.valueLogReader.CurrentSubsetNoRefresh(map[uint32]struct{}{fileID: {}})
+			resource.set = set
 			if len(set.Files) != 1 {
-				b.db.valueLogReader.Release(set)
-				physicalPin.Release()
 				return fmt.Errorf("COW value-log file %d is not registered", fileID)
 			}
 			id := [1]memtable.COWResourceID{{Kind: cowResourceValueLogFile, ID: uint64(fileID)}}
-			if err := b.cowPrepared.cut.prepared[shard].AttachResources(id[:], func() { manager.Release(set); physicalPin.Release() }); err != nil {
-				b.db.valueLogReader.Release(set)
-				physicalPin.Release()
+			if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
 				return err
 			}
+			if err := b.cowPrepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
+				return err
+			}
+			resource.attached = true
 		}
 	}
 	return nil
@@ -156,6 +220,11 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 func (p *cowBatchPreparation) drainCancelled() {
 	if p.cut != nil {
 		p.cut.drainCancelled()
+	}
+	for _, resource := range p.resources {
+		if !resource.attached {
+			resource.close()
+		}
 	}
 	p.scratch.Close()
 }
@@ -197,6 +266,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Batch storage is no longer borrowed: C1 copied changed payloads before
 	// the append. Release admission and owner before retirement or checkpoint.
 	unlock()
+	for _, resource := range p.resources {
+		if resource.definition != nil {
+			resource.definition.ReleaseCapture()
+		}
+	}
 	if old != nil {
 		old.drain()
 	}

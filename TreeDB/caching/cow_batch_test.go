@@ -54,6 +54,7 @@ func TestCOWBatchFinalizerRefusalCancelsPrivateRoots(t *testing.T) {
 	db, c := cowCutFixture(t)
 	b := &Batch{db: db, entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("private"), Revision: 23}}}
 	before := c.budget.Stats().TotalBytes
+	beforeLeases := c.budget.Stats().ExternalLeases
 	c.writerMu.Lock()
 	backend := db.backend.(*backenddb.DB)
 	err := backend.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, func(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error {
@@ -67,6 +68,11 @@ func TestCOWBatchFinalizerRefusalCancelsPrivateRoots(t *testing.T) {
 	p := b.cancelCOWPublication()
 	c.writerMu.Unlock()
 	p.drainCancelled()
+	// No read workspace has been constructed yet: all preparation-only leases
+	// must have refunded while generation-local resolver leases remain live.
+	if got := c.budget.Stats().ExternalLeases; got != beforeLeases {
+		t.Fatalf("external leases=%d before bytes=%d", got, before)
+	}
 	s := db.AcquireSnapshot()
 	defer s.Close()
 	v, err := s.Get([]byte("a"))
@@ -75,9 +81,6 @@ func TestCOWBatchFinalizerRefusalCancelsPrivateRoots(t *testing.T) {
 	}
 	// Private copied nodes remain conservatively charged to the live writer
 	// generation, while caller scratch/cut leases refund immediately.
-	if got := c.budget.Stats().ExternalLeases; got != 3 {
-		t.Fatalf("external leases=%d before bytes=%d", got, before)
-	}
 }
 
 func TestCOWLogicalSizeChangedKeysAndDuplicates(t *testing.T) {

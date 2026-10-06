@@ -2202,6 +2202,21 @@ func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
 	return set
 }
 
+// RegisteredFileRetentionSizes reports one exact registered file's metadata
+// before a subset allocation. Its producer-stamped strings and concrete File
+// wrapper are immutable; this call neither refreshes nor enumerates other files.
+func (m *Manager) RegisteredFileRetentionSizes(id uint32) (SetRetentionSizes, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f := m.files[id]
+	if f == nil || f.IsZombie.Load() {
+		return SetRetentionSizes{}, false
+	}
+	s := setRetentionSizes(1)
+	s.addFile(f)
+	return s, true
+}
+
 // currentSetLocked builds a ref-counted snapshot.
 // m.mu must be held (read or write).
 func (m *Manager) currentSetLocked() *Set {

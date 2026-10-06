@@ -2651,7 +2651,7 @@ func (db *DB) compactIndex(allowClosing bool) error {
 			return err
 		}
 	}
-	err := db.reconcileCachedBackendMaintenance(db.backend.CompactIndex())
+	err := db.runCachedBackendMaintenance(db.backend.CompactIndex)
 	if err == nil {
 		db.bgVac.deferredVectorBuildDebt.Store(false)
 	}
@@ -2746,8 +2746,13 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 		defer unlockCommandWALPublish()
 	}
 
-	onlineStats, stats := db.backend.VacuumIndexOnlineWithStats(ctx)
-	if err := db.reconcileCachedBackendMaintenance(stats); err != nil {
+	var onlineStats VacuumOnlineStats
+	err = db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		onlineStats, runErr = db.backend.VacuumIndexOnlineWithStats(ctx)
+		return runErr
+	})
+	if err != nil {
 		return onlineStats, err
 	}
 	success = true

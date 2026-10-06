@@ -16,6 +16,7 @@ type cowRollover struct {
 	next      *cowReadCut
 	writers   []*memtable.COWWriter
 	roots     []*memtable.COWRoot
+	resources []*cowGenerationResources
 	retired   []memtable.COWRetirement
 	scratch   *memtable.COWExternalLease
 	cutLease  *memtable.COWExternalLease
@@ -41,12 +42,13 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 	n := len(c.writers)
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowRollover{}))) +
 		2*memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*memtable.COWWriter)(nil)))) +
+		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowGenerationResources)(nil)))) +
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
-	p := &cowRollover{cache: c, scratch: lease, writers: make([]*memtable.COWWriter, n), roots: make([]*memtable.COWRoot, n), retired: make([]memtable.COWRetirement, n)}
+	p := &cowRollover{cache: c, scratch: lease, writers: make([]*memtable.COWWriter, n), roots: make([]*memtable.COWRoot, n), resources: make([]*cowGenerationResources, n), retired: make([]memtable.COWRetirement, n)}
 	p.cutLease, err = c.budget.AcquireExternal(cowCutCharge(n, len(old.frozen)+count))
 	if err != nil {
 		return p, err
@@ -59,11 +61,11 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		if err != nil {
 			return p, err
 		}
-		empty, e := p.writers[i].Prepare(nil, memtable.COWPrepareOptions{})
+		root, resources, e := prepareCOWEmptyRoot(p.writers[i], c.budget)
 		if e != nil {
 			return p, e
 		}
-		p.roots[i] = empty.Publish()
+		p.roots[i], p.resources[i] = root, resources
 	}
 	// All admitted history is precharged against potential retirement. Source
 	// count is the only additional Freeze admission and is serialized here.
@@ -94,7 +96,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			panic("lost COW rollover source")
 		}
 		next.frozen = append(next.frozen, table)
-		next.shards[i] = cowTable{shard: i, root: p.roots[i]}
+		next.shards[i] = cowTable{shard: i, root: p.roots[i], resources: p.resources[i]}
 	}
 	next.buildDomains()
 	p.next = next
