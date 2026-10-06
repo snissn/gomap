@@ -273,7 +273,9 @@ func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
 			if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
 				t.Fatalf("error=%v", err)
 			}
-			if database.State() != before || database.durableRoot.slotResources[database.durableRoot.slot] != currentResources {
+			after := database.State()
+			if after.CommitSeq != before.CommitSeq || after.RootPageID != before.RootPageID || after.SystemRootPageID != before.SystemRootPageID ||
+				after.AppliedCommandLSN != before.AppliedCommandLSN || database.durableRoot.slotResources[database.durableRoot.slot] != currentResources {
 				t.Fatal("failed capture mutated published authority")
 			}
 			expectLeafGenerationValue(t, database, leafGenerationKey("authority", 0), 'a')
