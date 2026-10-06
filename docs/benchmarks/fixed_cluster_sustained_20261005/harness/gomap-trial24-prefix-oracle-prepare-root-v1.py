@@ -1,14 +1,14 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Inert local constructor for an offline test-only oracle overlay.
 Does not invoke Go/Git/subprocess/network. Root supplies frozen final pins and
 runs the proposed command separately. Native output is pending root acceptance.
 """
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
+COLLECTOR_SHA='6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3'
 GO_SOURCE=r'''package main
 
 import (
@@ -24,19 +24,20 @@ import (
 
 // Test-only virtual file. No client/network constructor or serving call.
 func TestTrial24FrozenCanonicalPrefixOraclePreparation(t *testing.T) {
- var cfg struct { SourceHead, SourceTree, InputInventorySHA256, InitialPopulationSHA256, Config, Bootstrap, Dataset, Provenance, Probe, Output string }
+ var cfg struct { SourceHead, SourceTree, InputInventorySHA256, InitialPopulationSHA256, Config, Bootstrap, Dataset, Provenance, Probe, Output, RunID string; Originals, SpacingSeconds int }
  raw,err:=os.ReadFile(os.Getenv("GOMAP_TRIAL24_ORACLE_INPUT"));if err!=nil {t.Fatal(err)}
  if err=recallDecode(context.Background(),raw,&cfg);err!=nil {t.Fatal(err)}
  if !recallHex(cfg.SourceHead,20)||!recallHex(cfg.SourceTree,20)||!recallHex(cfg.InputInventorySHA256,32)||!recallHex(cfg.InitialPopulationSHA256,32)||!filepath.IsAbs(cfg.Output) {t.Fatal("incomplete frozen identities")}
+ if (cfg.Originals!=6||cfg.SpacingSeconds!=5)&&(cfg.Originals!=48||cfg.SpacingSeconds!=6)||cfg.RunID=="" {t.Fatal("accepted workload count/spacing/run identity")}
  ctx,cancel:=context.WithTimeout(context.Background(),120*time.Second);defer cancel()
- admission:=recallReport{Version:1,Kind:"fixed_cluster_mixed_window_admission_v1",Phase:"post-only",RunID:"rf4trial24mixedchangingc1mixedc1v1",Timeout:120*time.Second,RPCTimeout:3*time.Second}
+ admission:=recallReport{Version:1,Kind:"fixed_cluster_mixed_window_admission_v1",Phase:"post-only",RunID:cfg.RunID,Timeout:120*time.Second,RPCTimeout:3*time.Second}
  var in recallInput
  if err=recallPrepare(ctx,recallOptions{Config:cfg.Config,Bootstrap:cfg.Bootstrap,Dataset:cfg.Dataset,Provenance:cfg.Provenance,Probe:cfg.Probe,Phase:admission.Phase,RunID:admission.RunID,Timeout:admission.Timeout,RPCTimeout:admission.RPCTimeout},&in,&admission);err!=nil {t.Fatal(err)}
  if admission.PopulationRows!=10005||admission.PopulationSHA256!=cfg.InitialPopulationSHA256||len(admission.Queries)!=16||len(in.corpusIDs)!=10000 {t.Fatal("actual admitted population mismatch")}
  exportedBefore:=hashJSON(in.exported)
- r:=mixedReport{Originals:48,Profile:mixedProfileChangingTop10,windowReport:windowReport{Admission:admission},PaceInterval:6*time.Second}
+ r:=mixedReport{Originals:cfg.Originals,Profile:mixedProfileChangingTop10,windowReport:windowReport{Admission:admission},PaceInterval:time.Duration(cfg.SpacingSeconds)*time.Second}
  final,err:=mixedPlan(ctx,&in,&r);if err!=nil {t.Fatal(err)}
- if len(r.Writes)!=48||len(r.Prefixes)!=49||len(final.vectors)!=10002||hashJSON(in.exported)!=exportedBefore {t.Fatal("prefix shape/exported admission changed")}
+ if len(r.Writes)!=cfg.Originals||len(r.Prefixes)!=cfg.Originals+1||len(final.vectors)!=10002||hashJSON(in.exported)!=exportedBefore {t.Fatal("prefix shape/exported admission changed")}
  // Recheck complete population and native canonical top10 at each causal state.
  for prefix,p:=range r.Prefixes {
   state,e:=mixedPopulation(&in,r.Writes[:prefix]);if e!=nil {t.Fatal(e)}
@@ -47,10 +48,10 @@ func TestTrial24FrozenCanonicalPrefixOraclePreparation(t *testing.T) {
    if e!=nil||!pacedSameTruth(truth,p.Truth[qi]) {t.Fatalf("full native prefix%d query%d: %v",prefix,qi,e)}
   }
  }
- again:=mixedReport{Originals:48,Profile:r.Profile,windowReport:windowReport{Admission:admission},PaceInterval:r.PaceInterval}
+ again:=mixedReport{Originals:cfg.Originals,Profile:r.Profile,windowReport:windowReport{Admission:admission},PaceInterval:r.PaceInterval}
  if _,err=mixedPlan(ctx,&in,&again);err!=nil||hashJSON(again.Writes)!=hashJSON(r.Writes)||hashJSON(again.Prefixes)!=hashJSON(r.Prefixes) {t.Fatalf("non-deterministic originals/oracles: %v",err)}
  type original struct { Ordinal int; Kind string; Replace *public.ReplaceRequestV1 `json:",omitempty"`; Delete *public.DeleteRequestV1 `json:",omitempty"` }
- originals:=make([]original,0,48)
+ originals:=make([]original,0,cfg.Originals)
  for i,w:=range r.Writes {
   if w.Ordinal!=i||(w.Replace==nil)==(w.Delete==nil)||w.Replace!=nil&&w.Kind!="replace"||w.Delete!=nil&&w.Kind!="delete" {t.Fatal("invalid original pointer/kind")}
   originals=append(originals,original{Ordinal:w.Ordinal,Kind:w.Kind,Replace:w.Replace,Delete:w.Delete})
@@ -117,7 +118,7 @@ def prepare(pin_path,out):
  out.mkdir()
  go_path=out/'prefix_oracle_prepare_test.go';go_path.write_text(GO_SOURCE)
  overlay=out/'overlay.json';overlay.write_text(json.dumps({'Replace':{virtual:str(go_path)}})+'\n')
- cfg={'SourceHead':a['source_head'],'SourceTree':a['source_tree'],'InputInventorySHA256':a['input_inventory_sha256'],'InitialPopulationSHA256':initial['SHA256'],'Config':str(inputs/'config.json'),'Bootstrap':str(inputs/'bootstrap.json'),'Dataset':str(inputs/'dataset'),'Provenance':str(inputs/'provenance.json'),'Probe':str(inputs/'probe.jsonl'),'Output':str(out/'native-prefix-oracles-pending.json')}
+ cfg={'RunID':W.query_run,'Originals':W.originals,'SpacingSeconds':W.spacing,'SourceHead':a['source_head'],'SourceTree':a['source_tree'],'InputInventorySHA256':a['input_inventory_sha256'],'InitialPopulationSHA256':initial['SHA256'],'Config':str(inputs/'config.json'),'Bootstrap':str(inputs/'bootstrap.json'),'Dataset':str(inputs/'dataset'),'Provenance':str(inputs/'provenance.json'),'Probe':str(inputs/'probe.jsonl'),'Output':str(out/'native-prefix-oracles-pending.json')}
  config=out/'oracle-input.json';config.write_text(json.dumps(cfg)+'\n')
  command=['env','GOWORK=off','GOMAXPROCS=2','GOTOOLCHAIN=local','GOPROXY=off','GOSUMDB=off','GOMAP_TRIAL24_ORACLE_INPUT='+str(config),'go','test','-p=1','-count=1','-timeout=180s','-overlay='+str(overlay),'-run=^TestTrial24FrozenCanonicalPrefixOraclePreparation$','./'+package]
  proposal={'state':'PREPARED_INERT_OFFLINE_OVERLAY_NOT_EXECUTED','source_head':a['source_head'],'source_tree':a['source_tree'],'source_inventory_sha256':a['source_inventory_sha256'],'input_inventory_sha256':a['input_inventory_sha256'],'collector_sha256':COLLECTOR_SHA,'helper_sha256':sha(read(__file__)),'payload_sha256':{p.name:sha(read(p)) for p in (go_path,overlay,config)},'working_directory':str(root),'proposed_argv':command,'proposed_shell_command':shlex.join(command),'runtime_started':False,'root_action':'Freeze/review overlay and pins, own sole Go slot, verify exact source/input before and after; retain raw normal execution; independently validate/promote native pending packet. No campaign SSH by this helper.'}
