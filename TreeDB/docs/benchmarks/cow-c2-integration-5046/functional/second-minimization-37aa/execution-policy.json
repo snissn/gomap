@@ -1,0 +1,12 @@
+{
+  "candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "kind": "correctness-only affected gates; no timings/profiles/benchmarks",
+  "packages": [
+    "./TreeDB",
+    "./TreeDB/caching"
+  ],
+  "basis": "Only two COW caching runtime files changed; public callers and all new merged production authority tests execute; unchanged ce808 seven-package gates retained by exact file applicability.",
+  "external_process_probe": "Pre-start comm-only probe saw go/compile, so no contention/timing qualification claimed",
+  "runner": "run-gates.sh",
+  "scope": "new main documentation/CI inventory preserved; no further main chase"
+}

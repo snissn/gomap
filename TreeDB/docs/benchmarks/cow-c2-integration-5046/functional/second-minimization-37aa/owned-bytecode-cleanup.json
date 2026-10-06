@@ -1,0 +1,25 @@
+{
+  "kind": "owned isolated runner Python bytecode cleanup; no tracked source modification",
+  "removed": [
+    {
+      "path": ".github/scripts/__pycache__/ci_impact.cpython-310.pyc",
+      "sha256": "a00af998cf8b52b934afcac89d03bf646e3aea6e4955c63e90ee7ed1fe3295f4",
+      "bytes": 19282
+    },
+    {
+      "path": ".github/scripts/__pycache__/refresh_ci_impact_inventory.cpython-310.pyc",
+      "sha256": "4b24ab66048fa692c0572e5c7532ae65c12f1bf5414a312ebe07568831f50362",
+      "bytes": 6986
+    },
+    {
+      "path": ".github/scripts/__pycache__/test_ci_impact.cpython-310.pyc",
+      "sha256": "750de8d518162c6bae66e2788932f61314e80ea818884509d79bd58dbf5cb384",
+      "bytes": 26348
+    },
+    {
+      "path": ".github/scripts/__pycache__/test_refresh_ci_impact_inventory.cpython-310.pyc",
+      "sha256": "e9f8de64dbf0f1a889aea4343846f9d63877a081deba408ec01d9df132a6494c",
+      "bytes": 16742
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "at_utc": "2026-10-06T09:28:38.502958+00:00",
+  "expected_head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "fresh_pr": {
+    "headRefOid": "4403776d10b6ac82eb9e1839f437f59a78058816",
+    "state": "OPEN"
+  },
+  "command": [
+    "gh",
+    "run",
+    "rerun",
+    "37441320541",
+    "--repo",
+    "snissn/gomap",
+    "--job",
+    "112195493758"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "rationale": "One complete unchanged M0-job rerun after independently reconstructed within-capture instability, original25files and failurelog retained separately; no sample omission/waiver/regression-disproven claim; any further failure requires investigation."
+}

@@ -1,0 +1,67 @@
+{
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "stages": {
+    "initial.json": {
+      "test_pass_events": 10,
+      "package_pass_events": 2,
+      "fail_events": 0,
+      "package_elapsed": {
+        "github.com/snissn/gomap/TreeDB/caching": 0.284,
+        "github.com/snissn/gomap/TreeDB/mvcc": 1.208
+      }
+    },
+    "full-normal.json": {
+      "test_pass_events": 419,
+      "package_pass_events": 3,
+      "fail_events": 0,
+      "package_elapsed": {
+        "github.com/snissn/gomap/TreeDB/caching": 19.69,
+        "github.com/snissn/gomap/TreeDB/mvcc": 23.79,
+        "github.com/snissn/gomap/TreeDB": 77.067
+      }
+    },
+    "full-race.json": {
+      "test_pass_events": 418,
+      "package_pass_events": 3,
+      "fail_events": 0,
+      "package_elapsed": {
+        "github.com/snissn/gomap/TreeDB/caching": 17.368,
+        "github.com/snissn/gomap/TreeDB/mvcc": 27.983,
+        "github.com/snissn/gomap/TreeDB": 122.244
+      }
+    },
+    "full-safe.json": {
+      "test_pass_events": 419,
+      "package_pass_events": 3,
+      "fail_events": 0,
+      "package_elapsed": {
+        "github.com/snissn/gomap/TreeDB/caching": 17.694,
+        "github.com/snissn/gomap/TreeDB/mvcc": 22.763,
+        "github.com/snissn/gomap/TreeDB": 61.518
+      }
+    }
+  },
+  "stage_exits": {
+    "initial": 0,
+    "normal": 0,
+    "race": 0,
+    "safe": 0,
+    "vet": 0,
+    "final-no-extra-proof": 0
+  },
+  "source_checks": [
+    {
+      "commit": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+      "file_count": 6476,
+      "mismatches": [],
+      "archive_sha256": "0175d2e0038a7d2cb497982c402686c6b64a18f205f43c95fb3a1968a998b640"
+    },
+    {
+      "commit": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+      "file_count": 6476,
+      "mismatches": [],
+      "archive_sha256": "0175d2e0038a7d2cb497982c402686c6b64a18f205f43c95fb3a1968a998b640"
+    }
+  ]
+}

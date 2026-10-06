@@ -1,0 +1,93 @@
+{
+  "recorded_utc": "2026-10-06T04:57:38.942900+00:00",
+  "candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "main": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+  "candidate_source_tree_sha256": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9",
+  "disposition": "LIMITED ACCEPT for the three measured default public-read cases only",
+  "root_accepts_measured_delta": true,
+  "material_default_read_regression_observed": false,
+  "observations": [
+    {
+      "case": "BenchmarkReadUnderWriteCached/W=0",
+      "ns_ratio_spread": {
+        "samples": [
+          1.0165044435040202,
+          1.01455082243779,
+          1.0161119355522579
+        ],
+        "min": 1.01455082243779,
+        "median": 1.0161119355522579,
+        "max": 1.0165044435040202
+      },
+      "allocation_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "byte_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+      "ns_ratio_spread": {
+        "samples": [
+          0.9851159570785739,
+          1.0066225165562914,
+          1.00207540643376
+        ],
+        "min": 0.9851159570785739,
+        "median": 1.00207540643376,
+        "max": 1.0066225165562914
+      },
+      "allocation_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "byte_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+      "ns_ratio_spread": {
+        "samples": [
+          1.0,
+          0.9715189873417721,
+          0.9788583509513742
+        ],
+        "min": 0.9715189873417721,
+        "median": 0.9788583509513742,
+        "max": 1.0
+      },
+      "allocation_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "byte_deltas": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "bindings": {
+    "default-read-guard-b9e5587/analysis-validation.json": "ffadb1284258513fa50e5679fef8fe4444c47c1a89638eeadc609bc0803e77ef",
+    "default-read-guard-b9e5587/candidate-over-main.json": "cbfdd9521ef44496f6755fae36faef93a946199c8caba964de6153d44748b635",
+    "candidate-11474-independent-review/default-guard-b9-profile-repair-review.md": "0cab1cf2097a6b779db41e7547cfaabe805ae1725a591bd43d18053c45c18398"
+  },
+  "limits": [
+    "W0 adds about7ns (~1.6%), allocations unchanged",
+    "three descriptive paired repeats; no statistical significance",
+    "fixture final Close errors ignored; no durability/drain proof",
+    "no default-writer/all-profile/sustained claim",
+    "future runtime reuse requires explicit unchanged default callee/blob applicability proof",
+    "whole C2 acceptance remains held for material COW costs"
+  ]
+}

@@ -1,0 +1,12 @@
+{"Time":"2026-10-05T19:32:50.724621979-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Time":"2026-10-05T19:32:50.726978783-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyShardIteratorDiskTombstoneAndOldCut"}
+{"Time":"2026-10-05T19:32:50.72705594-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyShardIteratorDiskTombstoneAndOldCut","Output":"=== RUN   TestCOWEmptyShardIteratorDiskTombstoneAndOldCut\n"}
+{"Time":"2026-10-05T19:32:50.843550872-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyShardIteratorDiskTombstoneAndOldCut","Output":"--- PASS: TestCOWEmptyShardIteratorDiskTombstoneAndOldCut (0.12s)\n"}
+{"Time":"2026-10-05T19:32:50.843582383-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyShardIteratorDiskTombstoneAndOldCut","Elapsed":0.12}
+{"Time":"2026-10-05T19:32:50.843593262-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWChangedSizeSingleAndDuplicateFinalRecord"}
+{"Time":"2026-10-05T19:32:50.843596355-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWChangedSizeSingleAndDuplicateFinalRecord","Output":"=== RUN   TestCOWChangedSizeSingleAndDuplicateFinalRecord\n"}
+{"Time":"2026-10-05T19:32:50.92196906-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWChangedSizeSingleAndDuplicateFinalRecord","Output":"--- PASS: TestCOWChangedSizeSingleAndDuplicateFinalRecord (0.08s)\n"}
+{"Time":"2026-10-05T19:32:50.921997874-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWChangedSizeSingleAndDuplicateFinalRecord","Elapsed":0.08}
+{"Time":"2026-10-05T19:32:50.922062956-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"PASS\n"}
+{"Time":"2026-10-05T19:32:50.924077876-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/caching\t0.199s\n"}
+{"Time":"2026-10-05T19:32:50.924105527-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Elapsed":0.199}

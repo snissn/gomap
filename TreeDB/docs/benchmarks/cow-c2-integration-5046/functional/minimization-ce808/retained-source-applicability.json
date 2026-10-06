@@ -1,0 +1,32 @@
+{
+  "baseline": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "files": {
+    "TreeDB/cow_public_cost_bench_test.go": {
+      "b9_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "candidate_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "unchanged": true
+    },
+    "TreeDB/mvcc/cow_integration_bench_test.go": {
+      "b9_sha256": "243a3049303d017a5e68a4eb8782287c707cc91aa23f23199e910ed6db5e4b18",
+      "candidate_sha256": "243a3049303d017a5e68a4eb8782287c707cc91aa23f23199e910ed6db5e4b18",
+      "unchanged": true
+    },
+    "TreeDB/public.go": {
+      "b9_sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+      "candidate_sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+      "unchanged": true
+    },
+    "TreeDB/caching/db.go": {
+      "b9_sha256": "b43f8bcbd48508fe8172420dd3822cb75d751dd3a5b8455bf35d9ebe9367eb4f",
+      "candidate_sha256": "b43f8bcbd48508fe8172420dd3822cb75d751dd3a5b8455bf35d9ebe9367eb4f",
+      "unchanged": true
+    },
+    "TreeDB/caching/snapshot.go": {
+      "b9_sha256": "a6519ced417380bd1477de25a03823455913f4d353a248d8d9d5fb974dbc108e",
+      "candidate_sha256": "a6519ced417380bd1477de25a03823455913f4d353a248d8d9d5fb974dbc108e",
+      "unchanged": true
+    }
+  },
+  "scope": "Unchanged fixture/public selector evidence; changed COW callees are separately re-executed by run-gates.sh."
+}

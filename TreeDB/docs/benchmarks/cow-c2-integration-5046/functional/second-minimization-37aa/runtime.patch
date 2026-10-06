@@ -1,0 +1,80 @@
+diff --git a/TreeDB/caching/cow_cut.go b/TreeDB/caching/cow_cut.go
+index 20c09e9ac..1568701b9 100644
+--- a/TreeDB/caching/cow_cut.go
++++ b/TreeDB/caching/cow_cut.go
+@@ -342,7 +342,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
+ 	}
+ 	dedupBytes := uint64(0)
+ 	for _, group := range groups {
+-		if len(group) > 0 {
++		if len(group) > 1 {
+ 			dedupBytes += memtable.COWAllocationCharge(uint64(len(group))*128 + 4096)
+ 		}
+ 	}
+@@ -500,6 +500,17 @@ func (c *cowCache) close() {
+ // wins without a capture-time census or cumulative history ledger.
+ func cowChangedSize(old cowTable, next *memtable.COWRoot, group []memtable.COWMutation) int64 {
+ 	size := old.size
++	if len(group) == 1 {
++		key := group[0].Key
++		record, found := next.Get(key)
++		if !found {
++			panic("staged COW point disappeared")
++		}
++		if previous, found := old.root.Get(key); found {
++			size -= cowRecordSize(previous)
++		}
++		return size + cowRecordSize(record)
++	}
+ 	seen := make(map[string]struct{}, len(group))
+ 	for _, mutation := range group {
+ 		record, found := next.Get(mutation.Key)
+diff --git a/TreeDB/caching/cow_read.go b/TreeDB/caching/cow_read.go
+index 206cf302d..c7ea960ba 100644
+--- a/TreeDB/caching/cow_read.go
++++ b/TreeDB/caching/cow_read.go
+@@ -152,7 +152,15 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	count := len(s.rootIterator.immutables)
++	queue := s.rootIterator.immutables
++	count := 0
++	for _, source := range queue {
++		// The cut owns immutable roots. Len includes tombstones: only exact
++		// zero-entry roots can be omitted without changing precedence.
++		if source.Len() != 0 {
++			count++
++		}
++	}
+ 	if !empty {
+ 		count++
+ 	}
+@@ -168,7 +176,7 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
+ 		return nil, err
+ 	}
+ 	it := &cowMergeIterator{snapshot: s, lease: lease}
+-	sources, err := s.cowIteratorSources(start, end, empty, it)
++	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it)
+ 	if err != nil {
+ 		it.workspace.close()
+ 		lease.Close()
+@@ -188,14 +196,12 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
+ 	return it, nil
+ }
+ 
+-func (s *Snapshot) cowIteratorSources(start, end []byte, empty bool, owner *cowMergeIterator) ([]merging.IteratorSource, error) {
+-	queue := s.rootIterator.immutables
+-	count := len(queue)
+-	if !empty {
+-		count++
+-	}
++func (s *Snapshot) cowIteratorSources(start, end []byte, queue []memtable.Table, count int, empty bool, owner *cowMergeIterator) ([]merging.IteratorSource, error) {
+ 	sources := make([]merging.IteratorSource, 0, count)
+ 	for i := len(queue) - 1; i >= 0; i-- {
++		if queue[i].Len() == 0 {
++			continue
++		}
+ 		sources = append(sources, merging.IteratorSource{Iter: queue[i].NewIterator(start, end), Priority: len(sources)})
+ 	}
+ 	if !empty {

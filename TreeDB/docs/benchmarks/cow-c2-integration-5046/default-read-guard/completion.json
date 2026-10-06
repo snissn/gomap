@@ -1,0 +1,9 @@
+{
+  "completed_utc": "2026-10-06T04:45:58.323883+00:00",
+  "runs": 6,
+  "source_drift": {
+    "main": [],
+    "candidate": []
+  },
+  "qualification": "bounded default-read guard; ignored fixture Close errors, not a persistence/drain or C3/C4 proof"
+}

@@ -1,0 +1,111 @@
+[
+  {
+    "Time": "2026-10-06T08:42:45.6727097Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase"
+  },
+  {
+    "Time": "2026-10-06T08:42:45.6727097Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase",
+    "Output": "=== RUN   TestCOWCloseErrorNotificationCanReadClosedDatabase\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:45.6732816Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable"
+  },
+  {
+    "Time": "2026-10-06T08:42:45.6732816Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "Output": "=== RUN   TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:51.5408804Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "Output": "    cow_close_notification_test.go:55: close error notification blocked on public lifecycle lock\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:52.748015Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWCloseErrorNotificationCanReadClosedDatabasecommand_wal_d3497742719\\001\\dictdb\\index.db: The process cannot access the file because it is being used by another process.\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:52.7485844Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "Output": "--- FAIL: TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable (7.08s)\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:52.7485844Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "Elapsed": 7.08
+  },
+  {
+    "Time": "2026-10-06T08:42:52.7485844Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed"
+  },
+  {
+    "Time": "2026-10-06T08:42:52.7485844Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "Output": "=== RUN   TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:57.9269824Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "Output": "    cow_close_notification_test.go:55: close error notification blocked on public lifecycle lock\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:59.827467Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWCloseErrorNotificationCanReadClosedDatabasecommand_wal_r3514665079\\001\\dictdb\\index.db: The process cannot access the file because it is being used by another process.\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:59.8279963Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "Output": "--- FAIL: TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed (7.08s)\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:59.8279963Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "Elapsed": 7.08
+  },
+  {
+    "Time": "2026-10-06T08:42:59.8279963Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase",
+    "Output": "--- FAIL: TestCOWCloseErrorNotificationCanReadClosedDatabase (14.15s)\n"
+  },
+  {
+    "Time": "2026-10-06T08:42:59.8279963Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase",
+    "Elapsed": 14.15
+  }
+]

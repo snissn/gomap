@@ -1,0 +1,8 @@
+{"Time":"2026-10-05T18:10:34.646274692-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Time":"2026-10-05T18:10:34.648769664-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestDurabilityProfilePublicEntrypointInventory"}
+{"Time":"2026-10-05T18:10:34.648809885-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestDurabilityProfilePublicEntrypointInventory","Output":"=== RUN   TestDurabilityProfilePublicEntrypointInventory\n"}
+{"Time":"2026-10-05T18:10:34.701389242-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestDurabilityProfilePublicEntrypointInventory","Output":"--- PASS: TestDurabilityProfilePublicEntrypointInventory (0.05s)\n"}
+{"Time":"2026-10-05T18:10:34.701415421-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestDurabilityProfilePublicEntrypointInventory","Elapsed":0.05}
+{"Time":"2026-10-05T18:10:34.701420932-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Time":"2026-10-05T18:10:34.702627487-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"ok  \tgithub.com/snissn/gomap/TreeDB\t0.056s\n"}
+{"Time":"2026-10-05T18:10:34.702659543-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Elapsed":0.056}

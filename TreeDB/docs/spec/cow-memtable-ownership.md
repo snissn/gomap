@@ -1,11 +1,13 @@
 # Immutable COW memtable ownership
 
 `TreeDB/internal/memtable/cow_*.go` supplies the internal foundation for the
-immutable cached-read integration. It is not a public DB mode: C1 does not add
+immutable cached-read integration. The foundation itself is not a DB mode: C1 does not add
 `cow_btree` to `ModeFromString`, `Table`, or public dispatch. The existing mutable
 `BTree`, its arena, `Freeze`, stolen batches and lock-holding iterators retain
 their current behavior. No on-disk format, WAL, MVCC codec or durability default
-changes here.
+changes here. The coherent installer separately exposes explicit `cow_btree`;
+see [COW cached publication](cow-cache-publication.md) for its public dispatch,
+finite limits, refusal, recovery and lifetime obligations.
 
 ## Private preparation and immutable read headers
 
@@ -109,8 +111,9 @@ leases keep working; its own control wrapper stays charged until final release.
 Every `COWLimits` field must be positive and finite. Defaults are 1,024 active
 views/cursors, 64 generations, 32 frozen/pinned sources, 256 distinct resources
 per generation, 64 MiB generation history, 512 MiB total charge, 512 MiB retirement
-capacity and 64 MiB in-flight reservations. They are internal starting limits,
-not public production tuning or an RSS quota.
+capacity and 64 MiB in-flight reservations. The integrated cache exposes these
+finite defaults through `COWMemtableLimits`; they are conservative starting
+limits, not a production recommendation or an RSS quota.
 
 The source-bound mixed-operation charge remains intentionally conservative.
 The measured 1,024-operation mixed witness reserves about 50.5 MiB and fits the

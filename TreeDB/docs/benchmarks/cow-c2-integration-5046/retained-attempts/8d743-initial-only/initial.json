@@ -1,0 +1,33 @@
+{"Time":"2026-10-05T19:53:27.29774574-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Time":"2026-10-05T19:53:27.297879674-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-05T19:53:27.299916721-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue"}
+{"Time":"2026-10-05T19:53:27.299933833-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue","Output":"=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue\n"}
+{"Time":"2026-10-05T19:53:27.299949666-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable"}
+{"Time":"2026-10-05T19:53:27.299951884-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable","Output":"=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable\n"}
+{"Time":"2026-10-05T19:53:27.299960642-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorCapturedSourcesPrecedenceAndPressure"}
+{"Time":"2026-10-05T19:53:27.299962441-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorCapturedSourcesPrecedenceAndPressure","Output":"=== RUN   TestCOWSuccessorCapturedSourcesPrecedenceAndPressure\n"}
+{"Time":"2026-10-05T19:53:27.354259724-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorCapturedSourcesPrecedenceAndPressure","Output":"    cow_cost_minimization_test.go:403: commitlog: corrupt record\n"}
+{"Time":"2026-10-05T19:53:27.354605526-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorCapturedSourcesPrecedenceAndPressure","Output":"--- FAIL: TestCOWSuccessorCapturedSourcesPrecedenceAndPressure (0.05s)\n"}
+{"Time":"2026-10-05T19:53:27.354615839-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorCapturedSourcesPrecedenceAndPressure","Elapsed":0.05}
+{"Time":"2026-10-05T19:53:27.354626805-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorPointerOwnershipRefusalRetry"}
+{"Time":"2026-10-05T19:53:27.354628674-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorPointerOwnershipRefusalRetry","Output":"=== RUN   TestCOWSuccessorPointerOwnershipRefusalRetry\n"}
+{"Time":"2026-10-05T19:53:27.523789099-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorPointerOwnershipRefusalRetry","Output":"--- PASS: TestCOWSuccessorPointerOwnershipRefusalRetry (0.17s)\n"}
+{"Time":"2026-10-05T19:53:27.523807847-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWSuccessorPointerOwnershipRefusalRetry","Elapsed":0.17}
+{"Time":"2026-10-05T19:53:27.523894543-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"FAIL\n"}
+{"Time":"2026-10-05T19:53:27.52556438-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/caching\t0.228s\n"}
+{"Time":"2026-10-05T19:53:27.525577269-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/caching","Elapsed":0.228}
+{"Time":"2026-10-05T19:53:27.581075665-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable","Output":"--- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable (0.28s)\n"}
+{"Time":"2026-10-05T19:53:27.581092928-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable","Elapsed":0.28}
+{"Time":"2026-10-05T19:53:27.581099-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed"}
+{"Time":"2026-10-05T19:53:27.581106418-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed","Output":"=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed\n"}
+{"Time":"2026-10-05T19:53:27.735034185-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed","Output":"--- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed (0.15s)\n"}
+{"Time":"2026-10-05T19:53:27.73505264-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed","Elapsed":0.15}
+{"Time":"2026-10-05T19:53:27.73505763-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast"}
+{"Time":"2026-10-05T19:53:27.735059549-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast","Output":"=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast\n"}
+{"Time":"2026-10-05T19:53:27.849254141-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast","Output":"--- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast (0.11s)\n"}
+{"Time":"2026-10-05T19:53:27.84927288-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast","Elapsed":0.11}
+{"Time":"2026-10-05T19:53:27.849276915-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue","Output":"--- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue (0.55s)\n"}
+{"Time":"2026-10-05T19:53:27.849279083-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestCOWSuccessorLogicalTombstoneAndEmptyValue","Elapsed":0.55}
+{"Time":"2026-10-05T19:53:27.84928386-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"PASS\n"}
+{"Time":"2026-10-05T19:53:27.850648546-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/mvcc\t0.553s\n"}
+{"Time":"2026-10-05T19:53:27.850664502-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0.553}

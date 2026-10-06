@@ -1,0 +1,40 @@
+{
+  "at_utc": "2026-10-06T08:17:52.773391+00:00",
+  "measured_commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "measured_tree": "b06dc9f41b8593f1c9f87d5b6d0e1a23a853b822",
+  "measured_file_count": 7330,
+  "measured_full_source_manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+  "measured_aggregate_sha256": "9a2f85e57f217671a936de7e3dee724d98c56466be8fb9e9d031506541fc17c4",
+  "checked_staged_snapshot_tree": "e3150e4f3bede2396fb2ab2cf718973ddf07c722",
+  "checked_staged_snapshot_scope": "Snapshot before this proof, its Markdown companion, final independent packet review and final manifest; those later paths must be artifact-only descendants. This is not the final publication tree or full-commit identity.",
+  "existing_changed_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/README.md",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md"
+  ],
+  "changed_content_sha256": {
+    ".github/ci/ci_impact.json": "42d4f400866b66fac763c89831dfb66594c8fe622b3390eee80b1a573d8f5a88",
+    "TreeDB/README.md": "e8814c2a7a34931a400304b0cb4d535e5abe3bb8f96e6da16a77186b0ae2757d",
+    "TreeDB/docs/spec/cow-cache-publication.md": "91024e950b970ad8c9171fec835cc61cc0d52d84228eb16cb54948c00fbb09a0",
+    "cmd/benchprof/README.md": "1a9791d02f27c8c19166d1f858d328d649547c9124f5a3ca1de09acf623fd28a",
+    "cmd/unified_bench/README.md": "a749f47249b35c14d80456a61627996c87bbc2aa0ee45a994c45ec93e608ce3f"
+  },
+  "unchanged_original_paths": 7325,
+  "runtime_module_fixture_delta": [],
+  "new_artifact_count_at_snapshot": 641,
+  "new_artifact_paths_sha256": "b55fa51ba9fd335a26c0174b01cf790d666ae3cbd0b34ec50dbfbe595a8c3b72",
+  "new_compiled_go_paths": [],
+  "deleted_paths": [],
+  "unstaged_paths": [],
+  "original_path_mode_oid_mismatches_outside_allowlist": [],
+  "original_worktree_sha256_mismatches_outside_allowlist": [],
+  "byte_preserved_provenance_count": 634,
+  "provenance_mismatches": [],
+  "ci_semantic_changed_fields": [
+    "discovery_source_sha256"
+  ],
+  "old_publication_paths_unchanged": true,
+  "applicability": "All measured runtime, module, test and benchmark fixture bytes remain identical; affected reviews/functional and cost evidence apply to this staged publication snapshot. Strict current-head hosted CI, Windows runtime and hosted review are not waived."
+}

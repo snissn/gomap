@@ -1,0 +1,72 @@
+{
+  "at_utc": "2026-10-06T08:38:40.375642+00:00",
+  "docs_checked": [
+    "TreeDB/README.md",
+    "TreeDB/docs/spec/README.md",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "TreeDB/docs/spec/cow-memtable-ownership.md",
+    "TreeDB/docs/spec/architecture.md",
+    "TreeDB/docs/spec/contracts.md",
+    "TreeDB/docs/spec/write-path-and-durability.md",
+    "TreeDB/docs/spec/command-wal-durable-write-contract.md",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/docs/spec/verification.md",
+    "docs/TREEDB_WRITE_PATHS.md",
+    "docs/TREEDB_RECOVERY.md",
+    "docs/contracts/CONCURRENCY.md",
+    "cmd/unified_bench/README.md",
+    "cmd/benchprof/README.md",
+    "TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/cost-report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/applicability.md"
+  ],
+  "relative_links_checked": 111,
+  "missing_links": [],
+  "doc_content_sha256": {
+    "TreeDB/README.md": "e8814c2a7a34931a400304b0cb4d535e5abe3bb8f96e6da16a77186b0ae2757d",
+    "TreeDB/docs/spec/README.md": "2ff525fa5785eeb13a27e524fb04d47c8b7f609a6df0165304b1a5b55febd530",
+    "TreeDB/docs/spec/cow-cache-publication.md": "91024e950b970ad8c9171fec835cc61cc0d52d84228eb16cb54948c00fbb09a0",
+    "TreeDB/docs/spec/cow-memtable-ownership.md": "f335b92bc894afa5f8b5f13eddcaf74a2c608d3282f599463a940c3d463ae76a",
+    "TreeDB/docs/spec/architecture.md": "cae1798cd84c8d1e2e132c8b48cb238a7733b42e50853611799f9bad4d6ef022",
+    "TreeDB/docs/spec/contracts.md": "6c42c3efce70a791865795c4e69f24470bf3503c3c6cdaf276e293b2148f2e90",
+    "TreeDB/docs/spec/write-path-and-durability.md": "2008ec03fdbab90abc21a73e8dfd16197ebbb82c0e7246c5a6e29464f072026f",
+    "TreeDB/docs/spec/command-wal-durable-write-contract.md": "f7e3d3c3c6bc21759abe50c8dc0a43560f1399707dd637ba4099e4ff833e9251",
+    "TreeDB/docs/spec/recovery.md": "f831de78d0dd936c4ffe37243b5505cc7d744dc1b7d00bb1cb63fdc21c111477",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "840b964b7bcf2226bbffc290cc912c3b086e6405c7fd281871096c9b1e25ed55",
+    "TreeDB/docs/spec/verification.md": "31d0e474cf8fcbae4eefa347771fb5159e5180a6b2ddbd6bbec00e2fca1643d1",
+    "docs/TREEDB_WRITE_PATHS.md": "0c57a97409b7aa885d7c3c544271fb39b43d21d96c0af8f091e79e3852ecde70",
+    "docs/TREEDB_RECOVERY.md": "12c8f3aed55894decff0d56f6d294acc257d37c06cebbe168d8950764483e046",
+    "docs/contracts/CONCURRENCY.md": "04b95a6f5f1776c49694c57dfe47a336324ac25c8f3896592bf3b5c721c5e277",
+    "cmd/unified_bench/README.md": "8a5c3d98413859793d1b11e60d0a1225e568a9f0d15a8720dff450b9edc9b550",
+    "cmd/benchprof/README.md": "ed5da38235693d643ef258b840c18a695d199ec12beecf8688dd94477dede468",
+    "TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md": "bcfffa3489a25bb837b38d7d4ec50df7c4b9c9a00f1fe4a5cd873101db6e7d4b",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md": "7e126fb9c08f0ff19cd1aff127b7c2f624b31acdca5a15453d2fc34d52cbeefc",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/cost-report.md": "691cd025b9652c7b0cb267c4a4cd771538d1e989a191d67b64abcaeaa6028002",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/applicability.md": "916d3f251e44e4a4bf14421b515184800d46c72dccb4e3002dda6b07f334721d"
+  },
+  "diff_check_command": [
+    "git",
+    "diff",
+    "--cached",
+    "--check",
+    "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6"
+  ],
+  "diff_check_actual_exit": 2,
+  "literal_whitespace_exceptions": [
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/baseline.txt",
+      "sha256": "65b7ce843a05430cf360aad0ce177dae2179fb8c341ab529fde09f34f16c2069",
+      "basis": "Byte-preserved actual014 hosted strict benchmark literal; original private source/provenance agree."
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/candidate.txt",
+      "sha256": "11dedf0f683c1945c73a9869c8cae21c880d12f8d083f0bf5b8cfe6d2be505d6",
+      "basis": "Byte-preserved actual014 hosted strict benchmark literal; original private source/provenance agree."
+    }
+  ],
+  "all_other_changed_paths_clean": true,
+  "raw_stdout_sha256": "95c94859048ce830b1170ddfe16dcb50ddd2a5a5b832617ee3228d77fe401f65",
+  "scope": "Current-main composition and new strict014 literal append against014, not relabeled original31-exception frozen receipt."
+}

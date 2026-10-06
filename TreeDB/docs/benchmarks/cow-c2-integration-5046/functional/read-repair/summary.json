@@ -1,0 +1,32 @@
+{
+  "full-normal": {
+    "test_pass": 553,
+    "package_pass": 7,
+    "fail": 0
+  },
+  "full-race": {
+    "test_pass": 552,
+    "package_pass": 7,
+    "fail": 0
+  },
+  "full-safe": {
+    "test_pass": 553,
+    "package_pass": 7,
+    "fail": 0
+  },
+  "inventory": {
+    "test_pass": 1,
+    "package_pass": 1,
+    "fail": 0
+  },
+  "combined-normal-v5": {
+    "test_pass": 102,
+    "package_pass": 2,
+    "fail": 0
+  },
+  "combined-race-v5": {
+    "test_pass": 102,
+    "package_pass": 2,
+    "fail": 0
+  }
+}

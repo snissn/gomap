@@ -1,0 +1,22 @@
+{
+  "created_utc": "2026-10-06T06:59:08.482711+00:00",
+  "base": "2f626cb4f40e44736257537e38359ad003939ab9",
+  "candidate": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair",
+  "failed_ci_log_sha256": "5fca52b58b516c4b31efbc2cdb44b6b1f9136ebe98594c4ab7d55c7159e9810c",
+  "status": "SOURCE_LEADS_ONLY_REMOTE_WINDOW_PENDING",
+  "fixtures": [
+    "./TreeDB/db:^BenchmarkGetVersioned$",
+    "./TreeDB:^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$"
+  ],
+  "method": "same Go1.26.3 trimpath/buildvcs=false, CPU-pinned GOMAXPROCS1, balanced8 paired AB/BA; separate CPU and allocation profiles; baseline/current/patched bytes and binary hashes retained",
+  "source_leads": [
+    "Legacy native capture now routes via bounded COW function (nil admission,false bounded) with additional call and codegen branches",
+    "caching.Batch carries96B of COW-only fields in every legacy allocation; public command wrapper additionally grows32B; test allocation-count unchanged, sizeclasses require actual sizeof/heap witness"
+  ],
+  "candidate_minimal_repairs": [
+    "restore separate exact base legacy capture body preserving registry and resource pins",
+    "if actual allocation witness confirms, move COW-only batch fields to preadmitted COW-only state owner; guard optional accesses and charge wrapper+owner concrete sizes before construction"
+  ],
+  "scope": "No native producer/M7/fence or gate/threshold changes; no commits/push/GH writes until root coordination; current frozen c2 untouched"
+}

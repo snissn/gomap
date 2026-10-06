@@ -1,0 +1,8 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCOWIntegratedPublicMVCC/no_wal_fast/btree/point-12         	--- FAIL: BenchmarkCOWIntegratedPublicMVCC/no_wal_fast/btree/point-12
+    cow_integration_bench_test.go:28: use fixed -benchtime=128x or 256x for this growing-history diagnostic
+--- FAIL: BenchmarkCOWIntegratedPublicMVCC
+FAIL

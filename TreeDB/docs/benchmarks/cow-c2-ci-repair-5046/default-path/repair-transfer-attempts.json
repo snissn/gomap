@@ -1,0 +1,6 @@
+{
+  "first_attempt_exit": 1,
+  "first_attempt_error": "stdout metadata prefix made streamed tar invalid; no checkout writes",
+  "corrected_transfer_exit": 0,
+  "corrected_hash_verified": 311
+}

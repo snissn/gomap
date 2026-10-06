@@ -1,0 +1,71 @@
+{
+  "raw": {
+    "packet": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-integrated-974d",
+    "transfer_files": 70,
+    "transfer_manifest_sha256": "0af29eb544a9e6807c2e9046150d69d07c9bdee66a34734874ac69a8291b85a8",
+    "validation": {
+      "raw_runs": 27,
+      "rows": 540,
+      "matched_cases": 180,
+      "raw_hashes_verified": true,
+      "stderr_hashes_verified": true,
+      "source_tree_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+      "scope": "bounded C2 diagnostic; no statistical significance or sustained C4 acceptance",
+      "fixture_charge_scope": "whole fixture setup/reseeds/last observed cut outside timer; not per-op heap",
+      "close_receipts": 360,
+      "tail_scope": "16/128 fixed samples per case; descriptive percentiles only",
+      "rss_scope": "whole child run includes setup/teardown; receipts are not per-op memory"
+    },
+    "binary": {
+      "sha256": "87ae091fb8fe077f68327ab15d573c29768197156377f8570bb7eb8275d6707c",
+      "bytes": 52204929
+    },
+    "source_identity_sha256": "85e8fada4a8b5931a4c4b9bd61696903f8c2014e0add62af191af25721d1c98e",
+    "elapsed_seconds_sum": 411.79498860333115
+  },
+  "mvcc": {
+    "packet": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-integrated-974d",
+    "transfer_files": 50,
+    "transfer_manifest_sha256": "8e18f36ee63021e0fc3af119af4be76295e89c33f42f45d13ca3f49d6a9854bc",
+    "validation": {
+      "raw_runs": 18,
+      "rows": 108,
+      "matched_cases": 36,
+      "raw_hashes_verified": true,
+      "stderr_hashes_verified": true,
+      "source_tree_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+      "scope": "tiny growing-history C2 public-MVCC diagnostic; fences retained; no sustained, significance, C3 or C4 claim",
+      "complete_history_outputs": {
+        "128": 8.5,
+        "256": 16.5
+      },
+      "final_close_drain": "validated separately by root-package dirty fixture"
+    },
+    "binary": {
+      "sha256": "68b3b59a5b45409b53096dc71f4b0937f79ef56bba2b69048e2ffae85d58fc15",
+      "bytes": 24821118
+    },
+    "source_identity_sha256": "85e8fada4a8b5931a4c4b9bd61696903f8c2014e0add62af191af25721d1c98e",
+    "elapsed_seconds_sum": 77.63074078178033
+  },
+  "archive_type": {
+    "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "files": 7330,
+    "git_modes_sha256": "bbef4a6b0c0fefaef8b03d8be9629d28c32fb6670857b0414ddbc0e8b22b64ba",
+    "actual_rows_sha256": "2f096dd64e46e479685f271ebf09901d277d29391cc7bee42dc8a9f8f9e8e810",
+    "actual_kind_counts": {
+      "regular": 7330
+    },
+    "expected_mode_counts": {
+      "100644": 7207,
+      "100755": 123
+    },
+    "symlinks": [],
+    "mode_or_type_mismatches": [],
+    "extra": [],
+    "missing": []
+  },
+  "functional_manifest_sha256": "4b1eee4370284cb9b745356f537afa7ad2125d46048f7b97ea347b0bfee0763c",
+  "scope": "actual current974d three-repeat descriptive costs; no significance or sustained qualification; hosted strict default-path gate remains authority",
+  "private": "binaries/full compiled dependency dumps/process argv/source archives remain private remote; hash-only bindings transferred"
+}

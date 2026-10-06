@@ -166,6 +166,16 @@ func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
 	if !isLeafLogFileID(fileID) || path == "" {
 		return false
 	}
+	// Windows Dir joins the volume back onto the parent, allocating even for
+	// canonical native paths. Base discards that volume, so omit the join. A
+	// tail that is itself parsed as a volume (for example duplicate leading
+	// separators) must retain the original lexical namespace classification.
+	if volume := filepath.VolumeName(path); volume != "" {
+		tail := path[len(volume):]
+		if filepath.VolumeName(tail) == "" {
+			path = tail
+		}
+	}
 	return filepath.Base(filepath.Dir(path)) == compactLeafPagePayloadDirName
 }
 
