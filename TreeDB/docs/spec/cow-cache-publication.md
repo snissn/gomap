@@ -86,6 +86,10 @@ teardown; it does not promise storage reads after DB Close.
 Public reads capture their existing cached/backend owner under the public
 lifecycle lock, then release that lock before lower-layer read admission or
 callbacks. A callback may therefore close the DB without retaining that lock.
+Read-owner capture uses nonblocking read admission: exclusive or pending Close
+returns `ErrClosed`, and `Stats` returns nil, instead of waiting. This also lets
+synchronous error notifications and worker notifications finish when Close
+owns the lifecycle lock and waits for workers. Notification ordering is unchanged.
 During the final Close flush, the existing backend read barrier remains active
 for private COW build chunks: a later chunk may read external leaves buffered
 by an earlier chunk. Close removes that authority before lane teardown.

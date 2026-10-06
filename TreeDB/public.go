@@ -586,11 +586,16 @@ func (db *DB) ensureOpen() error {
 // captureReadOwners selects an existing lower-layer owner under the public
 // lifecycle lock. Lower-layer read admission excludes storage teardown; release
 // this lock before calling the owner so user callbacks can reenter Close.
+// Exclusive lifecycle ownership belongs to Close. Refuse rather than wait when
+// Close owns or awaits that lock: Close may itself be waiting for a worker whose
+// NotifyError callback is attempting a public read.
 func (db *DB) captureReadOwners() (*caching.DB, *db.DB, error) {
 	if db == nil {
 		return nil, nil, ErrClosed
 	}
-	db.lifecycleMu.RLock()
+	if !db.lifecycleMu.TryRLock() {
+		return nil, nil, ErrClosed
+	}
 	cached, backend := db.cached, db.backend
 	db.lifecycleMu.RUnlock()
 	if cached == nil && backend == nil {
@@ -2507,11 +2512,14 @@ func (db *DB) AcquireSnapshot() Snapshot {
 }
 
 // Stats returns diagnostic stats for the active backend and cached layer.
+// It returns nil when exclusive Close prevents diagnostic admission.
 func (db *DB) Stats() map[string]string {
 	if db == nil {
 		return nil
 	}
-	db.lifecycleMu.RLock()
+	if !db.lifecycleMu.TryRLock() {
+		return nil
+	}
 	defer db.lifecycleMu.RUnlock()
 	cached, backend := db.cached, db.backend
 	if cached == nil && backend == nil {
