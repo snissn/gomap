@@ -5,10 +5,13 @@ All plan/preflight/lifecycle callers then share the guard before any SSH/runtime
 No TLS disable/fallback; private key bytes are never returned or printed.
 """
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
+from source_paths import W
 import argparse, hashlib, ipaddress, json, pathlib, ssl, subprocess, time
 
 NODES = ("node-a", "node-b", "node-c", "node-d")
-CLUSTER = "gomap-4250-rf4trial24mixedchangingc1"
+CLUSTER = "gomap-4250-"+W.campaign
 
 def _file(name, cap, private=False):
     p = pathlib.Path(name)
