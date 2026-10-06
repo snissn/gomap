@@ -262,7 +262,6 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		defer close(writerDone)
 		defer active.Store(false)
 		writerStart := time.Now()
-		defer func() { r.WriterDurationNS = uint64(time.Since(writerStart)) }()
 		limit := uint64(256)
 		if mode == "burst" {
 			limit = 16
@@ -270,6 +269,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		if mode == "churn" {
 			limit = 1024
 		}
+		duration := 120 * time.Millisecond
 		for i := uint64(1); i <= limit; i++ {
 			ts := uint64(n + 1)
 			if mode != "churn" {
@@ -284,13 +284,17 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			overlap := inQuantum.Load()
 			writeInCall.Store(true)
 			e := s.CommitAt(ts, mutations, CommitRelaxed)
-			// The final public write return ends the finite burst activity phase.
-			if mode == "burst" && i == limit {
+			end := time.Now()
+			durationStop := mode != "burst" && end.Sub(writerStart) >= duration
+			// Decide every terminal path at the public write return, before bookkeeping.
+			terminal := e != nil || i == limit || durationStop
+			if terminal {
 				active.Store(false)
+				r.WriterDurationNS = uint64(end.Sub(writerStart))
 			}
 			overlap = overlap || inQuantum.Load()
 			writeInCall.Store(false)
-			r.WriteLatency.add(time.Since(start))
+			r.WriteLatency.add(end.Sub(start))
 			if overlap {
 				r.WriteIntervalsOverlappingQuantum++
 			}
@@ -300,9 +304,12 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			}
 			acknowledged.Store(i)
 			r.Writes++
-			if mode != "burst" && time.Since(writerStart) >= 120*time.Millisecond {
+			if durationStop {
 				r.WriterStopReason = "observation-duration"
 				return
+			}
+			if terminal {
+				break
 			}
 			if mode == "burst" {
 				if i < limit {

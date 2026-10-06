@@ -1353,3 +1353,24 @@ GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -run '^$' \
 Repeat without the tag for the default comparator. Fixture setup is excluded;
 1 MiB keys prevent short-input conversion elision from hiding allocation costs.
 See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
+### Native prune experiment environment and writer stop boundary
+
+The native memory and foreground drivers construct a minimal environment and
+record the exact non-null map passed to version, build and case processes. They
+fix `GOENV=off`, `CGO_ENABLED=1`, `GOFLAGS=-p=2`, `GOWORK=off` and
+`GOTOOLCHAIN=local`, record `HOME`, and use the resolved Go directory followed by
+the platform's default system tool path. Default caches remain under recorded
+`HOME`; inherited experiment, compiler, loader and GC overrides are excluded.
+An explicitly supplied `GOMAXPROCS` must be a canonical positive decimal and is
+recorded; when absent, the runtime uses its host-dependent default. Cases add
+only the recorded test controls. Unknown, null or inconsistent environment keys
+fail closed; older receipts with the former subset environment need their original
+validator and cannot be treated as evidence captured by the revised driver.
+
+Every foreground mode ends public writer activity at its final `CommitAt`
+return, including cap, duration and error stops, before latency/counter cleanup.
+Duration expiry is observed at public returns, preserving the existing approximate duration policy. The same return time binds latency and duration. The retained harness also uses
+that time for `WriterStopNS`; `writerDone` remains the later conservative worker
+join and post-writer read fence. These sampled phase witnesses do not qualify
+performance or prove continuous overlap.

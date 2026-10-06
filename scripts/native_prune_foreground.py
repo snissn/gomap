@@ -13,7 +13,23 @@ import time
 
 C = 'gomap-native-foreground-v2'
 MATRIX = [(n, m, 'bounded') for n in (64, 128) for m in ('burst', 'growth', 'churn')] + [(n, 'burst', 'unbounded') for n in (64, 128)]
-BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOMAXPROCS', 'GOROOT', 'PATH', 'GOGC', 'GOMEMLIMIT', 'GODEBUG')
+BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOENV', 'HOME', 'PATH')
+FIXED_ENV = {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOENV': 'off'}
+
+def validate_environment(env, go_path):
+    need(type(env) is dict and set(env) == set(BUILD_KEYS) | ({'GOMAXPROCS'} if 'GOMAXPROCS' in env else set()) and all(type(v) is str and v for v in env.values()), 'controlled build environment')
+    need(all(env[k] == v for k, v in FIXED_ENV.items()), 'controlled build environment')
+    need(pathlib.Path(env['HOME']).is_absolute() and env['PATH'] == str(pathlib.Path(go_path).parent) + os.pathsep + os.defpath, 'controlled build environment')
+    if 'GOMAXPROCS' in env:
+        value = env['GOMAXPROCS']
+        need(value.isascii() and value.isdecimal() and 0 < int(value) <= 2147483647 and str(int(value)) == value, 'controlled build environment')
+
+def controlled_environment(go_path):
+    env = dict(FIXED_ENV, HOME=str(pathlib.Path.home()), PATH=str(go_path.parent) + os.pathsep + os.defpath)
+    if 'GOMAXPROCS' in os.environ:
+        env['GOMAXPROCS'] = os.environ['GOMAXPROCS']
+    validate_environment(env, str(go_path))
+    return env
 
 # Explicit producer schema; missing or unexpected fields require a matching validator change.
 RESULT_TYPES = {
@@ -211,7 +227,8 @@ def validate_version(out, receipt):
 
 
 def capture_version(go_path, root, env, out, errors):
-    build_env = {k: env.get(k) for k in BUILD_KEYS}
+    validate_environment(env, str(go_path))
+    build_env = dict(env)
     before = artifact_sha(go_path)
     command = {'cwd': str(root), 'argv': [str(go_path), 'version'], 'env': build_env, 'go_path': str(go_path), 'go_sha256': before}
     (out / 'version-command.json').write_text(json.dumps(command, indent=2) + '\n')
@@ -259,8 +276,8 @@ def packet(out, root=None, receipt=None):
     build = json.loads((out / 'build-command.json').read_text())
     need(build['go'] == r['go'] and build['argv'][0] == r['go']['path'] and type(r['go']['version']) is str and r['go']['version'].startswith('go version ') and valid_sha(r['go']['sha256']), 'Go identity')
     need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(capture / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
-    need(build['env'] == r['build_env'] and all(k in r['build_env'] for k in BUILD_KEYS), 'build environment binding')
-    need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None, 'GOGC': None, 'GOMEMLIMIT': None, 'GODEBUG': None}.items()), 'controlled build environment')
+    need(build['env'] == r['build_env'], 'build environment binding')
+    validate_environment(r['build_env'], r['go']['path'])
     validate_version(out, r)
     for c in r['cases']:
         for key in ('raw', 'result', 'command'):
@@ -384,6 +401,7 @@ def contract_self_test(out, r):
 
 def self_test(out, root):
     r = packet(out, root)
+    environment_self_test(out, r)
     x = json.loads((out / r['cases'][0]['result']).read_text())
     c = r['cases'][0]
     probes = [lambda y: y.update(ReadsAfterWriterStop=0), lambda y: y.update(ReadersStopWithWriter=True), lambda y: y.update(ForcedBudgetError=True), lambda y: y.update(Calls=float(y['Calls'])), lambda y: y.update(Refusals=False), lambda y: y['ReadLatency'].update(Buckets=[-1, y['Reads'] + 1] + [0] * 6)]
@@ -405,6 +423,48 @@ def self_test(out, root):
     print('seventeen in-memory negative checks PASS; retained measurements unchanged')
     contract_self_test(out, r)
 
+
+def environment_self_test(out, receipt):
+    # Refresh every command binding together so only the environment contract
+    # rejects these probes. Original packets and measurement bytes stay intact.
+    import tempfile
+    faults = [(key, 'missing', None) for key in BUILD_KEYS]
+    faults += [(key, 'set', 'unrecorded') for key in ('GOEXPERIMENT', 'GOAMD64', 'CC', 'CGO_CFLAGS', 'LD_PRELOAD', 'GOROOT', 'GOGC', 'GOMEMLIMIT', 'GODEBUG')]
+    faults += [('GOENV', 'set', '/tmp/unbound-goenv'), ('HOME', 'set', 'relative'), ('PATH', 'set', receipt['build_env']['PATH'] + os.pathsep + '/tmp/unrecorded-tool-path')]
+    faults += [('GOMAXPROCS', 'set', v) for v in (None, 0, '', '0', '01', '2147483648', '٢')]
+    with tempfile.TemporaryDirectory(prefix='native-environment-contract-') as folder:
+        archive = pathlib.Path(folder)
+        for file in out.iterdir():
+            if file.is_file():
+                shutil.copyfile(file, archive / file.name)
+        for key, action, value in faults:
+            altered = json.loads(json.dumps(receipt))
+            env = altered['build_env']
+            if action == 'missing':
+                env.pop(key)
+            else:
+                env[key] = value
+            for name, binding in [('version-command.json', 'version_command_sha256'), ('build-command.json', 'build_command_sha256')]:
+                command = json.loads((out / name).read_text())
+                command['env'] = dict(env)
+                target = archive / name
+                target.write_text(json.dumps(command) + '\n')
+                altered[binding] = sha(target)
+            for case in altered['cases']:
+                command = json.loads((out / case['command']).read_text())
+                command['env'] = dict(env, **{k: v for k, v in command['env'].items() if k.startswith('MVCC_')})
+                target = archive / case['command']
+                target.write_text(json.dumps(command) + '\n')
+                case['command_sha256'] = sha(target)
+            (archive / 'receipt.json').write_text(json.dumps(altered) + '\n')
+            try:
+                packet(archive)
+            except ValueError as error:
+                if str(error) != 'controlled build environment':
+                    raise
+            else:
+                raise ValueError('coupled uncontrolled environment accepted: ' + key)
+    print(str(len(faults)) + ' coupled environment contract refusals PASS; original packets unchanged')
 
 def artifact_sha(path):
     try:
@@ -442,11 +502,8 @@ def main():
         return
     out.mkdir(exist_ok=False, parents=True)
     source = bindings(root); (out / 'source-bindings.json').write_text(json.dumps(source, indent=2) + '\n')
-    env = {k: v for k, v in os.environ.items() if not k.startswith('MVCC_FOREGROUND_')}; env.pop('GOROOT', None); env.update(CGO_ENABLED='1', GOWORK='off', GOTOOLCHAIN='local', GOFLAGS='-p=2', MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0')
-    for key in ('GOGC', 'GOMEMLIMIT', 'GODEBUG'):
-        env.pop(key, None)
-    go_path = pathlib.Path(shutil.which(args.go, path=env.get('PATH')) or args.go).resolve()
-    env['PATH'] = str(go_path.parent) + os.pathsep + env.get('PATH', '')
+    go_path = pathlib.Path(shutil.which(args.go) or args.go).resolve()
+    env = controlled_environment(go_path)
     cases = []; errors = []; binary_sha = None; source_stable = True
     go, build_env, version_metadata, source_stable = capture_version(go_path, root, env, out, errors)
     binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
@@ -469,9 +526,9 @@ def main():
             errors.append(f'source/executable drift before {algorithm}-{mode}-{n}')
             break
         name = f'{algorithm}-{mode}-{n}'; output = out / (name + '.json'); raw = out / (name + '.log'); command = out / (name + '-command.json')
-        ee = dict(env); ee.update(MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
+        ee = dict(env); ee.update(MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0', MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
         cmd = [str(binary), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v']
-        (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(build_env, **{k: v for k, v in ee.items() if k.startswith('MVCC_FOREGROUND_')})}, indent=2) + '\n')
+        (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(ee)}, indent=2) + '\n')
         start = time.monotonic()
         result, process_error = run_logged(cmd, root, ee, raw, 150)
         if result.returncode != 0: errors.append('process ' + name + ': ' + (process_error or str(result.returncode)))
