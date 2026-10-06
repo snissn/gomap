@@ -23,6 +23,13 @@ def draft():
                  "wal_appends/op": {"eq": 0 if profile == "no_wal_fast" else 1},
                  "wal_syncs/op": {"eq": 1 if profile == "command_wal_durable" else 0},
                  "close_ok": {"eq": 1}}
+        rules.update({"layout_expected_records": {"eq": 4},
+                      "ack_routing_before_ok": {"eq": 1}, "ack_routing_after_ok": {"eq": 1}})
+        for phase in ("before", "after"):
+            rules["layout_" + phase + "_inline"] = {"eq": 4 if layout == "inline" else 0}
+            rules["layout_" + phase + "_pointer"] = {"eq": 4 if layout == "pointer" else 0}
+            for name in ("wal_appends", "wal_syncs"):
+                rules[name + "_" + phase] = {"eq": 0} if profile == "no_wal_fast" else {"min": 0, "integer": True}
         for name in ("snapshot_rotations/op", "rotated_shards/op", "enqueued_records/op"):
             rules[name] = {"eq": 0} if mode == "cow_btree" else {"min": 0}
         comparisons = {"ns/op": "lower", "B/op": "lower", "allocs/op": "lower",
@@ -53,20 +60,21 @@ def draft():
             "comparable_metrics": ["point_calls/op", "scan_calls/op", "visited/op", "output/op", "wal_appends/op", "wal_syncs/op"],
             "comparison_metrics": comparisons,
             "ack_contract": "CommitRelaxed; durable WAL append/sync=1/1, relaxed=1/0, NoWAL=0/0; exact profile counts required",
-            "timed_scope": "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/stats/Close excluded",
+            "timed_scope": "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/physical layout probes/stats/Close excluded",
             "workload_contract": {"keys": ["c3-a", "c3-ab"], "seed_timestamps": [10, 20], "read_timestamp": 100,
                 "value_bytes": 256, "value_byte": 99, "history_growth": False,
                 "writers": 1, "point_readers": point, "scan_readers": scan,
                 "writer_records_per_call": 1 if workload == "point" else 4,
                 "concurrency": workload == "concurrent", "clock_calls_retained": True,
-                "read_overlap_is_internal_preparation_proof": False}})
+                "read_overlap_is_internal_preparation_proof": False, "physical_layout_records": 4,
+                "layout_probes_outside_counter_boundaries": True}})
     variants = {v: {"production_commit": None, "production_git_tree": None, "source": None, "manifest": None, "manifest_sha256": None,
         "source_tree_sha256": None, "binary": None, "binary_sha256": None,
         "build_receipt": None, "build_receipt_sha256": None} for v in ("baseline", "candidate")}
     return {"schema": SCHEMA, "status": "draft-unfrozen", "coordinator_acceptance": None,
         "scope": "C3-read milestone only; no M7/C4/parent qualification", "cycles": 3,
         "order": ["baseline", "candidate", "candidate", "baseline"], "timeout_seconds": 300,
-        "go_binary": None, "go_binary_sha256": None, "go_version": None, "toolchain_identity": None,
+        "go_binary": None, "go_binary_sha256": None, "go_version": None, "toolchain_identity": None, "external_input_identity": None,
         "environment": {"GOMAXPROCS": "4", "GOWORK": "off", "GOROOT": None,
             "GOGC": "100", "GOMEMLIMIT": "off", "GOFLAGS": "", "GOCACHE": None, "GOMODCACHE": None, "TMPDIR": None},
         "host": {"system": "Linux", "node": None, "machine": "x86_64", "release": None,

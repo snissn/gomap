@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs
 from collect import host_gate
 from build import verify_git_receipt, objects
 
@@ -41,7 +41,7 @@ def main():
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
         need(build.get("effective_process_environment") == env, "build process environment mismatch")
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
-        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source", "toolchain"}
+        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")
         for name, artifact in artifacts.items():
             need(artifact["path"] == variant + "-" + name + ".raw" and artifact["sha256"] == build["artifacts"][name]["sha256"], "artifact receipt binding drift")
@@ -50,7 +50,12 @@ def main():
         validate_go_environment(go_env, env)
         build_toolchain(build, c, json.loads((packet / (variant + "-toolchain.raw")).read_text()))
         build_toolchain(build, c, live_toolchain["inventory"])
-        validate_no_cgo(objects((packet / (variant + "-compiled_dependencies.raw")).read_text()))
+        packages = objects((packet / (variant + "-compiled_dependencies.raw")).read_text())
+        validate_no_cgo(packages)
+        build_inputs(build, c, packages,
+                     json.loads((packet / (variant + "-compiled_inputs_before.raw")).read_text()),
+                     json.loads((packet / (variant + "-compiled_input_closure.raw")).read_text()),
+                     json.loads((packet / (variant + "-generated_nonpersistent_inputs.raw")).read_text()), declaration["source"])
         observed = identity(packet / (variant + "-source-manifest.json"))
         need(observed == json.loads((packet / (variant + "-identity.json")).read_text()), "source identity drift")
         need(observed["manifest_sha256"] == declaration["manifest_sha256"] and observed["tree_sha256"] == declaration["source_tree_sha256"], "unbound source manifest")
