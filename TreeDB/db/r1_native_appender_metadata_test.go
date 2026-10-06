@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -146,4 +147,69 @@ func TestR1NativeAppenderCreationMetadataBoundedAcrossRotations(t *testing.T) {
 	}
 	defer closeNoErr(t, reopened)
 	oracle("converged fallback reopen", reopened.Get, want)
+}
+
+// A real failed manager registration must keep the old creation record even
+// when a later natural rotation hands a different file off successfully.
+func TestR1NativeAppenderCreationMetadataRetainsFailedAndAmbiguousHandoffs(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeNoErr(t, database)
+	appender, err := newReplayInlineAppender(database, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := appender.close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	appender.writer.maxSize = 16 << 10
+	appender.writer.blockCompression = false
+	value := bytes.Repeat([]byte("failed-handoff|"), 900)
+	appender.db = &DB{dir: filepath.Join(t.TempDir(), "missing-root"), valueLogManager: database.valueLogManager}
+	if _, err := appender.append(value); err == nil {
+		t.Fatal("registration against a missing namespace succeeded")
+	}
+	if len(appender.writer.createdSegments) != 1 || len(appender.writer.createdIDs) != 1 {
+		t.Fatal("failed registration lost its creation evidence")
+	}
+	failed := appender.writer.createdSegments[0]
+	appender.db = database
+	ptr, err := appender.append(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ptr.FileID == failed.fileID {
+		t.Fatal("fixture did not naturally rotate")
+	}
+	if len(appender.writer.createdSegments) != 1 || appender.writer.createdSegments[0] != failed || len(appender.writer.createdIDs) != 1 || appender.writer.createdIDs[0] != failed.fileID {
+		t.Fatal("successful new-file handoff erased unrelated failed creation evidence")
+	}
+	if err := appender.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := appender.ReadValueLogRecordAppend(ptr, nil)
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("registered pointer differs: %v", err)
+	}
+	// Registration succeeds, but a mismatched creation witness cannot be retired.
+	appender.mu.Lock()
+	appender.writer.createdSegments[0].identity.ObjectID[0] ^= 1
+	err = appender.registerProducedPointerLocked(page.ValuePtr{FileID: failed.fileID})
+	retained := len(appender.writer.createdSegments) == 1 && len(appender.writer.createdIDs) == 1
+	appender.writer.createdSegments[0] = failed
+	appender.mu.Unlock()
+	if err != nil || !retained {
+		t.Fatalf("ambiguous authority lost evidence: retained=%v err=%v", retained, err)
+	}
+	appender.mu.Lock()
+	err = appender.registerProducedPointerLocked(page.ValuePtr{FileID: failed.fileID})
+	retained = cap(appender.writer.createdSegments) != 0 || cap(appender.writer.createdIDs) != 0
+	appender.mu.Unlock()
+	if err != nil || retained {
+		t.Fatalf("exact completed handoff retained evidence: retained=%v err=%v", retained, err)
+	}
 }
