@@ -631,14 +631,15 @@ for label in permission_cases:
  pm.__file__=str(packet/'permission.py')
  payload=b'synthetic input bytes';inv={'sentinel':sha(payload)};ir=json.dumps(inv).encode()
  (inputs/'sentinel').write_bytes(payload);(inputs/'input-inventory.json').write_bytes(ir)
- mf=folder/'manifest.json';mf.write_text(json.dumps({'source_head':pm.HEAD,'source_tree':pm.TREE,'input_inventory_sha256':sha(ir)}))
+ predecl=folder/'fresh-predeclaration.json';predecl.write_text('{}')
+ mf=folder/'final-inactive-root-v1.json';mf.write_text(json.dumps({'source_head':pm.HEAD,'source_tree':pm.TREE,'input_inventory_sha256':sha(ir),'receipts':{'predeclaration':str(predecl)}}))
  ar=folder/'inputs.tar.gz'
  with tarfile.open(ar,'x:gz') as t:
   for name,raw in [('sentinel',payload),('input-inventory.json',ir)]:
    item=tarfile.TarInfo(name);item.size=len(raw);t.addfile(item,io.BytesIO(raw))
  pin=folder/'actual-consumed-pin.json';pin.write_bytes(b'{"synthetic_only":true}')
  pc.LOCAL_INPUT_ROOT=str(inputs);pc.INPUT_ROOT='/synthetic/remote-inputs'
- pc.prepare_local=lambda a:({str(pin):pin.read_bytes()},inv,[],[])
+ pc.prepare_local=lambda a:({str(pin):pin.read_bytes(),str(predecl):predecl.read_bytes()},inv,[],[])
  pm.load=lambda:(pc,lambda *a:None,None,[]);pm.isolated_arguments=lambda *a:['synthetic-no-transport']
  pm.MANIFEST=str(mf);pm.ARCHIVE=str(ar)
  calls=[]
@@ -667,8 +668,8 @@ for label in ('input_descendant','packet_descendant','input_symlink_parent','pos
  own=packet/'collector.py';own.write_bytes(Path(portable_sources['collector']).read_bytes());cm.__file__=str(own)
  manifest=folder/'manifest.json';manifest.write_text('{}')
  pin=folder/'oracle.json';pin.write_text('{}')
- cm.LOCAL_INPUT_ROOT=str(inputs);cm.validate_manifest=lambda *a:{'receipts':{'prefix_oracles':str(pin)}}
- cm.prepare_local=lambda a:({str(pin):b'{}',str(inputs/'input-inventory.json'):b'{}'},{},[],[])
+ cm.LOCAL_INPUT_ROOT=str(inputs);cm.validate_manifest=lambda *a:{'receipts':{'prefix_oracles':str(pin),'predeclaration':str(manifest)}}
+ cm.prepare_local=lambda a:({str(pin):b'{}',str(inputs/'input-inventory.json'):b'{}',str(manifest):b'{}'},{},[],[])
  alias=folder/'alias';alias.symlink_to(inputs,target_is_directory=True)
  target={'input_descendant':inputs/'bad','packet_descendant':packet/'bad','input_symlink_parent':alias/'bad','positive_sibling':folder/'allowed'}[label]
  cm.OUTPUT=target;argv_before=sys.argv;sys.argv=['synthetic-collector','--approved',str(manifest)];before=protected_snapshot(folder);denied=False
@@ -1048,4 +1049,5 @@ checks.append('metadata_repair_preserves_top_level_signed_zero_selectors')
 
 assert len(checks)==590
 exec(compile((R/'matched_workload_checks.py').read_bytes(),'matched_workload_checks.py','exec'),globals())
+exec(compile((R/'checkpoint_window_checks.py').read_bytes(),'checkpoint_window_checks.py','exec'),globals())
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, native declared-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
