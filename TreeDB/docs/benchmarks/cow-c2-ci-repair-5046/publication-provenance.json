@@ -3243,5 +3243,210 @@
     "original_private_path": "candidate-11474-independent-review/staged-metadata-acceptance.json",
     "sha256": "9b7cabc88d74539eaa3758f4fcac5713d04fd4a322542fc5cb16abbbdce7c6ff",
     "byte_preserved": true
+  },
+  "close-notification-test-repair/local/after-source.json": {
+    "original_private_path": "close-notification-windows-test-repair/after-source.json",
+    "sha256": "711a5c3b0fb0fc8e281d76c769d5ecdd2317ff1beed93cc9fedccdaa841696dd",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/before-source.json": {
+    "original_private_path": "close-notification-windows-test-repair/before-source.json",
+    "sha256": "e7c545a75a94552cb28079576d19eec70b9289e1e27c73544b83a85b72b7879d",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/before.go.txt": {
+    "original_private_path": "close-notification-windows-test-repair/before.go.txt",
+    "sha256": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/completion-source-proof.json": {
+    "original_private_path": "close-notification-windows-test-repair/completion-source-proof.json",
+    "sha256": "6260af30b597c54b789c77077533b97896e92bf34f231bcccbea34f1e7297a3a",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/diagnosis-and-change.md": {
+    "original_private_path": "close-notification-windows-test-repair/diagnosis-and-change.md",
+    "sha256": "7aeff30267f70d0ed646550c45b42c8679b64d4697ae2cae6833ab8c6524289b",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/event-summary.json": {
+    "original_private_path": "close-notification-windows-test-repair/event-summary.json",
+    "sha256": "0f6fed252ccdab0239829a5f2445f6c71a9b900114179f01f01311d48bf02cfc",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/execution-receipts.json": {
+    "original_private_path": "close-notification-windows-test-repair/execution-receipts.json",
+    "sha256": "f67e715174cc6867a6dd4b36a999d75ad7918060cf9c36730aca3eace20a5ce3",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/go-environment.json": {
+    "original_private_path": "close-notification-windows-test-repair/go-environment.json",
+    "sha256": "570e98b02f271d04447529d7f7221b7ccf34e8a562e05935fc9dfeffde427fc4",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/handoff.md": {
+    "original_private_path": "close-notification-windows-test-repair/handoff.md",
+    "sha256": "bb64e8d6d40d548643a579b8c2729f7dfa92e1487f97c33bf5c1631a401bee52",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/normal.json": {
+    "original_private_path": "close-notification-windows-test-repair/normal.json",
+    "sha256": "2f63f01ce62ad7814e6aa950d2629d9e4b79554429ca380406ec7c637e5b3cf8",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/normal.stderr": {
+    "original_private_path": "close-notification-windows-test-repair/normal.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/original-windows-failure-events.json": {
+    "original_private_path": "close-notification-windows-test-repair/original-windows-failure-events.json",
+    "sha256": "5588313102446e6a592c076e4e2da101eb12f7c38b4b22384120a3770a4c756c",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/race.json": {
+    "original_private_path": "close-notification-windows-test-repair/race.json",
+    "sha256": "f07cee9c92ec51befd9cad41a97ecc1a50ebe4e544d3e4da1018c3a6e40b81c5",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/race.stderr": {
+    "original_private_path": "close-notification-windows-test-repair/race.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/run-targeted.py": {
+    "original_private_path": "close-notification-windows-test-repair/run-targeted.py",
+    "sha256": "b1c0b0229bd1333844ba5a76dd2e1e3df24582f8c558563aafb8c2e39f754525",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/runtime.diff": {
+    "original_private_path": "close-notification-windows-test-repair/runtime.diff",
+    "sha256": "dc4eebe1a5e3fa6484eb74e785ec15efa00ce8306445799fddb9049c28f90be3",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/safe.json": {
+    "original_private_path": "close-notification-windows-test-repair/safe.json",
+    "sha256": "792bb18ba9628442c079db1c7b3463fecb36a818f583e6de4fcb832e11c37483",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/safe.stderr": {
+    "original_private_path": "close-notification-windows-test-repair/safe.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/local/packet-manifest.json": {
+    "original_private_path": "close-notification-windows-test-repair/packet-manifest.json",
+    "sha256": "9ad95f1e40f5448b3292cb6730b8b9a30e4101ebda21036f199bd5ed12793dc8",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-notification-windows-diagnosis.md": {
+    "original_private_path": "candidate-11474-independent-review/close-notification-windows-diagnosis.md",
+    "sha256": "55b23882cc8ed240328c00602d674b8e929cdcf8fc9bac549bcbd25d24384fb9",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-notification-windows-diagnosis.json": {
+    "original_private_path": "candidate-11474-independent-review/close-notification-windows-diagnosis.json",
+    "sha256": "d07491934156fd5c4f300fdc1ad902ff41b95382730f274cfdc8f31a6f7bf07b",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-notification-windows-test-review.md": {
+    "original_private_path": "candidate-11474-independent-review/close-notification-windows-test-review.md",
+    "sha256": "7dac0b5dd37201f30dffd80ce4312730a5a212c625fe23e249e5621209aba481",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-notification-windows-test-review.json": {
+    "original_private_path": "candidate-11474-independent-review/close-notification-windows-test-review.json",
+    "sha256": "254a4d877eff70342b59bffcddaafdb82ea9c7cedfea76dde138d71eec7f47aa",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/actual-cow-open.stderr": {
+    "original_private_path": "template-mode-forwarding-repair/actual-cow-open.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/actual-cow-open.stdout": {
+    "original_private_path": "template-mode-forwarding-repair/actual-cow-open.stdout",
+    "sha256": "cc9c542a525fe218663da751964fa7c216e976672488e6cfacd04c8e2a24cef8",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/diagnosis.md": {
+    "original_private_path": "template-mode-forwarding-repair/diagnosis.md",
+    "sha256": "9c9a4fc6033cf3c52f3679ba8496de0a74361513b2198baa3b0b9d7639d5ba78",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/execution-receipts.json": {
+    "original_private_path": "template-mode-forwarding-repair/execution-receipts.json",
+    "sha256": "1104642a073f13f8eb6be53d2ccbc36247998703677a4697364986fc49e619e9",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/existing-template-policy.stderr": {
+    "original_private_path": "template-mode-forwarding-repair/existing-template-policy.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/existing-template-policy.stdout": {
+    "original_private_path": "template-mode-forwarding-repair/existing-template-policy.stdout",
+    "sha256": "a25c0fe48abb47d75eef6e816bf4196e43411ff11af8c5e4f7dd122801dc907f",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/go-environment.json": {
+    "original_private_path": "template-mode-forwarding-repair/go-environment.json",
+    "sha256": "e04c8859222fa544cf11aa64205ce3406ba899a1fbc8c47304b162a540aa41b6",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/handoff.md": {
+    "original_private_path": "template-mode-forwarding-repair/handoff.md",
+    "sha256": "d23732fbb09611c52ee736f15a7292c58337dd6f969779b8d12d63d94e99349c",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/probe.go.txt": {
+    "original_private_path": "template-mode-forwarding-repair/probe.go",
+    "sha256": "2fbec89ed4d16b1e8434358c408a4da33f387652d6d4ad55a2c1f2eb9ecc5f53",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/review-thread.json": {
+    "original_private_path": "template-mode-forwarding-repair/review-thread.json",
+    "sha256": "7e5ab9534cc313ffdb448f4a256bbdadd610c49ba9eaa1ec3344ca53dbba5d99",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/run-diagnostic.py": {
+    "original_private_path": "template-mode-forwarding-repair/run-diagnostic.py",
+    "sha256": "e6c54a0d0fbf0a81aabfe59a917cab6ad8eebbd555a3a8f75505e07a0d9c462c",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/source-after.json": {
+    "original_private_path": "template-mode-forwarding-repair/source-after.json",
+    "sha256": "cbe9540d3fc2771469f0aadf1f06f1b21d8dbb46327a45acf14e67c0ce0c2c39",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/source-before.json": {
+    "original_private_path": "template-mode-forwarding-repair/source-before.json",
+    "sha256": "b1d4edaade6247b25e4d1dbffefbc02d0679c28516a0a05d957a5313469354e3",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/local/packet-manifest.json": {
+    "original_private_path": "template-mode-forwarding-repair/packet-manifest.json",
+    "sha256": "86a443ca855a07a9c702e7cd866750e572380d799b4274bc7d7ab50dffa7301e",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/independent/template-mode-preflight-review.md": {
+    "original_private_path": "candidate-11474-independent-review/template-mode-preflight-review.md",
+    "sha256": "215263b6c35dd2797bca1de8b69acc9a7189f8a9a4f5422e5d6ffda785c31559",
+    "byte_preserved": true
+  },
+  "template-mode-review-triage/independent/template-mode-preflight-review.json": {
+    "original_private_path": "candidate-11474-independent-review/template-mode-preflight-review.json",
+    "sha256": "3f1326e7f042e95800a66b96b0f9584dfaf20a2a0a848000efc4fe11ad565a3e",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-repair-staged-acceptance.md": {
+    "original_private_path": "candidate-11474-independent-review/close-repair-staged-acceptance.md",
+    "sha256": "b2f7226882a7cf72110e269e731253697f66b8407b05ca5b8eb5aa258d3ef88c",
+    "byte_preserved": true
+  },
+  "close-notification-test-repair/independent/close-repair-staged-acceptance.json": {
+    "original_private_path": "candidate-11474-independent-review/close-repair-staged-acceptance.json",
+    "sha256": "a18debac2406045d654e1ad97cdfcae965f3f735d2b5d5d1817874f347ec955c",
+    "byte_preserved": true
   }
 }

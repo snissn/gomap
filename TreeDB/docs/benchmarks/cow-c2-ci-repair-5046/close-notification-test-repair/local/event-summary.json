@@ -1,0 +1,29 @@
+{
+  "normal": {
+    "test_events": {
+      "pass": 18,
+      "fail": 0,
+      "skip": 0
+    },
+    "package_passes": 1,
+    "package_elapsed_seconds": 1.605
+  },
+  "race": {
+    "test_events": {
+      "pass": 18,
+      "fail": 0,
+      "skip": 0
+    },
+    "package_passes": 1,
+    "package_elapsed_seconds": 2.625
+  },
+  "safe": {
+    "test_events": {
+      "pass": 18,
+      "fail": 0,
+      "skip": 0
+    },
+    "package_passes": 1,
+    "package_elapsed_seconds": 1.603
+  }
+}

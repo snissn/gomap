@@ -1,0 +1,143 @@
+{
+  "disposition": "DISMISS claimed late-refusal/no-storage-effect defect; ACCEPT preserving existing public normalization, no source repair",
+  "at_utc": "2026-10-06T09:05:57.856747+00:00",
+  "source_head": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "review_thread": "PRRT_kwDOIdn7C86pY8UV",
+  "review_comment_url": "https://github.com/snissn/gomap/pull/5069#discussion_r4193380442",
+  "live_thread_observed_unresolved": true,
+  "exact_causal_claim": "The later caching.Open call receives the actual template mode and rejects it",
+  "source_counterevidence": [
+    "Public forceTemplateCompressionOff sets TemplateMode Off and clears template lookup/decode state before openResolved layout resolution and backend/side-store opens.",
+    "Initial omitted ValueLogTemplateMode means effective Off; later caching.Open gets explicitly normalized Off, not original requested non-off mode.",
+    "Direct caching.ValidateCOWOpenOptions still refuses an effective nonzero template mode.",
+    "Existing public TestSideStoreChunkSize_TemplateModeRequestIsIgnored documents accepted caller-request normalization, not an invalid public configuration.",
+    "Public profile resolution may call read-only resolveOpenDirLayout before openResolved normalization; it uses Stat/path selection and does not create storage."
+  ],
+  "source_sha256": {
+    "TreeDB/public.go": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+    "TreeDB/caching/cow_open.go": "439cdb487f7941ff8279845ee0b5c807b702119e725b8b2d3750b8cb8e68b213",
+    "TreeDB/side_store_chunk_size_test.go": "6fd4943645ca45cae6a448c4fbe20211c68d52973b3ff4dffef4eb9952bd250d",
+    "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+    "TreeDB/dir_layout.go": "7bbeba773c434e885af025471d5fd8e8c07750736a93cdcc6dad36f31e539e3f",
+    "TreeDB/template/mode.go": "72873ca6827c50ed06d919b9d934010693c8cdc246e3955bd7943795e1910581"
+  },
+  "sealed_packet_files_excluding_manifest": 13,
+  "sealed_packet_manifest_sha256": "86a443ca855a07a9c702e7cd866750e572380d799b4274bc7d7ab50dffa7301e",
+  "all_packet_hashes_and_no_extras_verified": true,
+  "artifact_sha256": {
+    "actual-cow-open.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "actual-cow-open.stdout": "cc9c542a525fe218663da751964fa7c216e976672488e6cfacd04c8e2a24cef8",
+    "diagnosis.md": "9c9a4fc6033cf3c52f3679ba8496de0a74361513b2198baa3b0b9d7639d5ba78",
+    "execution-receipts.json": "1104642a073f13f8eb6be53d2ccbc36247998703677a4697364986fc49e619e9",
+    "existing-template-policy.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "existing-template-policy.stdout": "a25c0fe48abb47d75eef6e816bf4196e43411ff11af8c5e4f7dd122801dc907f",
+    "go-environment.json": "e04c8859222fa544cf11aa64205ce3406ba899a1fbc8c47304b162a540aa41b6",
+    "handoff.md": "d23732fbb09611c52ee736f15a7292c58337dd6f969779b8d12d63d94e99349c",
+    "probe.go": "2fbec89ed4d16b1e8434358c408a4da33f387652d6d4ad55a2c1f2eb9ecc5f53",
+    "review-thread.json": "7e5ab9534cc313ffdb448f4a256bbdadd610c49ba9eaa1ec3344ca53dbba5d99",
+    "run-diagnostic.py": "e6c54a0d0fbf0a81aabfe59a917cab6ad8eebbd555a3a8f75505e07a0d9c462c",
+    "source-after.json": "cbe9540d3fc2771469f0aadf1f06f1b21d8dbb46327a45acf14e67c0ce0c2c39",
+    "source-before.json": "b1d4edaade6247b25e4d1dbffefbc02d0679c28516a0a05d957a5313469354e3",
+    "packet-manifest.json": "86a443ca855a07a9c702e7cd866750e572380d799b4274bc7d7ab50dffa7301e"
+  },
+  "actual_probe_rows": [
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "command_wal_durable",
+      "requested_template_mode": 1,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    },
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "command_wal_durable",
+      "requested_template_mode": 2,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    },
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "command_wal_relaxed",
+      "requested_template_mode": 1,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    },
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "command_wal_relaxed",
+      "requested_template_mode": 2,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    },
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "no_wal_fast",
+      "requested_template_mode": 1,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    },
+    {
+      "actual_memtable_mode": "cow_btree",
+      "open_error": null,
+      "profile": "no_wal_fast",
+      "requested_template_mode": 2,
+      "set_sync_get_close": "PASS",
+      "templatedb_created": false
+    }
+  ],
+  "actual_receipts": [
+    {
+      "name": "actual-cow-open",
+      "command": [
+        "go",
+        "run",
+        "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/template-mode-forwarding-repair/probe.go"
+      ],
+      "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "GOWORK": "off",
+      "exit_code": 0,
+      "elapsed_seconds": 2.797818899154663
+    },
+    {
+      "name": "existing-template-policy",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=3",
+        "-timeout=3m",
+        "-run=^TestSideStoreChunkSize_TemplateModeRequestIsIgnored$",
+        "./TreeDB"
+      ],
+      "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "GOWORK": "off",
+      "exit_code": 0,
+      "elapsed_seconds": 2.81649112701416
+    }
+  ],
+  "existing_policy_test_pass_events": 3,
+  "existing_policy_package_pass_events": 1,
+  "actual_platform": {
+    "GOARCH": "arm64",
+    "GOCACHE": "/Users/michaelseiler/Library/Caches/go-build",
+    "GOMODCACHE": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod",
+    "GOOS": "darwin",
+    "GOROOT": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64",
+    "GOVERSION": "go1.26.0"
+  },
+  "probe_source_review": "Artifact-only public API executable creates a unique base with absent child directory, requests each non-off enum for all three COW profiles, checks actual mode/no templatedb, then real SetSync/Get/Close and owned directory cleanup before successful exit. Rows require those operations before emission; receipts exit0 include cleanup success.",
+  "production_or_test_source_changes_for_this_task": [],
+  "coordinator_policy": "Preserve existing public normalization; do not add COW-only early refusal of caller requests.",
+  "limitations": [
+    "The diagnostic ran on local Darwin/arm64 Go1.26.0, not final-head Windows; public source normalization is platform-independent.",
+    "No no-storage-effect refusal is claimed for these accepted public effective-Off Opens: creating ordinary database storage is intended.",
+    "No executable binary equivalence, new exact-head timing or new broad performance qualification is inferred.",
+    "The unresolved hosted thread must be dispositioned by root with source/evidence reply; reviewer made no GitHub mutation."
+  ],
+  "cost_reuse": "No production, test or fixture code changed for this template triage, so it adds no compiled source delta. Historical974 costs retain original identity; accepted Close-test delta and final-head strict/Windows/CI/review obligations remain separately scoped."
+}

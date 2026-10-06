@@ -21,6 +21,11 @@ C2 execution paths and fixtures remain unchanged, but compiled dependency bytes
 and final full-tree/binary identities differ; the measured costs keep their
 original source identity and scoped applicability.
 
+[The later Close notification test repair](close-notification-test-repair/applicability.md)
+separates actual callback entry/read completion from storage teardown and joins
+Close before directory removal. Earlier Windows timeout evidence retains its
+original head; local repaired normal/race/safe passes are not Windows execution.
+
 ## Default paths and active Drain
 
 The original hosted strict gate measured native `GetVersioned` +7.96% paired time
