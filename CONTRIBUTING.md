@@ -40,6 +40,15 @@ GitHub Actions runs with `actions/setup-go` using the root `go.mod` as the versi
 - HashDB `go vet` + `go test ./...` (Windows)
 - Manual: `-race` runs (workflow dispatch)
 
+TreeDB also publishes an advisory CI impact receipt. Every original member still
+executes; the success-only required gate is unchanged. See
+[CI impact receipts](docs/CI_IMPACT_SELECTION.md) for event/merge identity,
+input ownership, complete fallback behavior, artifacts, replay, and qualification.
+When changing CI commands, member inventories, dynamic consumers, or source
+footprints, review the manifest, stage the intended source/workflow/harness inputs, then
+run its documented refresh/contract commands and stage the reviewed manifest.
+A refreshed candidate policy cannot authorize its own omissions.
+
 ## Code Guidelines
 
 - Keep commits small and reviewable.
