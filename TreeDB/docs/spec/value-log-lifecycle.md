@@ -412,21 +412,42 @@ ownership to the existing slot/runtime resource sets. Dictionary/template proofs
 and packed-generation authority retain their existing inherited-closure rules.
 
 Within one private Apply chain, the installed rewrite producer captures each
-immutable writer-owned dictionary definition once per identifiable provider.
-Cloned lanes share that definition. The attempt owner retains each original
-closure and provider snapshot lease, then transfers it once into the final Apply
-builder at freeze or releases it at abandon. Private append captures omit duplicate
+immutable writer-owned dictionary definition once per identifiable provider that
+explicitly certifies `GenerationScopedDictionaryResources`. Cloned lanes share
+that definition. The attempt owner retains each original closure and provider
+snapshot lease through freeze. It derives an independent exact token view using
+the closure's complete dictionary-generation obligations, then releases the
+original snapshot/read state and provider callbacks; abandon releases originals
+without producing a view. A kind-only clone can share original token chunks and
+their snapshot owner, so that clone alone does not provide this boundary.
+Private append captures omit duplicate
 dictionary closures; public stable append APIs keep their full closure contract.
 A later attempt captures afresh.
 Reconfiguration installs new immutable bytes, including reuse of a logical ID,
-and provider replacement selects new authority. Unidentifiable providers and
-arbitrary definitions continue to capture and validate on every append. Capture
+and provider replacement selects new authority. Uncertified or unidentifiable
+providers and arbitrary definitions continue to capture and validate on every
+append. Capture
 errors are never retained. Provider relocation does not invalidate a pinned
 immutable definition: the retained closure still names its exact prior physical
 generation, without reopening paths or substituting a newer generation. Generic
 stable producers keep their original append/capture behavior. This bounds repeated
 dictionary decoding and hashing by definitions per attempt, rather than output
 leaves; retention is limited to the closures needed by that attempt.
+
+dictdb's external index authority explicitly uses
+`NewStableIndexGenerationResourceToken`. Its original token still owns
+`Snapshot.Close` and any caller `OnRelease`; only the stable-index maintenance
+counter follows the exact shared file-handle family through
+`OnLastPinnedRelease`. This lightweight fence prevents online vacuum from
+renaming/unlinking the namespace generation while candidate, queued, pending,
+or physical-only coordinator views still name it. Logical filtering preserves
+the same handle family. Coalescing overlapping captures retains one physical
+representative and ends the discarded capture's fence; it never unions lists
+of prior Apply owners or retains prior snapshot state. The surviving fence ends
+once at the final handle release. The DB's own `ResourceIndex` capture continues
+to use the token-local maintenance lease, so durable candidate clones do not
+introduce a persistent fence against the DB's own index vacuum.
+
 The Apply wrapper also forwards the installed producer's prepared-payload
 capability and the zipper-compatible lane bridge. A hint wrapper exposing an
 optional stable method does not authorize unsupported prepared output; concurrent

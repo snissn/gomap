@@ -23,8 +23,9 @@ type applyLeafDictionaryKey struct {
 }
 
 // This owner lives for one private COW Apply chain. Each original closure owns
-// its provider's physical pins and snapshot lease until it transfers once into
-// the final Apply builder. Private appends need no duplicate dictionary closure.
+// its provider's physical pins and snapshot lease through freeze. Candidate views
+// independently retain certified lightweight physical-generation fences.
+// Private appends need no duplicate dictionary closure.
 type applyLeafDictionaryCapture struct {
 	mu        sync.Mutex
 	resources map[applyLeafDictionaryKey]*rootpublication.StableResourceSet
@@ -40,9 +41,10 @@ func (scope *applyLeafDictionaryCapture) capture(ctx context.Context, writer *re
 	if writer != nil {
 		definition = writer.leafDictionaryDefinition
 	}
-	// Only the known immutable encoder definition and an identifiable provider
-	// can reuse authority. Arbitrary definitions/providers retain full validation.
-	if scope == nil || definition == nil || provider == nil || !reflect.ValueOf(provider).Comparable() || definition.id != dictID || len(dictionary) == 0 || len(definition.bytes) != len(dictionary) || &definition.bytes[0] != &dictionary[0] {
+	// Reuse also requires explicit physical-generation lifetime authority.
+	// Unknown providers keep the public full-capture/move ownership contract.
+	generationProvider, generationScoped := provider.(interface{ GenerationScopedDictionaryResources() bool })
+	if scope == nil || !generationScoped || !generationProvider.GenerationScopedDictionaryResources() || definition == nil || provider == nil || !reflect.ValueOf(provider).Comparable() || definition.id != dictID || len(dictionary) == 0 || len(definition.bytes) != len(dictionary) || &definition.bytes[0] != &dictionary[0] {
 		return captureStableDictionaryResources(ctx, provider, dictID, dictionary)
 	}
 	scope.mu.Lock()
@@ -66,13 +68,36 @@ func (scope *applyLeafDictionaryCapture) capture(ctx context.Context, writer *re
 func (scope *applyLeafDictionaryCapture) mergeInto(builder *rootpublication.StableResourceSetBuilder) error {
 	scope.mu.Lock()
 	defer scope.mu.Unlock()
-	for key, resources := range scope.resources {
-		if err := builder.Merge(resources); err != nil {
+	for _, original := range scope.resources {
+		view, err := cloneApplyDictionaryGenerationResources(original)
+		if err != nil {
 			return err
 		}
-		delete(scope.resources, key)
+		if err := builder.Merge(view); err != nil {
+			view.Release()
+			return err
+		}
 	}
 	return nil
+}
+
+// A kind-only clone can share the original token chunks, including their
+// snapshot/read-state owner. Retaining the complete dictionary logical view via
+// the existing exact filter instead constructs independent token references;
+// only their certified physical-generation fence follows the shared handle.
+func cloneApplyDictionaryGenerationResources(original *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
+	requirements := rootpublication.StableLogicalObligationRequirements{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
+	}
+	if err := original.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		if obligation.Reachability == rootpublication.ReachabilityDictionaryGeneration {
+			requirements.Obligations = append(requirements.Obligations, obligation)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return rootpublication.CloneStableResourceSetForLogicalObligations(original, requirements)
 }
 
 func (scope *applyLeafDictionaryCapture) empty() bool {
@@ -83,11 +108,13 @@ func (scope *applyLeafDictionaryCapture) empty() bool {
 
 func (scope *applyLeafDictionaryCapture) release() {
 	scope.mu.Lock()
-	defer scope.mu.Unlock()
-	for _, resources := range scope.resources {
-		resources.Release()
-	}
+	resources := scope.resources
 	scope.resources = nil
+	scope.mu.Unlock()
+	// Original snapshot and provider callbacks run outside the scope lock.
+	for _, original := range resources {
+		original.Release()
+	}
 }
 
 // The private forwarding view preserves the existing hint/lane/replay append

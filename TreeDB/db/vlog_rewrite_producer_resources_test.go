@@ -504,7 +504,7 @@ func (p *snapshotDictionaryProvider) CaptureDictionaryResources(ctx context.Cont
 		resources.Release()
 		return nil, ErrClosed
 	}
-	token, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+	token, err := snapshot.NewStableIndexGenerationResourceToken(rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceDictionary, LogicalLane: "test/dictionary-index", ResourceID: "index",
 		Digest: sha256.Sum256([]byte("test-dictionary-index")), ContentSynced: true,
 		Reachability: rootpublication.ReachabilityDictionaryGeneration,

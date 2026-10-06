@@ -197,9 +197,9 @@ func (l *applyLeafResourceLog) freeze() (*rootpublication.StableResourceSet, err
 	if l.capture.dictionaries.empty() {
 		return resources, nil
 	}
-	// Freeze raw output before composing dictionary closures. Merging a frozen
-	// child into a mutable flat builder materializes new token references; the
-	// immutable kind-view union instead transfers the original provider leases.
+	// Known dictionary producers certify physical-generation fences inherited
+	// by exact candidate views. Original snapshots end after composition, while
+	// the retained physical representative protects maintenance through release.
 	builder := rootpublication.NewStableResourceSetBuilder()
 	defer builder.Abandon()
 	if err := l.capture.dictionaries.mergeInto(builder); err != nil {

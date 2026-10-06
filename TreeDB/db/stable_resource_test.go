@@ -233,6 +233,165 @@ func TestStableIndexResourceTokenRunsCallerReleaseAfterSnapshotTeardown(t *testi
 	}
 }
 
+// The inherited generation fence must not retain historical readers, snapshots,
+// or provider callbacks as unchanged physical generations are coalesced.
+func TestStableIndexGenerationResourceTokenBoundsFenceAndReaderLifetime(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable index authority requires exact relative namespace support")
+	}
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, key := range []string{"generation-older", "generation-newer"} {
+		if err := database.SetSync([]byte(key), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readerBaseline := database.idx.Load().registry.MinPinnedSeq()
+	local, last := 0, 0
+	var candidate *rootpublication.StableResourceSet
+	defer func() { candidate.Release() }()
+	for i := 0; i < 32; i++ {
+		snapshot := database.AcquireStableSnapshot()
+		token, err := snapshot.NewStableIndexGenerationResourceToken(rootpublication.StableResourceSpec{
+			Kind: rootpublication.ResourceDictionary, LogicalLane: "dictdb/index", ResourceID: "index",
+			Digest: sha256.Sum256([]byte("generation-lifetime-test")), Reachability: rootpublication.ReachabilityDictionaryGeneration,
+			ContentSynced: true,
+			LogicalObligations: []rootpublication.StableLogicalObligation{{
+				Class: "dictionary-generation", Kind: "dictionary", Namespace: "dictdb", Generation: 74, FileID: 74,
+				Length: 1, Reachability: rootpublication.ReachabilityDictionaryGeneration, Digest: sha256.Sum256([]byte("definition")),
+			}},
+			OnRelease: func() {
+				local++
+				if !snapshot.closed.Load() || snapshot.db != nil || snapshot.state != nil {
+					t.Error("original provider callback ran before snapshot/read-state teardown")
+				}
+			},
+			OnLastPinnedRelease: func() { last++ },
+		}, rootpublication.NewStableResourceToken)
+		if err != nil {
+			_ = snapshot.Close()
+			t.Fatal(err)
+		}
+		builder := rootpublication.NewStableResourceSetBuilder()
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			t.Fatal(err)
+		}
+		original, err := builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		view, err := cloneApplyDictionaryGenerationResources(original)
+		if err != nil {
+			original.Release()
+			t.Fatal(err)
+		}
+		original.Release()
+		if local != i+1 || database.idx.Load().registry.MinPinnedSeq() != readerBaseline {
+			view.Release()
+			t.Fatal("candidate view retained original provider/reader lifetime")
+		}
+		builder = rootpublication.NewStableResourceSetBuilder()
+		if candidate != nil {
+			if err := builder.Merge(candidate); err != nil {
+				view.Release()
+				t.Fatal(err)
+			}
+		}
+		if err := builder.Merge(view); err != nil {
+			builder.Abandon()
+			view.Release()
+			t.Fatal(err)
+		}
+		candidate, err = builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		if got := database.stableIndexCaptures.Load(); got != 1 || last != i {
+			t.Fatalf("publication %d fences=%d released=%d want one live fence", i, got, last)
+		}
+	}
+	if err := database.VacuumIndexOnline(t.Context()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("candidate lost namespace fence: %v", err)
+	}
+	candidate.Release()
+	if database.stableIndexCaptures.Load() != 0 || last != 32 {
+		t.Fatal("last candidate release did not balance generation fences")
+	}
+	if err := database.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableIndexGenerationResourceTokenConstructionFailureKeepsSnapshotOwner(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable index authority requires exact relative namespace support")
+	}
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	snapshot := database.AcquireStableSnapshot()
+	defer snapshot.Close()
+	injected := errors.New("reject generation construction")
+	callbacks := 0
+	token, err := snapshot.NewStableIndexGenerationResourceToken(rootpublication.StableResourceSpec{
+		OnRelease: func() { callbacks++ }, OnLastPinnedRelease: func() { callbacks++ },
+	}, func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+		return nil, injected
+	})
+	if token != nil || !errors.Is(err, injected) || snapshot.closed.Load() || callbacks != 0 || database.stableIndexCaptures.Load() != 1 {
+		t.Fatalf("failed construction token=%v err=%v callbacks=%d fences=%d", token, err, callbacks, database.stableIndexCaptures.Load())
+	}
+	_ = snapshot.Close()
+	if database.stableIndexCaptures.Load() != 0 || callbacks != 0 {
+		t.Fatal("failed construction transferred or leaked the snapshot owner")
+	}
+}
+
+func TestCaptureStableIndexFileResourceOwnCandidateFenceRemainsTokenLocal(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable index authority requires exact relative namespace support")
+	}
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	snapshot := database.acquireDurableCandidateStableIndexSnapshotV1(database.idx.Load(), false)
+	token, err := snapshot.CaptureStableIndexFileResource()
+	if err != nil {
+		_ = snapshot.Close()
+		t.Fatal(err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		t.Fatal(err)
+	}
+	original, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatal(err)
+	}
+	defer original.Release()
+	view, err := rootpublication.ClonePhysicalReachabilityUnion(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Release()
+	original.Release()
+	if database.durableCandidateIndexCaptures.Load() != 0 || database.stableIndexCaptures.Load() != 0 {
+		t.Fatal("own candidate inherited a long-lived namespace maintenance fence")
+	}
+}
+
 func TestCaptureStableIndexFileResourceProductionWitness(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("stable index authority requires exact relative namespace support")

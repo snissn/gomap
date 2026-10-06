@@ -3706,7 +3706,9 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			work.CopiedEntries++
 			var cloned *StableResourceToken
 			var namespace *StableNamespaceToken
-			if allFieldsUnscoped {
+			// A generation fence belongs to the exact shared handle family even
+			// when logical filtering narrows its immutable obligation view.
+			if allFieldsUnscoped || token.onLastPinnedRelease != nil {
 				if err := token.namespace.validateStable(); err != nil {
 					return nil, work, err
 				}

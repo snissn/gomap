@@ -412,6 +412,13 @@ type StableResourceSpec struct {
 	// must still execute SyncThrough on the pinned identity.
 	ContentSynced bool
 	OnRelease     func()
+	// OnLastPinnedRelease owns a physical-generation lifetime, independent of
+	// per-token OnRelease bookkeeping. It runs once after the last exact-handle
+	// reference closes, including shared logical/physical-only clones. Coalescing
+	// independent captures keeps only the retained representative's lifetime;
+	// this callback must protect the physical generation, not logical aliases.
+	// Construction consumes it only on success.
+	OnLastPinnedRelease func()
 	// PinRegistry is the DB-scoped physical deletion gate. When set, token
 	// construction acquires a pin for the exact handle identity before return.
 	PinRegistry *IdentityPinRegistry
@@ -444,20 +451,21 @@ type StableResourceToken struct {
 	logicalObligations []StableLogicalObligation
 	// directory pins the exact index generation/root backing this token's
 	// logical view. It never retains a predecessor resource set or token.
-	directory         *DependencyDirectoryV2
-	stability         ResourceStability
-	namespace         *StableNamespaceToken
-	pinned            *os.File
-	pinnedRefs        *atomic.Int64
-	flush             resourceOperation
-	sync              resourceOperation
-	syncedFrontier    DurableFrontier
-	hasSyncedFrontier bool
-	onRelease         func()
-	identityPin       *IdentityPin
-	owner             atomic.Uint32
-	released          atomic.Bool
-	metrics           resourceTokenMetrics
+	directory           *DependencyDirectoryV2
+	stability           ResourceStability
+	namespace           *StableNamespaceToken
+	pinned              *os.File
+	pinnedRefs          *atomic.Int64
+	flush               resourceOperation
+	sync                resourceOperation
+	syncedFrontier      DurableFrontier
+	hasSyncedFrontier   bool
+	onRelease           func()
+	onLastPinnedRelease func()
+	identityPin         *IdentityPin
+	owner               atomic.Uint32
+	released            atomic.Bool
+	metrics             resourceTokenMetrics
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
@@ -561,7 +569,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
-		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
+		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, onLastPinnedRelease: spec.OnLastPinnedRelease, identityPin: identityPin,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -634,7 +642,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
 		flush: token.flush, sync: token.sync,
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
-		onRelease: onRelease, identityPin: identityPin,
+		onRelease: onRelease, onLastPinnedRelease: token.onLastPinnedRelease, identityPin: identityPin,
 	}
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
@@ -803,6 +811,9 @@ func (token *StableResourceToken) releasePinned() {
 func (token *StableResourceToken) releasePinnedReference() {
 	if token.pinnedRefs == nil || token.pinnedRefs.Add(-1) == 0 {
 		_ = token.pinned.Close()
+		if token.onLastPinnedRelease != nil {
+			token.onLastPinnedRelease()
+		}
 	}
 }
 
