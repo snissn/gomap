@@ -52,6 +52,80 @@ def report(reads=10000):
 
 
 class CaptureRehearsal(unittest.TestCase):
+    def test_optimized_library_replay_cannot_accept_a_forged_environment(self):
+        code = """import unified_bench_quicksilver_capture as m
+m.validate_environment_receipt(
+    {'environment_policy': 'bogus', 'env': {}, 'command': ['/tmp/root/bin/fake']},
+    {'build_env': {'GOWORK': 'off'}})
+print('accepted forged environment')
+"""
+        for flags, setting in [(['-O'], None), (['-OO'], None), ([], '1'), ([], '2')]:
+            env = dict(os.environ)
+            env.pop('PYTHONOPTIMIZE', None)
+            env['PYTHONPATH'] = str(pathlib.Path(capture.__file__).resolve().parent)
+            if setting is not None:
+                env['PYTHONOPTIMIZE'] = setting
+            with self.subTest(flags=flags, setting=setting):
+                result = subprocess.run([sys.executable, '-B', *flags, '-c', code], env=env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('validation requires Python assertions', result.stderr)
+                self.assertEqual(result.stdout, '')
+
+    @staticmethod
+    def validation_fixture(temp, build_env=None, directory=None):
+        root = pathlib.Path(temp).resolve()
+        directory = directory or root/'capture'/'1-fake'
+        directory.mkdir(parents=True, exist_ok=True)
+        manifest_path = directory.parent/'manifest.json'
+        build_env = build_env or {'GOWORK': 'off'}
+        manifest_path.write_text(json.dumps(dict(build_env=build_env)))
+        return directory, dict(command=[str(root/'bin'/'fake-bench')],
+                               environment_policy=capture.ENVIRONMENT_POLICY,
+                               manifest_sha256=capture.sha256(manifest_path),
+                               env=capture.capture_environment(build_env, root/'working-dbs', inherited={}))
+
+    def test_online_replay_rejects_incomplete_or_drifting_environment(self):
+        mutations = [lambda r: r.pop('environment_policy'),
+                     lambda r: r.update(environment_policy='allowlist-v0'),
+                     lambda r: r['env'].pop('MALLOC_ARENA_MAX'),
+                     lambda r: r['env'].update(MALLOC_ARENA_MAX='8'),
+                     lambda r: r['env'].update(UNDECLARED_PROCESS_CONTROL='1'),
+                     lambda r: r['env'].update(TMPDIR='/unbound/working-dbs'),
+                     lambda r: r.update(env=None)]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                directory, metadata = self.validation_fixture(temp, dict(GOWORK='off', MALLOC_ARENA_MAX='2'))
+                cell = dict(engine='treedb', keys=40000, reads=10000)
+                capture.validate([report()], cell, directory, {}, metadata)
+                mutation(metadata)
+                with self.assertRaisesRegex(AssertionError, 'environment'):
+                    capture.validate([report()], cell, directory, {}, metadata)
+        with tempfile.TemporaryDirectory() as temp:
+            directory, metadata = self.validation_fixture(temp, dict(GOWORK='off', MALLOC_ARENA_MAX='2'))
+            manifest_path = directory.parent/'manifest.json'
+            manifest_path.write_text(json.dumps(dict(build_env=dict(GOWORK='off', MALLOC_ARENA_MAX='8'))))
+            cell = dict(engine='treedb', keys=40000, reads=10000)
+            with self.assertRaisesRegex(AssertionError, 'manifest drift'):
+                capture.validate([report()], cell, directory, {}, metadata)
+            metadata['manifest_sha256'] = capture.sha256(manifest_path)
+            with self.assertRaisesRegex(AssertionError, 'effective environment drift'):
+                capture.validate([report()], cell, directory, {}, metadata)
+
+    def test_environment_sanitizes_ambient_controls_and_records_explicit_manifest(self):
+        ambient = dict(PATH='/usr/bin', LANG='C', MALLOC_ARENA_MAX='1', GH_TOKEN='secret',
+                       TREEDB_UNDECLARED='1', LD_PRELOAD='/injected.so', GLIBC_TUNABLES='glibc.malloc.trim_threshold=1')
+        env = capture.capture_environment(dict(GOWORK='off', MALLOC_ARENA_MAX='2', GOMEMLIMIT='1MiB'), '/tmp/dbs', ambient)
+        self.assertNotIn('GH_TOKEN', env); self.assertNotIn('TREEDB_UNDECLARED', env)
+        self.assertEqual(env['MALLOC_ARENA_MAX'], '2')
+        self.assertEqual(env['GOMEMLIMIT'], 'off')
+        self.assertEqual(env['LD_PRELOAD'], '/injected.so')  # Existing native rejection must still see it.
+        self.assertEqual(env['GLIBC_TUNABLES'], ambient['GLIBC_TUNABLES'])
+        self.assertNotIn('MALLOC_ARENA_MAX', capture.capture_environment({'GOWORK': 'off'}, '/tmp/dbs', ambient))
+        for invalid in ({'GOWORK': 'off', 'BAD': None}, {'GOWORK': 'off', 'BAD=KEY': 'x'}, {'GOWORK': 'off', 'BAD': 'x\0y'}):
+            with self.assertRaises(AssertionError):
+                capture.capture_environment(invalid, '/tmp/dbs', ambient)
+
     def test_churn_contract(self):
         self.assertEqual(capture.churn_settings(dict(engine='treedb', churn_rounds=2)), (2, 6000000000))
         for cell in (dict(churn_rounds=-1), dict(churn_rounds=33), dict(churn_rounds=True),
@@ -70,30 +144,59 @@ class CaptureRehearsal(unittest.TestCase):
         round = dict(round=1, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                      mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                      wall_seconds=10., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                     pause_seconds=6., before=snapshot, after=snapshot)
+                     pause_seconds=6., pause_started_unix_nano=1000000001, pause_finished_unix_nano=7000000001,
+                     before=snapshot, after=dict(snapshot, captured_at_unix_nano=8000000001))
         packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
-                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2)],
+                                          leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2, pause_started_unix_nano=11000000001, pause_finished_unix_nano=17000000001,
+                                                              before=dict(snapshot, captured_at_unix_nano=10000000001),
+                                                              after=dict(snapshot, captured_at_unix_nano=18000000001))],
                                           final_files_after_close={'maindb/index.db': 4096})
-        metadata = dict(env={'TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE': '1'})
         with tempfile.TemporaryDirectory() as temp:
-            capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+            directory, metadata = self.validation_fixture(temp, dict(GOWORK='off', TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE='1'))
+            capture.validate([packet], cell, directory, {}, metadata)
             for section, field, value in ((round, 'verified_keys', 1), (round, 'round', 2),
                                            (round, 'pause_seconds', 5.), (round, 'mutation_commit_batches', 1),
+                                           (round, 'pause_started_unix_nano', True), (round, 'pause_started_unix_nano', 0),
+                                           (round, 'pause_finished_unix_nano', float('inf')),
+                                           (round, 'pause_finished_unix_nano', 2**63),
+                                           (round, 'pause_finished_unix_nano', 999999999),
+                                           (round, 'pause_finished_unix_nano', 7002000001),
+                                           (round, 'pause_started_unix_nano', -1),
+                                           (snapshot, 'captured_at_unix_nano', 1000000002),
                                            (snapshot, 'process_rss_supported', False),
                                            (packet['maintenance_churn'], 'leaf_generation_pack_maintenance_env', '')):
                 original = section[field]
                 section[field] = value
                 with self.assertRaises(AssertionError):
-                    capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+                    capture.validate([packet], cell, directory, {}, metadata)
                 section[field] = original
+            end = round['pause_finished_unix_nano']
+            round['pause_finished_unix_nano'] = end+500000
+            capture.validate([packet], cell, directory, {}, metadata)
+            round['pause_finished_unix_nano'] = end
+            after = round['after']['captured_at_unix_nano']
+            round['after']['captured_at_unix_nano'] = round['pause_finished_unix_nano']-1
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, directory, {}, metadata)
+            round['after']['captured_at_unix_nano'] = after
+            second = packet['maintenance_churn']['rounds'][1]
+            second_start = second['pause_started_unix_nano']
+            second['pause_started_unix_nano'] = round['pause_started_unix_nano']
+            with self.assertRaises(AssertionError):
+                capture.validate([packet], cell, directory, {}, metadata)
+            second['pause_started_unix_nano'] = second_start
+            marker = round.pop('pause_started_unix_nano')
+            with self.assertRaises(KeyError):
+                capture.validate([packet], cell, directory, {}, metadata)
+            round['pause_started_unix_nano'] = marker
             original = packet['registered_cli_flags']['max-wall']
             packet['registered_cli_flags']['max-wall'] = '30m0s'
             with self.assertRaises(AssertionError):
-                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+                capture.validate([packet], cell, directory, {}, metadata)
             packet['registered_cli_flags']['max-wall'] = original
             packet['maintenance_churn']['rounds'].pop()
             with self.assertRaises(AssertionError):
-                capture.validate([packet], cell, pathlib.Path(temp), {}, metadata)
+                capture.validate([packet], cell, directory, {}, metadata)
 
     def test_sparse_and_retained_settings(self):
         self.assertEqual(capture.churn_settings(dict(engine='treedb',churn_rounds=2,churn_shape='sparse')), (2,6000000000))
@@ -117,12 +220,12 @@ class CaptureRehearsal(unittest.TestCase):
                           writer_semantics='idempotent repeated mutation schedule; insert identities already exist and are SET again',
                           load_seconds=0,deleted_preparation_seconds=0,initial_checkpoint_ms=0,reopen_ms=0,initial_verified_misses=90400)
             packet['registered_cli_flags']['quicksilver-measure-dir']=str(retained)
-            metadata=dict(env={})
-            capture.validate([packet],cell,pathlib.Path(temp),{},metadata)
+            directory, metadata = self.validation_fixture(temp)
+            capture.validate([packet],cell,directory,{},metadata)
             self.assertEqual(metadata['retained_fixture']['directory'],str(retained.resolve()))
             packet['initial_verified_misses']=80400
             with self.assertRaises(AssertionError):
-                capture.validate([packet],cell,pathlib.Path(temp),{},metadata)
+                capture.validate([packet],cell,directory,{},metadata)
             for bad in (dict(cell,churn_rounds=1),dict(cell,case='structured256'),dict(cell,measure_dir='relative')):
                 with self.assertRaises(AssertionError):
                     capture.retained_settings(bad)
@@ -175,17 +278,21 @@ class CaptureRehearsal(unittest.TestCase):
         rounds = [dict(round=i, restored_keys=40000,restore_commit_batches=40, mutation_targets=40000, mutation_commit_batches=160,
                        mutations=packet['mutations'], verified_keys=40000, verified_misses=90400,
                        wall_seconds=64., write_seconds=1., checkpoint_seconds=1., verification_seconds=1.,
-                       pause_seconds=60., before=snapshot, after=snapshot) for i in range(1, 33)]
+                       pause_seconds=60., pause_started_unix_nano=(i-1)*70000000000+1000000001,
+                       pause_finished_unix_nano=(i-1)*70000000000+61000000001,
+                       before=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+1),
+                       after=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+62000000001)) for i in range(1, 33)]
         packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
                                           leaf_generation_pack_maintenance_env='', rounds=rounds,
                                           final_files_after_close={'maindb/index.db': 4096})
         with tempfile.TemporaryDirectory() as temp:
-            capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
+            directory, metadata = self.validation_fixture(temp)
+            capture.validate([packet], cell, directory, {}, metadata)
             cell['churn_pause'] = '1m'
-            capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
+            capture.validate([packet], cell, directory, {}, metadata)
             packet['registered_cli_flags']['max-wall'] = '30m0s'
             with self.assertRaises(AssertionError):
-                capture.validate([packet], cell, pathlib.Path(temp), {}, dict(env={}))
+                capture.validate([packet], cell, directory, {}, metadata)
 
     def test_retained_database_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -197,7 +304,7 @@ class CaptureRehearsal(unittest.TestCase):
             packet['registered_cli_flags']['keep'] = 'true'
             packet['data_dir'] = str(retained)
             cell = dict(engine='treedb', keys=40000, reads=10000, keep=True)
-            metadata = {'env': {'TMPDIR': str(retained.parent)}}
+            directory, metadata = self.validation_fixture(temp, directory=directory)
             capture.validate([packet], cell, directory, {}, metadata)
             packet['data_dir'] = str(directory)
             with self.assertRaises(AssertionError):
@@ -205,8 +312,12 @@ class CaptureRehearsal(unittest.TestCase):
 
     def test_process_capture_rejects_wrong_contract_and_native_identity_keeps_raw(self):
         real_run = subprocess.run
+        received_environments = []
+        controls = dict(GOMEMLIMIT='off', GOGC='100', GOMAXPROCS='12',
+                        TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824')
 
         def timed_run(command, **kwargs):
+            received_environments.append(dict(kwargs['env']))
             if command[0] == '/usr/bin/ldd':
                 self.assertEqual(command, ['/usr/bin/ldd', str(binary)])
                 self.assertEqual(kwargs['env']['LD_LIBRARY_PATH'], str(root))
@@ -218,6 +329,7 @@ class CaptureRehearsal(unittest.TestCase):
                     library.write_bytes(b'changed after manifest preflight')
                 kwargs['stdout'].write(f'linux-vdso.so.1 (0x1234)\nlibc.so.6 => {resolved} (0x2345)\n{loader} (0x3456)\n')
                 return subprocess.CompletedProcess(command, 0)
+            self.assertEqual({k: kwargs['env'][k] for k in controls}, controls)
             self.assertEqual(command[:3], ['/usr/bin/time', '-v', str(root/'bin'/'fake-bench')])
             # Controlled ELF/ldd fixture avoids a native build. Execute its output
             # producer in a fresh real Python process; no claim of native timing.
@@ -245,7 +357,9 @@ class CaptureRehearsal(unittest.TestCase):
             other.write_bytes(b'unapproved runtime')
             receipt = root/'receipt.json'
             receipt.write_text('{"scope":"fake-process rehearsal only"}')
-            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root)}, libraries={},
+            manifest = dict(build_env={'GOWORK': 'off', 'LD_LIBRARY_PATH': str(root), 'GOMEMLIMIT': '2GiB',
+                                       'GOGC': '25', 'TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES': '77',
+                                       'MALLOC_ARENA_MAX': '2'}, libraries={},
                             sources={'fake': dict(head='0'*40, binary='fake-bench', binary_sha256=capture.sha256(binary))},
                             receipts={role: dict(path='receipt.json', sha256=capture.sha256(receipt)) for role in ('source', 'build', 'native', 'runner')})
             manifest_path, plan_path = root/'manifest.json', root/'plan.json'
@@ -276,7 +390,10 @@ class CaptureRehearsal(unittest.TestCase):
                 (root/'payload.json').write_text(json.dumps([packet]))
                 plan_path.write_text(json.dumps(dict(output=scenario, cells=[cell])))
                 clean_loader = {k: '' for k in os.environ if k.startswith('LD_')}
+                clean_loader.update(GOMEMLIMIT='512MiB', GOGC='50')
+                clean_loader.update(MALLOC_ARENA_MAX='1', GH_TOKEN='test-secret')
                 clean_loader['LD_PRELOAD'] = '/injected.so' if scenario == 'ambient-preload' else ''
+                received_environments.clear()
                 with mock.patch.dict(os.environ, clean_loader), mock.patch.object(sys, 'argv', ['capture', str(manifest_path), str(plan_path)]), mock.patch.object(capture.subprocess, 'run', timed_run), mock.patch.object(capture, 'run_with_rss', sampled_run):
                     if accepted:
                         capture.main()
@@ -286,6 +403,11 @@ class CaptureRehearsal(unittest.TestCase):
                 directory = root/scenario/'1-fake'
                 metadata = json.loads((directory/'run.json').read_text())
                 self.assertEqual(metadata.get('validated', False), accepted)
+                self.assertEqual({k: metadata['env'][k] for k in controls}, controls)
+                self.assertEqual(metadata['environment_policy'], capture.ENVIRONMENT_POLICY)
+                self.assertEqual(metadata['env']['MALLOC_ARENA_MAX'], '2')
+                self.assertNotIn('GH_TOKEN', metadata['env'])
+                self.assertTrue(all(env == metadata['env'] for env in received_environments))
                 self.assertEqual(metadata['plan_sha256'], hashlib.sha256(plan_path.read_bytes()).hexdigest())
                 if accepted or scenario in ('commits','sampling-error') or scenario in ratio_scenarios:
                     self.assertEqual(metadata['rc'], 0)
