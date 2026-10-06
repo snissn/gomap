@@ -8,9 +8,9 @@ from source_paths import source_path, isolate_paths, W, WORKLOAD_SHA
 """
 import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="694b422489e781ce781f046eb00c06a0a9a76a963d7bd0e5af48ba4f181a6d07"
+HELPER_SHA="679cef8bb78868150612f1de0828b9925c182515d727b4ecfc64f0dad9495089"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3"
+COLLECTOR_SHA="7ba177dd3b64ee37ecbaf6f92f80d76efe4c931ac8cf9b5123dbbb3910d361df"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
 RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
 REMOTE='/home/mikers/gomap-4997-4998-'+W.stage_short+'-oracle-root-v1'
