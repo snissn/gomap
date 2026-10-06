@@ -102,7 +102,7 @@ func TestCOWDictionaryCleanupPrepareRefusalTransfersOwner(t *testing.T) {
 				owner, err := store.PrepareDictionaryReadDefinition(id, c.readLimits(), c.budget.Limits().MaxResources, probe.admit)
 				// The same carrier used by partial batch cancellation must preserve
 				// transferred ownership without executing callbacks in cancel.
-				b := &Batch{db: db, cowPrepared: &cowBatchPreparation{resources: []*cowLiveResource{{definition: owner}}}}
+				b := &Batch{db: db, cowState: &cowBatchState{prepared: &cowBatchPreparation{resources: []*cowLiveResource{{definition: owner}}}}}
 				cancelled := b.cancelCOWPublication()
 				held := c.budget.Stats()
 				c.writerMu.Unlock()

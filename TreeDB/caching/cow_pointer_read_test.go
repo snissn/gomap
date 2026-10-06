@@ -207,7 +207,16 @@ func TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint(t *testing
 	}
 	defer old.Close()
 	backend := db.backend.(*backenddb.DB)
-	if err := db.RunBackendMaintenance(func() error { return backend.VacuumIndexOnline(context.Background()) }); err != nil {
+	maintenance := func() error { return backend.VacuumIndexOnline(context.Background()) }
+	if runtime.GOOS == "windows" {
+		if err := backend.VacuumIndexOnline(context.Background()); !errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			t.Fatalf("Windows online-vacuum refusal: %v", err)
+		}
+		// Keep the old-cut, basis-refresh and later checkpoint assertions on
+		// Windows using real supported maintenance.
+		maintenance = backend.CompactIndex
+	}
+	if err := db.RunBackendMaintenance(maintenance); err != nil {
 		t.Fatal(err)
 	}
 	if db.cow.cut.basis == old.cowCut.basis {

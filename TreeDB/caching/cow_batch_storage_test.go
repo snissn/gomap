@@ -18,14 +18,14 @@ func TestCOWBatchStorageAdmissionAndReset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if b.cowStorage == nil || cap(b.entries) < 65 {
+	if b.cowState.storage == nil || cap(b.entries) < 65 {
 		t.Fatal("missing admitted growth")
 	}
 	if db.cow.budget.Stats().ExternalBytes <= baseline {
 		t.Fatal("batch capacity uncharged")
 	}
 	b.Reset()
-	if len(b.entries) != 0 || b.copyArena != nil || b.cowStorage != nil {
+	if len(b.entries) != 0 || b.copyArena != nil || b.cowState.storage != nil {
 		t.Fatal("reset retained batch storage")
 	}
 	if err := b.Set([]byte("again"), []byte("value")); err != nil {

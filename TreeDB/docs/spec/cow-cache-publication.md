@@ -106,6 +106,15 @@ and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
+On Windows and race builds, `ReadAt` makes the three fixed inspection buffers
+heap allocations. The serialized read workspace reserves their separately
+rounded 4,144-byte peak envelope before inspection and keeps it through Close.
+Normal Unix builds retain stack inspection and their zero-allocation check.
+Leaf namespace checks avoid the Windows volume/parent string join for canonical
+native file paths produced by `filepath.Join`. Arbitrary noncanonical paths may
+need lexical normalization allocation and are outside the low-level bounded
+leaf-read caller contract; legacy namespace classification remains unchanged.
+
 Successor reads search the captured cache roots using existing immutable
 lower-bound lookups only when the exact retained backend user root is proven
 empty. They inspect all captured shards/sources and preserve newest-source

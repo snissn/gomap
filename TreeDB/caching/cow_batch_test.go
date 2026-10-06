@@ -12,7 +12,7 @@ import (
 
 func TestCOWBatchCanonicalPreparationPublishesFinalRevisions(t *testing.T) {
 	db, c := cowCutFixture(t)
-	b := &Batch{db: db, entries: []batch.Entry{
+	b := &Batch{db: db, cowState: &cowBatchState{}, entries: []batch.Entry{
 		{Type: batch.OpPut, Key: []byte("a"), Value: []byte("new"), Revision: 41},
 		{Type: batch.OpDelete, Key: []byte("b"), Revision: 42},
 	}}
@@ -29,9 +29,9 @@ func TestCOWBatchCanonicalPreparationPublishesFinalRevisions(t *testing.T) {
 		c.writerMu.Unlock()
 		t.Fatalf("staged value=%q err=%v", value, err)
 	}
-	retired := b.cowPrepared.cut.publish()
-	p := b.cowPrepared
-	b.cowPrepared = nil
+	retired := b.cowState.prepared.cut.publish()
+	p := b.cowState.prepared
+	b.cowState.prepared = nil
 	c.writerMu.Unlock()
 	if retired != nil {
 		retired.drain()
@@ -52,7 +52,7 @@ func TestCOWBatchCanonicalPreparationPublishesFinalRevisions(t *testing.T) {
 
 func TestCOWBatchFinalizerRefusalCancelsPrivateRoots(t *testing.T) {
 	db, c := cowCutFixture(t)
-	b := &Batch{db: db, entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("private"), Revision: 23}}}
+	b := &Batch{db: db, cowState: &cowBatchState{}, entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("private"), Revision: 23}}}
 	before := c.budget.Stats().TotalBytes
 	beforeLeases := c.budget.Stats().ExternalLeases
 	c.writerMu.Lock()
@@ -87,7 +87,7 @@ func TestCOWLogicalSizeChangedKeysAndDuplicates(t *testing.T) {
 	db, c := cowCutFixture(t)
 	publish := func(entries []batch.Entry) {
 		t.Helper()
-		b := &Batch{db: db, entries: entries}
+		b := &Batch{db: db, cowState: &cowBatchState{}, entries: entries}
 		c.writerMu.Lock()
 		err := db.backend.(*backenddb.DB).FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(entries))
 		if err != nil {
@@ -98,7 +98,7 @@ func TestCOWLogicalSizeChangedKeysAndDuplicates(t *testing.T) {
 			}
 			t.Fatal(err)
 		}
-		p := b.cowPrepared
+		p := b.cowState.prepared
 		old := p.cut.publish()
 		c.writerMu.Unlock()
 		if old != nil {

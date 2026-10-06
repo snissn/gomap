@@ -32,11 +32,11 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	if b.db.cow == nil {
 		return nil
 	}
-	if b.cowPrepared != nil {
+	if b.cowState.prepared != nil {
 		return fmt.Errorf("COW batch already prepared")
 	}
-	if b.cowProducer != nil && b.cowProducer.err != nil {
-		return b.cowProducer.err
+	if b.cowState.producer != nil && b.cowState.producer.err != nil {
+		return b.cowState.producer.err
 	}
 	if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir); err != nil {
 		return err
@@ -52,7 +52,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
 		memtable.COWAllocationCharge(uint64(n)*8)
-	reusePrediction := len(b.shardCnts) == shards && len(b.cowPredictionGroups) == shards && len(b.cowPredictionStorage) == n
+	reusePrediction := len(b.shardCnts) == shards && len(b.cowState.predictionGroups) == shards && len(b.cowState.predictionStorage) == n
 	if !reusePrediction {
 		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
 			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
@@ -63,10 +63,10 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		return err
 	}
 	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
-	b.cowPrepared = p // caller drains all cancellation, including partial stage
+	b.cowState.prepared = p // caller drains all cancellation, including partial stage
 	// Prediction has finished. Reuse its admitted scalar/group/mutation backing,
 	// replacing predicted pointers/revisions with the final canonical entries.
-	counts, groups, mutations := b.shardCnts, b.cowPredictionGroups, b.cowPredictionStorage
+	counts, groups, mutations := b.shardCnts, b.cowState.predictionGroups, b.cowState.predictionStorage
 	if !reusePrediction {
 		counts = make([]int, shards)
 		groups = make([][]memtable.COWMutation, shards)
@@ -98,10 +98,10 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 			if e.IsPtr {
 				m.Flags = node.FlagPointer
 				m.Value = nil
-				if b.cowProducer == nil {
+				if b.cowState.producer == nil {
 					return ErrCOWUnsupported
 				}
-				header, ok := b.cowProducer.frame(e.ValuePtr)
+				header, ok := b.cowState.producer.frame(e.ValuePtr)
 				if !ok {
 					return ErrCOWUnsupported
 				}
@@ -177,31 +177,31 @@ func (b *Batch) ExternalCommandWALFinalizer() backenddb.RawKVCommandWALFinalize 
 }
 
 func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error {
-	if b.cowPrepared == nil || b.cowPrepared.cut == nil {
+	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
 		return fmt.Errorf("COW publication was not prepared")
 	}
 	if err := validateCOWCanonicalEntries(payload, b.entries, lookup); err != nil {
 		return err
 	}
-	for _, resource := range b.cowPrepared.resources {
+	for _, resource := range b.cowState.prepared.resources {
 		if resource.id.Kind != cowResourceDictionary {
 			continue
 		}
 		shard := resource.shard
-		if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
+		if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
 			return err
 		}
 		ids := [1]memtable.COWResourceID{resource.id}
-		if err := b.cowPrepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
+		if err := b.cowState.prepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
 			return err
 		}
 		resource.attached = true
 	}
-	for shard, files := range b.cowPrepared.files {
+	for shard, files := range b.cowState.prepared.files {
 		for _, fileID := range files {
 			manager := b.db.valueLogReader
 			resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
-			b.cowPrepared.resources = append(b.cowPrepared.resources, resource)
+			b.cowState.prepared.resources = append(b.cowState.prepared.resources, resource)
 			registry := manager.StableResourcePinRegistry()
 			identity, registered := manager.StableSegmentIdentity(fileID)
 			if !registered || registry == nil || registry != b.db.valueLogIdentityPins {
@@ -218,10 +218,10 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 				return fmt.Errorf("COW value-log file %d is not registered", fileID)
 			}
 			id := [1]memtable.COWResourceID{{Kind: cowResourceValueLogFile, ID: uint64(fileID)}}
-			if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
+			if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
 				return err
 			}
-			if err := b.cowPrepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
+			if err := b.cowState.prepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
 				return err
 			}
 			resource.attached = true
@@ -231,8 +231,11 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 }
 
 func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
-	p := b.cowPrepared
-	b.cowPrepared = nil
+	if b.cowState == nil {
+		return nil
+	}
+	p := b.cowState.prepared
+	b.cowState.prepared = nil
 	if p != nil && p.cut != nil {
 		p.cut.cancel()
 	}
@@ -274,11 +277,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		}
 		return err
 	}
-	if b.cowPrepared == nil || b.cowPrepared.cut == nil {
+	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
 		panic("COW append succeeded without staged publication")
 	}
-	p := b.cowPrepared
-	b.cowPrepared = nil
+	p := b.cowState.prepared
+	b.cowState.prepared = nil
 	// Accepted publication is nonfallible. This existing internal observation
 	// seam may pause tests, but an observer cannot revoke an accepted frame.
 	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)

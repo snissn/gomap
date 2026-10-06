@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestCOWPublicSnapshotReadCloseConcurrency(t *testing.T) {
@@ -219,7 +220,12 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
 				t.Fatalf("rewrite changed logical revision: got=%d want=%d error=%v", revision, entry.Revision, err)
 			}
 			current.Close()
-			if _, err := database.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+			_, err = database.CompactStorage(context.Background(), CompactStorageOptions{})
+			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("unsupported leaf-pack promotion: %v", err)
+				}
+			} else if err != nil {
 				t.Fatalf("ordinary compaction after selected rewrite: %v", err)
 			}
 			if err := database.Set([]byte("a"), []byte("late")); err != nil {

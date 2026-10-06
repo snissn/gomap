@@ -154,17 +154,21 @@ func cowShape(header, prefix []byte, n uint32, ptr page.ValuePtr, limits COWRead
 	return s, nil
 }
 
-// InspectCOWRecord uses stack metadata only. The caller must already own the
-// open registered file and producer visibility; no refresh, sync or cache is
-// performed. Raw template/compact-leaf payloads are refused here. Compressed
-// payloads can only be checked for those encodings after admitted decoding.
+// InspectCOWRecord uses fixed-size metadata. Before inspection the caller must
+// admit the separate buffers reported by COWInspectionMetadataAllocationSizes;
+// Windows and race instrumentation make those buffers escape through ReadAt.
+// The caller must already own the open registered file and producer visibility;
+// no refresh, sync or cache is performed. Raw template/compact-leaf payloads are
+// refused here. Compressed payloads can only be checked for those encodings
+// after admitted decoding.
 func InspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
 	return inspectCOWRecord(f, ptr, limits, false)
 }
 
 // InspectCOWLeafRecord is the explicit bounded external-leaf sibling. The
-// caller must own the registered leaf file. Its existing namespace authority
-// is checked here. Leaves are at most one page, grouped raw bytes at most 255
+// caller must own the registered leaf file with its canonical native path and
+// the inspection metadata admission. Its existing namespace authority is
+// checked here. Leaves are at most one page, grouped raw bytes at most 255
 // pages, and stored records at most 2MiB, in addition to the caller's limits.
 func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
 	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
@@ -243,7 +247,8 @@ func ReadCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
 // ReadCOWLeafPage expands a compact leaf into the pre-admitted pageDst. Its
 // capacity must be at least page.PageSize before any read/decode. Returned
 // bytes are exactly one page and alias pageDst. No materialization fallback or
-// global codec cache is used.
+// global codec cache is used. The retained file has the canonical native path
+// required by InspectCOWLeafRecord.
 func ReadCOWLeafPage(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
 	if cap(pageDst) < page.PageSize || shape.ValueBytes > page.PageSize || shape.RawBytes > MaxFrameK*page.PageSize || shape.RecordBytes > 2<<20 {
 		return nil, ErrCOWReadCapacity

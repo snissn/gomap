@@ -202,7 +202,13 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				if cut == nil {
 					t.Fatalf("real COW route emitted no %s boundary (operation=%v)", point, err)
 				}
-				if err == nil || !errors.Is(err, cutErr) {
+				// After the actual meta write, the asynchronous publisher may
+				// poison the handle before the checkpoint's readiness/flush gate
+				// observes it. That gate returns the recovery sentinel instead of
+				// the observer cause. Keep every other cut's direct-cause check.
+				observedMetaPoison := point == durabilitycut.AfterMetaWrite &&
+					resource == durabilitycut.ResourceMeta && errors.Is(err, backenddb.ErrRecoveryRequired)
+				if err == nil || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 					t.Fatalf("interruption classification err=%v", err)
 				}
 				result, reopened, closeReopened, reopenErr := powerlossreopen.Stable(cut, opts, false)

@@ -91,10 +91,10 @@ func compareCOWProducedFrames(a, b cowProducedFrame) int {
 }
 
 func (b *Batch) cowProducedFrameObserver() valuelog.ProducedFrameObserver {
-	if b.cowProducer == nil {
+	if b.cowState == nil || b.cowState.producer == nil {
 		return nil
 	}
-	return b.cowProducer.observer
+	return b.cowState.producer.observer
 }
 
 func (c *cowFrameCapture) close() {

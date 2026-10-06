@@ -9,6 +9,25 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+// cowBatchState exists only for explicitly admitted COW batches. Keeping its
+// ownership and prediction fields separate preserves ordinary batch allocations.
+type cowBatchState struct {
+	lease             *memtable.COWExternalLease
+	storage           *cowBatchStorage
+	err               error
+	prepared          *cowBatchPreparation
+	producer          *cowFrameCapture
+	predictionGroups  [][]memtable.COWMutation
+	predictionStorage []memtable.COWMutation
+}
+
+// One admitted allocation owns the public batch and its COW-only state. Both
+// interior pointers retain this owner; ordinary batches need no sidecar storage.
+type cowBatchOwner struct {
+	batch Batch
+	state cowBatchState
+}
+
 // A batch owns every admitted backing, including discarded growth arrays,
 // until Reset drops its references. These leases never enter legacy pools.
 type cowBatchStorage struct {
@@ -17,8 +36,8 @@ type cowBatchStorage struct {
 }
 
 // Shared immutable refusal carrier: constructing a refused batch allocates no
-// wrapper. All COW staging/write/close paths test cowErr before mutation.
-var cowDeniedBatch = Batch{cowErr: memtable.ErrCOWCapacity, closed: true}
+// wrapper. All COW staging/write/close paths test the state error before mutation.
+var cowDeniedBatch = Batch{cowState: &cowBatchState{err: memtable.ErrCOWCapacity}, closed: true}
 
 // AcquireCOWAllocation admits concrete caller-owned wrapper/backing capacities
 // before allocation. The returned independent lease lasts until that caller
@@ -31,18 +50,20 @@ func (db *DB) AcquireCOWAllocation(bytes uint64) (*memtable.COWExternalLease, er
 }
 
 func (db *DB) newCOWBatch(hint int) *Batch {
-	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Batch{}))))
+	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchOwner{}))))
 	if err != nil {
 		return &cowDeniedBatch
 	}
-	b := &Batch{db: db, cowLease: lease, streamBypassOff: true}
+	owner := &cowBatchOwner{batch: Batch{db: db, streamBypassOff: true}, state: cowBatchState{lease: lease}}
+	b := &owner.batch
+	b.cowState = &owner.state
 	b.cowReserve(hint)
 	return b
 }
 
 func (b *Batch) cowAdmitStorage(bytes uint64) error {
-	if b.cowErr != nil {
-		return b.cowErr
+	if b.cowState.err != nil {
+		return b.cowState.err
 	}
 	ownerCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchStorage{})))
 	if bytes > ^uint64(0)-ownerCharge {
@@ -52,20 +73,20 @@ func (b *Batch) cowAdmitStorage(bytes uint64) error {
 	if err != nil {
 		return err
 	}
-	b.cowStorage = &cowBatchStorage{lease: lease, next: b.cowStorage}
+	b.cowState.storage = &cowBatchStorage{lease: lease, next: b.cowState.storage}
 	return nil
 }
 
 func (b *Batch) cowReserve(n int) {
-	if b.cowErr != nil || b.closed || n <= cap(b.entries) {
+	if b.cowState.err != nil || b.closed || n <= cap(b.entries) {
 		return
 	}
 	if n < 0 || uint64(n) > ^uint64(0)/uint64(unsafe.Sizeof(batch.Entry{})) {
-		b.cowErr = memtable.ErrCOWCapacity
+		b.cowState.err = memtable.ErrCOWCapacity
 		return
 	}
 	if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(batch.Entry{})))); err != nil {
-		b.cowErr = err
+		b.cowState.err = err
 		return
 	}
 	entries := make([]batch.Entry, len(b.entries), n)
@@ -74,8 +95,8 @@ func (b *Batch) cowReserve(n int) {
 }
 
 func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
-	if b.cowErr != nil {
-		return b.cowErr
+	if b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -89,8 +110,8 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 			return memtable.ErrCOWCapacity
 		}
 		b.cowReserve(next)
-		if b.cowErr != nil {
-			return b.cowErr
+		if b.cowState.err != nil {
+			return b.cowState.err
 		}
 	}
 	if owned {
@@ -132,8 +153,8 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 }
 
 func (b *Batch) cowSetOps(ops []batch.Entry) error {
-	if b.cowErr != nil {
-		return b.cowErr
+	if b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -168,8 +189,8 @@ func (b *Batch) cowReset() {
 	b.eligibleIdxs = nil
 	b.shardEntries = nil
 	b.shardIdxSets = nil
-	b.cowPredictionGroups = nil
-	b.cowPredictionStorage = nil
+	b.cowState.predictionGroups = nil
+	b.cowState.predictionStorage = nil
 	b.firstKey, b.lastKey = nil, nil
 	b.stableViewValueLeaseChunks = nil
 	b.size, b.maxEntries = 0, 0
@@ -177,10 +198,10 @@ func (b *Batch) cowReset() {
 	b.commandWALAppend = nil
 	b.commandWALPreparedRevision, b.commandWALMaterializedRID = false, false
 	b.entryRevision = page.LegacyEntryRevision
-	b.cowErr = nil
-	for b.cowStorage != nil {
-		owner := b.cowStorage
-		b.cowStorage = owner.next
+	b.cowState.err = nil
+	for b.cowState.storage != nil {
+		owner := b.cowState.storage
+		b.cowState.storage = owner.next
 		owner.next = nil
 		owner.lease.Close()
 	}
@@ -192,7 +213,7 @@ func (b *Batch) cowClose() error {
 	}
 	b.cowReset()
 	b.closed = true
-	b.cowLease.Close()
+	b.cowState.lease.Close()
 	// Keep the closed lease identity so repeated methods stay on the COW path.
 	return nil
 }
@@ -216,8 +237,8 @@ func (b *Batch) cowPrepareWriteStorage() error {
 	if err := b.cowAdmitStorage(bytes); err != nil {
 		return err
 	}
-	b.cowPredictionGroups = make([][]memtable.COWMutation, shards)
-	b.cowPredictionStorage = make([]memtable.COWMutation, n)
+	b.cowState.predictionGroups = make([][]memtable.COWMutation, shards)
+	b.cowState.predictionStorage = make([]memtable.COWMutation, n)
 	b.shardAdds = make([]int64, shards)
 	b.shardCnts = make([]int, shards)
 	b.shardIdxs = make([]int, n)

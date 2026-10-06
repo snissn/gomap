@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sync"
 	"testing"
 
@@ -16,19 +15,6 @@ import (
 )
 
 var cowTestLimits = COWReadLimits{MaxRecordBytes: 1 << 20, MaxRawBytes: 1 << 20, MaxValueBytes: 1 << 20}
-
-func cowTestRaceEnabled() bool {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return false
-	}
-	for _, setting := range info.Settings {
-		if setting.Key == "-race" && setting.Value == "true" {
-			return true
-		}
-	}
-	return false
-}
 
 func cowTestFrame(dictID uint64, codec BlockCodec, values [][]byte, compressed []byte) []byte {
 	k := len(values)
@@ -122,15 +108,18 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 				t.Fatal("value mismatch")
 			}
 			payload, raw, out := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, shape.ValueBytes)
-			// Race instrumentation makes os.ReadAt's stack input buffers escape;
-			// normal builds verify the preflight's zero-allocation contract.
-			raceEnabled := cowTestRaceEnabled()
+			// Windows and race ReadAt make these three fixed metadata buffers
+			// escape. The caller pre-admits their separate rounded capacities.
+			wantInspectAllocs := 0.0
+			if COWInspectionMetadataAllocationSizes() != [3]uint64{} {
+				wantInspectAllocs = 3
+			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := InspectCOWRecord(f, ptr, cowTestLimits); err != nil {
 					panic(err)
 				}
-			}); n != 0 && !raceEnabled {
-				t.Fatalf("Inspect allocs=%g", n)
+			}); n != wantInspectAllocs {
+				t.Fatalf("Inspect allocs=%g want=%g", n, wantInspectAllocs)
 			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := ReadCOWRecord(f, ptr, shape, true, payload, raw, out, nil); err != nil {

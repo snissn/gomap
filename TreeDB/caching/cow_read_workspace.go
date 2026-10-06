@@ -55,6 +55,11 @@ func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 func newCOWReadWorkspace(s *Snapshot) (*cowReadWorkspace, error) {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) +
 		memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0))))
+	// Inspection precedes record/decoder growth. Reserve its peak heap metadata
+	// first; cowReadMu serializes reuse and Close owns the envelope's lifetime.
+	for _, size := range valuelog.COWInspectionMetadataAllocationSizes() {
+		bytes += memtable.COWAllocationCharge(size)
+	}
 	lease, err := s.cowCache.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err

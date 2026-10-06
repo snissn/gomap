@@ -17,8 +17,8 @@ func (b *Batch) cowGenerationRollover() (*cowRollover, error) {
 	for _, entry := range b.entries {
 		b.shardCnts[b.db.shardIndex(entry.Key)]++
 	}
-	groups := b.cowPredictionGroups
-	storage := b.cowPredictionStorage
+	groups := b.cowState.predictionGroups
+	storage := b.cowState.predictionStorage
 	start := 0
 	for i, count := range b.shardCnts {
 		groups[i] = storage[start : start : start+count]

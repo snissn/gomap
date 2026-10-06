@@ -1701,9 +1701,120 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
 	return db.captureSnapshotBoundedWithValueLogPublicationLockHeld(nil, admit, true)
 }
 
+// Ordinary snapshots keep the established fast capture path. Bounded COW
+// captures below use their separate admission and fixed-registry policy.
 func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
-	_, err := db.captureSnapshotBoundedWithValueLogPublicationLockHeld(snap, nil, false)
-	return err == nil
+	db.rootReuseMu.RLock()
+	defer db.rootReuseMu.RUnlock()
+	if db.closing.Load() || db.publicationPoisoned.Load() {
+		return false
+	}
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
+	acqShard := snapshotAcquireShard()
+	db.snapshotAcquireRO[acqShard].Add(1)
+	db.snapshotAcquireEpoch.Add(1)
+	defer func() {
+		// Publish the completion epoch before dropping the in-flight count so
+		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
+		db.snapshotAcquireEpoch.Add(1)
+		db.snapshotAcquireRO[acqShard].Add(-1)
+	}()
+	if db.closing.Load() {
+		return false
+	}
+
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.idx == nil || view.state == nil {
+		return false
+	}
+	idx := view.idx
+	state := view.state
+	vm := view.vlogManager
+	vlogSet := state.ValueLogSet
+	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	if vlogNeedsPin {
+		if vm == nil {
+			return false
+		}
+		vm.Acquire(vlogSet)
+	}
+
+	var registryID int64
+	if idx != nil {
+		if idx.registry == nil {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			return false
+		}
+		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+	}
+	if state.LeafGenerations != nil {
+		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
+		if state.LeafGenerations.PinSet != nil {
+			snap.leafGenerationPinSet = state.LeafGenerations.PinSet
+			if db.retainLeafGenerationPinSet(snap.leafGenerationPinSet) {
+				snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+			} else {
+				snap.leafGenerationPinnedIDs = nil
+			}
+			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+		} else if len(state.LeafGenerations.PinRefs) == len(state.LeafGenerations.GenerationOrder) && len(state.LeafGenerations.PinRefs) > 0 {
+			snap.leafGenerationRefs = append(snap.leafGenerationRefs[:0], state.LeafGenerations.PinRefs...)
+			db.pinLeafGenerationRefs(snap.leafGenerationRefs)
+			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+		} else {
+			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+			db.pinLeafGenerationIDs(snap.leafGenerationIDs)
+			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+		}
+	} else {
+		snap.leafGenerationIDs = nil
+		snap.leafGenerationPinnedIDs = nil
+		snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+		snap.leafGenerationPinSet = nil
+	}
+
+	snap.db = db
+	snap.idx = idx
+	snap.state = state
+	snap.vlogManager = vm
+	snap.vlogPinned = vlogNeedsPin
+	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
+	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+	for i := range snap.rootTrees {
+		snap.rootTrees[i].root = 0
+		snap.rootTrees[i].tree.Reset(nil, nil, 0)
+	}
+	if cap(snap.rootTrees) > snapshotRootTreeRetainMax {
+		snap.rootTrees = nil
+	} else {
+		snap.rootTrees = snap.rootTrees[:0]
+	}
+	snap.registryID = registryID
+	if idx != nil {
+		sameTree := snap.treePager == idx.pager &&
+			snap.treeRoot == state.RootPageID
+		if !sameTree {
+			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			snap.treePager = idx.pager
+			snap.treeRoot = state.RootPageID
+		}
+	} else {
+		if snap.treePager != nil || snap.treeRoot != 0 {
+			snap.tree.Reset(nil, nil, 0)
+			snap.treePager = nil
+			snap.treeRoot = 0
+		}
+	}
+	snap.tree.SetNegativeFilter(view.negativeFilter)
+	snap.iteratorMu.Lock()
+	snap.closed.Store(false)
+	snap.readState.Store(0)
+	snap.iteratorMu.Unlock()
+	return true
 }
 
 func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool) (*Snapshot, error) {

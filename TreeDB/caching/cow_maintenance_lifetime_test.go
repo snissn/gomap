@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"unsafe"
@@ -14,21 +15,22 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-var errCOWMaintenanceAcceptedReport = errors.New("test: error reported after real vacuum acceptance")
+var errCOWMaintenanceAcceptedReport = errors.New("test: error reported after real maintenance acceptance")
 
 // Only heuristic input and post-acceptance fault placement are controlled.
 // Vacuum, snapshot capture, cut installation, and finite admission are native.
 type cowMaintenanceLifetimeBackend struct {
 	*backenddb.DB
-	cache           *DB
-	t               *testing.T
-	indexPath       string
-	before, after   os.FileInfo
-	pressure        *memtable.COWExternalLease
-	armed           bool
-	installPressure bool
-	accepted        atomic.Int64
-	captures        atomic.Int64
+	cache                                      *DB
+	t                                          *testing.T
+	indexPath                                  string
+	before, after                              os.FileInfo
+	beforeRoot, afterRoot, beforeSeq, afterSeq string
+	pressure                                   *memtable.COWExternalLease
+	armed                                      bool
+	installPressure                            bool
+	accepted                                   atomic.Int64
+	captures                                   atomic.Int64
 }
 
 func (b *cowMaintenanceLifetimeBackend) exhaustInFlight() {
@@ -98,6 +100,26 @@ func (b *cowMaintenanceLifetimeBackend) VacuumIndexOnline(ctx context.Context) e
 	return errCOWMaintenanceAcceptedReport
 }
 
+func (b *cowMaintenanceLifetimeBackend) compactIndexWithAcceptedReport() error {
+	b.t.Helper()
+	before := b.DB.Stats()
+	if err := b.DB.CompactIndex(); err != nil {
+		return err
+	}
+	after := b.DB.Stats()
+	b.beforeRoot, b.afterRoot = before["treedb.root_page"], after["treedb.root_page"]
+	b.beforeSeq, b.afterSeq = before["treedb.commit_seq"], after["treedb.commit_seq"]
+	if b.beforeRoot == "" || b.afterRoot == "" || b.beforeRoot == b.afterRoot || b.beforeSeq == "" || b.afterSeq == "" || b.beforeSeq == b.afterSeq {
+		b.t.Fatalf("CompactIndex did not publish a real successor root: root%s->%s sequence%s->%s", b.beforeRoot, b.afterRoot, b.beforeSeq, b.afterSeq)
+	}
+	b.accepted.Add(1)
+	if !b.installPressure {
+		b.armed = false
+		b.exhaustInFlight()
+	}
+	return errCOWMaintenanceAcceptedReport
+}
+
 func cowMaintenanceLifetimeFixture(t *testing.T) (*DB, *cowMaintenanceLifetimeBackend) {
 	t.Helper()
 	dir := t.TempDir()
@@ -128,9 +150,17 @@ func cowMaintenanceLifetimeFixture(t *testing.T) (*DB, *cowMaintenanceLifetimeBa
 }
 
 func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
-	for _, route := range []string{"central-maintenance", "checkpoint-vacuum"} {
+	routes := []string{"central-maintenance", "checkpoint-vacuum", "central-index-compaction"}
+	if runtime.GOOS == "windows" {
+		testCOWMaintenanceUnsupportedVacuumPreservesLifetime(t)
+		// Windows has no online vacuum. Keep both post-acceptance admission
+		// stages using native CompactIndex, which publishes a new tree root.
+		routes = []string{"central-index-compaction"}
+	}
+	for _, route := range routes {
 		for _, stage := range []string{"capture", "install"} {
 			t.Run(route+"/"+stage, func(t *testing.T) {
+				central := route != "checkpoint-vacuum"
 				cached, backend := cowMaintenanceLifetimeFixture(t)
 				beforeValue := bytes.Repeat([]byte("old-pointer/"), 512)
 				afterValue := bytes.Repeat([]byte("new-pointer/"), 512)
@@ -164,7 +194,7 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 					t.Fatalf("old point before vacuum: len%d err%v", len(oldValue), err)
 				}
 				basis := cached.cow.cut.basis
-				if route == "central-maintenance" {
+				if central {
 					if err := cached.Set([]byte("a"), afterValue); err != nil {
 						t.Fatal(err)
 					}
@@ -178,16 +208,27 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 				backend.armed = true
 				backend.installPressure = stage == "install"
 				capturesBefore := backend.captures.Load()
-				if route == "central-maintenance" {
-					err = cached.RunBackendMaintenance(func() error { return backend.VacuumIndexOnline(context.Background()) })
+				if central {
+					maintenance := func() error { return backend.VacuumIndexOnline(context.Background()) }
+					if route == "central-index-compaction" {
+						maintenance = backend.compactIndexWithAcceptedReport
+					}
+					err = cached.RunBackendMaintenance(maintenance)
 				} else {
 					err = cached.Checkpoint()
 				}
 				if !errors.Is(err, errCOWMaintenanceAcceptedReport) || !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("accepted report plus real refresh refusal: %v", err)
 				}
-				if backend.accepted.Load() != 1 || backend.before == nil || backend.after == nil || os.SameFile(backend.before, backend.after) {
-					t.Fatal("physical maintenance acceptance lost")
+				if backend.accepted.Load() != 1 {
+					t.Fatal("native maintenance acceptance lost")
+				}
+				if route == "central-index-compaction" {
+					if backend.beforeRoot == backend.afterRoot || backend.beforeSeq == backend.afterSeq {
+						t.Fatal("native index-compaction root publication lost")
+					}
+				} else if backend.before == nil || backend.after == nil || os.SameFile(backend.before, backend.after) {
+					t.Fatal("physical vacuum acceptance lost")
 				}
 				if !cached.cow.refreshRequired.Load() || cached.cow.cut.basis != basis {
 					t.Fatal("refusal cleared gate or replaced retained basis")
@@ -229,7 +270,7 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 					t.Fatalf("old empty=%v err%v", got, err)
 				}
 				want := beforeValue
-				if route == "central-maintenance" {
+				if central {
 					want = afterValue
 					if has, err := cached.Has([]byte("deleted")); err != nil || has {
 						t.Fatalf("newer tombstone has%t err%v", has, err)
@@ -245,12 +286,12 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 					t.Fatal("retry did not install coherent basis and release gate")
 				}
 				if backend.accepted.Load() != 1 {
-					t.Fatalf("retry repeated physical vacuum %d times", backend.accepted.Load())
+					t.Fatalf("retry repeated native maintenance %d times", backend.accepted.Load())
 				}
 				if got, err := backend.Get([]byte("a")); err != nil || !bytes.Equal(got, want) {
 					t.Fatalf("retry backend len%d err%v", len(got), err)
 				}
-				if route == "central-maintenance" {
+				if central {
 					if has, err := cached.Has([]byte("deleted")); err != nil || has {
 						t.Fatalf("retried tombstone has%t err%v", has, err)
 					}
@@ -264,8 +305,92 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 				if got, err := old.Get([]byte("a")); err != nil || !bytes.Equal(got, beforeValue) {
 					t.Fatalf("old after retry len%d err%v", len(got), err)
 				}
-				t.Logf("real accepted vacuum1; %s refusal then retry; captures%d oldRevision%d", stage, backend.captures.Load(), oldRevision)
+				t.Logf("real accepted maintenance1; %s refusal then retry; captures%d oldRevision%d", stage, backend.captures.Load(), oldRevision)
 			})
 		}
+	}
+}
+
+func testCOWMaintenanceUnsupportedVacuumPreservesLifetime(t *testing.T) {
+	t.Helper()
+	for _, route := range []string{"central-maintenance", "checkpoint-vacuum"} {
+		t.Run(route+"/unsupported-native-vacuum", func(t *testing.T) {
+			cached, backend := cowMaintenanceLifetimeFixture(t)
+			beforeValue := bytes.Repeat([]byte("old-pointer/"), 512)
+			afterValue := bytes.Repeat([]byte("new-pointer/"), 512)
+			for _, key := range []string{"a", "deleted"} {
+				if err := cached.Set([]byte(key), beforeValue); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := cached.Set([]byte("empty"), []byte{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := cached.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			for route == "checkpoint-vacuum" && cached.checkpointRuns.Load() < checkpointSparseIndexCheckEveryNoops {
+				if err := cached.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			old, err := cached.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			_, oldRevision, err := old.GetVersioned([]byte("a"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cached.Set([]byte("a"), afterValue); err != nil {
+				t.Fatal(err)
+			}
+			if err := cached.Delete([]byte("deleted")); err != nil {
+				t.Fatal(err)
+			}
+			backend.armed = true
+			if route == "central-maintenance" {
+				err = cached.RunBackendMaintenance(func() error { return backend.VacuumIndexOnline(context.Background()) })
+				if !errors.Is(err, backenddb.ErrVacuumUnsupported) {
+					t.Fatalf("Windows native vacuum refusal: %v", err)
+				}
+			} else if err = cached.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint without unsupported auto-vacuum: %v", err)
+			}
+			if backend.accepted.Load() != 0 || backend.pressure != nil || cached.cow.refreshRequired.Load() {
+				t.Fatal("unsupported vacuum fabricated acceptance, pressure or a persistent coherence gate")
+			}
+			if got, revision, err := old.GetVersioned([]byte("a")); err != nil || !bytes.Equal(got, beforeValue) || revision != oldRevision {
+				t.Fatalf("old cut after refusal: len%d revision%d want%d error%v", len(got), revision, oldRevision, err)
+			}
+			if got, err := old.Get([]byte("deleted")); err != nil || !bytes.Equal(got, beforeValue) {
+				t.Fatalf("old deleted pointer len%d error%v", len(got), err)
+			}
+			if got, err := old.Get([]byte("empty")); err != nil || got == nil || len(got) != 0 {
+				t.Fatalf("old empty%v error%v", got, err)
+			}
+			if got, err := cached.Get([]byte("a")); err != nil || !bytes.Equal(got, afterValue) {
+				t.Fatalf("current pointer after refusal len%d error%v", len(got), err)
+			}
+			if has, err := cached.Has([]byte("deleted")); err != nil || has {
+				t.Fatalf("current tombstone after refusal has%t error%v", has, err)
+			}
+			if err := cached.Set([]byte("resumed"), []byte("ok")); err != nil {
+				t.Fatalf("writer after unsupported vacuum: %v", err)
+			}
+			if err := cached.Checkpoint(); err != nil {
+				t.Fatalf("later checkpoint: %v", err)
+			}
+			if got, err := backend.Get([]byte("a")); err != nil || !bytes.Equal(got, afterValue) {
+				t.Fatalf("later native pointer len%d error%v", len(got), err)
+			}
+			if has, err := backend.Has([]byte("deleted")); err != nil || has {
+				t.Fatalf("later native tombstone has%t error%v", has, err)
+			}
+			if got, err := old.Get([]byte("a")); err != nil || !bytes.Equal(got, beforeValue) {
+				t.Fatalf("old cut after later checkpoint len%d error%v", len(got), err)
+			}
+		})
 	}
 }

@@ -34322,6 +34322,16 @@ func (db *DB) Print() error {
 // should ensure no writes occur concurrently if they require a fully drained
 // state.
 func (db *DB) Drain() error {
+	if db.cow != nil {
+		// Admission may wait for an existing checkpoint, so acquire flushMu
+		// only after rotating the active immutable sources into the frontier.
+		if err := db.rolloverCOWForFlush(); err != nil {
+			return err
+		}
+		db.flushMu.Lock()
+		defer db.flushMu.Unlock()
+		return db.flushCOWFrozen(db.flushSyncRequested(false), nil)
+	}
 	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
@@ -35024,13 +35034,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	cowLease                  *memtable.COWExternalLease
-	cowStorage                *cowBatchStorage
-	cowErr                    error
-	cowPrepared               *cowBatchPreparation
-	cowProducer               *cowFrameCapture
-	cowPredictionGroups       [][]memtable.COWMutation
-	cowPredictionStorage      []memtable.COWMutation
+	cowState                  *cowBatchState
 	db                        *DB
 	entries                   []batch.Entry
 	backend                   batch.Interface
@@ -35119,7 +35123,7 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 
 // Reserve ensures the batch has capacity for at least n staged entries.
 func (b *Batch) Reserve(n int) {
-	if b != nil && (b.cowLease != nil || b.cowErr != nil) {
+	if b != nil && b.cowState != nil {
 		b.cowReserve(n)
 		return
 	}
@@ -36133,7 +36137,7 @@ func (b *Batch) copyValueToAppendOnlyDirectArena(value []byte) []byte {
 // This intentionally keeps internal buffers to avoid per-batch allocations in
 // callers that frequently reset (e.g. geth benchmarks).
 func (b *Batch) Reset() {
-	if b != nil && (b.cowLease != nil || b.cowErr != nil) {
+	if b != nil && b.cowState != nil {
 		b.cowReset()
 		return
 	}
@@ -36723,7 +36727,7 @@ func (b *Batch) Set(key, value []byte) error {
 }
 
 func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: normalizeRawKVPointKey(key), Value: normalizeRawKVValue(value), Revision: revision}, true)
 	}
 	if b.closed {
@@ -36811,8 +36815,8 @@ func (b *Batch) SetView(key, value []byte) error {
 }
 
 func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
-	if b.cowErr != nil {
-		return b.cowErr
+	if b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -36829,7 +36833,7 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
 }
 
 func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.EntryRevision) error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision}, false)
 	}
 	if hotPathStatsEnabled {
@@ -36897,7 +36901,7 @@ func (b *Batch) Delete(key []byte) error {
 }
 
 func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpDelete, Key: normalizeRawKVPointKey(key), Revision: revision}, true)
 	}
 	if b.closed {
@@ -37006,8 +37010,8 @@ func (b *Batch) DeleteView(key []byte) error {
 }
 
 func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
-	if b.cowErr != nil {
-		return b.cowErr
+	if b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -37023,7 +37027,7 @@ func (b *Batch) DeleteViewValidated(key []byte) error {
 }
 
 func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryRevision) error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}, false)
 	}
 	if hotPathStatsEnabled {
@@ -37086,7 +37090,7 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
 }
 
 func (b *Batch) SetOps(ops []batch.Entry) error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowSetOps(ops)
 	}
 	if b.closed {
@@ -37355,8 +37359,8 @@ type CommandWALBatchWriteTiming struct {
 // visible in the mutable table. This is intentionally limited to command-WAL
 // public mode, where the cached redo log is disabled.
 func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error {
-	if b != nil && b.cowErr != nil {
-		return b.cowErr
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b == nil || b.db == nil {
 		return backenddb.ErrClosed
@@ -37391,8 +37395,8 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 // unassigned through preflight; appendCommand must arrange their assignment
 // while holding the command-WAL append serialization boundary.
 func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func() error) error {
-	if b != nil && b.cowErr != nil {
-		return b.cowErr
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b == nil || b.db == nil {
 		return backenddb.ErrClosed
@@ -37430,8 +37434,8 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
 // measuring non-overlapping request phases. Normal writes use the unmeasured
 // method above and do not pay these clock reads.
 func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
-	if b != nil && b.cowErr != nil {
-		return timing, b.cowErr
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return timing, b.cowState.err
 	}
 	if b == nil || b.db == nil {
 		return timing, backenddb.ErrClosed
@@ -37488,8 +37492,8 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
 // revision ordering while exposing the same phase diagnostics as the ordinary
 // measured command-WAL batch path.
 func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
-	if b != nil && b.cowErr != nil {
-		return timing, b.cowErr
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return timing, b.cowState.err
 	}
 	if b == nil || b.db == nil {
 		return timing, backenddb.ErrClosed
@@ -37546,8 +37550,8 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool
 }
 
 func (b *Batch) write(sync bool) error {
-	if b != nil && b.cowErr != nil {
-		return b.cowErr
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -37964,12 +37968,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			unlockWriteMu()
 			return err
 		}
-		b.cowProducer = capture
+		b.cowState.producer = capture
 		previousUnlock := unlockWriteMu
 		unlockWriteMu = func() {
 			b.db.cow.writerMu.Unlock()
 			previousUnlock()
-			b.cowProducer = nil
+			b.cowState.producer = nil
 			capture.close()
 		}
 	}
@@ -39410,7 +39414,7 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 }
 
 func (b *Batch) Close() error {
-	if b.cowLease != nil || b.cowErr != nil {
+	if b.cowState != nil {
 		return b.cowClose()
 	}
 	if b.closed {

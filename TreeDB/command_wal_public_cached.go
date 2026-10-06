@@ -468,13 +468,26 @@ func (tdb *DB) syncPublicCommandWALDirect() (db.CommandWALBarrierResult, error) 
 
 // Refused constructors return an immutable carrier rather than allocating an
 // uncharged public wrapper. Every mutable entry point checks batchError first.
-var cowDeniedPublicBatch = commandWALPublicBatch{batchError: memtable.ErrCOWCapacity}
-var cowClosedPublicBatch = commandWALPublicBatch{batchError: ErrClosed}
+var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}
+var cowClosedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: ErrClosed}}
+
+type commandWALPublicCOWState struct {
+	lease      *memtable.COWExternalLease
+	batchError error
+	cow        bool
+}
+
+// The COW wrapper and state share one admitted allocation. Its interior
+// pointers retain the whole owner through the wrapper's existing Close boundary.
+type commandWALPublicCOWOwner struct {
+	batch commandWALPublicBatch
+	state commandWALPublicCOWState
+}
+
+func (b *commandWALPublicBatch) isCOW() bool { return b.cowState != nil && b.cowState.cow }
 
 type commandWALPublicBatch struct {
-	cowLease                 *memtable.COWExternalLease
-	cow                      bool
-	batchError               error
+	cowState                 *commandWALPublicCOWState
 	db                       *DB
 	inner                    Batch
 	innerSetViewValidated    commandWALPublicInnerSetViewValidated
@@ -485,16 +498,11 @@ type commandWALPublicBatch struct {
 	payloadOpHint            int
 	payloadByteHint          int
 	payloadSoftCapBytes      int
-	payloadBypass            bool
-	payloadLeasedToMemtable  bool
 	payloadLeasedBufferMask  commitlog.RawKVBatchPayloadBufferMask
 	payloadLeaseAttachedMask commitlog.RawKVBatchPayloadBufferMask
 	knownZeroValueRef        []byte
 	knownZeroValueLen        uint64
-	knownZeroValueValid      bool
 	opCount                  int
-	hasDeleteRange           bool
-	dirty                    bool
 	setCalls                 int
 	setBytes                 int
 	setViewCalls             int
@@ -503,6 +511,11 @@ type commandWALPublicBatch struct {
 	deleteBytes              int
 	deleteViewCalls          int
 	deleteViewBytes          int
+	payloadBypass            bool
+	payloadLeasedToMemtable  bool
+	knownZeroValueValid      bool
+	hasDeleteRange           bool
+	dirty                    bool
 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
 	// keeps payload-owned key/value views valid after a successful Write until
 	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
@@ -561,7 +574,7 @@ type commandWALPublicInnerStableViewValueLease interface {
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	if tdb != nil && tdb.cached != nil && tdb.cached.COWMode() {
-		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicBatch{}))))
+		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicCOWOwner{}))))
 		if err != nil {
 			if inner != nil {
 				_ = inner.Close()
@@ -573,7 +586,9 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 		}
 		// Canonical preparation scans the inner immutable staged entries. A
 		// second payload builder would duplicate their bytes and retention.
-		b := &commandWALPublicBatch{db: tdb, inner: inner, cow: true, cowLease: lease, payloadBypass: true}
+		owner := &commandWALPublicCOWOwner{batch: commandWALPublicBatch{db: tdb, inner: inner, payloadBypass: true}, state: commandWALPublicCOWState{cow: true, lease: lease}}
+		b := &owner.batch
+		b.cowState = &owner.state
 		b.disableInnerStreamingBypass()
 		b.rebindInnerViewers()
 		return b
@@ -605,7 +620,7 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 	if b == nil {
 		return
 	}
-	if b.cow {
+	if b.isCOW() {
 		b.payloadBypass = true
 		b.hasDeleteRange = false
 		return
@@ -744,13 +759,13 @@ func (b *commandWALPublicBatch) SetViewWithReplayBytes(key, value []byte) (keyVi
 }
 
 func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, useInnerView bool) (keyView, valueView []byte, err error) {
-	if b != nil && b.batchError != nil {
-		return nil, nil, b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return nil, nil, b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return nil, nil, ErrClosed
 	}
-	if b.cow && retainReplayViews {
+	if b.isCOW() && retainReplayViews {
 		return nil, nil, caching.ErrCOWUnsupported
 	}
 	b.preparePayloadForAppend()
@@ -767,7 +782,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		b.dirty = true
 		return nil, nil, nil
 	}
-	if b.cow || b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
+	if b.isCOW() || b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
 		if useInnerView {
 			err = b.innerSetView(key, value)
 		} else {
@@ -836,13 +851,13 @@ func (b *commandWALPublicBatch) DeleteViewWithReplayBytes(key []byte) (keyView [
 }
 
 func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInnerView bool) (keyView []byte, err error) {
-	if b != nil && b.batchError != nil {
-		return nil, b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return nil, b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	if b.cow && retainReplayViews {
+	if b.isCOW() && retainReplayViews {
 		return nil, caching.ErrCOWUnsupported
 	}
 	b.preparePayloadForAppend()
@@ -858,7 +873,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		b.dirty = true
 		return nil, nil
 	}
-	if b.cow || b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
+	if b.isCOW() || b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
 		if useInnerView {
 			err = b.innerDeleteView(key)
 		} else {
@@ -892,8 +907,8 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 }
 
 func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
-	if b != nil && b.batchError != nil {
-		return b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return ErrClosed
@@ -1041,8 +1056,8 @@ func (b *commandWALPublicBatch) WriteSync() error {
 }
 
 func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error) {
-	if b != nil && b.batchError != nil {
-		return b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return ErrClosed
@@ -1176,7 +1191,7 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 }
 
 func (b *commandWALPublicBatch) Close() error {
-	if b != nil && b.batchError != nil {
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
 		return nil
 	}
 	if b == nil || b.inner == nil {
@@ -1191,7 +1206,7 @@ func (b *commandWALPublicBatch) Close() error {
 	keepPayload := false
 	if b.payloadLeasedToMemtable {
 		payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
-	} else if !b.cow {
+	} else if !b.isCOW() {
 		keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
 	}
 	b.inner = nil
@@ -1213,8 +1228,8 @@ func (b *commandWALPublicBatch) Close() error {
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = true
-	if b.cowLease != nil {
-		b.cowLease.Close()
+	if b.cowState != nil && b.cowState.lease != nil {
+		b.cowState.lease.Close()
 	}
 	if owner != nil && keepPayload {
 		owner.commandWALPublicPayloadPool.Put(payload)
@@ -1223,7 +1238,7 @@ func (b *commandWALPublicBatch) Close() error {
 }
 
 func (b *commandWALPublicBatch) Reset() {
-	if b != nil && b.batchError != nil {
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
 		return
 	}
 	if b == nil || b.inner == nil {
@@ -1287,7 +1302,7 @@ func (b *commandWALPublicBatch) knownZeroValue(value []byte) bool {
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	// COW production always uses canonical prepared entry scan, never a second
 	// independently allocated payload encoder.
-	if b != nil && b.cow {
+	if b != nil && b.isCOW() {
 		return nil, caching.ErrCOWUnsupported
 	}
 	if b == nil || b.inner == nil {
@@ -1518,8 +1533,8 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
-	if b != nil && b.batchError != nil {
-		return b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return nil
@@ -1528,8 +1543,8 @@ func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *commandWALPublicBatch) GetByteSize() (int, error) {
-	if b != nil && b.batchError != nil {
-		return 0, b.batchError
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return 0, b.cowState.batchError
 	}
 	if b == nil || b.inner == nil {
 		return 0, nil
