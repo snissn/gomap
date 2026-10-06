@@ -1,0 +1,3 @@
+  9b0fa0 T github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotBoundedWithValueLogPublicationLockHeld
+  9b1f20 T github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotBoundedWithValueLogPublicationLockHeld.deferwrap1
+  9b1ec0 T github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotBoundedWithValueLogPublicationLockHeld.func1

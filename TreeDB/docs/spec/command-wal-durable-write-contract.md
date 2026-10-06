@@ -44,6 +44,25 @@ command WAL solely in userspace. Explicit `SetSync`, `DeleteSync` and
 `Batch.WriteSync` opt up to the durable boundary regardless of the relaxed
 ordinary ACK class. Neither class requires a backend tree flush or checkpoint.
 
+## Explicit immutable COW cache ordering
+
+Selecting `MemtableMode="cow_btree"` changes cached installation, not the durable
+return boundary above. It prepares every changed shard and the complete cut
+before append. The existing intent encodes canonical RID/revision operations
+and captures its dependency closure; a pre-append finalizer validates the staged
+pointer/revision identity and retains separate generation read owners.
+Self-contained `SetMaterializedRID` frames still require live read owners even
+when their WAL external closure is nil. WAL debt owns its own resources.
+
+Producer buffer flush establishes pointer readability, not file/name sync or
+command durability. After the existing frame/sync frontier, the WAL barrier is
+released and the prepared cut installs once without allocation or rebuilding.
+Readers acquire the complete old or new cut. Capacity/unsupported refusal is
+pre-append; later failures retain existing ambiguity/poison/reopen semantics.
+No command payload is re-encoded for COW. The
+[COW publication contract](cow-cache-publication.md) also covers accepted backend
+flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
+
 ## Current ordered paths
 
 ### Durable singleton `SetSync`

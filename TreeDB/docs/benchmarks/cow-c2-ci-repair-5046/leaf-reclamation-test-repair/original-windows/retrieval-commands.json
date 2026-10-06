@@ -1,0 +1,14 @@
+{
+  "commands": [
+    "gh api repos/snissn/gomap/actions/jobs/112196498661/logs",
+    "gh api repos/snissn/gomap/actions/artifacts/11402094450/zip",
+    "gh api repos/snissn/gomap/actions/jobs/112196498661",
+    "gh api repos/snissn/gomap/actions/artifacts/11402094450"
+  ],
+  "exit_code": 0,
+  "zip_extracted_literal_names": [
+    "treedb-test.jsonl",
+    "treedb-test.jsonl.summary.md"
+  ],
+  "mutations": "private artifact writes only"
+}

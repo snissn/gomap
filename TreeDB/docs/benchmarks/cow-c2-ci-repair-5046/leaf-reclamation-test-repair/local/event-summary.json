@@ -1,0 +1,140 @@
+{
+  "normal": {
+    "test_action_counts": {
+      "pass": 12
+    },
+    "package_action_counts": {
+      "pass": 1
+    },
+    "physical_removal_receipts": [
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=46.625\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.375\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=21.125\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.458\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.542\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.583\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=29.125\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=57.042\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.375\u00b5s"
+      }
+    ]
+  },
+  "race": {
+    "test_action_counts": {
+      "pass": 12
+    },
+    "package_action_counts": {
+      "pass": 1
+    },
+    "physical_removal_receipts": [
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=151.042\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=150.375\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=170\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=151.334\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=148.5\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=140.125\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=163.625\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=142.666\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=140.958\u00b5s"
+      }
+    ]
+  },
+  "safe": {
+    "test_action_counts": {
+      "pass": 12
+    },
+    "package_action_counts": {
+      "pass": 1
+    },
+    "physical_removal_receipts": [
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=20\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.542\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.875\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=22.125\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=19.041\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=18.875\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=25.875\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=18.542\u00b5s"
+      },
+      {
+        "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+        "output": "cow_public_review_regression_test.go:331: unused leaf physically reclaimed: polls=1 elapsed=20.709\u00b5s"
+      }
+    ]
+  }
+}

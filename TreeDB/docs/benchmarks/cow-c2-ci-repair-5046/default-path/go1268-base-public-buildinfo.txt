@@ -1,0 +1,10 @@
+/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-path-repair/bin/go1268-base-public.test: go1.26.8
+	path	github.com/snissn/gomap/TreeDB.test
+	mod	github.com/snissn/gomap	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	CGO_ENABLED=1
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1

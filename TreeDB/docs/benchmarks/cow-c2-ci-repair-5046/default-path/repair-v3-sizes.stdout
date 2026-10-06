@@ -1,0 +1,5 @@
+cache_raw=656 public_raw=560 cache_alloc=704 public_alloc=576
+Batch_state_raw=96 state_alloc=96
+Batch_owner_raw=752 owner_alloc=768
+commandWALPublicBatch_state_raw=32 state_alloc=32
+commandWALPublicBatch_owner_raw=592 owner_alloc=640

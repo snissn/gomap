@@ -1,0 +1,223 @@
+{
+  "raw": {
+    "rows": 540,
+    "cases": 180,
+    "raw_stream_files": 54,
+    "owned_rerun_derivatives_byte_identical": true,
+    "independent_rows_and_all_summary_ratio_scaling_values_exact": true,
+    "close_receipts": 360,
+    "private_binary_index_matches_metadata": true,
+    "all_zero_comparator_deltas": [
+      {
+        "repeat": 1,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 2,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 3,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 1,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 2,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 3,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 1024,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 1,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 2,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 3,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 1,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 2,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 3,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Inline64",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "btree"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 67.0
+      },
+      {
+        "repeat": 1,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Pointer4096",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 85.0
+      },
+      {
+        "repeat": 3,
+        "case": {
+          "profile": "no_wal_fast",
+          "layout": "Pointer4096",
+          "records": 2048,
+          "operation": "IncrementalWrite",
+          "numerator": "cow_btree",
+          "denominator": "append_only"
+        },
+        "metric": "allocs/op",
+        "absolute_delta": 85.0
+      }
+    ],
+    "time_range_utc": [
+      "2026-10-06T07:46:38.148862+00:00",
+      "2026-10-06T07:53:47.393829+00:00"
+    ],
+    "load_minmax_1min": [
+      2.87744140625,
+      6.3818359375
+    ]
+  },
+  "mvcc": {
+    "rows": 108,
+    "cases": 36,
+    "raw_stream_files": 36,
+    "owned_rerun_derivatives_byte_identical": true,
+    "independent_rows_and_all_summary_ratio_scaling_values_exact": true,
+    "close_receipts": 0,
+    "private_binary_index_matches_metadata": true,
+    "all_zero_comparator_deltas": [],
+    "time_range_utc": [
+      "2026-10-06T07:53:59.119188+00:00",
+      "2026-10-06T07:55:28.187838+00:00"
+    ],
+    "load_minmax_1min": [
+      2.83349609375,
+      3.50390625
+    ]
+  },
+  "all45_run_receipts_nonoverlapping": true,
+  "scope": "current measured packet reconstruction only; no cost acceptance/significance/hosted default or Windows waiver"
+}

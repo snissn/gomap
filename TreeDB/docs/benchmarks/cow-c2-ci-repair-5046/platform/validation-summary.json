@@ -1,0 +1,409 @@
+{
+  "validation-v3": {
+    "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98",
+    "file_count": 7286,
+    "no_source_drift": true,
+    "receipts": [
+      {
+        "label": "normal-valuelog",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-run",
+          "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+          "./TreeDB/internal/valuelog"
+        ],
+        "started": "2026-10-06T07:26:17.722192+00:00",
+        "finished": "2026-10-06T07:26:20.257438+00:00",
+        "elapsed_seconds": 2.5350952079999995,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "normal-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-run",
+          "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:26:20.257800+00:00",
+        "finished": "2026-10-06T07:26:35.184649+00:00",
+        "elapsed_seconds": 14.926809166000002,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "normal-public",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-run",
+          "^TestCOWPublic(SelectedSourceRewriteKeepsOldCuts|ModeledInterruptedDependencyAndRootPublicationCuts)$",
+          "./TreeDB"
+        ],
+        "started": "2026-10-06T07:26:35.185234+00:00",
+        "finished": "2026-10-06T07:26:58.577438+00:00",
+        "elapsed_seconds": 23.392096917000003,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "race-valuelog",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-race",
+          "-run",
+          "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+          "./TreeDB/internal/valuelog"
+        ],
+        "started": "2026-10-06T07:26:58.577985+00:00",
+        "finished": "2026-10-06T07:27:02.473436+00:00",
+        "elapsed_seconds": 3.895444417,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "race-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-race",
+          "-run",
+          "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:27:02.473787+00:00",
+        "finished": "2026-10-06T07:27:23.734742+00:00",
+        "elapsed_seconds": 21.26085254200001,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "race-public",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-race",
+          "-run",
+          "^TestCOWPublic(SelectedSourceRewriteKeepsOldCuts|ModeledInterruptedDependencyAndRootPublicationCuts)$",
+          "./TreeDB"
+        ],
+        "started": "2026-10-06T07:27:23.735181+00:00",
+        "finished": "2026-10-06T07:28:13.907249+00:00",
+        "elapsed_seconds": 50.171796625,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "safe-valuelog",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-tags=treedb_safe",
+          "-run",
+          "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+          "./TreeDB/internal/valuelog"
+        ],
+        "started": "2026-10-06T07:28:13.907883+00:00",
+        "finished": "2026-10-06T07:28:15.477378+00:00",
+        "elapsed_seconds": 1.5695174159999965,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "safe-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-tags=treedb_safe",
+          "-run",
+          "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:28:15.477879+00:00",
+        "finished": "2026-10-06T07:28:34.122815+00:00",
+        "elapsed_seconds": 18.64489883399999,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      },
+      {
+        "label": "safe-public",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-tags=treedb_safe",
+          "-run",
+          "^TestCOWPublic(SelectedSourceRewriteKeepsOldCuts|ModeledInterruptedDependencyAndRootPublicationCuts)$",
+          "./TreeDB"
+        ],
+        "started": "2026-10-06T07:28:34.123684+00:00",
+        "finished": "2026-10-06T07:29:01.641531+00:00",
+        "elapsed_seconds": 27.517722416999987,
+        "exit": 0,
+        "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+      }
+    ],
+    "files": {
+      "normal-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normal-cache.stdout": "03d3c5315e66b155549239d41d507522a7e69ed79e5ee0a2444f0ebc7db3ec9e",
+      "normal-public.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normal-public.stdout": "6b4a4f5d57c3a3d64f7d285ec831100aa584b2b512c10456b90ee769974976fd",
+      "normal-valuelog.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normal-valuelog.stdout": "2c8d102a8995fec0f730feffe3ecd25581bfd4912cc6f13048caa7c4aaefd9dd",
+      "race-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "race-cache.stdout": "ce85c9702dd4a78b81c87f5cd2f8e35544ac75ac9f51b4b82fe41d94a3a6df17",
+      "race-public.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "race-public.stdout": "fa2b786d14dad0b24edc773771306b12600a9c6655f9d343af5a30e8b6ef3884",
+      "race-valuelog.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "race-valuelog.stdout": "e1e253ad355c5a2d3a513fff9ae28ff0d1060d5f2bfb77793782370b83997c0d",
+      "receipts.json": "3984e1db11ea9acbc294b2e48794276355ada975d59dd308d760e04b2f9b3a41",
+      "runtime.patch": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "safe-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "safe-cache.stdout": "889716da1b2f6434a6308c78eb653a53391d9c8040235dc462389a6cd3f49a12",
+      "safe-public.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "safe-public.stdout": "351f09a613dfa3b9564914c4cdf0962c776c8385f8637f25fc118a16cc913674",
+      "safe-valuelog.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "safe-valuelog.stdout": "24660c645412a8caa01326c225ecf971c3ddcff678e6375d982993bc5e5160a7",
+      "source-drift.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "source-identity-after.json": "e75cf3ecdcb0bc0658434f043c894bcf17c02598bebad6e620fab4c1dd2766c5",
+      "source-identity-before.json": "e75cf3ecdcb0bc0658434f043c894bcf17c02598bebad6e620fab4c1dd2766c5"
+    },
+    "test_events": {
+      "normal-cache.stdout": {
+        "pass": 12,
+        "skip": 0,
+        "fail": 0
+      },
+      "normal-public.stdout": {
+        "pass": 41,
+        "skip": 0,
+        "fail": 0
+      },
+      "normal-valuelog.stdout": {
+        "pass": 43,
+        "skip": 0,
+        "fail": 0
+      },
+      "race-cache.stdout": {
+        "pass": 12,
+        "skip": 0,
+        "fail": 0
+      },
+      "race-public.stdout": {
+        "pass": 41,
+        "skip": 0,
+        "fail": 0
+      },
+      "race-valuelog.stdout": {
+        "pass": 43,
+        "skip": 0,
+        "fail": 0
+      },
+      "safe-cache.stdout": {
+        "pass": 12,
+        "skip": 0,
+        "fail": 0
+      },
+      "safe-public.stdout": {
+        "pass": 41,
+        "skip": 0,
+        "fail": 0
+      },
+      "safe-valuelog.stdout": {
+        "pass": 43,
+        "skip": 0,
+        "fail": 0
+      }
+    }
+  },
+  "validation-v4-admission": {
+    "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+    "file_count": 7286,
+    "no_source_drift": true,
+    "receipts": [
+      {
+        "label": "normal-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-run",
+          "^TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain$",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:33:35.684629+00:00",
+        "finished": "2026-10-06T07:33:51.105585+00:00",
+        "elapsed_seconds": 15.420748500037007,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750"
+      },
+      {
+        "label": "race-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-race",
+          "-run",
+          "^TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain$",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:33:51.105917+00:00",
+        "finished": "2026-10-06T07:34:09.245579+00:00",
+        "elapsed_seconds": 18.139581958996132,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750"
+      },
+      {
+        "label": "safe-cache",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-tags=treedb_safe",
+          "-run",
+          "^TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain$",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:34:09.246166+00:00",
+        "finished": "2026-10-06T07:34:19.974323+00:00",
+        "elapsed_seconds": 10.728134666976985,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750"
+      }
+    ],
+    "files": {
+      "normal-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normal-cache.stdout": "651e029316122f3d2ec2da9bcfac6fa4148c04c4e07c34fe43f83bdff998cf47",
+      "race-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "race-cache.stdout": "9086a3885976bd0f075436e9c34918049c5a6bb9ef76954f33e5bc334ebd9f4c",
+      "receipts.json": "dd562926aa106eed939786820e79477007aed4895b6acec384ae86a9dc531fc6",
+      "runtime.patch": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "safe-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "safe-cache.stdout": "04c1ee0b6da0ecf02379cc562ddb9d0a3c014bfa30695cb46e565da4cdde9beb",
+      "source-drift.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "source-identity-after.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
+      "source-identity-before.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8"
+    },
+    "test_events": {
+      "normal-cache.stdout": {
+        "pass": 1,
+        "skip": 0,
+        "fail": 0
+      },
+      "race-cache.stdout": {
+        "pass": 1,
+        "skip": 0,
+        "fail": 0
+      },
+      "safe-cache.stdout": {
+        "pass": 1,
+        "skip": 0,
+        "fail": 0
+      }
+    }
+  },
+  "crosscompile-v4": {
+    "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+    "file_count": 7286,
+    "no_source_drift": true,
+    "receipts": [
+      {
+        "label": "windows-valuelog",
+        "command": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/valuelog.test.exe",
+          "-gcflags=github.com/snissn/gomap/TreeDB/internal/valuelog=-m=2",
+          "./TreeDB/internal/valuelog"
+        ],
+        "started": "2026-10-06T07:34:41.983366+00:00",
+        "finished": "2026-10-06T07:34:45.112857+00:00",
+        "elapsed_seconds": 3.12933908298146,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+        "binary_sha256": "6abcad1ed3bf11fde0bb5084cddb1717cfe67a416596295931eb114add282e4e"
+      },
+      {
+        "label": "windows-cache",
+        "command": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/cache.test.exe",
+          "./TreeDB/caching"
+        ],
+        "started": "2026-10-06T07:34:45.119850+00:00",
+        "finished": "2026-10-06T07:35:04.909980+00:00",
+        "elapsed_seconds": 19.790054374956526,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+        "binary_sha256": "959f8eb4192cca573b93792c96256f259a9ddd93bf52907038332d55c2c303e8"
+      },
+      {
+        "label": "windows-public",
+        "command": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/public.test.exe",
+          "./TreeDB"
+        ],
+        "started": "2026-10-06T07:35:04.930218+00:00",
+        "finished": "2026-10-06T07:35:25.254251+00:00",
+        "elapsed_seconds": 20.323967333999462,
+        "exit": 0,
+        "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+        "binary_sha256": "009a0e52a20d09a0f8a8fdbd20f820983d6dae6a80be60d090a1bbbc91069265"
+      }
+    ],
+    "files": {
+      "receipts.json": "174d08be140532e5d590b09444e132726a35a0c9c3945bb73dd2a8cf81844221",
+      "runtime.patch": "e74f37a8b02cacd124846a20b2f1384f1790e86ba0a37ae8c478a85cbaeaf26c",
+      "source-drift.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "source-identity-after.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
+      "source-identity-before.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
+      "windows-cache.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "windows-cache.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "windows-public.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "windows-public.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "windows-valuelog.stderr": "bb3b708161f4862381d97c91910b2c90b68218bebd77c7b5b770322db1ad1700",
+      "windows-valuelog.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "v3_to_v4_applicability": {
+    "changed_files": [
+      "TreeDB/caching/cow_read_metadata_admission_test.go"
+    ],
+    "only_affected_new_admission_test_reexecuted": true,
+    "all_other_source_unchanged": true
+  }
+}

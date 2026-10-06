@@ -1,0 +1,34 @@
+{
+  "at_utc": "2026-10-06T09:03:29.688981+00:00",
+  "parent_head": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "test_source_sha256": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+  "packet_entries_verified": 18,
+  "packet_manifest_sha256": "9ad95f1e40f5448b3292cb6730b8b9a30e4101ebda21036f199bd5ed12793dc8",
+  "actual_event_counts": {
+    "normal": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "exit_code": 0
+    },
+    "race": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "exit_code": 0
+    },
+    "safe": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "exit_code": 0
+    }
+  },
+  "literal_copies_verified": 23,
+  "runtime_delta_for_this_repair": [],
+  "actual_windows_execution": false,
+  "remaining_gates": [
+    "final-head Windows runtime",
+    "strict default performance",
+    "required CI",
+    "hosted review",
+    "guarded merge"
+  ]
+}

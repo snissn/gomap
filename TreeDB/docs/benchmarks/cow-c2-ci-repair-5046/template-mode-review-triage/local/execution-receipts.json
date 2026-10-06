@@ -1,0 +1,30 @@
+[
+  {
+    "name": "actual-cow-open",
+    "command": [
+      "go",
+      "run",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/template-mode-forwarding-repair/probe.go"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "GOWORK": "off",
+    "exit_code": 0,
+    "elapsed_seconds": 2.797818899154663
+  },
+  {
+    "name": "existing-template-policy",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-timeout=3m",
+      "-run=^TestSideStoreChunkSize_TemplateModeRequestIsIgnored$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "GOWORK": "off",
+    "exit_code": 0,
+    "elapsed_seconds": 2.81649112701416
+  }
+]

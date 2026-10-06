@@ -1,0 +1,99 @@
+diff --git a/TreeDB/cow_power_loss_test.go b/TreeDB/cow_power_loss_test.go
+index da1872024..d66ebc603 100644
+--- a/TreeDB/cow_power_loss_test.go
++++ b/TreeDB/cow_power_loss_test.go
+@@ -4,6 +4,9 @@ import (
+ 	"bytes"
+ 	"errors"
+ 	"fmt"
++	"path/filepath"
++	"strings"
++	"sync"
+ 	"testing"
+ 
+ 	treedb "github.com/snissn/gomap/TreeDB"
+@@ -163,21 +166,61 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
+ 				var cut *powerlossoracle.Model
+ 				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
+ 				resource := durabilitycut.ResourceAuxiliary
++				var observerMu sync.Mutex
++				active := true
++				matchingCuts := 0
+ 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
++					// Some value-log events omit Root and identify their owning
++					// database through an exact path instead.
++					eventRoot := event.Root
++					if eventRoot == "" {
++						eventRoot = event.Path
++					}
++					if eventRoot == "" {
++						eventRoot = event.NewPath
++					}
++					if eventRoot == "" {
++						eventRoot = event.OldPath
++					}
++					if eventRoot == "" && len(event.Paths) != 0 {
++						eventRoot = event.Paths[0]
++					}
++					rel, err := filepath.Rel(opts.Dir, eventRoot)
++					if err != nil || eventRoot == "" || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
++						return nil
++					}
++					observerMu.Lock()
++					defer observerMu.Unlock()
++					if !active {
++						return nil
++					}
+ 					if err := model.Observe(opts.Dir, event); err != nil {
+ 						return err
+ 					}
+-					if event.Point == point && cut == nil {
+-						cut = model.Clone()
+-						resource = event.Resource
++					if event.Point == point {
++						matchingCuts++
++						if cut == nil {
++							cut = model.Clone()
++							resource = event.Resource
++						}
++						// A pre-meta failure is retryable. A checkpoint waiter
++						// arriving after an attempt starts can trigger another
++						// attempt, so keep the interruption active until restore.
+ 						return cutErr
+ 					}
+ 					return nil
+ 				})
+ 				observing := true
++				deactivate := func() {
++					observerMu.Lock()
++					active = false
++					observerMu.Unlock()
++					restore()
++					observing = false
++				}
+ 				defer func() {
+ 					if observing {
+-						restore()
++						deactivate()
+ 					}
+ 				}()
+ 				value := bytes.Repeat([]byte("new-segment-persistent-value/"), 1024)
+@@ -197,8 +240,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
+ 				if acknowledged {
+ 					err = db.Checkpoint()
+ 				}
+-				restore()
+-				observing = false
++				deactivate()
+ 				if cut == nil {
+ 					t.Fatalf("real COW route emitted no %s boundary (operation=%v)", point, err)
+ 				}
+@@ -242,7 +284,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
+ 				if point == durabilitycut.AfterMetaSync && !present {
+ 					t.Fatal("completed meta sync lost grouped command")
+ 				}
+-				t.Logf("actual COW cut=%s resource=%s group_acknowledged=%t recovered_group=%t", point, resource, acknowledged, present)
++				t.Logf("actual COW cut=%s resource=%s matching_attempts=%d group_acknowledged=%t recovered_group=%t", point, resource, matchingCuts, acknowledged, present)
+ 			})
+ 		}
+ 	}

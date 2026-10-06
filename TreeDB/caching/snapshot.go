@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
@@ -33,6 +34,11 @@ import (
 // Snapshot pointers are single-use: after Close returns, callers must discard the
 // pointer and treat further use as invalid.
 type Snapshot struct {
+	cowCut          *cowReadCut
+	cowCache        *cowCache
+	cowPin          *memtable.COWView
+	cowReader       *cowReadWorkspace
+	cowReadMu       sync.Mutex
 	db              *DB
 	view            *memtableView
 	backend         *backenddb.Snapshot
@@ -44,12 +50,14 @@ type Snapshot struct {
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
 
-	closed     atomic.Bool
-	generation atomic.Uint64
-	finalized  atomic.Bool
-	readState  atomic.Uint64
-	iteratorMu sync.Mutex
-	iterators  map[*snapshotBoundIterator]struct{}
+	closed           atomic.Bool
+	generation       atomic.Uint64
+	finalized        atomic.Bool
+	readState        atomic.Uint64
+	iteratorMu       sync.Mutex
+	iterators        map[*snapshotBoundIterator]struct{}
+	cowIterators     *snapshotBoundIterator
+	cowIteratorCount uint64
 }
 
 type ownedReadScratch struct {
@@ -90,6 +98,8 @@ func putSnapshot(snap *Snapshot) {
 	if snap == nil {
 		return
 	}
+	snap.cowCut = nil
+	snap.cowPin = nil
 	snap.db = nil
 	snap.view = nil
 	snap.backend = nil
@@ -179,6 +189,9 @@ func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
+	if db.cow != nil {
+		return nil
+	}
 	if !db.backendReadValueLogCleanForSnapshotFastPath() {
 		return nil
 	}
@@ -212,6 +225,9 @@ func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
+	}
+	if db.cow != nil {
+		return db.acquireCOWSnapshot()
 	}
 	snapshotDebug := iteratorDebugEnabled.Load()
 	if snapshotDebug {
@@ -391,13 +407,20 @@ func (s *Snapshot) Close() error {
 
 func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.iteratorMu.Lock()
-	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+	if len(s.iterators) != 0 || s.cowIteratorCount != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
 		s.iteratorMu.Unlock()
 		return nil
 	}
 	s.iteratorMu.Unlock()
 	var err error
-	if s.backend != nil {
+	if s.cowCut != nil {
+		if s.cowReader != nil {
+			s.cowReader.close()
+			s.cowReader = nil
+		}
+		s.cowPin.Close()
+		s.db.cow.releaseCut(s.cowCut)
+	} else if s.backend != nil {
 		err = s.backend.Close()
 	}
 	if s.view != nil && s.db != nil {
@@ -629,6 +652,9 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
+	if reverse && s.cowCut != nil {
+		return nil, ErrCOWUnsupported
+	}
 	rootSnap := rootDomainIteratorSnapshotFromCachedSnapshot(s)
 	queue := rootSnap.immutables
 	var queueRangeSpans [][]batch.DeleteRange
@@ -725,6 +751,9 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, 
 // buildIteratorLocked accesses the snapshot's pinned view and backend and must
 // run while iteratorMu is held by bindNewIterator.
 func (s *Snapshot) buildIteratorLocked(start, end []byte, reverse bool) (merging.Iterator, error) {
+	if s.cowCache != nil {
+		return s.buildCOWIteratorLocked(start, end, reverse)
+	}
 	sources, err := s.iteratorSources(start, end, reverse)
 	if err != nil {
 		return nil, err
@@ -753,6 +782,11 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 	return s.iterate(start, end, true, fn)
 }
 
+func invokeSnapshotIterateCallback(fn func(key, value []byte) error, key, value []byte, lease *memtable.COWExternalLease) error {
+	defer lease.Close()
+	return fn(key, value)
+}
+
 func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) (err error) {
 	if err := s.beginRead(); err != nil {
 		return err
@@ -777,12 +811,24 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	for it.Valid() {
 		key := it.Key()
 		value := it.Value()
+		var callbackLease *memtable.COWExternalLease
+		if s.cowCache != nil {
+			callbackLease, err = s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(len(key))) + memtable.COWAllocationCharge(uint64(len(value))))
+			if err != nil {
+				iterErr = err
+				break
+			}
+			key = it.KeyCopy(nil)
+			value = it.ValueCopy(nil)
+		}
 		if err := it.Error(); err != nil {
+			callbackLease.Close()
 			iterErr = err
 			break
 		}
-		if err := fn(key, value); err != nil {
-			iterErr = err
+		callbackErr := invokeSnapshotIterateCallback(fn, key, value, callbackLease)
+		if callbackErr != nil {
+			iterErr = callbackErr
 			break
 		}
 		it.Next()
@@ -802,6 +848,10 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 	defer s.endRead()
 	key = normalizeRawKVPointKey(key)
+	if s.cowCut != nil {
+		out, _, err := s.cowGetVersionedAppendOpen(key, dst)
+		return out, err
+	}
 	// Critical fast path for parallel point reads:
 	// consult only mutable/immutable memtables first, then query published/backend
 	// directly via append APIs. This avoids a published GetEntry pre-read that can
@@ -925,6 +975,9 @@ func (s *Snapshot) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevisi
 	}
 	defer s.endRead()
 	key = normalizeRawKVPointKey(key)
+	if s.cowCut != nil {
+		return s.cowGetVersionedAppendOpen(key, dst)
+	}
 	oldLen := len(dst)
 	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
 	if found {
@@ -988,6 +1041,13 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	if s == nil {
 		return nil, backenddb.ErrClosed
 	}
+	if s.cowCache != nil {
+		out, err := s.GetAppend(key, nil)
+		if err == nil && out == nil {
+			out = []byte{}
+		}
+		return out, err
+	}
 	scratch := getOwnedReadScratch()
 	defer putOwnedReadScratch(scratch)
 
@@ -1014,6 +1074,10 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 
 func (s *Snapshot) getUnsafeOpen(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
+	if s.cowCut != nil {
+		out, _, err := s.cowGetVersionedAppendOpen(key, nil)
+		return out, err
+	}
 	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
@@ -1049,6 +1113,29 @@ func (s *Snapshot) getUnsafeOpen(key []byte) ([]byte, error) {
 // GetManyView calls fn once for each key with a read-only value view. Values
 // are valid only until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if s != nil && s.cowCache != nil {
+		if err := s.beginRead(); err != nil {
+			return err
+		}
+		s.endRead()
+		if fn == nil {
+			return errors.New("caching snapshot: GetManyView nil callback")
+		}
+		for i, key := range keys {
+			v, lease, found, err := s.cowViewCopy(key)
+			if err != nil {
+				return err
+			}
+			err = func() error {
+				defer lease.Close()
+				return fn(i, normalizeRawKVPointKey(key), v, found)
+			}()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if err := s.beginRead(); err != nil {
 		return err
 	}
@@ -1094,6 +1181,15 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 
 func (s *Snapshot) hasOpen(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
+	if s.cowCut != nil {
+		s.cowReadMu.Lock()
+		defer s.cowReadMu.Unlock()
+		entry, err := s.cowEntryLocked(key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return false, nil
+		}
+		return entry.Flags&node.FlagTombstone == 0 && err == nil, err
+	}
 	_, _, flags, found := s.lookupCachedRootDomainEntry(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
@@ -1121,7 +1217,7 @@ func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
-	if memtableViewHasRangeSpans(s.view) {
+	if memtableViewHasRangeSpans(s.view) || s.cowCut != nil {
 		for i, key := range keys {
 			ok, err := s.hasOpen(key)
 			if err != nil {
@@ -1223,6 +1319,31 @@ type prefixProbeRef struct {
 }
 
 func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	if s != nil && s.cowCache != nil {
+		if err := s.beginRead(); err != nil {
+			return nil, err
+		}
+		s.endRead()
+		out := make([]bool, len(prefixes))
+		for i, prefix := range prefixes {
+			// The first key >= prefix decides existence. An unbounded forward
+			// iterator avoids allocating an internal copy of the query prefix.
+			it, err := s.Iterator(prefix, nil)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = it.Valid() && bytes.HasPrefix(it.Key(), prefix)
+			err = it.Error()
+			closeErr := it.Close()
+			if err != nil {
+				return nil, err
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+		}
+		return out, nil
+	}
 	if err := s.beginRead(); err != nil {
 		return nil, err
 	}
@@ -1340,6 +1461,16 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	}
 	defer s.endRead()
 	key = normalizeRawKVPointKey(key)
+	if s.cowCut != nil {
+		s.cowReadMu.Lock()
+		defer s.cowReadMu.Unlock()
+		entry, err := s.cowEntryLocked(key)
+		if err == nil {
+			entry.Key = append([]byte(nil), entry.Key...)
+			entry.Value = append([]byte(nil), entry.Value...)
+		}
+		return entry, err
+	}
 	val, ptr, flags, revision, found := s.lookupQueueEntryWithRevision(key)
 	if found {
 		return snapshotRawKVLeafEntryWithRevision(key, val, ptr, flags, revision), nil
@@ -1355,6 +1486,9 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	if s != nil && s.cowCache != nil {
+		return s.GetEntry(key)
+	}
 	if err := s.beginRead(); err != nil {
 		return node.LeafEntry{}, err
 	}

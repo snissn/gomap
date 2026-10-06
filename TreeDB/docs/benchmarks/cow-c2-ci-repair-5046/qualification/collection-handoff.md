@@ -1,0 +1,12 @@
+Integrated source `974d1ce9bd5cd91d17f5851d53663bf71643b288` is passed the recorded affected functional checks and has a completed, strict-parser cost diagnostic. Root owns the performance disposition and hosted default-path CI acceptance.
+
+- Normal/race/treedb_safe: each 275 test/subcase pass events, one subprocess-helper skip, four package passes. Vet 0. Commands, separate raw streams, exits and full source proofs are sealed in the 19-file functional manifest.
+- RawKV: 27 serial runs, 540 rows, 180 matched cases; all 12/36-case groups match the exact anchored filter. FreshCapture 16x; CaptureReadRelease/Forward16/IncrementalWrite 128x; IncrementalWriteSync 16x. All 360 COW final-close receipts have positive historical peak and zero live charges/counts. Snapshot rotations are zero in every COW row.
+- MVCC: 18 serial runs, 108 rows, 36 matched cases; point and complete exact-key history at 128/256 fixed operations. Full-history visited/output means exactly 8.5/16.5. Store fences remain. No per-operation memory-drain claim is inferred from this fixture; actual root-package finalClose receipts above carry that proof.
+- Both analyzers exited 0 and verified every stdout/stderr hash and complete source identity after every run. All 7,330 files match. The additional post-collection type audit found 7,330 regular files, 123 executable and 7,207 non-executable Git modes, no symlinks/mismatches/extras/missing.
+
+The 90 rawstdout/stderr files and all repeat spreads are retained. The packets contain source/fixture/binary/environment/build/command/resource/load bindings. Full binaries, dependency dumps and process/foreign-argv snapshots stay private; the transferred private-input index binds their hashes without exposing content.
+
+These are sequential shared-host descriptive diagnostics. Neither repeated medians nor local default-read timing establish statistical significance or hosted CI acceptance. DirtyCheckpoint remains explicitly historical; there is no 974d timing claim for it. Original failed CI, earlier diagnostic variants, calibrated failures and historical 4add47 evidence remain separate and unchanged.
+
+Remote source: `/mnt/fast4tb/gomap-cow-execution-o2nauuzm/OWNED/c2-pr5069-integrated-974d/source`. Remote complete raw/MVCC packets use the same names as the local bounded packets. No source/harness/Git/GitHub edits were made. All owned Go/test/collector jobs finished; Linux185 is released.

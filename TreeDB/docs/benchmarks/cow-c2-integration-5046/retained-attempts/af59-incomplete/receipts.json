@@ -1,0 +1,252 @@
+[
+  {
+    "label": "r1-append_only-fresh",
+    "started_utc": "2026-10-06T03:23:49.950007+00:00",
+    "completed_utc": "2026-10-06T03:24:08.119279+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./append_only/././FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 18.169251012150198,
+    "load_before": [
+      1.72705078125,
+      3.177734375,
+      2.99365234375
+    ],
+    "user_seconds": 2.042725,
+    "system_seconds": 1.486553,
+    "child_max_rss_kib": 349604,
+    "log_sha256": "8acca0f5ef7276baa1538dc67132b9f1476cbb3aae5f77d0c2c86b7553dd7e7b",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-append_only-other",
+    "started_utc": "2026-10-06T03:24:08.696200+00:00",
+    "completed_utc": "2026-10-06T03:24:26.496189+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./append_only/././(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 17.799967790953815,
+    "load_before": [
+      2.4072265625,
+      3.232421875,
+      3.015625
+    ],
+    "user_seconds": 2.630915,
+    "system_seconds": 1.6576170000000001,
+    "child_max_rss_kib": 283660,
+    "log_sha256": "696ef0a1fd2df628732cfb861621ab7772e15d50096baf2e3fc0accaa80d5e4f",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-append_only-durability",
+    "started_utc": "2026-10-06T03:24:27.073150+00:00",
+    "completed_utc": "2026-10-06T03:24:53.352582+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./append_only/././(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 26.279408702626824,
+    "load_before": [
+      3.05810546875,
+      3.33154296875,
+      3.05322265625
+    ],
+    "user_seconds": 2.618058,
+    "system_seconds": 2.431054,
+    "child_max_rss_kib": 329444,
+    "log_sha256": "645d6f22db8f59c42b3d38063cbfacf9c19c0609c1df80d4c89b3b2630aa5b10",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-fresh",
+    "started_utc": "2026-10-06T03:24:53.929232+00:00",
+    "completed_utc": "2026-10-06T03:25:32.645274+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./btree/././FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 38.71602084580809,
+    "load_before": [
+      2.9638671875,
+      3.28759765625,
+      3.04541015625
+    ],
+    "user_seconds": 3.779792,
+    "system_seconds": 1.581833,
+    "child_max_rss_kib": 230972,
+    "log_sha256": "f8ef8ef17e5d436591dce9f7dcc622ce5e8ab8c2eed6dd297cff6e3551f7b2a3",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-other",
+    "started_utc": "2026-10-06T03:25:33.232952+00:00",
+    "completed_utc": "2026-10-06T03:26:13.202323+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./btree/././(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 39.96934648184106,
+    "load_before": [
+      3.32861328125,
+      3.34423828125,
+      3.07470703125
+    ],
+    "user_seconds": 2.893765,
+    "system_seconds": 1.327739,
+    "child_max_rss_kib": 112140,
+    "log_sha256": "e17634d76bdd5ab9db561a35c67c99d6b86bccc8bb18c5cec8b13be69652b1f1",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-durability",
+    "started_utc": "2026-10-06T03:26:13.781015+00:00",
+    "completed_utc": "2026-10-06T03:27:09.511628+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./btree/././(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 55.73059285385534,
+    "load_before": [
+      3.30078125,
+      3.33203125,
+      3.08251953125
+    ],
+    "user_seconds": 4.000055,
+    "system_seconds": 2.070738,
+    "child_max_rss_kib": 227968,
+    "log_sha256": "bbf72d22e15f50a75f3620dcfef047175f3996dce1e076778aeb04201a0549b8",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-fresh",
+    "started_utc": "2026-10-06T03:27:10.113103+00:00",
+    "completed_utc": "2026-10-06T03:27:31.257913+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./cow_btree/././FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 21.144786154851317,
+    "load_before": [
+      3.65234375,
+      3.453125,
+      3.140625
+    ],
+    "user_seconds": 2.154389,
+    "system_seconds": 0.883671,
+    "child_max_rss_kib": 222488,
+    "log_sha256": "42423d8ebac805582e4c63f8e1dc3b29ccfb6f6e9d76938b876e479bb59e57ad",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-other",
+    "started_utc": "2026-10-06T03:27:31.834974+00:00",
+    "completed_utc": "2026-10-06T03:27:55.077633+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./cow_btree/././(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 23.242637163959444,
+    "load_before": [
+      3.46142578125,
+      3.42333984375,
+      3.13720703125
+    ],
+    "user_seconds": 1.6307450000000001,
+    "system_seconds": 0.869116,
+    "child_max_rss_kib": 112140,
+    "log_sha256": "210ff593483413740e922e9161281b3c018493492fa13248ee71ce943c4ad07b",
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-durability",
+    "started_utc": "2026-10-06T03:27:55.653625+00:00",
+    "completed_utc": "2026-10-06T03:28:26.259371+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./cow_btree/././(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 30.605722818057984,
+    "load_before": [
+      3.49169921875,
+      3.4365234375,
+      3.14990234375
+    ],
+    "user_seconds": 2.26865,
+    "system_seconds": 1.197031,
+    "child_max_rss_kib": 217676,
+    "log_sha256": "eb6ef77acb044069903d5e16df059388ae355acbd2ff0d1e8322acfc1d7fcc15",
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-fresh",
+    "started_utc": "2026-10-06T03:28:26.840266+00:00",
+    "completed_utc": "2026-10-06T03:28:46.774334+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-af59d/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost/./cow_btree/././FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 1,
+    "elapsed_seconds": 19.934046077076346,
+    "load_before": [
+      3.3076171875,
+      3.39501953125,
+      3.14453125
+    ],
+    "user_seconds": 1.9569860000000001,
+    "system_seconds": 0.921886,
+    "child_max_rss_kib": 229012,
+    "log_sha256": "a78d799d4dd4ba7447a573e0a82ed96465b4a0ea98765da593c738292a8c674b",
+    "source_drift_after": []
+  }
+]

@@ -1,0 +1,1253 @@
+[
+  {
+    "Time": "2026-10-06T09:27:44.1028545Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts"
+  },
+  {
+    "Time": "2026-10-06T09:27:44.1028545Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts\n"
+  },
+  {
+    "Time": "2026-10-06T09:27:44.1028545Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:27:44.1028545Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:27:44.5362303Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-dependency-file-sync resource=command-wal group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:27:52.4649752Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync (8.36s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:27:52.4649752Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+    "Elapsed": 8.36
+  },
+  {
+    "Time": "2026-10-06T09:27:52.4649752Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:27:52.4649752Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:27:54.7339397Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-dependency-file-sync resource=command-wal group_acknowledged=false recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:02.3989815Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync (9.93s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:02.3989815Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+    "Elapsed": 9.93
+  },
+  {
+    "Time": "2026-10-06T09:28:02.3989815Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:28:02.3989815Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:02.5231199Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:10.1622427Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync (7.76s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:10.1622427Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+    "Elapsed": 7.76
+  },
+  {
+    "Time": "2026-10-06T09:28:10.1622427Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:28:10.1622427Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:10.2933312Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:17.9371762Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync (7.77s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:17.9377146Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+    "Elapsed": 7.77
+  },
+  {
+    "Time": "2026-10-06T09:28:17.9377146Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:28:17.9377146Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:18.2221446Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-index-data-sync resource=index group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:25.8487306Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync (7.91s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:25.849465Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+    "Elapsed": 7.91
+  },
+  {
+    "Time": "2026-10-06T09:28:25.849465Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:28:25.849465Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:26.1208508Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-index-data-sync resource=index group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:34.3936133Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync (8.54s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:34.3947843Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+    "Elapsed": 8.54
+  },
+  {
+    "Time": "2026-10-06T09:28:34.3947843Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:28:34.3947843Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:36.5048188Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:212: interruption classification err=<nil>\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:36.5286416Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+    "Output": "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write (2.13s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:36.5286416Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+    "Elapsed": 2.13
+  },
+  {
+    "Time": "2026-10-06T09:28:36.5286416Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:28:36.5286416Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:39.7687411Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-publication-seal-write resource=publication-seal group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:47.6504481Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write (11.12s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:47.6504481Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+    "Elapsed": 11.12
+  },
+  {
+    "Time": "2026-10-06T09:28:47.6504481Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:28:47.6504481Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:48.1165493Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-write resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:56.0908597Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write (8.44s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:56.0908597Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+    "Elapsed": 8.44
+  },
+  {
+    "Time": "2026-10-06T09:28:56.0914138Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:28:56.0914138Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:28:58.5192073Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-write resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:06.4287224Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write (10.34s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:06.4287224Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+    "Elapsed": 10.34
+  },
+  {
+    "Time": "2026-10-06T09:29:06.4287224Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:06.4287224Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:07.9305809Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-sync resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:15.5712193Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync (9.14s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:15.5712193Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+    "Elapsed": 9.14
+  },
+  {
+    "Time": "2026-10-06T09:29:15.5712193Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:15.5712193Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:15.8171344Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-sync resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:23.4517269Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync (7.88s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:23.4517269Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+    "Elapsed": 7.88
+  },
+  {
+    "Time": "2026-10-06T09:29:23.4517269Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:23.4517269Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:23.6321313Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-dependency-file-sync resource=command-wal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:31.2631104Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync (7.81s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:31.2631104Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+    "Elapsed": 7.81
+  },
+  {
+    "Time": "2026-10-06T09:29:31.2631104Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:31.2631104Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:31.4403894Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-dependency-file-sync resource=command-wal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:39.0727977Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync (7.81s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:39.0727977Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+    "Elapsed": 7.81
+  },
+  {
+    "Time": "2026-10-06T09:29:39.0733024Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:39.0733024Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:39.2064555Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:46.8428859Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync (7.77s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:46.8428859Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+    "Elapsed": 7.77
+  },
+  {
+    "Time": "2026-10-06T09:29:46.8428859Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:46.8428859Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:46.9743337Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:54.6241498Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync (7.78s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:54.6253431Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+    "Elapsed": 7.78
+  },
+  {
+    "Time": "2026-10-06T09:29:54.6253431Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:29:54.6253431Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:29:54.8560585Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-index-data-sync resource=index group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:02.5139791Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync (7.89s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:02.5139791Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+    "Elapsed": 7.89
+  },
+  {
+    "Time": "2026-10-06T09:30:02.5139791Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:30:02.5139791Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:02.7470319Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-index-data-sync resource=index group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:10.3862177Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync (7.87s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:10.3862177Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+    "Elapsed": 7.87
+  },
+  {
+    "Time": "2026-10-06T09:30:10.3862177Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:30:10.3862177Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:10.6102416Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-publication-seal-write resource=publication-seal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:18.2555188Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write (7.87s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:18.2555188Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+    "Elapsed": 7.87
+  },
+  {
+    "Time": "2026-10-06T09:30:18.2555188Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:30:18.2555188Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:18.4867181Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-publication-seal-write resource=publication-seal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:26.1256021Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write (7.87s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:26.1261851Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+    "Elapsed": 7.87
+  },
+  {
+    "Time": "2026-10-06T09:30:26.1261851Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:30:26.1261851Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:26.3692466Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-write resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:34.0135615Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write (7.89s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:34.0144521Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+    "Elapsed": 7.89
+  },
+  {
+    "Time": "2026-10-06T09:30:34.0144521Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:30:34.0144521Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:34.289454Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-write resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:42.0151194Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write (8.00s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:42.0158418Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+    "Elapsed": 8
+  },
+  {
+    "Time": "2026-10-06T09:30:42.0158418Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:30:42.0158418Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:46.230505Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-sync resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:53.9074878Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync (11.89s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:53.9074878Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+    "Elapsed": 11.89
+  },
+  {
+    "Time": "2026-10-06T09:30:53.9074878Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:30:53.9074878Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:30:54.351749Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-sync resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.0195776Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync (8.11s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.0195776Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+    "Elapsed": 8.11
+  },
+  {
+    "Time": "2026-10-06T09:31:02.0195776Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.0195776Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.2818442Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-dependency-file-sync resource=auxiliary group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.3959539Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync (0.38s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.3959539Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+    "Elapsed": 0.38
+  },
+  {
+    "Time": "2026-10-06T09:31:02.3959539Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.3959539Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.6367397Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-dependency-file-sync resource=auxiliary group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.6598794Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync (0.26s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.6605516Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+    "Elapsed": 0.26
+  },
+  {
+    "Time": "2026-10-06T09:31:02.6605516Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.6605516Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.953202Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.9669587Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync (0.31s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.9669587Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+    "Elapsed": 0.31
+  },
+  {
+    "Time": "2026-10-06T09:31:02.9669587Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:02.9669587Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.2286482Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-new-file-directory-sync resource=value-log group_acknowledged=false recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.2437273Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync (0.28s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.2437273Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+    "Elapsed": 0.28
+  },
+  {
+    "Time": "2026-10-06T09:31:03.2437273Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.2437273Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.5276568Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-index-data-sync resource=index group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.5672199Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync (0.32s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.5672199Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+    "Elapsed": 0.32
+  },
+  {
+    "Time": "2026-10-06T09:31:03.5672199Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.5672199Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.8368292Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-index-data-sync resource=index group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.858026Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync (0.29s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.858026Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+    "Elapsed": 0.29
+  },
+  {
+    "Time": "2026-10-06T09:31:03.8583451Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:31:03.8583451Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.1276412Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-publication-seal-write resource=publication-seal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.1543528Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write (0.30s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.1543528Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+    "Elapsed": 0.3
+  },
+  {
+    "Time": "2026-10-06T09:31:04.1543528Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.1543528Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.4437483Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-publication-seal-write resource=publication-seal group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.467917Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write (0.31s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.467917Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+    "Elapsed": 0.31
+  },
+  {
+    "Time": "2026-10-06T09:31:04.467917Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.467917Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.748779Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-write resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.7670846Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write (0.30s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.7675351Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+    "Elapsed": 0.3
+  },
+  {
+    "Time": "2026-10-06T09:31:04.7675351Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write"
+  },
+  {
+    "Time": "2026-10-06T09:31:04.7675351Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.0682386Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-write resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.1002979Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write (0.33s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.1002979Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+    "Elapsed": 0.33
+  },
+  {
+    "Time": "2026-10-06T09:31:05.101049Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.101049Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.5208738Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=before-meta-sync resource=meta group_acknowledged=true recovered_group=false\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.5465188Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync (0.45s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.5465188Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+    "Elapsed": 0.45
+  },
+  {
+    "Time": "2026-10-06T09:31:05.5465188Z",
+    "Action": "run",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.5465188Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+    "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.9088182Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+    "Output": "    cow_power_loss_test.go:245: actual COW cut=after-meta-sync resource=meta group_acknowledged=true recovered_group=true\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.9412559Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+    "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync (0.39s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.9417843Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+    "Elapsed": 0.39
+  },
+  {
+    "Time": "2026-10-06T09:31:05.9417843Z",
+    "Action": "output",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+    "Output": "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts (201.84s)\n"
+  },
+  {
+    "Time": "2026-10-06T09:31:05.9417843Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB",
+    "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+    "Elapsed": 201.84
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "host": "Linux185",
+  "toolchain": "Go1.26.3",
+  "runner": "run-gates.sh",
+  "commands_owner": "sole C2 writer",
+  "purpose": "third narrow successor qualification plus zero-byte entry normalization compatibility repair",
+  "stages": [
+    "full-source/no-extra initial proof",
+    "actual successor witnesses",
+    "affected normal",
+    "affected race",
+    "affected treedb_safe",
+    "three-package vet",
+    "full-source/no-extra final proof"
+  ],
+  "capture": "git archive of committed source; no .git; 6476 exact regular-file hashes; archive hash retained by proofs",
+  "claims_excluded": [
+    "performance",
+    "whole repository test pass",
+    "C3 Store fence removal",
+    "C4 sustained workload",
+    "M7 qualification"
+  ],
+  "historical_failed_attempt": "8d743 initial exit1 preserved; subsequent stages unexecuted"
+}

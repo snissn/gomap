@@ -1,0 +1,17 @@
+{
+  "candidate": "8d7436d8745faf5c0cb79d1a11bdd7b40ad8a414",
+  "stage": "initial",
+  "exit": 1,
+  "files": {
+    "source-identity.json": "0b03c454abadfd1bf130dc5cf1c46e48ec929d30b50789db56201706b7be48b1",
+    "run-gates.sh": "22364312cea52a04d6445b3429d141f76db61d9dbbe51eb27daae758e00883a6",
+    "verify.py": "6d0522f7744f5731a56de6d73b925d2d95c3b3978f711a9ec0ab27f56e99e31c",
+    "goenv.json": "7927d4c543f033facbb9f681b1b392d652b95919a8a8ecd229e20ac5e14593f5",
+    "go-version.txt": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7",
+    "initial-source-check.json": "b9cf10ddeea8bd533a5a3d27d82982f47044cbae1da474ec3aa1e6c016a38c5f",
+    "initial.json": "e225cd41817f0c62ce2fbe187fa35fe7be6146a44fbe7b516e2023ebe04a2bc6",
+    "initial-exit.tsv": "40736f020f4a4dd7045eebd4bf89acbe6cbc84900d7fc62d79e6dc44719184fc"
+  },
+  "interpretation": "Real COW Set(nil,nil) compatibility failure before successor probe; normalization lost by zero-byte arena slice. Later normal/race/safe/vet stages were not executed.",
+  "repair": "bc3f3fc47 reuses existing nonnil-empty key/value sentinels after arena slicing, without native planner or allocation changes."
+}

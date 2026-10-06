@@ -1,0 +1,12 @@
+{
+  "go_version": "go version go1.26.0 darwin/arm64",
+  "go_env": {
+    "GOARCH": "arm64",
+    "GOCACHE": "/Users/michaelseiler/Library/Caches/go-build",
+    "GOMODCACHE": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod",
+    "GOOS": "darwin",
+    "GOROOT": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64",
+    "GOVERSION": "go1.26.0",
+    "GOWORK": "off"
+  }
+}

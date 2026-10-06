@@ -1,0 +1,24 @@
+{
+  "commit": "28216b4585b5d67faed1e57675c3d09e73d24a24",
+  "git_tree": "9f37d0d3588444f16dd398a423c58f1df13ba74d",
+  "source_files": 6457,
+  "af59_full_git_verified_manifest_reused": true,
+  "runtime_overlay_exact_git_blob_checks": {
+    "TreeDB/caching/db.go": "b43f8bcbd48508fe8172420dd3822cb75d751dd3a5b8455bf35d9ebe9367eb4f",
+    "TreeDB/cow_close_frontier_test.go": "bac950e471d0d3ae4505a89e330494356b78aba74bbf2f00b16951404a35ad9e"
+  },
+  "changed_documentation_excluded_from_execution_identity": true,
+  "raw_sha256": {
+    "fixed-normal.json": "8a915f07fccc0fc71d672b8931ef14e3815321a65fb17134998321a1c530f177",
+    "fixed-race.json": "c38ab4cee6aa54f88b6032ddc221c1e6c70c4cb684673bddeaa2e5bdf6ec32d8",
+    "fixed-safe.json": "c877548502a8856beb60487873ac3cd86bd280ab810517069acbfe30c270fbdd"
+  },
+  "parsed_test_events": {
+    "normal": 27,
+    "race": 75,
+    "safe": 69
+  },
+  "package_passes_each": 2,
+  "post_run_drift": [],
+  "scope": "focused Close repair only; final public/lazy candidate pending"
+}

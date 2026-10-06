@@ -1,0 +1,46 @@
+{
+  "created_utc": "2026-10-06T05:10:05.489441+00:00",
+  "scope": "bounded C2 integration diagnostic only",
+  "source_tree_sha256": "c50cf00ef056bd1cca78e80c02cf5df79deb961915290d161d139b5aa98a0d1f",
+  "fixture_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+  "GOMAXPROCS": 12,
+  "original_memory_controls_removed": {
+    "GOGC": null,
+    "GOMEMLIMIT": null
+  },
+  "orders": [
+    [
+      "append_only",
+      "btree",
+      "cow_btree"
+    ],
+    [
+      "cow_btree",
+      "btree",
+      "append_only"
+    ],
+    [
+      "btree",
+      "append_only",
+      "cow_btree"
+    ]
+  ],
+  "FreshCapture_operations": 16,
+  "other_operations": 128,
+  "durability_operations": 16,
+  "fixtures": "three profiles, Inline64/Pointer4096, N1024/N2048",
+  "noise_policy": "retain every run; describe repeat spread; no significance or sustained claim",
+  "allocation_scope": "testing timed B/op and allocs/op; caller setup excluded",
+  "rss_scope": "maximum child RSS includes fixture construction, all cases and teardown",
+  "host": {
+    "system": "Linux",
+    "node": "mikers-B560-DS3H-AC-Y1",
+    "release": "6.8.0-138-generic",
+    "version": "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "cpu_count": 12,
+  "runner_gate": "coordinator must serialize this collection with other owned validations",
+  "stream_policy": "separate retained stdout and stderr, each bound by receipt hash"
+}

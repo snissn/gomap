@@ -1,0 +1,1345 @@
+{
+  "actual_order_markers_only_no_process_argv": [
+    {
+      "at": "2026-10-06T09:17:36+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:39+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:42+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:43+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:43+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:46+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:49+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:51+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:54+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:56+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 1
+    },
+    {
+      "at": "2026-10-06T09:17:59+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:02+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:05+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:06+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:07+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:09+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:12+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:15+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:17+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:20+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 2
+    },
+    {
+      "at": "2026-10-06T09:18:22+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:25+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:28+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:29+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:29+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:32+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:35+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:37+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:40+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:43+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 3
+    },
+    {
+      "at": "2026-10-06T09:18:45+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:48+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:51+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:52+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:52+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:55+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:18:58+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:19:00+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:19:03+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:19:05+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 4
+    },
+    {
+      "at": "2026-10-06T09:19:08+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:11+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:14+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:14+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:15+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:18+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:20+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:23+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:26+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:28+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 5
+    },
+    {
+      "at": "2026-10-06T09:19:31+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:34+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:37+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:37+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:38+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:41+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:43+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:46+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:49+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:51+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 6
+    },
+    {
+      "at": "2026-10-06T09:19:54+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:19:56+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:19:59+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:00+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:01+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:04+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:06+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:09+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:12+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:14+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 7
+    },
+    {
+      "at": "2026-10-06T09:20:16+00:00",
+      "group": "get_versioned",
+      "revision": "candidate",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:19+00:00",
+      "group": "get_versioned",
+      "revision": "baseline",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:22+00:00",
+      "group": "batch_write",
+      "revision": "candidate",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:23+00:00",
+      "group": "batch_write",
+      "revision": "baseline",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:24+00:00",
+      "group": "snapshot_seek",
+      "revision": "candidate",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:26+00:00",
+      "group": "snapshot_seek",
+      "revision": "baseline",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:29+00:00",
+      "group": "repeated_iterator",
+      "revision": "candidate",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:32+00:00",
+      "group": "repeated_iterator",
+      "revision": "baseline",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:35+00:00",
+      "group": "durable_sync",
+      "revision": "candidate",
+      "sample": 8
+    },
+    {
+      "at": "2026-10-06T09:20:37+00:00",
+      "group": "durable_sync",
+      "revision": "baseline",
+      "sample": 8
+    }
+  ],
+  "artifact_id": 11401980581,
+  "balanced_AB_BA_pairs_verified": 40,
+  "baseline_sha": "edbd68d34b0fdf7152a498b87d373576de029721",
+  "binary_equivalence_waiver_used": false,
+  "candidate_sha": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "decision": "ACCEPT",
+  "groups": 5,
+  "historical_974_cost_scope": "Separate opt-in experimental diagnostic; not evidence of this current hosted gate",
+  "job": {
+    "completed_at": "2026-10-06T09:20:43Z",
+    "conclusion": "success",
+    "head_sha": "4403776d10b6ac82eb9e1839f437f59a78058816",
+    "html_url": "https://github.com/snissn/gomap/actions/runs/37441320552/job/112196498298",
+    "id": 112196498298,
+    "name": "mvcc raw-path gate (linux)",
+    "run_id": 37441320552,
+    "started_at": "2026-10-06T09:15:01Z",
+    "status": "completed"
+  },
+  "measurement_pass": true,
+  "parser_calibration": "Initial independent parser rejected actual custom metric pairs in durable benchmark rows before emitting a verdict; corrected parser validates all metric pairs and extracts the exact gate fields. No benchmark values changed.",
+  "private_input_bindings": {
+    "baseline.txt": "f1690aa6a43cf651c8c5b9c45aaf06296b49ca21158d2b5b312c5603f2756be2",
+    "binary-sha256.txt": "1dcfa84e50dddcfb5da2f54c70d84d075e0929e85375c9ea000ef86cd820b899",
+    "candidate.txt": "fa9f4abadfa7ed59237c5d23f07c6f7bdbef4cd762ad6a4fc2fb356fdefb8dba",
+    "environment.txt": "fa6c7a5d4cb5d42e8c7564e6420e23260289581d8820734f7d06bc0811bc82ac",
+    "processes.txt": "5be2bc2e1aae6a96dd4a40a9814561d322df659adece8d57d6ab0033cf453727",
+    "summary.json": "9a3ee79615dda0a1f0b54c7ea590aa7d56fcc0be2053859653d4cf51b699e31e",
+    "summary.md": "ac0d14436ba82a9c2aa8f331cf683ffc2006aa08e5b80427e8a2e3a544c14502"
+  },
+  "reanalysis_script_sha256": "febd7d7168afec61687bc591648c17951c83ed303cd84b35412048da62724a81",
+  "reported_executable_references": {
+    "files": {
+      "baseline-caching.test": "dcb73a53abc60fe622f8f48d694611bce661a2ff56cbecb1f8ee3b31aff7ebf1",
+      "baseline-db.test": "254417d6df230fc850c17aaeed912859f9c8c387498434837b1fa4e2f60e994e",
+      "baseline-treedb.test": "4121b4e7a650757d741ea6b39b11c54ce9efcdfe50e8bea3091f8e7f9352d995",
+      "candidate-caching.test": "137c020d27a62c234b3847dc5bdba916e9602b96dc4ace515a5c97b4b12d58cc",
+      "candidate-db.test": "eb25b812c44c76cd3f3249824744bf7035081ae71b8ced1683e1473e43fd495d",
+      "candidate-treedb.test": "f7ad4a1fd651942f945f59946805eaa2bff1ceeaac5c3b5ef808d24188c87350"
+    },
+    "independently_rehashed_executables": false,
+    "limitation": "The six actual executables were not transferred; digest references agree between retained manifest and summary, but actual executable bytes cannot be independently rehashed."
+  },
+  "results": [
+    {
+      "allocs_pass": true,
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 434.75
+      },
+      "baseline_samples": [
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5283304,
+          "line": 5,
+          "ns_per_op": 456.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5652999,
+          "line": 35,
+          "ns_per_op": 432.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5335128,
+          "line": 65,
+          "ns_per_op": 434.0
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5513276,
+          "line": 95,
+          "ns_per_op": 435.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5673014,
+          "line": 125,
+          "ns_per_op": 417.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5592660,
+          "line": 155,
+          "ns_per_op": 433.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5304675,
+          "line": 185,
+          "ns_per_op": 438.2
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5567899,
+          "line": 215,
+          "ns_per_op": 437.3
+        }
+      ],
+      "benchmark": "BenchmarkGetVersioned",
+      "binary_package": "db",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 425.0
+      },
+      "candidate_samples": [
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5375466,
+          "line": 5,
+          "ns_per_op": 419.2
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5428303,
+          "line": 35,
+          "ns_per_op": 415.6
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5494237,
+          "line": 65,
+          "ns_per_op": 432.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5628616,
+          "line": 95,
+          "ns_per_op": 420.8
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5694848,
+          "line": 125,
+          "ns_per_op": 413.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5533206,
+          "line": 155,
+          "ns_per_op": 429.2
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5484247,
+          "line": 185,
+          "ns_per_op": 436.3
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 5538822,
+          "line": 215,
+          "ns_per_op": 434.2
+        }
+      ],
+      "measurement_pass": true,
+      "no_binary_equivalence_waiver": true,
+      "ns_delta_percent": -2.2426682001150056,
+      "paired_ns_delta_percent": -1.0206413630448274,
+      "paired_ns_delta_percent_samples": [
+        -8.170865279299022,
+        -3.996303996303985,
+        -0.25345622119816724,
+        -3.3754305396096362,
+        -0.9580838323353325,
+        -1.0831988937543224,
+        -0.4335919671382915,
+        -0.7088954950834725
+      ],
+      "reported_binary_digests": {
+        "baseline": "254417d6df230fc850c17aaeed912859f9c8c387498434837b1fa4e2f60e994e",
+        "candidate": "eb25b812c44c76cd3f3249824744bf7035081ae71b8ced1683e1473e43fd495d"
+      },
+      "timing_pass": true
+    },
+    {
+      "allocs_pass": true,
+      "baseline": {
+        "allocs_per_op": 281.0,
+        "bytes_per_op": 152689.0,
+        "ns_per_op": 79586.0
+      },
+      "baseline_samples": [
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152690.0,
+          "iterations": 1000,
+          "line": 11,
+          "ns_per_op": 75524.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152690.0,
+          "iterations": 1000,
+          "line": 41,
+          "ns_per_op": 80190.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152689.0,
+          "iterations": 1000,
+          "line": 71,
+          "ns_per_op": 77951.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152689.0,
+          "iterations": 1000,
+          "line": 101,
+          "ns_per_op": 78982.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152689.0,
+          "iterations": 1000,
+          "line": 131,
+          "ns_per_op": 74901.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152689.0,
+          "iterations": 1000,
+          "line": 161,
+          "ns_per_op": 82881.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152688.0,
+          "iterations": 1000,
+          "line": 191,
+          "ns_per_op": 83124.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152688.0,
+          "iterations": 1000,
+          "line": 221,
+          "ns_per_op": 83272.0
+        }
+      ],
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "binary_package": "db",
+      "bytes_delta": 55.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 64,
+      "candidate": {
+        "allocs_per_op": 281.0,
+        "bytes_per_op": 152744.0,
+        "ns_per_op": 81382.5
+      },
+      "candidate_samples": [
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 11,
+          "ns_per_op": 74259.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 41,
+          "ns_per_op": 76689.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 71,
+          "ns_per_op": 85732.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 101,
+          "ns_per_op": 77164.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 131,
+          "ns_per_op": 94944.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152744.0,
+          "iterations": 1000,
+          "line": 161,
+          "ns_per_op": 85824.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152746.0,
+          "iterations": 1000,
+          "line": 191,
+          "ns_per_op": 81731.0
+        },
+        {
+          "allocs_per_op": 281.0,
+          "bytes_per_op": 152745.0,
+          "iterations": 1000,
+          "line": 221,
+          "ns_per_op": 81034.0
+        }
+      ],
+      "measurement_pass": true,
+      "no_binary_equivalence_waiver": true,
+      "ns_delta_percent": 2.25730656145553,
+      "paired_ns_delta_percent": -1.6753869417875045,
+      "paired_ns_delta_percent_samples": [
+        -1.6749642497749018,
+        -4.365881032547703,
+        9.981911713768898,
+        -2.3017902813299185,
+        26.759322305443177,
+        3.550874144858285,
+        -1.6758096338001072,
+        -2.6875780574502794
+      ],
+      "reported_binary_digests": {
+        "baseline": "254417d6df230fc850c17aaeed912859f9c8c387498434837b1fa4e2f60e994e",
+        "candidate": "eb25b812c44c76cd3f3249824744bf7035081ae71b8ced1683e1473e43fd495d"
+      },
+      "timing_pass": true
+    },
+    {
+      "allocs_pass": true,
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 204.5
+      },
+      "baseline_samples": [
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11869833,
+          "line": 17,
+          "ns_per_op": 201.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11407684,
+          "line": 47,
+          "ns_per_op": 203.1
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 10787262,
+          "line": 77,
+          "ns_per_op": 216.6
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11960578,
+          "line": 107,
+          "ns_per_op": 204.4
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11462466,
+          "line": 137,
+          "ns_per_op": 204.6
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11613102,
+          "line": 167,
+          "ns_per_op": 208.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11636852,
+          "line": 197,
+          "ns_per_op": 211.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11887722,
+          "line": 227,
+          "ns_per_op": 201.6
+        }
+      ],
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "binary_package": "treedb",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 212.0
+      },
+      "candidate_samples": [
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11587106,
+          "line": 17,
+          "ns_per_op": 210.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11508421,
+          "line": 47,
+          "ns_per_op": 213.5
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 10783274,
+          "line": 77,
+          "ns_per_op": 224.2
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11456316,
+          "line": 107,
+          "ns_per_op": 207.3
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11576713,
+          "line": 137,
+          "ns_per_op": 207.9
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11204455,
+          "line": 167,
+          "ns_per_op": 214.8
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11116424,
+          "line": 197,
+          "ns_per_op": 215.6
+        },
+        {
+          "allocs_per_op": 0.0,
+          "bytes_per_op": 0.0,
+          "iterations": 11315295,
+          "line": 227,
+          "ns_per_op": 208.6
+        }
+      ],
+      "measurement_pass": true,
+      "no_binary_equivalence_waiver": true,
+      "ns_delta_percent": 3.667481662591676,
+      "paired_ns_delta_percent": 3.1482700388277274,
+      "paired_ns_delta_percent_samples": [
+        4.466501240694787,
+        5.1206302314130925,
+        3.50877192982455,
+        1.4187866927592996,
+        1.6129032258064502,
+        2.8243178554332227,
+        1.7461066540821024,
+        3.472222222222232
+      ],
+      "reported_binary_digests": {
+        "baseline": "4121b4e7a650757d741ea6b39b11c54ce9efcdfe50e8bea3091f8e7f9352d995",
+        "candidate": "f7ad4a1fd651942f945f59946805eaa2bff1ceeaac5c3b5ef808d24188c87350"
+      },
+      "timing_pass": true
+    },
+    {
+      "allocs_pass": true,
+      "baseline": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 276.65
+      },
+      "baseline_samples": [
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8626980,
+          "line": 23,
+          "ns_per_op": 273.3
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8861026,
+          "line": 53,
+          "ns_per_op": 278.0
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8176585,
+          "line": 83,
+          "ns_per_op": 275.7
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8735498,
+          "line": 113,
+          "ns_per_op": 274.6
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8781936,
+          "line": 143,
+          "ns_per_op": 281.2
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8918665,
+          "line": 173,
+          "ns_per_op": 277.6
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8476849,
+          "line": 203,
+          "ns_per_op": 284.4
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8893742,
+          "line": 233,
+          "ns_per_op": 274.0
+        }
+      ],
+      "benchmark": "BenchmarkRepeatedIterator",
+      "binary_package": "caching",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 1.12,
+      "candidate": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 272.45000000000005
+      },
+      "candidate_samples": [
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8810482,
+          "line": 23,
+          "ns_per_op": 273.9
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8587856,
+          "line": 53,
+          "ns_per_op": 270.1
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8774491,
+          "line": 83,
+          "ns_per_op": 273.1
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8772686,
+          "line": 113,
+          "ns_per_op": 271.5
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8169836,
+          "line": 143,
+          "ns_per_op": 272.1
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8952015,
+          "line": 173,
+          "ns_per_op": 272.8
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 8672716,
+          "line": 203,
+          "ns_per_op": 273.0
+        },
+        {
+          "allocs_per_op": 2.0,
+          "bytes_per_op": 112.0,
+          "iterations": 9017608,
+          "line": 233,
+          "ns_per_op": 272.0
+        }
+      ],
+      "measurement_pass": true,
+      "no_binary_equivalence_waiver": true,
+      "ns_delta_percent": -1.5181637448038798,
+      "paired_ns_delta_percent": -1.4290107066920577,
+      "paired_ns_delta_percent_samples": [
+        0.2195389681668436,
+        -2.8417266187050316,
+        -0.9430540442509905,
+        -1.1289147851420323,
+        -3.2361308677098077,
+        -1.729106628242083,
+        -4.008438818565397,
+        -0.7299270072992692
+      ],
+      "reported_binary_digests": {
+        "baseline": "dcb73a53abc60fe622f8f48d694611bce661a2ff56cbecb1f8ee3b31aff7ebf1",
+        "candidate": "137c020d27a62c234b3847dc5bdba916e9602b96dc4ace515a5c97b4b12d58cc"
+      },
+      "timing_pass": true
+    },
+    {
+      "allocs_pass": true,
+      "baseline": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4577.5,
+        "ns_per_op": 217596.5
+      },
+      "baseline_samples": [
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4579.0,
+          "iterations": 10000,
+          "line": 29,
+          "ns_per_op": 225643.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 59,
+          "ns_per_op": 218571.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4578.0,
+          "iterations": 10000,
+          "line": 89,
+          "ns_per_op": 231791.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 119,
+          "ns_per_op": 216622.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 149,
+          "ns_per_op": 219771.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4578.0,
+          "iterations": 10000,
+          "line": 179,
+          "ns_per_op": 214179.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 209,
+          "ns_per_op": 212930.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4578.0,
+          "iterations": 10000,
+          "line": 239,
+          "ns_per_op": 209857.0
+        }
+      ],
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "binary_package": "treedb",
+      "bytes_delta": -0.5,
+      "bytes_pass": true,
+      "bytes_tolerance": 45.775,
+      "candidate": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4577.0,
+        "ns_per_op": 220151.5
+      },
+      "candidate_samples": [
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 29,
+          "ns_per_op": 217488.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 59,
+          "ns_per_op": 220895.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 89,
+          "ns_per_op": 219408.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 119,
+          "ns_per_op": 231651.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 149,
+          "ns_per_op": 223320.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4577.0,
+          "iterations": 10000,
+          "line": 179,
+          "ns_per_op": 223975.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4578.0,
+          "iterations": 10000,
+          "line": 209,
+          "ns_per_op": 209643.0
+        },
+        {
+          "allocs_per_op": 17.0,
+          "bytes_per_op": 4579.0,
+          "iterations": 10000,
+          "line": 239,
+          "ns_per_op": 212786.0
+        }
+      ],
+      "measurement_pass": true,
+      "no_binary_equivalence_waiver": true,
+      "ns_delta_percent": 1.1741916804727914,
+      "paired_ns_delta_percent": 1.229491188543852,
+      "paired_ns_delta_percent_samples": [
+        -3.614116103756815,
+        1.0632700586994615,
+        -5.34231268686014,
+        6.937891811542696,
+        1.614862743492096,
+        4.573744391373569,
+        -1.543699807448462,
+        1.3957123183882425
+      ],
+      "reported_binary_digests": {
+        "baseline": "4121b4e7a650757d741ea6b39b11c54ce9efcdfe50e8bea3091f8e7f9352d995",
+        "candidate": "f7ad4a1fd651942f945f59946805eaa2bff1ceeaac5c3b5ef808d24188c87350"
+      },
+      "timing_pass": true
+    }
+  ],
+  "samples_per_revision_per_group": 8,
+  "scope": "current hosted strict raw-path gate measurement arithmetic and retained references; no new benchmark execution",
+  "source_definitions": {
+    ".github/scripts/check_mvcc_raw_path_gate.py": {
+      "baseline_sha256": "3405c6088aff3ff6d06caa6f62b860edddbcbb18a983f91ac9d67af94c0eec9a",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "3405c6088aff3ff6d06caa6f62b860edddbcbb18a983f91ac9d67af94c0eec9a"
+    },
+    ".github/workflows/treedb-tests.yml": {
+      "baseline_sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477"
+    },
+    "TreeDB/caching/bench_test.go": {
+      "baseline_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e"
+    },
+    "TreeDB/command_wal_public_test.go": {
+      "baseline_sha256": "a706d9249d01c634b8d092ae91821e2b5e9369c2392ee91be6b405a3410db463",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "a706d9249d01c634b8d092ae91821e2b5e9369c2392ee91be6b405a3410db463"
+    },
+    "TreeDB/db/conditional_kv_contract_bench_test.go": {
+      "baseline_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6"
+    },
+    "TreeDB/snapshot_seek_iterator_bench_test.go": {
+      "baseline_sha256": "b2947d89bf9f3c1fe46353518e44cb6b69518f6179d1afa583dd570169a39ac5",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "b2947d89bf9f3c1fe46353518e44cb6b69518f6179d1afa583dd570169a39ac5"
+    },
+    "scripts/mvcc_candidate_checkout_guard.sh": {
+      "baseline_sha256": "775d764acaa59b617ceeb3d7fcb468fdb49f48f3b7bd7c5171ddfd4071c0cb20",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "775d764acaa59b617ceeb3d7fcb468fdb49f48f3b7bd7c5171ddfd4071c0cb20"
+    },
+    "scripts/mvcc_raw_path_gate.sh": {
+      "baseline_sha256": "f40abf9f22b42b7d99a0950b93521cfe361c785da4c116ef107aaee2debe1885",
+      "byte_identical_to_baseline": true,
+      "candidate_sha256": "f40abf9f22b42b7d99a0950b93521cfe361c785da4c116ef107aaee2debe1885"
+    }
+  },
+  "thresholds": {
+    "median_allocations_must_not_increase": true,
+    "median_bytes_delta_max": "min(base_median_B_per_op * 0.01, 64)",
+    "median_paired_ns_delta_percent_max": 5,
+    "unchanged_from_original_failed_gate": true
+  },
+  "total_actual_rows": 80
+}

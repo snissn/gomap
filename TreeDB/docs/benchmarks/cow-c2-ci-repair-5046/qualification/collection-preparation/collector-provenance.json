@@ -1,0 +1,21 @@
+{
+  "unchanged_parsers": [
+    "analyze_mvcc.parse_row",
+    "analyze.parse_row"
+  ],
+  "original_scripts": {
+    "collect.py": "96f5c4c9953f3a9fcef0fcd68a850ab02177748ddf293c5b3a372872ac7154da",
+    "collect_mvcc.py": "a2fa743c537a1bbbe3d410d22d7176e38d8a7ce997ce26118925fec8290b60aa",
+    "analyze.py": "8288b912ef24e0e1482ac533ac6c0f7103440d56d2a8a63df5c5f3605951bf49",
+    "analyze_mvcc.py": "65f0f44c860f52dcf5f5b17e9bbcee543b6c95bf51e1f8b3c8ecaf8bfea7c47c"
+  },
+  "changes": [
+    "head alias to commit in normalized identity",
+    "omit DirtyCheckpoint from raw durability group",
+    "raw exact rows540",
+    "full perrun COW close/rotation gate before continuing",
+    "retain load/process after each run in private output"
+  ],
+  "contract_source": "actual4add47 logs; duplicates/live-charge mutations are validation probes, not published benchmark results",
+  "current_fixture_changes": []
+}

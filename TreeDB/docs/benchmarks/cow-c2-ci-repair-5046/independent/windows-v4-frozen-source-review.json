@@ -1,0 +1,128 @@
+{
+  "verdict": "SOURCE ACCEPT for frozen Windows v4 variant; integrated and hosted acceptance HELD",
+  "base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "source_file_count": 7286,
+  "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+  "aggregate_serialization": "compact JSON of sorted files dictionary",
+  "source_manifest_sha256": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
+  "independent_full_source_drift": [],
+  "independent_extra_files": [],
+  "reviewed_changed_paths_sha256": {
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "a7f108461898ba5bfd56a9f3d8f2c1300ac60d7a7c3e55858fcef2a2093ca2a5",
+    "TreeDB/caching/cow_pointer_read_test.go": "d0f75793711599f421ad53803b510c75fbbdfb7cabb906a3371f48d446308ba5",
+    "TreeDB/caching/cow_read_metadata_admission_test.go": "53daf4d7d0824e25c165fc5835d3b5086b00e57c9eac497efb8a930d76e58b2c",
+    "TreeDB/caching/cow_read_workspace.go": "56dc92be58a19b178bac99cdcfd72c7142928adc44bac8f4d3373b57476e4496",
+    "TreeDB/cow_power_loss_test.go": "b9c8b406409431618f78eedf92e101427c5d44a3346e18ffd63e165dbbe1faad",
+    "TreeDB/cow_public_review_regression_test.go": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "TreeDB/docs/spec/cow-cache-publication.md": "eebaacf6878444b0df3a43008c81f545a5509ac52874c542b146c1e4c39f85cd",
+    "TreeDB/internal/valuelog/cow_inspection_heap.go": "d26852c5d004a13722f5a83107a432ef28b2e673ea2598021328007e71257d1e",
+    "TreeDB/internal/valuelog/cow_inspection_stack.go": "1c309e708dbda7272f7a2d2bb66c19437718511b7d6c18e90fb880caa18340c5",
+    "TreeDB/internal/valuelog/cow_namespace_contract_test.go": "333c70d5bacec8f6eb2b8103038380f056b8e453bab8c9de41cd2f062066d982",
+    "TreeDB/internal/valuelog/cow_reader.go": "6ecda5c7ccab087e880b2856598e91c24bebacc41e5b5511bdd84c7a1c491b6f",
+    "TreeDB/internal/valuelog/cow_reader_test.go": "0d8793e468cdceaff5ee5fe454d2ef6a70fdf4505ca4363a009605c209c17504",
+    "TreeDB/internal/valuelog/leaf_page_payload.go": "bc851c40b262583d0f5194d973ba489a6270035ea72af26f3415193921fc6364"
+  },
+  "go1_26_8_filepathlite_sha256": {
+    "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/src/internal/filepathlite/path.go": "dd1a0138328d6353d089d6ba8e04905d9e951bedfef1b85913c64de2ca2fd223",
+    "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/src/internal/filepathlite/path_windows.go": "ad313fae9fd1e150df082ad7f43c34b0830ce79433d0eef89c7724fdb07d06bb"
+  },
+  "v3_actual_receipts_sha256": "3984e1db11ea9acbc294b2e48794276355ada975d59dd308d760e04b2f9b3a41",
+  "v3_actual_runtime": [
+    {
+      "label": "normal-valuelog",
+      "exit": 0,
+      "test_passes": 43,
+      "package_passes": 1,
+      "stdout_sha256": "2c8d102a8995fec0f730feffe3ecd25581bfd4912cc6f13048caa7c4aaefd9dd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "normal-cache",
+      "exit": 0,
+      "test_passes": 12,
+      "package_passes": 1,
+      "stdout_sha256": "03d3c5315e66b155549239d41d507522a7e69ed79e5ee0a2444f0ebc7db3ec9e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "normal-public",
+      "exit": 0,
+      "test_passes": 41,
+      "package_passes": 1,
+      "stdout_sha256": "6b4a4f5d57c3a3d64f7d285ec831100aa584b2b512c10456b90ee769974976fd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "race-valuelog",
+      "exit": 0,
+      "test_passes": 43,
+      "package_passes": 1,
+      "stdout_sha256": "e1e253ad355c5a2d3a513fff9ae28ff0d1060d5f2bfb77793782370b83997c0d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "race-cache",
+      "exit": 0,
+      "test_passes": 12,
+      "package_passes": 1,
+      "stdout_sha256": "ce85c9702dd4a78b81c87f5cd2f8e35544ac75ac9f51b4b82fe41d94a3a6df17",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "race-public",
+      "exit": 0,
+      "test_passes": 41,
+      "package_passes": 1,
+      "stdout_sha256": "fa2b786d14dad0b24edc773771306b12600a9c6655f9d343af5a30e8b6ef3884",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "safe-valuelog",
+      "exit": 0,
+      "test_passes": 43,
+      "package_passes": 1,
+      "stdout_sha256": "24660c645412a8caa01326c225ecf971c3ddcff678e6375d982993bc5e5160a7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "safe-cache",
+      "exit": 0,
+      "test_passes": 12,
+      "package_passes": 1,
+      "stdout_sha256": "889716da1b2f6434a6308c78eb653a53391d9c8040235dc462389a6cd3f49a12",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    },
+    {
+      "label": "safe-public",
+      "exit": 0,
+      "test_passes": 41,
+      "package_passes": 1,
+      "stdout_sha256": "351f09a613dfa3b9564914c4cdf0962c776c8385f8637f25fc118a16cc913674",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_aggregate_sha256": "094c0216f53348f7c0a91f444acf1e9f065941d3ce5760eb0c17a68db6a5ea98"
+    }
+  ],
+  "v3_to_v4_changed_paths": [
+    "TreeDB/caching/cow_read_metadata_admission_test.go"
+  ],
+  "witness_assessment": {
+    "metadata": "Real pointer Get refuses before workspace installation under whole-envelope minus-one-byte pressure. Identical ownership on refusal; retry returns exact value after pressure release; repeated Get reuses admitted storage; Snapshot Close restores retained-cut baseline.",
+    "namespace": "Volume-tail fallback preserves original lexical classification. Native cache rotation, manager scan/SegmentPath, leaf fallback and pack destination paths use filepath.Join. Arbitrary direct registration remains low-level caller obligation.",
+    "portable_maintenance": "central-index-compaction executes on Unix default routes and Windows; both capture/install stages require native changed root_page and commit_seq, real pressure, retained old basis, persistent gate and successful retry.",
+    "post_meta": "ErrRecoveryRequired only for captured AfterMetaWrite ResourceMeta; cut!=nil prerequisite asserted beforehand. Every other direct-cause check and all stable-image/no-partial-group/ACK assertions remain."
+  },
+  "limitations": [
+    "No reviewer Go/build/test/timing/remote/GitHub jobs or source changes.",
+    "V4 admission runtime is separate pending evidence; v3 nine jobs apply to unchanged source except stronger admission witness.",
+    "Hosted Windows runtime, default raw-path performance and coherent integrated candidate gates remain outstanding.",
+    "Canonical-only allocation claim; arbitrary noncanonical parser paths can allocate."
+  ]
+}

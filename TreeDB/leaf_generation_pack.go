@@ -38,8 +38,13 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 		opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, protectedRootIDs)
 		opts.ProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedSystemRootIDs, protectedSystemRootIDs)
 	}
-	stats, err := db.backend.LeafGenerationPack(ctx, treedbdb.LeafGenerationPackOptions(opts))
-	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
+	var stats treedbdb.LeafGenerationPackStats
+	err := db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		stats, runErr = db.backend.LeafGenerationPack(ctx, treedbdb.LeafGenerationPackOptions(opts))
+		return runErr
+	})
+	if err != nil {
 		return out, err
 	}
 	success = true

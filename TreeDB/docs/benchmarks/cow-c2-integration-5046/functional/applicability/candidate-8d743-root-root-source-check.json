@@ -1,0 +1,18 @@
+{
+  "candidate": "8d7436d8745faf5c0cb79d1a11bdd7b40ad8a414",
+  "git_tree": "d8e33e6840717f3a413700dc524cdbc4fc414c8a",
+  "source_tree_sha256": "a1c70e0417ec318392f4549ba786ef32148e34486a85c1c23048abb33e9d3326",
+  "file_count": 6476,
+  "unchanged_git_blob_proofs_reused": 6472,
+  "new_changed_blobs_direct_sha256_verified": [
+    "TreeDB/caching/cow_cost_minimization_test.go",
+    "TreeDB/caching/cow_read.go",
+    "TreeDB/caching/point_successor.go",
+    "TreeDB/mvcc/cow_successor_test.go"
+  ],
+  "baseline_candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "baseline_identity_sha256": "4b9173ece756898eb0d9e9913f26eb162362f284649d1cf7d3ededafb242e35f",
+  "baseline_proof_sha256": "2ca92001bfea6ffff8dc441e026927b66827ad86815a1074b0149ce4189685b5",
+  "mismatches": [],
+  "scope": "all frozen source files; functional/cost acceptance separate"
+}

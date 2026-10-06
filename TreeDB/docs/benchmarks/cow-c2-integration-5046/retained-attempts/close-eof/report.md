@@ -1,0 +1,11 @@
+# COW Close EOF repair
+
+Original source: af59d9fe0f62bb118d3a1d9004dc96c4717775aa. The root collector stopped on its tenth raw run after NoWAL/Inline64/N2048/FreshCapture cleanup returned EOF; the failed original packet remains unchanged on Linux185. An isolated exact benchmark reproduction also returned EOF.
+
+Close set closing=true and removed the backend current-value-log read barrier before closeCOWFrontier. That frontier can emit more than one private backend build chunk; a later chunk reads external leaves produced and buffered by an earlier chunk. The native manager documents that this barrier makes buffered records visible. A successful leaf cache hit can conceal the missing barrier.
+
+The new actual public regression first checkpoints2048inline entries, overwrites all2048, records final native revisions, closes, and reopens to check every final value/revision. Disabling only the optional leaf cache makes the original NoWAL failure deterministic. The two journal profiles already checkpoint before cached Close and pass. The diagnostic-only original-source wrapper identifies the failing stage exactly as `close COW frozen flush: EOF`; it is absent from the repaired source.
+
+Repair commit28216b458 retains the existing read barrier during COW Close and permits its current-leaf flush only through a scoped atomic Close-drain flag. Public admissions still see closing=true. The flag is reset and the barrier unregistered before lane/storage teardown. Legacy Close ordering is unchanged. No errors are suppressed and no deletion/retention authority is replaced.
+
+Linux185 Go1.26.3 focused count3 checks pass: normal27test/subcase events +2packages, race75+2, safe69+2, all without failures (patterns differ intentionally: race/safe broaden existing Close and shared-owner barrier coverage). The original exact benchmark now passes20timed repetitions at16x; this is a Close correctness reproduction, not accepted performance evidence. The full repaired source is bound as af59 archive + explicit hashed overlays in source-identity.json. Public selector work is excluded from this packet. The regression checks actual retained cache charges drain, with positive historical peak, and final seed recovery rather than earlier-checkpoint recovery.

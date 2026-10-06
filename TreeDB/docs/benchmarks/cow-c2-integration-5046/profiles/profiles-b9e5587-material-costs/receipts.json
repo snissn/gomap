@@ -1,0 +1,224 @@
+[
+  {
+    "label": "raw-btree-Inline64-Forward16",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Inline64$/^N=2048$/^Forward16$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Inline64-Forward16.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Inline64-Forward16.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:17.620668+00:00",
+    "completed_utc": "2026-10-06T04:44:18.711832+00:00",
+    "elapsed_seconds": 1.0911676660180092,
+    "load_before": [
+      1.19189453125,
+      1.70263671875,
+      2.20361328125
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "b112082dd149a062861c3dbf184a1e6abd26ba1a5541d56685c433d8d96254dd",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-btree-Inline64-Forward16.alloc-top.txt": "a8cd8bad4430c09ae8790448cd613b8aaff1e15d528e3c268662516156185aa2",
+      "raw-btree-Inline64-Forward16.cpu.pprof": "b06e8348097d626b221946ac72cd9cac0676c7b451345d4673ca8789e3f5af6f",
+      "raw-btree-Inline64-Forward16.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw-btree-Inline64-Forward16.cpu-top.txt": "2a147d0d415bc20e4eacb0c12c91610805aa958287ccdca08bb24248f1b3ca49",
+      "raw-btree-Inline64-Forward16.cpu-cum.txt": "7059578534a06bf2b3a9ac56b88217388ae50fdfc337d7374f7ef621707a9529",
+      "raw-btree-Inline64-Forward16.log": "b112082dd149a062861c3dbf184a1e6abd26ba1a5541d56685c433d8d96254dd",
+      "raw-btree-Inline64-Forward16.heap.pprof": "d172b84c8771e4370663b47f5d3322c72986c8eb22dea0c9c02890981dd890d5",
+      "raw-btree-Inline64-Forward16.alloc-cum.txt": "5481f3ca60aff4aa2a0f71d7d5553f8d1b0ab34c49fc6d8cb7abb7859774f24c"
+    }
+  },
+  {
+    "label": "raw-cow_btree-Inline64-Forward16",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Inline64$/^N=2048$/^Forward16$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Inline64-Forward16.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Inline64-Forward16.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:20.423930+00:00",
+    "completed_utc": "2026-10-06T04:44:21.835242+00:00",
+    "elapsed_seconds": 1.4113141279667616,
+    "load_before": [
+      1.2568359375,
+      1.7080078125,
+      2.2021484375
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "3a1349742b5002058f07a37f086094d2922802ce33f8f112efd961b7291d976d",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-cow_btree-Inline64-Forward16.cpu-top.txt": "0588bfde9985030163891dd8d231f9c2c42c5c018e9896f78588bddf1ff97def",
+      "raw-cow_btree-Inline64-Forward16.cpu.pprof": "a49593daa0cf860d1fca3f5489f2be58be84f838b6b63c2290f68338aab79aa0",
+      "raw-cow_btree-Inline64-Forward16.heap.pprof": "fb8a56bc89338692e8d3e4307d05327fd9cc77c35601a03ab795657c9054a738",
+      "raw-cow_btree-Inline64-Forward16.log": "3a1349742b5002058f07a37f086094d2922802ce33f8f112efd961b7291d976d",
+      "raw-cow_btree-Inline64-Forward16.alloc-top.txt": "0825ed3c29b70b8c0b2ae8b70e92657a5739dacbb492fdd42352f1e9341102e3",
+      "raw-cow_btree-Inline64-Forward16.cpu-cum.txt": "5a73468ccbc26a89a0a906b5923c6a689ba30f22b754b9fdc3f5c3e847b9b252",
+      "raw-cow_btree-Inline64-Forward16.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw-cow_btree-Inline64-Forward16.alloc-cum.txt": "60e7ee3d57fda22c0cb1e3579e722f676728b8c9d5bb697960621635c75cf4ca"
+    }
+  },
+  {
+    "label": "raw-btree-Pointer4096-CaptureReadRelease",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Pointer4096$/^N=2048$/^CaptureReadRelease$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Pointer4096-CaptureReadRelease.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Pointer4096-CaptureReadRelease.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:22.020650+00:00",
+    "completed_utc": "2026-10-06T04:44:23.147897+00:00",
+    "elapsed_seconds": 1.1272494830191135,
+    "load_before": [
+      1.2568359375,
+      1.7080078125,
+      2.2021484375
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "51dee9b6186947bf63b1dbedf217e520fc57c98c1a36632bdd91631fddf6e205",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-btree-Pointer4096-CaptureReadRelease.alloc-cum.txt": "bc1d65a475ee1c825226e2feec5eb1cfbd94a62485fb40b675b7736f182ffe92",
+      "raw-btree-Pointer4096-CaptureReadRelease.cpu.pprof": "d787a20f3466fdb6d67220ce856096f565f8b3ea433ff5d55fa222b9c2971c23",
+      "raw-btree-Pointer4096-CaptureReadRelease.log": "51dee9b6186947bf63b1dbedf217e520fc57c98c1a36632bdd91631fddf6e205",
+      "raw-btree-Pointer4096-CaptureReadRelease.alloc-top.txt": "b8e7cb5c95f5521914533e422af15d3af1552c86f03ac90687d177f8035cf745",
+      "raw-btree-Pointer4096-CaptureReadRelease.cpu-top.txt": "ae6170d4b159a88318911c35470da8744c9c3359daa04f97d6ab69b88c8f662a",
+      "raw-btree-Pointer4096-CaptureReadRelease.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw-btree-Pointer4096-CaptureReadRelease.cpu-cum.txt": "03ad1086a337801c2d4478ee2209838ed6254b28eec6a1a4593173f7469ea4bc",
+      "raw-btree-Pointer4096-CaptureReadRelease.heap.pprof": "6486ab7cdc81292f9f4cfb4e4bc3f959a29c91755c83db5a9e9a1adf9b5468fa"
+    }
+  },
+  {
+    "label": "raw-cow_btree-Pointer4096-CaptureReadRelease",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Pointer4096$/^N=2048$/^CaptureReadRelease$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Pointer4096-CaptureReadRelease.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Pointer4096-CaptureReadRelease.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:23.332566+00:00",
+    "completed_utc": "2026-10-06T04:44:24.814463+00:00",
+    "elapsed_seconds": 1.4819004242308438,
+    "load_before": [
+      1.4765625,
+      1.74609375,
+      2.2119140625
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "beb591d314995f4749772eaa262eb9494600770ffa038e4f9252ea61c6ed346f",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.cpu.pprof": "122b1b46ca9430fff87d6a27f4fa7489ed95bec547b32ffba4279bc86ea2726d",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.cpu-top.txt": "c0ee5899f423b9bec8bb39e3a803e2b312f7500f998c89b37dd1a6b68327dd5a",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.alloc-cum.txt": "4f44525748d87a390b4d9938ab08380cda907ffa020839fbba9e04a7c9ce7d52",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.cpu-cum.txt": "2c70c4924e006a22ba9c3094694c33d3c745f084bec8522b8c058a2d8936dd6a",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.heap.pprof": "8c7fccdb09567d216e54d2566576cf4af3c259263e39785790cb084b1d829764",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.log": "beb591d314995f4749772eaa262eb9494600770ffa038e4f9252ea61c6ed346f",
+      "raw-cow_btree-Pointer4096-CaptureReadRelease.alloc-top.txt": "d8fae9d1b655ee50f702a6f245464178a0378075eb1271186e595f4bfdb8b148"
+    }
+  },
+  {
+    "label": "raw-btree-Pointer4096-IncrementalWrite",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Pointer4096$/^N=2048$/^IncrementalWrite$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Pointer4096-IncrementalWrite.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-btree-Pointer4096-IncrementalWrite.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:24.997690+00:00",
+    "completed_utc": "2026-10-06T04:44:26.169047+00:00",
+    "elapsed_seconds": 1.1713591837324202,
+    "load_before": [
+      1.4765625,
+      1.74609375,
+      2.2119140625
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "e356885b1064d0446f2ada2bbc768bd76ea34d6fceb09be74320d3f86df8b3ba",
+    "stderr_sha256": "5318eab9ff61a63704e9c5fa63f059c77cd24eaac4b84c67069a97d0becd0610",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-btree-Pointer4096-IncrementalWrite.alloc-top.txt": "1f1cf475d20d1f40974db2fc56b02a900ee957ff4784f678366cb1b20b9e37b4",
+      "raw-btree-Pointer4096-IncrementalWrite.cpu.pprof": "2236d23d3ee3018b10593b416d0e4a55b855e07b5eabbecf93bf5a7e81a6b6b7",
+      "raw-btree-Pointer4096-IncrementalWrite.cpu-top.txt": "bd13ed30f07f6d10438be36d2ff52f01b157308219247c034992bb3a216cee66",
+      "raw-btree-Pointer4096-IncrementalWrite.log": "e356885b1064d0446f2ada2bbc768bd76ea34d6fceb09be74320d3f86df8b3ba",
+      "raw-btree-Pointer4096-IncrementalWrite.cpu-cum.txt": "dfbfbb0f6623f0f0d1fd695143cb6e5c5942a3b2b31ff216af5b68e737b63c46",
+      "raw-btree-Pointer4096-IncrementalWrite.stderr.log": "5318eab9ff61a63704e9c5fa63f059c77cd24eaac4b84c67069a97d0becd0610",
+      "raw-btree-Pointer4096-IncrementalWrite.heap.pprof": "7cc7d9afd311372a6aa10bb2c5ebef632a744f8895148e3f87113dce72c0818e",
+      "raw-btree-Pointer4096-IncrementalWrite.alloc-cum.txt": "182ca3885fb562ea72ae59c6c563902e72385f3113046646ce23b7a781ff8225"
+    }
+  },
+  {
+    "label": "raw-cow_btree-Pointer4096-IncrementalWrite",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-b9e5587-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Pointer4096$/^N=2048$/^IncrementalWrite$",
+      "-test.benchtime=8192x",
+      "-test.count=1",
+      "-test.timeout=300s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Pointer4096-IncrementalWrite.cpu.pprof",
+      "-test.memprofile=/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/profiles-b9e5587-material-costs/raw-cow_btree-Pointer4096-IncrementalWrite.heap.pprof"
+    ],
+    "started_utc": "2026-10-06T04:44:26.355941+00:00",
+    "completed_utc": "2026-10-06T04:44:28.007948+00:00",
+    "elapsed_seconds": 1.6520170741714537,
+    "load_before": [
+      1.4765625,
+      1.74609375,
+      2.2119140625
+    ],
+    "exit_code": 0,
+    "validation_errors": [],
+    "source_drift_after": [],
+    "log_sha256": "957b4c82610f36aab0637b7baf66de9e5ec99a2ba29d112883a11d8a6c73d1b1",
+    "stderr_sha256": "6bd5226f1266bc94d1744c1efadb7c56b5965c905447d115c6992a0f4145154a",
+    "diagnostic_only": true,
+    "output_hashes": {
+      "raw-cow_btree-Pointer4096-IncrementalWrite.stderr.log": "6bd5226f1266bc94d1744c1efadb7c56b5965c905447d115c6992a0f4145154a",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.log": "957b4c82610f36aab0637b7baf66de9e5ec99a2ba29d112883a11d8a6c73d1b1",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.cpu-cum.txt": "f3108adf1a41f2a874dcc02369093f2dcc874e5a6b12966ea4e6b521f633b51b",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.alloc-cum.txt": "dfa4c7706aae8e0b8501c35c91afe7dcb6f852297520b002e48c9df8d0a8244a",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.heap.pprof": "b362090e32bce3775b86eded3637b77ceaa6ca8fe1ffa0d96e31a99d3621d0a5",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.cpu-top.txt": "901c9598ee2dcc8521451749d02a5040de54b0964c076e160afba1dcaad9aed0",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.cpu.pprof": "f412fdca0a1814c8014b65d3a68610022dc2c2600f80bcb975b4aa8ad12465a7",
+      "raw-cow_btree-Pointer4096-IncrementalWrite.alloc-top.txt": "d0e43cfe572d7ef29ec493a54b3bb2c8c2f831f5f1730ea7380a87a1fcd9bd71"
+    }
+  }
+]

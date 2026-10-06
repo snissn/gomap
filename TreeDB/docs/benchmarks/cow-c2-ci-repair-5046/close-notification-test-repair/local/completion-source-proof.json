@@ -1,0 +1,14 @@
+{
+  "commit": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "files": {
+    "TreeDB/cow_close_notification_test.go": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+    "TreeDB/public.go": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65"
+  },
+  "pre_post_source_identical": true,
+  "changed_paths": [
+    "TreeDB/cow_close_notification_test.go"
+  ],
+  "diff_check_exit": 0,
+  "runtime_changes": [],
+  "Windows_executed": false
+}
