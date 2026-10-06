@@ -817,7 +817,14 @@ observable. For unversioned callbacks, equal canonical root sets with unchanged
 backend commit/root state are the same audit-visible basis because retiring or
 reusing a protected page changes that backend state. Value-log reference counts
 retain every logical pointer projection, while live-byte accounting counts a
-grouped physical record once. Audit results are published to the incremental
+grouped physical record once. Segment and chunk live-byte totals include the
+leading four-byte CRC of each counted record, unlike pointer-relative length
+hints. The entire physical grouped frame remains live while any member is
+referenced; this accounting does not reclaim individual obsolete members inside
+that frame. An all-live sealed segment must not acquire rewrite debt solely from
+its mandatory CRC prefixes. Genuine dead physical records, active/protected
+segment eligibility and retained-root GC debt follow the existing policies.
+Audit results are published to the incremental
 reference tracker only after the protected basis brackets two exact backend-state
 checks; one invalidation is retried and a second returns
 `ErrCompactStorageAuditStale`. Later settle/final audits perform zero new walks

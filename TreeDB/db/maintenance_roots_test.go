@@ -690,7 +690,7 @@ func TestMaintenanceRootScansDeduplicateRoleAliasesByRootID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("estimateValueLogLiveBytesBySegment: %v", err)
 	}
-	if got, want := liveByID[referenced.FileID], int64(recordLen); got != want {
+	if got, want := liveByID[referenced.FileID], int64(recordLen)+4; got != want {
 		t.Fatalf("segment live bytes for file %d = %d, want %d", referenced.FileID, got, want)
 	}
 
@@ -704,7 +704,7 @@ func TestMaintenanceRootScansDeduplicateRoleAliasesByRootID(t *testing.T) {
 		t.Fatalf("estimateValueLogLiveBytesByChunk: %v", err)
 	}
 	chunkKey := valueLogChunkKey{fileID: referenced.FileID, chunkOffset: chunkOffset}
-	if got, want := liveByChunk[chunkKey], int64(recordLen); got != want {
+	if got, want := liveByChunk[chunkKey], int64(recordLen)+4; got != want {
 		t.Fatalf("chunk live bytes for %+v = %d, want %d", chunkKey, got, want)
 	}
 }

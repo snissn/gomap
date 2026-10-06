@@ -1550,6 +1550,12 @@ Semantics:
 - `Offset` points to `record_start + 4` (immediately after record CRC field).
 - `Length` stores record length hint plus packed flags.
 
+The decoded record-length hint is measured from `Offset`: it excludes the
+four-byte leading CRC. The same unit applies when a zero hint is resolved from
+the record header. A physical record occupies this decoded length plus four
+bytes; storage maintenance must include that CRC when comparing live bytes
+with physical file or chunk sizes. This distinction does not change the encoding.
+
 ### 4.1 FileID layout
 
 `FileID` uses a marker bit and packed segment id:

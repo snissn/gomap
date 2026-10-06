@@ -65,10 +65,10 @@ func TestEstimateValueLogLiveBytesByChunk_SplitsPointerRecordsAcrossChunks(t *te
 	if chunk1 == chunk2 {
 		t.Fatalf("expected separate chunk offsets, got %d and %d", chunk1, chunk2)
 	}
-	if got, want := liveByChunk[valueLogChunkKey{fileID: ptrs[0].FileID, chunkOffset: chunk1}], int64(recordLen1); got != want {
+	if got, want := liveByChunk[valueLogChunkKey{fileID: ptrs[0].FileID, chunkOffset: chunk1}], (int64(recordLen1) + 4); got != want {
 		t.Fatalf("chunk1 live bytes=%d want %d", got, want)
 	}
-	if got, want := liveByChunk[valueLogChunkKey{fileID: ptrs[1].FileID, chunkOffset: chunk2}], int64(recordLen2); got != want {
+	if got, want := liveByChunk[valueLogChunkKey{fileID: ptrs[1].FileID, chunkOffset: chunk2}], (int64(recordLen2) + 4); got != want {
 		t.Fatalf("chunk2 live bytes=%d want %d", got, want)
 	}
 }
@@ -120,7 +120,7 @@ func TestEstimateValueLogLiveBytesByChunk_DedupsGroupedPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chunk offset: %v", err)
 	}
-	if got, want := liveByChunk[valueLogChunkKey{fileID: base.FileID, chunkOffset: chunkOffset}], int64(recordLen); got != want {
+	if got, want := liveByChunk[valueLogChunkKey{fileID: base.FileID, chunkOffset: chunkOffset}], (int64(recordLen) + 4); got != want {
 		t.Fatalf("grouped chunk live bytes=%d want %d", got, want)
 	}
 }

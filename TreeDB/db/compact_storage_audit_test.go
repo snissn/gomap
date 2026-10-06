@@ -236,8 +236,8 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases(t *
 	if got.valueLogRefCounts[base.FileID] != 3 {
 		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[base.FileID])
 	}
-	if got.valueLogLiveBytesBySegment[base.FileID] != int64(recordLen) {
-		t.Fatalf("grouped live bytes=%d want one record=%d", got.valueLogLiveBytesBySegment[base.FileID], recordLen)
+	if got.valueLogLiveBytesBySegment[base.FileID] != (int64(recordLen) + 4) {
+		t.Fatalf("grouped live bytes=%d want physical record=%d", got.valueLogLiveBytesBySegment[base.FileID], int64(recordLen)+4)
 	}
 	if got.counters.GroupedRecordDedupeHits != 2 {
 		t.Fatalf("grouped dedupe hits=%d want 2", got.counters.GroupedRecordDedupeHits)
@@ -345,8 +345,8 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if got.valueLogRefCounts[grouped.FileID] != 3 {
 		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[grouped.FileID])
 	}
-	if got.valueLogLiveBytesBySegment[grouped.FileID] != int64(recordLen) {
-		t.Fatalf("grouped live bytes=%d want one record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], recordLen)
+	if got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen) + 4) {
+		t.Fatalf("grouped live bytes=%d want physical record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
 	}
 	if _, ok := got.valueLogRefCounts[protectedOrdinary.FileID]; ok {
 		t.Fatalf("protected ordinary segment %d entered maintenance projection: %v", protectedOrdinary.FileID, got.valueLogRefCounts)
@@ -504,8 +504,8 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReus
 	if wantRefs[grouped.FileID] <= 3 {
 		t.Fatalf("fixture did not create repeated maintenance projections: refs=%d", wantRefs[grouped.FileID])
 	}
-	if got.valueLogRefCounts[grouped.FileID] != wantRefs[grouped.FileID] || got.valueLogLiveBytesBySegment[grouped.FileID] != int64(recordLen) {
-		t.Fatalf("grouped projection mismatch: refs=%d want=%d live=%d record=%d", got.valueLogRefCounts[grouped.FileID], wantRefs[grouped.FileID], got.valueLogLiveBytesBySegment[grouped.FileID], recordLen)
+	if got.valueLogRefCounts[grouped.FileID] != wantRefs[grouped.FileID] || got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen)+4) {
+		t.Fatalf("grouped projection mismatch: refs=%d want=%d live=%d record=%d", got.valueLogRefCounts[grouped.FileID], wantRefs[grouped.FileID], got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
 	}
 	if _, ok := got.valueLogRefCounts[protected[0].FileID]; ok {
 		t.Fatalf("protected-only segment %d entered value-log projection: %v", protected[0].FileID, got.valueLogRefCounts)

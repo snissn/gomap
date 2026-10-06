@@ -859,8 +859,20 @@ Coverage:
 
 Invariant:
 - Offline rewrite preserves values while reducing/replacing old segments.
+- Physical segment/chunk live bytes include each live record's CRC exactly
+  once. All-live sealed outputs have no CRC-only rewrite debt; real dead-record
+  spans and recoverable-root retention remain distinguishable.
 
 Coverage:
+- `TreeDB/db/vlog_physical_live_bytes_test.go`:
+  - `TestValueLogPhysicalLiveBytes_FileSpanOracle`: actual file spans for
+    ordinary/grouped, hinted/header-fallback and mixed live/dead records,
+    direct maintenance projection, chunk accounting and exhaustive admission.
+  - `TestValueLogPhysicalLiveBytes_MemoizedProtectedRoots`: one physical frame
+    shared across roots and repeated memoized scans, preserving dedupe counts.
+  - `TestValueLogPhysicalLiveBytes_ExhaustiveRolloverReopen`: forced small
+    output rollover, retained-root debt, durable-horizon settling, exhaustive
+    convergence and checksum-verified reopen.
 - `TreeDB/db/vlog_rewrite_test.go`:
   - `TestValueLogRewriteOffline_RewritesAndShrinks`
 
