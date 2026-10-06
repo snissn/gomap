@@ -140,6 +140,9 @@ def raw_results(text, config, pid):
              'process-retained-heap-B': final['process_retained_heap_bytes']}
     require(all(math.isclose(values[key], n, rel_tol=1e-5, abs_tol=0.51) for key, n in exact.items()), 'Go metrics disagree with actual counts/results')
     require(values['ns/op'] > 0 and values['B/op'] > 0 and values['allocs/op'] > 0, 'invalid epoch metrics')
+    # Go prints epoch ns/op rounded; the enclosing epoch timer cannot be shorter
+    # than the sum of its measured call intervals. Allow half a printed ns/op.
+    require((values['ns/op'] + 0.51) * config['epochs'] >= final['call_ns'], 'epoch timer shorter than actual call timers')
     return {'result': final, 'go_metrics': values, 'calibration_epochs': expected_epochs[:-1]}
 
 
@@ -168,6 +171,14 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     require(toolchain['go'].startswith('go version go1.') and bool(toolchain['cc']) and bool(toolchain['uname']['system'])
             and bool(toolchain['binary_buildinfo']) and bool(toolchain['filesystem']), 'missing actual build/host identity')
     require(toolchain['go_env']['GOWORK'] == 'off' and toolchain['go_env']['GOTOOLCHAIN'] == 'local', 'unfrozen toolchain/workspace')
+    capture_directory = Path(toolchain['capture_directory'])
+    require(capture_directory.is_absolute() and toolchain['benchmark_tmpdir'] == str(capture_directory / 'benchmark-tmp'), 'benchmark temporary directory is not capture-owned')
+    require(integer(toolchain['capture_filesystem_device']) and integer(toolchain['benchmark_filesystem_device'])
+            and toolchain['benchmark_filesystem_device'] == toolchain['capture_filesystem_device']
+            and bool(toolchain['benchmark_filesystem']), 'benchmark/capture filesystem mismatch or missing observation')
+    require(toolchain['process_environment'] == {'TMPDIR': toolchain['benchmark_tmpdir'], 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
+            'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(config['documents']),
+            'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(config['calls_per_epoch'])}, 'effective benchmark environment mismatch')
     require(hashlib.sha256((path.parent / 'collections.test').read_bytes()).hexdigest() == toolchain['binary_sha256'], 'binary hash mismatch')
     require(hashlib.sha256((path.parent / 'build.log').read_bytes()).hexdigest() == packet['build_log_sha256'], 'build log hash mismatch')
     invocation = packet['invocation']

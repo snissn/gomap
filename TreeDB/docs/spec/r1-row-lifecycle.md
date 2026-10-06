@@ -159,9 +159,9 @@ packet, raw build and process logs, the test binary, exact source manifests,
 actual Go/CGO/build/environment/host/load identities, and `summary.md`. Defaults
 are five fresh OS processes, each with five final epochs, 4,096 documents and
 1,024 calls per epoch. Processes run sequentially. No concurrent writer or
-comparator runs in this diagnostic. The caller must provide an otherwise quiet
-runner; actual before/after load and CPU affinity are retained rather than
-assuming an idle host. Spread across final process results is descriptive and
+comparator runs in this diagnostic. Use a suitable runner with low competing
+activity to the best practical extent; absolute quiet is not expected. Actual
+before/after load and CPU affinity are retained. Spread across final process results is descriptive and
 supplies no automatic capacity threshold.
 
 The fixture is frozen by the compiled `r1MutationRow5059` recipe and a SHA-256
@@ -229,13 +229,23 @@ harness source and supply `--qualification retained --source-commit SHA
 checks the declared landed tooling commit is an ancestor of the measured clean
 source; coordinator review verifies the declaration against actual landing.
 Defaults supply the retained five-by-five dimensions. A distinct output directory
-is mandatory and must be outside the source checkout. Binary and raw logs are
+is mandatory and must be outside the source checkout. Each capture creates a
+fresh owned `benchmark-tmp/` directory there and binds the subprocess `TMPDIR`
+to it, so `testing.TempDir` database files use the capture filesystem. Effective
+subprocess environment, the actual directory's `df` observation and matching
+filesystem device identities are recorded and validated. Benchmark cleanup only
+removes its own temporary database directories; raw logs and capture metadata
+remain. The caller's default `/tmp` is not assumed equivalent. Binary and raw logs are
 retained for independent validation. Failed/partial builds or processes keep
 their existing output and cannot produce a successful summary.
 
 Validation rejects changed/malformed source manifests, binary/raw hash drift,
 failed processes, missing metrics or phases, calibration/final confusion,
 incorrect operation or epoch denominators, and relabeled tiny rehearsals.
+The printed enclosing epoch timer must cover the sum of measured call timers,
+allowing only Go's printed rounding. Effective temporary-directory/filesystem
+metadata is mandatory; older provisional packets without it remain preserved
+under their original harness identity and fail the new validator.
 `--expected-runtime`, `--expected-harness` and `--expected-commit` additionally
 bind a packet to the coordinator's independently frozen identities. The real
 rehearsal rejection suite deliberately alters raw semantic values and rebinds

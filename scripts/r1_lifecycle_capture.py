@@ -107,6 +107,8 @@ def main():
         raise ValueError('capture output must be outside the source checkout')
     # Never mix packets, old raw data, or calibration runs from prior binaries.
     out.mkdir(parents=True, exist_ok=False)
+    benchmark_tmpdir = out / 'benchmark-tmp'
+    benchmark_tmpdir.mkdir()
     write(out / 'source-before.json', before)
     env = json.loads(run([go, 'env', '-json']))
     cc = shlex.split(env['CC'])
@@ -114,6 +116,13 @@ def main():
                  'cc': run([*cc, '--version']), 'uname': platform.uname()._asdict(),
                  'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS', 'GOCACHE', 'GOMODCACHE', 'TMPDIR', 'GOFLAGS')},
                  'cpu': Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else platform.processor(),
+                 'capture_directory': str(out), 'benchmark_tmpdir': str(benchmark_tmpdir),
+                 'capture_filesystem_device': out.stat().st_dev,
+                 'benchmark_filesystem_device': benchmark_tmpdir.stat().st_dev,
+                 'benchmark_filesystem': run(['df', '-Pk', str(benchmark_tmpdir)]),
+                 'process_environment': {'TMPDIR': str(benchmark_tmpdir), 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
+                                         'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(args.documents),
+                                         'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(args.calls_per_epoch)},
                  'filesystem': run(['df', '-Pk', str(out)])}
     binary = out / 'collections.test'
     command = [go, 'test', '-c', '-o', str(binary), './TreeDB/collections']
@@ -131,7 +140,7 @@ def main():
     invocation = [str(binary), '-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
                   f'-test.benchtime={args.epochs}x', '-test.count=1', '-test.benchmem', '-test.v']
     process_env = dict(os.environ, GOMAP_R1_LIFECYCLE_DOCUMENTS=str(args.documents),
-                       GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH=str(args.calls_per_epoch))
+                       GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH=str(args.calls_per_epoch), TMPDIR=str(benchmark_tmpdir))
     records = []
     for repetition in range(args.repetitions):
         name = f'run-{repetition + 1:03d}.log'

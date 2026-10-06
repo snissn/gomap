@@ -65,6 +65,22 @@ class RealPacketTests(unittest.TestCase):
         self.packet['toolchain']['binary_sha256'] = '0' * 64
         self.reject()
 
+    def test_benchmark_tmpdir_metadata_mismatch(self):
+        self.packet['toolchain']['process_environment']['TMPDIR'] = '/tmp'
+        self.reject()
+
+    def test_benchmark_filesystem_metadata_mismatch(self):
+        self.packet['toolchain']['benchmark_filesystem_device'] += 1
+        self.reject()
+
+    def test_missing_effective_benchmark_environment(self):
+        del self.packet['toolchain']['process_environment']
+        self.reject()
+
+    def test_impossible_epoch_timer_with_rebound_raw_hash(self):
+        self.edit_raw(lambda text: __import__('re').sub(r'\s+[\d.]+\s+ns/op', ' 1 ns/op', text))
+        self.reject()
+
     def test_failed_process_even_with_valid_output(self):
         self.packet['runs'][0]['exit_code'] = 1
         self.reject()
