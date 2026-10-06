@@ -583,6 +583,22 @@ func (db *DB) ensureOpen() error {
 	return nil
 }
 
+// captureReadOwners selects an existing lower-layer owner under the public
+// lifecycle lock. Lower-layer read admission excludes storage teardown; release
+// this lock before calling the owner so user callbacks can reenter Close.
+func (db *DB) captureReadOwners() (*caching.DB, *db.DB, error) {
+	if db == nil {
+		return nil, nil, ErrClosed
+	}
+	db.lifecycleMu.RLock()
+	cached, backend := db.cached, db.backend
+	db.lifecycleMu.RUnlock()
+	if cached == nil && backend == nil {
+		return nil, nil, ErrClosed
+	}
+	return cached, backend, nil
+}
+
 func (db *DB) beginPublicOperation() error {
 	if db == nil {
 		return ErrClosed
@@ -1881,26 +1897,28 @@ func (db *DB) backgroundError() error {
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.Get(key)
+	if cached != nil {
+		return cached.Get(key)
 	}
-	return db.backend.Get(key)
+	return backend.Get(key)
 }
 
 // GetVersioned returns the value for a key plus TreeDB's native per-entry
 // revision. Missing keys return a nil value and nil error, matching Get.
 func (db *DB) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, LegacyEntryRevision, err
 	}
-	if db.cached != nil {
-		return db.cached.GetVersioned(key)
+	if cached != nil {
+		return cached.GetVersioned(key)
 	}
-	return db.backend.GetVersioned(key)
+	return backend.GetVersioned(key)
 }
 
 // GetMany returns values for keys.
@@ -1908,13 +1926,14 @@ func (db *DB) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.GetMany(keys)
+	if cached != nil {
+		return cached.GetMany(keys)
 	}
-	return db.backend.GetMany(keys)
+	return backend.GetMany(keys)
 }
 
 // GetManyView calls fn once for each key with a read-only value view. The
@@ -1924,13 +1943,14 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // reported with found=false and value=nil. Existing safe-copy GetMany semantics
 // are unchanged.
 func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return err
 	}
-	if db.cached != nil {
-		return db.cached.GetManyView(keys, fn)
+	if cached != nil {
+		return cached.GetManyView(keys, fn)
 	}
-	return db.backend.GetManyView(keys, fn)
+	return backend.GetManyView(keys, fn)
 }
 
 // GetManyParallelPlan reports how TreeDB would schedule GetMany for the given
@@ -1943,13 +1963,17 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 	if keyCount <= 0 {
 		return 1, false
 	}
-	if db.cached != nil {
-		if planner, ok := any(db.cached).(getManyPlanner); ok {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
+		return 1, false
+	}
+	if cached != nil {
+		if planner, ok := any(cached).(getManyPlanner); ok {
 			return planner.GetManyParallelPlan(keyCount)
 		}
 	}
-	if db.backend != nil {
-		if planner, ok := any(db.backend).(getManyPlanner); ok {
+	if backend != nil {
+		if planner, ok := any(backend).(getManyPlanner); ok {
 			return planner.GetManyParallelPlan(keyCount)
 		}
 	}
@@ -1975,49 +1999,53 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // It avoids internal allocations by using the provided buffer.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return dst, err
 	}
-	if db.cached != nil {
-		return db.cached.GetAppend(key, dst)
+	if cached != nil {
+		return cached.GetAppend(key, dst)
 	}
-	return db.backend.GetAppend(key, dst)
+	return backend.GetAppend(key, dst)
 }
 
 // GetVersionedAppend appends the value for key to dst and returns TreeDB's
 // native per-entry revision. Missing/tombstoned keys return dst and
 // ErrKeyNotFound; tombstones preserve their stored revision.
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return dst, LegacyEntryRevision, err
 	}
-	if db.cached != nil {
-		return db.cached.GetVersionedAppend(key, dst)
+	if cached != nil {
+		return cached.GetVersionedAppend(key, dst)
 	}
-	return db.backend.GetVersionedAppend(key, dst)
+	return backend.GetVersionedAppend(key, dst)
 }
 
 // Has reports whether a key exists in the database.
 func (db *DB) Has(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return false, err
 	}
-	if db.cached != nil {
-		return db.cached.Has(key)
+	if cached != nil {
+		return cached.Has(key)
 	}
-	return db.backend.Has(key)
+	return backend.Has(key)
 }
 
 // HasMany reports whether each key exists.
 func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.HasMany(keys)
+	if cached != nil {
+		return cached.HasMany(keys)
 	}
-	snap := db.AcquireSnapshot()
+	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
 	}
@@ -2027,13 +2055,14 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 
 // HasPrefixes reports whether each prefix has at least one visible key.
 func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.HasPrefixes(prefixes)
+	if cached != nil {
+		return cached.HasPrefixes(prefixes)
 	}
-	snap := db.AcquireSnapshot()
+	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
 	}
@@ -2345,25 +2374,31 @@ func (db *DB) DeleteSync(key []byte) error {
 
 // Iterator returns a forward iterator over the range [start, end).
 func (db *DB) Iterator(start, end []byte) (Iterator, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.Iterator(start, end)
+	if cached != nil {
+		return cached.Iterator(start, end)
 	}
-	return db.backend.Iterator(start, end)
+	return backend.Iterator(start, end)
 }
 
 // SeekGE returns owned copies of the first visible physical key and value in
 // [start,end). A miss returns nil, nil, false, nil.
 func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, nil, false, err
 	}
-	if db.cached != nil {
-		return db.cached.SeekGE(start, end)
+	if cached != nil {
+		return cached.SeekGE(start, end)
 	}
-	it, err := db.backend.Iterator(start, end)
+	return seekGEBackend(backend, start, end)
+}
+
+func seekGEBackend(backend *db.DB, start, end []byte) ([]byte, []byte, bool, error) {
+	it, err := backend.Iterator(start, end)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -2379,24 +2414,26 @@ func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
 // should use SeekGE. Store also fences multi-record commits and physical pruning
 // against reads and snapshot acquisition. Results own their key/value bytes.
 func (db *DB) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, nil, false, err
 	}
-	if db.cached != nil {
-		return db.cached.SeekGEVersionRange(start, end)
+	if cached != nil {
+		return cached.SeekGEVersionRange(start, end)
 	}
-	return db.SeekGE(start, end)
+	return seekGEBackend(backend, start, end)
 }
 
 // ReverseIterator returns a reverse iterator over the range [start, end).
 func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.ReverseIterator(start, end)
+	if cached != nil {
+		return cached.ReverseIterator(start, end)
 	}
-	return db.backend.ReverseIterator(start, end)
+	return backend.ReverseIterator(start, end)
 }
 
 // NewBatch creates a new batch for buffered writes.
@@ -2449,29 +2486,39 @@ func (db *DB) AcquireSnapshot() Snapshot {
 	if db == nil {
 		return nil
 	}
-	if db.cached != nil {
-		if snap := db.cached.AcquireBackendSnapshotFastPath(); snap != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
+		return nil
+	}
+	if cached != nil {
+		if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
 			return snap
 		}
-		snap := db.cached.AcquireSnapshot()
+		snap := cached.AcquireSnapshot()
 		if snap == nil {
 			return nil
 		}
 		return snap
 	}
-	if db.backend == nil {
+	if backend == nil {
 		return nil
 	}
-	return db.backend.AcquireSnapshot()
+	return backend.AcquireSnapshot()
 }
 
 // Stats returns diagnostic stats for the active backend and cached layer.
 func (db *DB) Stats() map[string]string {
-	if db == nil || (db.cached == nil && db.backend == nil) {
+	if db == nil {
 		return nil
 	}
-	if db.cached != nil {
-		stats := db.cached.Stats()
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	cached, backend := db.cached, db.backend
+	if cached == nil && backend == nil {
+		return nil
+	}
+	if cached != nil {
+		stats := cached.Stats()
 		if stats == nil {
 			stats = make(map[string]string)
 		}
@@ -2484,11 +2531,11 @@ func (db *DB) Stats() map[string]string {
 		db.publicOperationStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-		bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
+		bgIndexVacuumStatsInto(stats, &db.bgVac, backend.VacuumOnlinePhase())
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
-	stats := db.backend.Stats()
+	stats := backend.Stats()
 	if stats == nil {
 		stats = make(map[string]string)
 	}
@@ -2498,7 +2545,7 @@ func (db *DB) Stats() map[string]string {
 	db.publicOperationStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-	bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
+	bgIndexVacuumStatsInto(stats, &db.bgVac, backend.VacuumOnlinePhase())
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }

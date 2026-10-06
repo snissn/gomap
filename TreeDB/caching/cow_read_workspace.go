@@ -279,7 +279,7 @@ func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, er
 	return w.read(ptr.ValuePtr(), true, dst)
 }
 
-func (s *Snapshot) cowEntryLocked(w *cowReadWorkspace, key []byte) (node.LeafEntry, error) {
+func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
 	if found {
 		if flags&(node.FlagPointer|node.FlagTombstone) == 0 {
@@ -289,17 +289,17 @@ func (s *Snapshot) cowEntryLocked(w *cowReadWorkspace, key []byte) (node.LeafEnt
 		// GetEntry alone copies it into the caller-owned returned entry.
 		return node.LeafEntry{Key: key, Value: val, ValuePtr: ptr, Flags: flags, Revision: revision}, nil
 	}
+	w, err := s.cowWorkspaceLocked()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
 	return s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, w.key[:], w.leaf[:], w.readLeaf)
 }
 
 func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	w, err := s.cowWorkspaceLocked()
-	if err != nil {
-		return dst, 0, err
-	}
-	value, revision, err := s.cowValueLocked(w, key)
+	value, revision, err := s.cowValueLocked(key)
 	if err != nil {
 		return dst, revision, err
 	}
@@ -307,8 +307,8 @@ func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.Entr
 }
 
 // cowValueLocked borrows one winning value under cowReadMu and beginRead.
-func (s *Snapshot) cowValueLocked(w *cowReadWorkspace, key []byte) ([]byte, page.EntryRevision, error) {
-	entry, err := s.cowEntryLocked(w, key)
+func (s *Snapshot) cowValueLocked(key []byte) ([]byte, page.EntryRevision, error) {
+	entry, err := s.cowEntryLocked(key)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -317,6 +317,10 @@ func (s *Snapshot) cowValueLocked(w *cowReadWorkspace, key []byte) ([]byte, page
 	}
 	value := entry.Value
 	if entry.Flags&node.FlagPointer != 0 {
+		w, workspaceErr := s.cowWorkspaceLocked()
+		if workspaceErr != nil {
+			return nil, entry.Revision, workspaceErr
+		}
 		value, err = w.read(entry.ValuePtr, false, nil)
 	}
 	return value, entry.Revision, err
@@ -331,11 +335,7 @@ func (s *Snapshot) cowViewCopy(key []byte) ([]byte, *memtable.COWExternalLease, 
 	defer s.endRead()
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	w, err := s.cowWorkspaceLocked()
-	if err != nil {
-		return nil, nil, false, err
-	}
-	value, _, err := s.cowValueLocked(w, normalizeRawKVPointKey(key))
+	value, _, err := s.cowValueLocked(normalizeRawKVPointKey(key))
 	if err == tree.ErrKeyNotFound {
 		return nil, nil, false, nil
 	}

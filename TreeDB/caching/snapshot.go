@@ -1184,11 +1184,7 @@ func (s *Snapshot) hasOpen(key []byte) (bool, error) {
 	if s.cowCut != nil {
 		s.cowReadMu.Lock()
 		defer s.cowReadMu.Unlock()
-		w, err := s.cowWorkspaceLocked()
-		if err != nil {
-			return false, err
-		}
-		entry, err := s.cowEntryLocked(w, key)
+		entry, err := s.cowEntryLocked(key)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			return false, nil
 		}
@@ -1468,11 +1464,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	if s.cowCut != nil {
 		s.cowReadMu.Lock()
 		defer s.cowReadMu.Unlock()
-		w, err := s.cowWorkspaceLocked()
-		if err != nil {
-			return node.LeafEntry{}, err
-		}
-		entry, err := s.cowEntryLocked(w, key)
+		entry, err := s.cowEntryLocked(key)
 		if err == nil {
 			entry.Key = append([]byte(nil), entry.Key...)
 			entry.Value = append([]byte(nil), entry.Value...)
