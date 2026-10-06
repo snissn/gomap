@@ -13,7 +13,7 @@ CORE_SHA='0182750a8662e3beed1748527f1c24549470bfa275852877f7408233883412a6'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
 OLD_SHA='fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70'
+COLLECTOR_SHA='37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
 RUN='rf4trial24mixedchangingc1'; QUERY_RUN=RUN+'mixedc1v1'
 C=Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN

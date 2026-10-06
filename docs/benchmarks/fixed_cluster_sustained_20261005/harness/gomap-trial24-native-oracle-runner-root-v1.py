@@ -7,9 +7,9 @@ import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, 
 if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="fdc7c6ea3cff6401a38efedb142c407220f3421ae1ddb11f7ae6361db4080e52"
+HELPER_SHA="46051f60b8097e4767c79f9b4400e82f7117780e5162c3fc2a540d712f923b39"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70"
+COLLECTOR_SHA="37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
 RUNNER="/home/mikers/gomap-1242-bounded-runner-prepare.py"
 TEMPLATE="/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1"
@@ -249,7 +249,7 @@ def capture_file(path):
         need(all(int(events.get(k,"-1"))==0 for k in ("oom","oom_kill")) and int(events.get("oom_group_kill","0"))==0,"actual no OOM")
     peak=int(raw["receipts/end-memory.peak.txt"]);need(0<=peak<=8589934592,"actual finite peak")
     pending=strict(raw["oracle-preparation/native-prefix-oracles-pending.json"])
-    need(pending["state"]=="NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION" and pending["source_head"]==HEAD and pending["source_tree"]==TREE and pending["RunID"]=="rf4trial24mixedchangingc1mixedc1v1" and pending["Profile"]=="changing-top10" and len(pending["Prefixes"])==59 and len(pending["OriginalRequests"])==58,"pending native packet shape/source")
+    need(pending["state"]=="NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION" and pending["source_head"]==HEAD and pending["source_tree"]==TREE and pending["RunID"]=="rf4trial24mixedchangingc1mixedc1v1" and pending["Profile"]=="changing-top10" and len(pending["Prefixes"])==49 and len(pending["OriginalRequests"])==48,"pending native packet shape/source")
     admission=strict(raw["run-admission.json"]);prepared=strict(raw["prepared-packet.json"])
     for n,item in prepared["files"].items():need(sha(raw[n])==item["sha256"],"generated runner/payload unchanged")
     need(admission["review"]["RootReviewedGeneratedRunnerAndAdmittedRun"] is True and admission["review"]["prepared_packet_sha256"]==sha(raw["prepared-packet.json"]),"actual root reviewed packet binding")

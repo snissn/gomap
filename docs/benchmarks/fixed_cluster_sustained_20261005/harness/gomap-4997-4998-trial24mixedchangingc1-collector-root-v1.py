@@ -219,9 +219,9 @@ def validate_mixed_report(planned, report):
         assert admission['PopulationRows']==b['PopulationRows'] and admission['PopulationSHA256']==b['PopulationSHA256']
         assert admission['HighestCommitIndex']==b['HighestCommitIndex']
     assert len(planned['Anchors'])==len(report['Anchors'])==b['AnchorRows'] and planned['Anchors']==report['Anchors']
-    assert len(report['Prefixes'])==59 and planned['Prefixes']==report['Prefixes']==prefix_oracles['Prefixes']
+    assert len(report['Prefixes'])==49 and planned['Prefixes']==report['Prefixes']==prefix_oracles['Prefixes']
     assert encode_go_json(original_requests(report['Writes']))==encode_go_json(prefix_oracles['OriginalRequests']), 'original request byte identity including signed zero'
-    assert report['Kind']=='fixed_cluster_mixed_window_v1' and report['PaceInterval']==5000000000
+    assert report['Kind']=='fixed_cluster_mixed_window_v1' and report['PaceInterval']==6000000000
     assert report['Concurrency']==1 and report['WarmupPlanned']==64 and report['MaxAttempts']==65536
     assert report['OutputBytes']==134217728 and report['RequestedDuration']==300000000000
     assert report['ResourceGateDir']==MOUNT_GATE and len(report['ResourceBoundaries'])==len(boundary_evidence)==2
@@ -238,9 +238,9 @@ def validate_mixed_report(planned, report):
     assert w['Attempted']==w['Succeeded']==64 and w['Failed']==w['Canceled']==w['Unknown']==0
     assert c['Attempted']==c['Succeeded'] and c['Failed']==c['Canceled']==c['Unknown']==0
     assert all(v>0 for v in report['MeasuredQuerySucceeded'])
-    assert len(report['Writes'])==58 and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Writes'])
+    assert len(report['Writes'])==48 and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Writes'])
     assert len(report['Retries'])==2 and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Retries'])
-    assert len(report['Visibility'])==58 and len(report['VisibilityEvidence'])==58
+    assert len(report['Visibility'])==48 and len(report['VisibilityEvidence'])==48
     assert report['HighestNewCommitIndex']>b['HighestCommitIndex'] and report['RequiredAppliedIndex']>=report['HighestNewCommitIndex']
     assert report['AuditPlan']['HighestNewCommitIndex']==report['HighestNewCommitIndex']
     assert report['AuditPlan']['RequiredAppliedIndex']==report['RequiredAppliedIndex']
@@ -249,7 +249,7 @@ def validate_mixed_report(planned, report):
     for v in audits:
         audit=v['ColocatedAudit']
         assert audit['RunID']==QUERY_RUN and audit['AppliedIndex']>=report['RequiredAppliedIndex']
-        assert audit['RetainedCount']==58 and len(audit['Witnesses'])==58 and len(audit['Final'])==4
+        assert audit['RetainedCount']==48 and len(audit['Witnesses'])==48 and len(audit['Final'])==4
     assert not report['Truncated'] and report['StopReason']=='window_elapsed'
     assert planned['Profile']==report['Profile']=='changing-top10'
     assert a['Verdict']=='ACCEPTED_INPUTS_CHANGING_TOP10_PENDING_RUNTIME'
@@ -618,7 +618,7 @@ def driver_arguments():
         '-v',root+'/bootstrap-qualify.json:/bootstrap.json:ro',
         '-v',INPUT_ROOT+':/recall:ro','-v',GATE_DIR+':'+MOUNT_GATE+':rw',image,
         '-config','/config.json','-bootstrap-receipt','/bootstrap.json',
-        '-mode','mixed-window','-mixed-profile','changing-top10','-mixed-originals','58','-mixed-interval','5s','-phase','post-only',
+        '-mode','mixed-window','-mixed-profile','changing-top10','-mixed-originals','48','-mixed-interval','6s','-phase','post-only',
         '-probe-receipt','/recall/probe.jsonl','-dataset','/recall/dataset',
         '-provenance','/recall/provenance.json','-run-id',QUERY_RUN,
         '-read-resource-gate-dir',MOUNT_GATE,'-timeout','420s','-rpc-timeout','3s',
@@ -713,7 +713,7 @@ def build_initial_population(files, bootstrap, baseline):
 
 
 def apply_originals(initial, writes):
-    assert len(writes)==58
+    assert len(writes)==48
     out=dict(initial);previous=0;keys=set()
     for ordinal,w in enumerate(writes):
         assert w['Ordinal']==ordinal and w['Invoked'] is True and w['Outcome']=='succeeded'
@@ -746,7 +746,7 @@ def population_plan(vectors, floor, known_plan=None):
            'RequiredAppliedIndex':floor,'Writes':[],'Final':[]}
     else:
         p=copy.deepcopy(known_plan)
-        assert p['RunID']==QUERY_RUN and len(p['Writes'])==58 and len(p['Final'])==4
+        assert p['RunID']==QUERY_RUN and len(p['Writes'])==48 and len(p['Final'])==4
         assert p['RequiredAppliedIndex']==floor>=p['HighestNewCommitIndex']>0
         assert 'Population' not in p
     p['Population']=expectation
@@ -895,7 +895,7 @@ def compatible_prefixes(response, prefixes, query_index, lower, upper):
 
 
 def validate_causal_report(report, initial):
-    count=original_count(report);assert count==58
+    count=original_count(report);assert count==48
     prefixes=report['Prefixes'];assert len(prefixes)==count+1
     states=[dict(initial)]
     for i in range(1,count+1):states.append(apply_prefix(initial,report['Writes'][:i]))
@@ -907,7 +907,7 @@ def validate_causal_report(report, initial):
                for p in prefixes[1:] for qi in range(16)), 'no top10 membership changed'
     for i,w in enumerate(report['Writes']):
         assert w['StartNS']>0 and w['EndNS']>=w['StartNS']
-        if i:assert w['StartNS']>=report['Writes'][i-1]['EndNS'] and w['StartNS']>=report['Writes'][i-1]['StartNS']+5000000000
+        if i:assert w['StartNS']>=report['Writes'][i-1]['EndNS'] and w['StartNS']>=report['Writes'][i-1]['StartNS']+6000000000
     reads=report['ReadPrefixes'];attempts=report['Attempts']
     measured=[a for a in attempts if a['Phase']=='measured'];assert len(reads)==len(measured)
     by_ordinal={p['Ordinal']:p for p in reads};assert len(by_ordinal)==len(reads)
@@ -998,7 +998,7 @@ def validate_prefix_oracles(oracle,a,initial):
     assert oracle['source_head']==a['source_head'] and oracle['source_tree']==a['source_tree']
     assert oracle['InitialPopulationSHA256']==population_identity(initial,128)['SHA256']
     writes=oracle['OriginalRequests'];prefixes=oracle['Prefixes']
-    assert len(writes)==58 and len(prefixes)==59
+    assert len(writes)==48 and len(prefixes)==49
     assert writes==original_requests(writes), 'frozen OriginalRequests must use canonical omitted inactive fields'
     sustained_originals(writes)
     assert all(w['Ordinal']==i and w['Kind'] in ('replace','delete') for i,w in enumerate(writes))
@@ -1097,7 +1097,7 @@ def self_check():
     checks.append('ordinary_protocol_integer_tokens_preserved')
     # Actual mixedWrite/ColocatedAuditWriteV1 omitempty shapes: no inactive key.
     initial={'doc-%06d'%i:checked_vector(v+[0]*126,128) for i,v in enumerate(([0,1],[1,0],[-1,0],[0,-1]))}
-    pattern=[('replace',0,[1,-0.0]),('replace',0,[-1,-0.0]),('delete',1,None),('replace',2,[0,1]),('delete',2,None),('delete',3,None)]+[('replace',0,[1,-0.0] if i%2==0 else [-1,-0.0]) for i in range(6,58)]
+    pattern=[('replace',0,[1,-0.0]),('replace',0,[-1,-0.0]),('delete',1,None),('replace',2,[0,1]),('delete',2,None),('delete',3,None)]+[('replace',0,[1,-0.0] if i%2==0 else [-1,-0.0]) for i in range(6,48)]
     writes=[]
     for i,(kind,index,xy) in enumerate(pattern):
         req={'Version':1,'Generation':{'Index':'synthetic','Generation':2},
@@ -1357,8 +1357,8 @@ def uint64_mask(n):
     assert type(n) is int and 0<n<1<<64
     return n
 def sustained_originals(writes):
-    assert len(writes)==58
-    assert [w['Ordinal'] for w in writes]==list(range(58)) and all(type(w['Ordinal']) is int for w in writes)
+    assert len(writes)==48
+    assert [w['Ordinal'] for w in writes]==list(range(48)) and all(type(w['Ordinal']) is int for w in writes)
     assert [w['Kind'] for w in writes[:6]]==['replace','replace','delete','replace','delete','delete']
     ids=[operation_request(w)[1]['ID'] for w in writes[:6]]
     assert ids[0]==ids[1] and ids[3]==ids[4] and len({ids[i] for i in (0,2,3,5)})==4
@@ -1375,16 +1375,16 @@ def sustained_originals(writes):
         assert [struct.pack('<f',x) for x in req['Vector']]==[struct.pack('<f',x) for x in v[i%2]]
 
 def sustained_shape(report,planned=False):
-    assert original_count(report)==58
+    assert original_count(report)==48
     writes=report['Writes'];prefixes=report['Prefixes']
-    assert len(writes)==58 and len(prefixes)==59
+    assert len(writes)==48 and len(prefixes)==49
     sustained_originals(writes)
-    assert [p['Prefix'] for p in prefixes]==list(range(59))
+    assert [p['Prefix'] for p in prefixes]==list(range(49))
     assert all(type(p['Prefix']) is int and type(p['PopulationRows']) is int and len(p['Truth'])==len(p['Changed'])==16 for p in prefixes)
     assert report['Concurrency']==1 and report['WarmupPlanned']==64 and report['MaxAttempts']==65536 and report['OutputBytes']==134217728
-    assert report['RequestedDuration']==300000000000 and report['PaceInterval']==5000000000 and report['Truncated'] is False
+    assert report['RequestedDuration']==300000000000 and report['PaceInterval']==6000000000 and report['Truncated'] is False
     for i,w in enumerate(writes):
-        assert type(w['Ordinal']) is int and w['Ordinal']==i and w['IntendedOffsetNS']==i*5000000000
+        assert type(w['Ordinal']) is int and w['Ordinal']==i and w['IntendedOffsetNS']==i*6000000000
         assert w['Outcome']==('unissued' if planned else 'succeeded') and w['Invoked'] is (not planned)
     if planned:
         assert report['Retries'] in (None,[]) and report['Attempts'] in (None,[]) and report['ReadPrefixes'] in (None,[])

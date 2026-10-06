@@ -95,8 +95,8 @@ Go JSON PASS and captured source/input equality remain required. Historical
 retrieval receipts are evidence and are deliberately absent from this source
 packet. Root retains and accepts fresh transport and runtime evidence separately.
 
-The measured workload remains 300 seconds, 58 original writes, 59 canonical
-prefix states, at least five seconds between original starts, RPC timeout three
+The explicitly revised measured workload is 300 seconds, 48 original writes, 49 canonical
+prefix states, six seconds between original starts (above the five-second minimum), RPC timeout three
 seconds, C1, 64 warmup calls, 65,536 measured attempts and 128 MiB complete output.
 The driver 420-second and collector 480-second bounds are termination envelopes.
 Native preparation retains its 120-second context and 1 MiB output cap; the
@@ -107,7 +107,7 @@ Remaining gates: independent packet prereview; product and harness landing;
 exact frozen runtime/harness source identities; actual build/images; final
 source declaration and generated source review; fresh bootstrap/config/TLS/CIDs,
 inputs, native oracle, permission and admission; one-shot actual collection;
-all initial/final populations, all 58 witnesses, resource/closure and durable
+all initial/final populations, all 48 witnesses, resource/closure and durable
 artifact retention. This source packet proves no sustained capacity result and
 closes no parent issue.
 
@@ -179,3 +179,16 @@ first owned mkdir, freezer joins, and both source constructors. Dataset/TLS
 dependencies and acceptance receipts in these controls are explicitly synthetic.
 They prove source-only joins and no-mutation rejection, not product acceptance,
 remote filesystem qualification, CI, certificates, datasets or workload results.
+
+Root accepted the 48-original/49-prefix revision before retained invocation.
+With campaign spacing of 6s and two serial RPC budgets of 3s each, the cumulative
+budget is (48-1)*max(6,6)+6 = 288s, leaving 12s of arithmetic headroom in 300s.
+Ideal original starts extend through 282s. The exact retained interval is 6s;
+five-second reports or declarations fail this campaign gate. Generic product
+defaults and shared verifier fixtures retain their five-second semantics.
+This does not guarantee completion under arbitrary scheduling or validation
+delay. The former 58-original proposal needs 348s and is superseded; old source
+and evidence retain their identities and cannot become 48-original evidence.
+The 48-original contract remains provisional until the generic product admission
+correction lands. All 49 native canonical prefixes and all 48 witnesses remain
+required. The even count preserves the final population of 10002.

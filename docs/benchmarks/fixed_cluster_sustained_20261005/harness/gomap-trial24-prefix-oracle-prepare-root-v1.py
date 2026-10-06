@@ -6,7 +6,7 @@ runs the proposed command separately. Native output is pending root acceptance.
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
 if not __debug__:raise RuntimeError('ordinary Python required')
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70'
+COLLECTOR_SHA='37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
 GO_SOURCE=r'''package main
 
 import (
@@ -32,9 +32,9 @@ func TestTrial24FrozenCanonicalPrefixOraclePreparation(t *testing.T) {
  if err=recallPrepare(ctx,recallOptions{Config:cfg.Config,Bootstrap:cfg.Bootstrap,Dataset:cfg.Dataset,Provenance:cfg.Provenance,Probe:cfg.Probe,Phase:admission.Phase,RunID:admission.RunID,Timeout:admission.Timeout,RPCTimeout:admission.RPCTimeout},&in,&admission);err!=nil {t.Fatal(err)}
  if admission.PopulationRows!=10005||admission.PopulationSHA256!=cfg.InitialPopulationSHA256||len(admission.Queries)!=16||len(in.corpusIDs)!=10000 {t.Fatal("actual admitted population mismatch")}
  exportedBefore:=hashJSON(in.exported)
- r:=mixedReport{Originals:58,Profile:mixedProfileChangingTop10,windowReport:windowReport{Admission:admission},PaceInterval:5*time.Second}
+ r:=mixedReport{Originals:48,Profile:mixedProfileChangingTop10,windowReport:windowReport{Admission:admission},PaceInterval:6*time.Second}
  final,err:=mixedPlan(ctx,&in,&r);if err!=nil {t.Fatal(err)}
- if len(r.Writes)!=58||len(r.Prefixes)!=59||len(final.vectors)!=10002||hashJSON(in.exported)!=exportedBefore {t.Fatal("prefix shape/exported admission changed")}
+ if len(r.Writes)!=48||len(r.Prefixes)!=49||len(final.vectors)!=10002||hashJSON(in.exported)!=exportedBefore {t.Fatal("prefix shape/exported admission changed")}
  // Recheck complete population and native canonical top10 at each causal state.
  for prefix,p:=range r.Prefixes {
   state,e:=mixedPopulation(&in,r.Writes[:prefix]);if e!=nil {t.Fatal(e)}
@@ -45,10 +45,10 @@ func TestTrial24FrozenCanonicalPrefixOraclePreparation(t *testing.T) {
    if e!=nil||!pacedSameTruth(truth,p.Truth[qi]) {t.Fatalf("full native prefix%d query%d: %v",prefix,qi,e)}
   }
  }
- again:=mixedReport{Originals:58,Profile:r.Profile,windowReport:windowReport{Admission:admission},PaceInterval:r.PaceInterval}
+ again:=mixedReport{Originals:48,Profile:r.Profile,windowReport:windowReport{Admission:admission},PaceInterval:r.PaceInterval}
  if _,err=mixedPlan(ctx,&in,&again);err!=nil||hashJSON(again.Writes)!=hashJSON(r.Writes)||hashJSON(again.Prefixes)!=hashJSON(r.Prefixes) {t.Fatalf("non-deterministic originals/oracles: %v",err)}
  type original struct { Ordinal int; Kind string; Replace *public.ReplaceRequestV1 `json:",omitempty"`; Delete *public.DeleteRequestV1 `json:",omitempty"` }
- originals:=make([]original,0,58)
+ originals:=make([]original,0,48)
  for i,w:=range r.Writes {
   if w.Ordinal!=i||(w.Replace==nil)==(w.Delete==nil)||w.Replace!=nil&&w.Kind!="replace"||w.Delete!=nil&&w.Kind!="delete" {t.Fatal("invalid original pointer/kind")}
   originals=append(originals,original{Ordinal:w.Ordinal,Kind:w.Kind,Replace:w.Replace,Delete:w.Delete})

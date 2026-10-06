@@ -51,17 +51,17 @@ assert c.compatible_prefixes(response,prefixes,0,0,63)[1]==.5
 checks.append('minimum_across_every_compatible_state')
 bad('prefix65_cap',lambda:c.compatible_prefixes(response,prefixes+[prefixes[-1]],0,0,64))
 bad('bool_causal_bound',lambda:c.compatible_prefixes(response,prefixes,0,False,63))
-# Real omitted-pointer request schema, original six shape and52 changing replacements.
+# Real omitted-pointer request schema, original six shape and42 changing replacements.
 vecs=[[1.,-0.0]+[0.]*126,[-1.,-0.0]+[0.]*126,[0.,1.]+[0.]*126]
-pattern=[('replace',0,0),('replace',0,1),('delete',1,None),('replace',2,2),('delete',2,None),('delete',3,None)]+[('replace',0,i%2) for i in range(6,58)]
+pattern=[('replace',0,0),('replace',0,1),('delete',1,None),('replace',2,2),('delete',2,None),('delete',3,None)]+[('replace',0,i%2) for i in range(6,48)]
 writes=[]
 for i,(kind,id,vi) in enumerate(pattern):
  req={'Version':1,'Generation':{'Index':'synthetic','Generation':2},'ID':base64.b64encode(('doc-%06d'%id).encode()).decode(),'IdempotencyKey':base64.b64encode(('trial24-key-%d'%i).encode()).decode(),'Deadline':'0001-01-01T00:00:00Z'}
  if kind=='replace':req.update(Vector=vecs[vi],Document=base64.b64encode(c.encode_go_json({'embedding':vecs[vi]})).decode())
- writes.append({'Ordinal':i,'Kind':kind,kind.capitalize():req,'IntendedOffsetNS':i*5000000000,'Outcome':'succeeded','Invoked':True})
-report={'Originals':58,'Writes':writes,'Prefixes':[{'Prefix':i,'PopulationRows':10005-(i>=3)-(i>=5)-(i>=6),'Truth':[[]]*16,'Changed':[[]]*16} for i in range(59)],'Concurrency':1,'WarmupPlanned':64,'MaxAttempts':65536,'OutputBytes':134217728,'RequestedDuration':300000000000,'PaceInterval':5000000000,'Truncated':False,'Retries':[dict(writes[0]),dict(writes[2])],'ReadPrefixes':[{'CompatibleMask':1<<58}]}
-c.sustained_shape(report);checks.append('complete58_originals59_prefix_shape')
-for label,edit in [('missing_original',lambda z:z['Writes'].pop()),('duplicate_ordinal',lambda z:z['Writes'][-1].__setitem__('Ordinal',56)),('missing_prefix',lambda z:z['Prefixes'].pop()),('duplicate_prefix',lambda z:z['Prefixes'][-1].__setitem__('Prefix',57)),('wrong_count',lambda z:z.__setitem__('Originals',57)),('truncated',lambda z:z.__setitem__('Truncated',True)),('output_cap',lambda z:z.__setitem__('OutputBytes',134217729)),('unknown_original',lambda z:z['Writes'][6].__setitem__('Outcome','unknown')),('duplicate_key',lambda z:z['Writes'][6]['Replace'].__setitem__('IdempotencyKey',z['Writes'][0]['Replace']['IdempotencyKey'])),('continued_noop',lambda z:z['Writes'][6]['Replace'].__setitem__('Vector',vecs[1])),('deleted_ID_reuse',lambda z:z['Writes'][6]['Replace'].__setitem__('ID',z['Writes'][2]['Delete']['ID'])),('wrong_retry',lambda z:z['Retries'][1].__setitem__('Ordinal',1)),('float_mask',lambda z:z['ReadPrefixes'][0].__setitem__('CompatibleMask',1.0))]:
+ writes.append({'Ordinal':i,'Kind':kind,kind.capitalize():req,'IntendedOffsetNS':i*6000000000,'Outcome':'succeeded','Invoked':True})
+report={'Originals':48,'Writes':writes,'Prefixes':[{'Prefix':i,'PopulationRows':10005-(i>=3)-(i>=5)-(i>=6),'Truth':[[]]*16,'Changed':[[]]*16} for i in range(49)],'Concurrency':1,'WarmupPlanned':64,'MaxAttempts':65536,'OutputBytes':134217728,'RequestedDuration':300000000000,'PaceInterval':6000000000,'Truncated':False,'Retries':[dict(writes[0]),dict(writes[2])],'ReadPrefixes':[{'CompatibleMask':1<<48}]}
+c.sustained_shape(report);checks.append('complete48_originals49_prefix_shape')
+for label,edit in [('missing_original',lambda z:z['Writes'].pop()),('duplicate_ordinal',lambda z:z['Writes'][-1].__setitem__('Ordinal',46)),('missing_prefix',lambda z:z['Prefixes'].pop()),('duplicate_prefix',lambda z:z['Prefixes'][-1].__setitem__('Prefix',47)),('wrong_count',lambda z:z.__setitem__('Originals',47)),('truncated',lambda z:z.__setitem__('Truncated',True)),('output_cap',lambda z:z.__setitem__('OutputBytes',134217729)),('unknown_original',lambda z:z['Writes'][6].__setitem__('Outcome','unknown')),('duplicate_key',lambda z:z['Writes'][6]['Replace'].__setitem__('IdempotencyKey',z['Writes'][0]['Replace']['IdempotencyKey'])),('continued_noop',lambda z:z['Writes'][6]['Replace'].__setitem__('Vector',vecs[1])),('deleted_ID_reuse',lambda z:z['Writes'][6]['Replace'].__setitem__('ID',z['Writes'][2]['Delete']['ID'])),('wrong_retry',lambda z:z['Retries'][1].__setitem__('Ordinal',1)),('float_mask',lambda z:z['ReadPrefixes'][0].__setitem__('CompatibleMask',1.0))]:
  z=copy.deepcopy(report);edit(z);bad(label,lambda z=z:c.sustained_shape(z))
 assert c.strict_json('[1,-0]')[1]==0 and struct.pack('<f',c.strict_json('[1,-0]')[1])==struct.pack('<f',-0.0)
 checks.append('raw_JSON_negative_zero_FP32_retained')
@@ -117,7 +117,7 @@ checks.append("actual_mutation_deadline_explicit_RPC3s")
 # Actual command flags and no silent bounds expansion.
 ns=rs.pure_collector({'query_image':'sha256:'+'1'*64,'driver_uid_gid':'1000:1000','driver_sha256':'2'*64},'a'*32)
 argv=ns['driver_arguments']()
-for flag,want in [('-mixed-originals','58'),('-read-window','300s'),('-mixed-interval','5s'),('-timeout','420s'),('-rpc-timeout','3s'),('-read-warmup','64'),('-read-max-attempts','65536'),('-read-output-bytes','134217728')]:assert argv.count(flag)==1 and argv[argv.index(flag)+1]==want
+for flag,want in [('-mixed-originals','48'),('-read-window','300s'),('-mixed-interval','6s'),('-timeout','420s'),('-rpc-timeout','3s'),('-read-warmup','64'),('-read-max-attempts','65536'),('-read-output-bytes','134217728')]:assert argv.count(flag)==1 and argv[argv.index(flag)+1]==want
 checks.append('exact_sustained_argv_existing_caps')
 # Exact immutable portable transitive source closure.
 for row in m['transitive_sources'].values():
@@ -534,4 +534,6 @@ for label,target in cases:
 
 exec(compile((R/'receipt_closure_checks.py').read_bytes(),'receipt_closure_checks.py','exec'))
 
-print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native59-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
+exec(compile((R/'cumulative_workload_checks.py').read_bytes(),str(R/'cumulative_workload_checks.py'),'exec'))
+
+print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

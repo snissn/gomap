@@ -4,10 +4,10 @@
   "source_head": null,
   "source_tree": null,
   "workload": {
-    "Originals": 58,
-    "Prefixes": 59,
+    "Originals": 48,
+    "Prefixes": 49,
     "DurationSeconds": 300,
-    "MinSpacingSeconds": 5,
+    "MinSpacingSeconds": 6,
     "RPCTimeoutSeconds": 3,
     "OverallTimeoutSeconds": 420,
     "CollectorOuterSeconds": 480,
@@ -67,7 +67,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py",
-        "sha256": "32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70"
+        "sha256": "37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
       },
       "changes": [
         [
@@ -100,7 +100,7 @@
         ],
         [
           "'-mixed-profile','changing-top10'",
-          "'-mixed-profile','changing-top10','-mixed-originals','58'"
+          "'-mixed-profile','changing-top10','-mixed-originals','48'"
         ],
         [
           "['duration_seconds']==60",
@@ -113,6 +113,10 @@
         [
           "len(planned['Anchors'])",
           "len(planned['Anchors'])"
+        ],
+        [
+          "'-mixed-interval','5s'",
+          "'-mixed-interval','6s'"
         ]
       ]
     },
@@ -190,7 +194,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "22f8d2764f502f044f5c9375f1522d0ac909db65b2f2f938d34bf23b722413e2"
+        "sha256": "6545cb65575352785897c80ccbbd73c89bed19bece02758a3dc8b482c66b1310"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -204,7 +208,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "fdc7c6ea3cff6401a38efedb142c407220f3421ae1ddb11f7ae6361db4080e52"
+        "sha256": "46051f60b8097e4767c79f9b4400e82f7117780e5162c3fc2a540d712f923b39"
       },
       "changes": [
         [
@@ -213,15 +217,19 @@
         ],
         [
           "mixedReport{Profile:",
-          "mixedReport{Originals:58,Profile:"
+          "mixedReport{Originals:48,Profile:"
         ],
         [
           "len(r.Writes)!=6||len(r.Prefixes)!=7",
-          "len(r.Writes)!=58||len(r.Prefixes)!=59"
+          "len(r.Writes)!=48||len(r.Prefixes)!=49"
         ],
         [
           "make([]original,0,6)",
-          "make([]original,0,58)"
+          "make([]original,0,48)"
+        ],
+        [
+          "PaceInterval:5*time.Second",
+          "PaceInterval:6*time.Second"
         ]
       ]
     },
@@ -232,7 +240,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "521d7f731f6ab0624d5a8a35f81c12e94e3281de5d2782b15a70bb6dd03f3729"
+        "sha256": "ed45269aabb9689833bca3c044a63b133c46cf778534fc6bd14d06ff793a2cf8"
       },
       "changes": [
         [
@@ -249,7 +257,7 @@
         ],
         [
           "len(pending[\"Prefixes\"])==7 and len(pending[\"OriginalRequests\"])==6",
-          "len(pending[\"Prefixes\"])==59 and len(pending[\"OriginalRequests\"])==58"
+          "len(pending[\"Prefixes\"])==49 and len(pending[\"OriginalRequests\"])==48"
         ]
       ]
     },
@@ -260,7 +268,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "0a6eb86f559cbda226d9b691fc845a42db4290c0023d62ee5d178feea9fb0fdd"
+        "sha256": "5345c9a27a7f6cd318d26617db26dffe8d2cae687dca6f023ea8dc764539baa0"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -273,7 +281,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "68c2f5059c5f1a552c758cc5bcbc90490825f16e7b76df4f9b0bb4d20abdcaeb"
+        "sha256": "b8cb5d66271dcf515da1d9deeda31832843ef280dfdd5d0467a55260229615b2"
       },
       "changes": [
         [
@@ -282,20 +290,21 @@
         ],
         [
           "len(actual)==len(expected)==7",
-          "len(actual)==len(expected)==59"
+          "len(actual)==len(expected)==49"
         ],
         [
           "len(native_originals)==6",
-          "len(native_originals)==58"
+          "len(native_originals)==48"
         ],
         [
           "('final',6,",
-          "('final',58,"
+          "('final',48,"
         ],
         [
           "range(1,7)",
-          "range(1,59)"
-        ]
+          "range(1,49)"
+        ],
+        "Exact retained campaign verifier adapts PaceInterval and both serial start bounds to6s; generic shared read defaults/self-check remain5s"
       ]
     },
     "resource": {
@@ -305,7 +314,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "e4a3f01c51fe3a7ef9cefe1f98f641631d895422a7e5f6fb0fcf99acbb29f22b"
+        "sha256": "313d0015c9b91c1fa0076e436c982e6dfed0fd8b6d07fea8b8003b9c575a5d0f"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -314,7 +323,7 @@
   },
   "limits": [
     "No source/runtime/campaign acceptance or activation. Final root frozen source/head/tree/inventory/ELFs/images/CIDs/TLS/inputs/admission are absent.",
-    "Native preparation remains its accepted120s context and bounded1MiB packet; root must assess actual new59-prefix preparation without silently raising either cap.",
+    "Native preparation remains its accepted120s context and bounded1MiB packet; root must assess actual new49-prefix preparation without silently raising either cap.",
     "512KiB audit plan,128MiB complete output,16384 population row default and all retained resource/ownership bounds unchanged."
   ],
   "transitive_sources": {
@@ -427,5 +436,17 @@
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     }
+  },
+  "workload_revision": {
+    "state": "PROVISIONAL_ACCEPTED_48_ORIGINAL_WORKLOAD_PENDING_PRODUCT_LANDING",
+    "originals": 48,
+    "prefixes": 49,
+    "cumulative_rpc_budget_seconds": 288,
+    "arithmetic_headroom_seconds": 12,
+    "supersedes": "58 originals/59 prefixes at300s/5s/3s;348s cumulative RPC budget is inadmissible",
+    "authority": "Root accepted issue5021 revision before retained invocation; prior evidence remains historical",
+    "interval_seconds": 6,
+    "ideal_last_start_seconds": 282,
+    "accepted_revision": "accepted-cumulative-workload-revision-root-v2.json"
   }
 }

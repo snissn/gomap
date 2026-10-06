@@ -8,7 +8,7 @@ import pathlib, re, secrets, shlex, subprocess, sys, tarfile, time, types
 if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode = True
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA = "32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70"
+COLLECTOR_SHA = "37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
 RESOURCE = source_path('/tmp/gomap-4994-mixed-window-resource-accounting-root-v5.py')
 RESOURCE_SHA = "f2f776103435f40fcc83cceb5e34b51bf1337e00f77b848cdddef1ebef6e296d"
 RUN = "rf4trial24mixedchangingc1"

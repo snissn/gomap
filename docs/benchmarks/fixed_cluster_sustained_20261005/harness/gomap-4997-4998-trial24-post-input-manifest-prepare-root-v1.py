@@ -4,7 +4,7 @@ import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
 TEMPLATE_SHA256 = 'e486d6ef8059e75958ae85be621784904c8a0bd949693f90452cf13e55a3bdcc'
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA256 = '32bfb32812b05e7ddadd45b7042ec06f2b046afc6dba7d995a0d9e23b1216d70'
+COLLECTOR_SHA256 = '37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def collector():
     assert sha(pathlib.Path(COLLECTOR).read_bytes()) == COLLECTOR_SHA256

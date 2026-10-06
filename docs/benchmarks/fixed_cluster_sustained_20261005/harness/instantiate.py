@@ -6,7 +6,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='0ba1d5dc584132bb4648fd219a1ea0373c37c6b8ed4e8cfd9c213a5ab3668a11'
+PACKET_SHA='8b5b404347fe30a6718aa681ea83ddbd347821a002857a3630392fd361d29a79'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -120,7 +120,7 @@ def main():
   dest=Path(emitted[role]['path']) if role in emitted else out/role
   dest.parent.mkdir(parents=True,exist_ok=True)
   with dest.open('xb') as f:f.write(b)
- receipt={'state':'FROZEN_SOURCE_OUTPUT_PENDING_INDEPENDENT_REVIEW_NO_ACTIVATION','campaign':d['campaign'],'workload':d['workload'],'source_head':d['source_head'],'source_tree':d['source_tree'],'declaration_path':a.declaration,'declaration_sha256':a.declaration_sha256,'provisional_packet_sha256':PACKET_SHA,'roles':emitted,'transitive_sources':m['transitive_sources'],'source_path_resolver':m['source_path_resolver'],'final_source_pins':{k:d[k] for k in ('source_inventory','build','images','source_prereview')},'runtime_started':False,'admission_flags_granted':False,'root_remaining_gates':['Independent generated source review including final macro/path/hash joins','Fresh bootstrap/config/TLS/CIDs/stores/growth/post-input sealed inventory','Native59-prefix Go preparation actual timeout/1MiB cap and independent actual oracle acceptance','Predeclared recall accounting policy, permission8raw proof, final manifest and exclusive root activation','Actual one-shot window, all initial/final populations, all58witnesses, resource/closure and durable retention']}
+ receipt={'state':'FROZEN_SOURCE_OUTPUT_PENDING_INDEPENDENT_REVIEW_NO_ACTIVATION','campaign':d['campaign'],'workload':d['workload'],'source_head':d['source_head'],'source_tree':d['source_tree'],'declaration_path':a.declaration,'declaration_sha256':a.declaration_sha256,'provisional_packet_sha256':PACKET_SHA,'roles':emitted,'transitive_sources':m['transitive_sources'],'source_path_resolver':m['source_path_resolver'],'final_source_pins':{k:d[k] for k in ('source_inventory','build','images','source_prereview')},'runtime_started':False,'admission_flags_granted':False,'root_remaining_gates':['Independent generated source review including final macro/path/hash joins','Fresh bootstrap/config/TLS/CIDs/stores/growth/post-input sealed inventory','Native49-prefix Go preparation actual timeout/1MiB cap and independent actual oracle acceptance','Predeclared recall accounting policy, permission8raw proof, final manifest and exclusive root activation','Actual one-shot window, all initial/final populations, all48witnesses, resource/closure and durable retention']}
  with (out/'instantiation.json').open('x') as f:json.dump(receipt,f,indent=2);f.write('\n')
  print(json.dumps({'state':receipt['state'],'receipt':str(out/'instantiation.json'),'sha256':sha((out/'instantiation.json').read_bytes()),'runtime_started':False}))
 if __name__=='__main__':main()
