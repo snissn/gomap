@@ -14,7 +14,7 @@ CORE_SHA='2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
 OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3'
+COLLECTOR_SHA='e8c7e4fb3fbfab3c1001c7a86f36b36b6e89caddc50c90a755fdc795a6a4c9e5'
 RUN=W.campaign; QUERY_RUN=W.query_run
 C=Path(W.output)
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN
@@ -137,6 +137,8 @@ def permission_proof(pr,permission_raw,a):
  need(set(PERMISSION_PATH_KEYS)<=set(pr),'permission raw contract missing')
  px=strict(permission_raw[pr['inspect_path']]);need(isinstance(px,list) and len(px)==1,'one raw isolated inspect');px=px[0]
  pc=strict(permission_raw[pr['command_path']]);ps=permission_raw[pr['stdout_path']]
+ expected_name=NAME+('-trial24-checkpoint-window-v1' if W.issue=='5021' and a.get('receipts',{}).get('predeclaration','/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json')!='/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json' else '')+'-isolated-permission'
+ need(pc.count('--name')==1 and pc[pc.index('--name')+1]==expected_name and px['Name']=='/'+expected_name,'exact isolated phase name')
  need(px['Image']==a['query_image'] and px['HostConfig']['NetworkMode']=='none' and px['Config']['User']==a['driver_uid_gid'],'raw isolated image/network/user')
  binds=px['HostConfig']['Binds'];need(isinstance(binds,list) and len(binds)==len(set(binds)),'unique isolated mounts')
  required={ROOT+'/node-c/config.json:/config.json:ro',ROOT+'/node-c/credentials:/credentials:ro',ROOT+'/bootstrap-qualify.json:/bootstrap.json:ro'}
@@ -367,7 +369,7 @@ def self_check():
  pc[pc.index('-mode')+1]='read-window';j=pc.index('-mixed-interval');del pc[j:j+2];j=pc.index('-mixed-profile');del pc[j:j+2];j=pc.index('-mixed-originals');del pc[j:j+2]
  image_at=pc.index(a['query_image']);app=pc[image_at+1:]
  binds=[pc[i+1] for i,v in enumerate(pc) if v=='-v']
- px={'Id':'5'*64,'Image':a['query_image'],'Path':'/treedb-query-under-write','Args':app,
+ px={'Id':'5'*64,'Name':'/'+NAME+'-isolated-permission','Image':a['query_image'],'Path':'/treedb-query-under-write','Args':app,
   'Config':{'User':a['driver_uid_gid'],'Entrypoint':['/treedb-query-under-write'],'Cmd':app},
   'HostConfig':{'NetworkMode':'none','Binds':binds,'Mounts':[],'VolumesFrom':[]},
   'Mounts':[{'Source':b.split(':')[0],'Destination':b.split(':')[1],'Type':'bind','Mode':'ro','RW':False} for b in binds],

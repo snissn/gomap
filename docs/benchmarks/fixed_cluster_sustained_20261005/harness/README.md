@@ -307,3 +307,81 @@ ranking nor runtime artifacts. Collection still requires #5021 actual checkpoint
 all oracle/resource/lifecycle gates and independent artifact acceptance.
 
 The isolated permission observation switches to `read-window` with an exact `60s` duration, supported by the read-only driver. Its exact argv validator rejects a substituted duration. This does not change the original mixed checkpoint’s `300s` declaration or the matched `60s` C1/C4 workloads. Synthetic argv controls do not prove that credentials were read or that an actual permission observation passed.
+# Prospective Trial24 checkpoint window
+
+The original 7,200-second campaign is **INCOMPLETE**, retired after a network-none
+permission setup bounds refusal with zero issued RPCs. Its declaration, budget,
+refusal container, input staging and raw evidence stay unchanged. The separate
+`trial24-checkpoint-window-v1` phase may measure the first original 300-second
+window; it cannot qualify the original end-to-end preparation timebox.
+
+Source construction remains provisional until this source and its predecessor
+PR5070 are reviewed and landed. The optional instantiation `checkpoint_harness`
+object supplies `head`, `tree`, `source_inventory` and `source_acceptance` (the
+last two are ordinary path/SHA references to the existing independently reviewed
+landed-source envelope). Every current harness template Git blob/mode must occur
+unchanged in that separate inventory, and its refs remain in instantiation output.
+Runtime `source_head/tree`, build, images and native
+oracle provenance remain 484c6e13 / 5a3ff182. Omitting the optional object preserves
+fresh-campaign construction and disables checkpoint admission. Paths locate
+bytes; equal staged copies must retain every checked SHA.
+
+The phase predeclaration has state `PROSPECTIVE_CHECKPOINT_WINDOW_PREDECLARED`,
+`PhaseID`, `campaign`, `runtime_started: false`, exact `accepted_workload`, separate
+`runtime_head/tree` and `harness_head/tree`, and `checkpoint_refs` containing
+`decision`, `original_budget`, `original_predeclaration`, `original_inactive`,
+`refusal`, `native`, `retention`. All seven hashes are fixed by the accepted graph
+decision. Put every reference in the ordinary manifest `local_pins`; the thirteen
+receipt roles and manifest shape are unchanged. The new predeclaration occupies
+the existing `predeclaration` role and must differ from the original path.
+
+Authorization state is `AUTHORIZED_SINGLE_FIRST_CHECKPOINT_WINDOW`, with the
+same RunID, fixed PhaseID, separate runtime/harness identities, collector SHA,
+new predeclaration SHA, `all_cleanup_io_stopped`, `no_other_campaign_or_writer`,
+`retained_owned_stores_verified`, and path/SHA references `phase_budget` and
+`unused_window_proof`. The budget state is
+`CHECKPOINT_WINDOW_PERMISSION_DISPATCH_STARTED`: fixed PhaseID, integer
+`budget_seconds: 7200`, finite `started_unix`, `deadline_unix = started_unix + 7200`,
+predeclaration SHA and graph decision SHA. Root starts it immediately before the
+first actual permission command after source landing. It includes permission,
+population admission, workload, closure, independent review and three copies;
+source construction and original preparation cost remain separately reported.
+
+The unused-window proof states `FRESH_ORIGINAL_WINDOW_UNUSED`, fixes PhaseID and
+original inactive SHA, `output`, `name`, `gate`, finite `observed_unix`, and true
+`output_absent`, `driver_absent`, `gate_absent`, `no_issued_mutations`,
+`all_four_stopped_owned`, and `stopped_nodes` mapping all four node names to
+the exact original CIDs. Its `raw_evidence` list contains exactly two retained
+successful bounded SSH records, one for each approved host. Each JSON stdout
+binds the same state/phase, `host`, its own two-node `stopped_nodes` subset and
+true `all_stopped_owned`. Only the driver host also binds the exact `name` and
+`gate` with true `driver_absent` and `gate_absent`. Both raw completions precede
+`observed_unix`, which precedes phase budget start; there is no extra TTL.
+Permission and collector separately refuse
+an existing local collector output before creating outputs. Remote path checks
+do not claim to observe the local evidence filesystem. These are root operator observations, not a global
+lock. Fresh resources, TLS, ownership and exclusivity remain root admission.
+Already-owned permission wait/inspect/logs and bounded final stop/inspect bypass
+phase exhaustion, as does the collector's existing finally closure. No new
+launch may bypass the budget. The collector still inspects the same four CIDs and performs its full live
+initial population audit before the sole window launch.
+
+New inactive manifest locator ends
+`-final-inactive-trial24-checkpoint-window-v1-root-v1.json`; the archive and all
+four readonly mount locators remain original. Permission verifies the existing
+remote staged tree without writing: UID/GID1000, bounded exact inventory/files,
+no symlink ancestors, no extra files/directories. Its fresh container name adds
+`-trial24-checkpoint-window-v1-isolated-permission`; the old refusal remains.
+The collector output/name/gate are admitted only as unused and remain exclusive.
+Phase exhaustion refuses new work; existing finally cleanup retains its bounded
+stop/inspect/evidence commands. Immutable artifact accounting checks provenance
+without applying current-clock freshness to historical receipt bytes.
+
+The phase collector-review binding has `decision: ACCEPT`, empty `findings`,
+collector SHA, new predeclaration SHA and separate runtime/harness head/tree.
+The landed binding has state `LANDED_CHECKPOINT_WINDOW_HARNESS_VERIFIED`, those
+same identities and collector SHA, actual `merge_commit`, `required_ci_passed`.
+Root must back those bindings with actual independent generated-source review
+and current landed source/CI evidence. Synthetic source controls never provide
+these authorities. All workload, outcome, population, resource, retention and
+unknown-fails-without-replay gates remain unchanged; parent readiness stays open.

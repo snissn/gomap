@@ -67,7 +67,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py",
-        "sha256": "6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3"
+        "sha256": "e8c7e4fb3fbfab3c1001c7a86f36b36b6e89caddc50c90a755fdc795a6a4c9e5"
       },
       "changes": [
         [
@@ -195,7 +195,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "ba6678e82a553ec30785c3dead7af5649769505cfccf1a694e29a471007d6da1"
+        "sha256": "41b95901eee6d2c55007a0ba6dea67e3b716297c8b3895e498f05758928eb580"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -209,7 +209,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "694b422489e781ce781f046eb00c06a0a9a76a963d7bd0e5af48ba4f181a6d07"
+        "sha256": "008e1f74a41fa19e2aefb59172c6038a6c07ab9a899c50a6e26bb23fb5ab828a"
       },
       "changes": [
         [
@@ -241,7 +241,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "5accd554b321c015902f3d8901206cdccaf1fc4c67165f3fb6cf92902c6c30c6"
+        "sha256": "2e7a64a3ac22729df8886a2983f787ced596cbbe161cf7c675b99806d0b28916"
       },
       "changes": [
         [
@@ -269,7 +269,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "f9e7fe729fa5227ff248e540c7208e313036cc0b647e36a0d58a301e5a8930d8"
+        "sha256": "b189b43b52a59c00de780530a46f594ff839cc0190a3d4364188df485badd4a0"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "8b953985fc2cf6854ccf8b02b42e4f58d0092944552974b4071e58e240fd0d2a"
+        "sha256": "6b9a19224c5d4432b2dd7b52d596280b0ad19e2ec6e1f20fb141874fa15bbabf"
       },
       "changes": [
         [
@@ -315,7 +315,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "bae7f84f9b0eb89a88f2b845276d645dbc2b8b73c2a2b9cff20885c32e08ba79"
+        "sha256": "bd2d2c288cf05cb06dfadfc949bd00d093468244acc8cfd7c8d8b7c9340ce408"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -483,5 +483,13 @@
     "InitialRows": 10005,
     "FinalRows": 10002,
     "state": "SOURCE_CONSTRUCTION_ONLY_NOT_ADMITTED"
+  },
+  "checkpoint_phase": {
+    "id": "trial24-checkpoint-window-v1",
+    "state": "PROVISIONAL_SOURCE_ONLY_NOT_ADMITTED",
+    "graph_decision_sha256": "274c9fabff5c94811bdb9d4812b6c38504787b9e73da9a2701a1dde153f653ef",
+    "runtime_head": "484c6e131ba72357155d512ed06f2842c0a866a3",
+    "runtime_tree": "5a3ff182ebe4f86aca1fcf171f7d44b90643528a",
+    "original_campaign": "INCOMPLETE_RETIRED_AFTER_NO_RPC_PERMISSION_SETUP_REFUSAL"
   }
 }
