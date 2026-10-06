@@ -356,3 +356,208 @@ func TestCOWChangedSizeSingleAndDuplicateFinalRecord(t *testing.T) {
 		t.Fatalf("old pointer changed=%q err=%v", value, err)
 	}
 }
+
+type cowMissingSuccessorTable struct{ memtable.Table }
+
+func TestCOWSuccessorCapturedSourcesPrecedenceAndPressure(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(dir, "backend")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{MemtableMode: "cow_btree", MemtableShards: 4,
+		DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30,
+		ValueLogPointerThreshold: 64, ValueLogCompression: uint8(vlogCompressionOff)})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			_ = db.Close()
+		}
+	})
+	capture := func() *Snapshot {
+		t.Helper()
+		s, e := db.acquireCOWSnapshotWithError()
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+	check := func(s *Snapshot, start, end, wantKey, wantValue string, found bool) {
+		t.Helper()
+		var bound []byte
+		if end != "" {
+			bound = []byte(end)
+		}
+		key, value, got, e := s.cowSeekGE([]byte(start), bound)
+		if e != nil || got != found || string(key) != wantKey || string(value) != wantValue {
+			t.Fatalf("SeekGE [%q,%q)=%q/%q found=%t err=%v want=%q/%q %t", start, end, key, value, got, e, wantKey, wantValue, found)
+		}
+	}
+	empty := capture()
+	check(empty, "", "", "", "", false)
+	if err := db.Set(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	zero := capture()
+	check(zero, "", "", "", "", true)
+	if err := db.Delete(nil); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"a": "old-a", "m": "old-m", "z": "old-z"} {
+		if err := db.Set([]byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := capture()
+	var crossStart string
+	for ch := byte('b'); ch < 'm'; ch++ {
+		if db.shardIndex([]byte{ch}) != db.shardIndex([]byte("m")) {
+			crossStart = string([]byte{ch})
+			break
+		}
+	}
+	if crossStart == "" {
+		t.Fatal("fixture has no cross-shard lower bound")
+	}
+	check(old, crossStart, "", "m", "old-m", true)
+	check(old, crossStart, "m", "", "", false)
+	if err := db.Delete([]byte("m")); err != nil {
+		t.Fatal(err)
+	}
+	// Freeze real current roots without publishing to disk, then restore m in a
+	// newer root. The older physical tombstone must lose to that current value.
+	db.cow.writerMu.Lock()
+	rollover, err := db.cow.prepareRollover()
+	if err == nil {
+		rollover.install()
+	}
+	db.cow.writerMu.Unlock()
+	rollover.drain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("m"), []byte("current-m")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	current := capture()
+	before := db.cow.budget.Stats()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := db.cow.budget.AcquireExternal(db.cow.budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No workspace/cursor is needed for the winning inline value, even with
+	// a losing older tombstone and no available external reservation.
+	check(current, "m", "", "m", "current-m", true)
+	if got := db.cow.budget.Stats().Views; got != before.Views {
+		t.Fatalf("fast successor acquired cursor views: %d want%d", got, before.Views)
+	}
+	// An unexpected table capability must use the same snapshot fallback rather
+	// than silently omitting even an otherwise losing source.
+	queue := current.rootIterator.immutables
+	original := queue[0]
+	queue[0] = cowMissingSuccessorTable{original}
+	_, _, _, capabilityErr := current.cowSeekGE([]byte("m"), nil)
+	queue[0] = original
+	if !errors.Is(capabilityErr, memtable.ErrCOWCapacity) {
+		pressure.Close()
+		t.Fatalf("missing capability bypassed fallback: %v", capabilityErr)
+	}
+	// Winning physical tombstones still use the general iterator, whose
+	// admitted owner must refuse at this real capacity boundary.
+	if _, _, _, e := current.cowSeekGE([]byte("a"), nil); !errors.Is(e, memtable.ErrCOWCapacity) {
+		pressure.Close()
+		t.Fatalf("tombstone fallback error=%v", e)
+	}
+	pressure.Close()
+	check(current, "a", "", "m", "current-m", true)
+	check(old, "a", "", "a", "old-a", true)
+	check(current, "z", "z", "", "", false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	check(current, "m", "", "m", "current-m", true)
+	check(old, "m", "", "m", "old-m", true)
+	disk := capture()
+	if isEmpty, e := disk.cowCut.basis.snapshot.OwnedUserRootEmpty(); e != nil || isEmpty {
+		t.Fatalf("disk basis empty=%t err=%v", isEmpty, e)
+	}
+	check(disk, "a", "", "m", "current-m", true)
+	if err := db.Set([]byte("m"), []byte("later-m")); err != nil {
+		t.Fatal(err)
+	}
+	check(disk, "m", "", "m", "current-m", true)
+	if key, value, found, e := db.SeekGE([]byte("m"), nil); e != nil || !found || string(key) != "m" || string(value) != "later-m" {
+		t.Fatalf("live successor=%q/%q %t %v", key, value, found, e)
+	}
+	for _, s := range []*Snapshot{empty, zero, old, current, disk} {
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, e := s.cowSeekGE(nil, nil); !errors.Is(e, backenddb.ErrClosed) {
+			t.Fatalf("closed successor=%v", e)
+		}
+	}
+	cache := db.cow
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats := cache.budget.Stats()
+	if stats.TotalBytes != 0 || stats.Views != 0 || stats.ExternalLeases != 0 || stats.PeakBytes == 0 {
+		t.Fatalf("successor owners did not drain: %+v", stats)
+	}
+}
+
+func TestCOWSuccessorPointerOwnershipRefusalRetry(t *testing.T) {
+	db := cowPointerFixture(t)
+	want := bytes.Repeat([]byte("pointer"), 128)
+	if err := db.Set([]byte("a"), want); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	before := db.cow.budget.Stats()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := db.cow.budget.AcquireExternal(db.cow.budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, e := s.cowSeekGE(nil, nil); !errors.Is(e, memtable.ErrCOWCapacity) {
+		pressure.Close()
+		t.Fatalf("pointer refusal=%v", e)
+	}
+	if s.cowReader != nil || db.cow.budget.Stats().Views != before.Views {
+		t.Fatal("refused pointer successor leaked workspace/cursor")
+	}
+	pressure.Close()
+	key, value, found, err := s.cowSeekGE(nil, nil)
+	if err != nil || !found || string(key) != "a" || !bytes.Equal(value, want) {
+		t.Fatalf("pointer successor=%q len%d %t %v", key, len(value), found, err)
+	}
+	key[0] = 'x'
+	value[0] ^= 0xff
+	if err := db.Set([]byte("a"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	key, value, found, err = s.cowSeekGE(nil, nil)
+	if err != nil || !found || string(key) != "a" || !bytes.Equal(value, want) {
+		t.Fatal("owned pointer output mutated retained cut")
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	_, value, found, err = s.cowSeekGE(nil, nil)
+	if err != nil || !found || !bytes.Equal(value, want) {
+		t.Fatal("old successor pointer changed after checkpoint")
+	}
+}

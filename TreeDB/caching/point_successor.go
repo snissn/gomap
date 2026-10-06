@@ -197,20 +197,12 @@ func (db *DB) seekGE(start, end []byte, mvccOwned bool) (key, value []byte, foun
 		return nil, nil, false, nil
 	}
 	if db.cow != nil {
-		it, err := db.cowIterator(start, end)
+		s, err := db.acquireCOWSnapshotWithError()
 		if err != nil {
 			return nil, nil, false, err
 		}
-		defer it.Close()
-		if !it.Valid() {
-			return nil, nil, false, it.Error()
-		}
-		key = append([]byte(nil), it.Key()...)
-		value = append([]byte(nil), it.Value()...)
-		if err := it.Error(); err != nil {
-			return nil, nil, false, err
-		}
-		return key, value, true, nil
+		defer s.Close()
+		return s.cowSeekGE(start, end)
 	}
 	db.pointSuccessorCallsTotal.Add(1)
 	debugTiming := pointSuccessorDebugEnabled.Load()

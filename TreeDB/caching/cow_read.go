@@ -15,6 +15,69 @@ import (
 
 func (db *DB) COWMode() bool { return db != nil && db.cow != nil }
 
+// cowSeekGE uses only this snapshot's owned sources. An empty retained disk
+// basis permits allocation-free cached lower bounds; disk records and physical
+// tombstone advancement retain the general merge on the same snapshot.
+func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, err error) {
+	if err = s.beginRead(); err != nil {
+		return nil, nil, false, err
+	}
+	defer s.endRead()
+	empty, err := s.cowCut.basis.snapshot.OwnedUserRootEmpty()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if empty {
+		var best pointSuccessorCandidate
+		queue := s.rootIterator.immutables
+		for i := len(queue) - 1; i >= 0; i-- {
+			if _, ok := queue[i].(memtable.SuccessorTable); !ok {
+				empty = false // Unknown sources require the existing merge.
+				break
+			}
+			candidate := seekPointSuccessorTable(queue[i], start, end, nil, 0, len(queue)-1-i)
+			best = choosePointSuccessor(best, candidate)
+		}
+		if empty {
+			if !best.found {
+				return nil, nil, false, nil
+			}
+			if best.flags&node.FlagTombstone == 0 {
+				s.cowReadMu.Lock()
+				borrowed, _, readErr := s.cowValueLocked(best.key)
+				if readErr == nil {
+					key = append([]byte(nil), best.key...)
+					value = append([]byte(nil), borrowed...)
+				}
+				s.cowReadMu.Unlock()
+				if readErr != nil {
+					return nil, nil, false, readErr
+				}
+				return key, value, true, nil
+			}
+		}
+	}
+	// No read-workspace mutex is held while the iterator acquires its own pins
+	// and decodes values. beginRead keeps this exact cut alive through Close.
+	it, err := s.Iterator(start, end)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer func() { err = errors.Join(err, it.Close()) }()
+	if !it.Valid() {
+		return nil, nil, false, it.Error()
+	}
+	if err = it.Error(); err != nil {
+		return nil, nil, false, err
+	}
+	key = append([]byte(nil), it.Key()...)
+	value = append([]byte(nil), it.Value()...)
+	if err = it.Error(); err != nil {
+		return nil, nil, false, err
+	}
+	return key, value, true, nil
+}
+
 func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 	s, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
