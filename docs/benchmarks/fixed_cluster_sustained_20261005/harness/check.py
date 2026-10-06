@@ -560,4 +560,8 @@ exec(compile((R/'cumulative_workload_checks.py').read_bytes(),str(R/'cumulative_
 
 exec(compile((R/'elf_schema_checks.py').read_bytes(),str(R/'elf_schema_checks.py'),'exec'))
 
+assert len(checks)==442
+exec(compile((R/'visibility48_checks.py').read_bytes(),str(R/'visibility48_checks.py'),'exec'))
+visibility_controls()
+
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

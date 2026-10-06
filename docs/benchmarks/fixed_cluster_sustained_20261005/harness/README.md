@@ -199,3 +199,9 @@ raw-pinned build proof; packaged image records retain their two-field identity
 projection. The pure fixtures execute the actual adapter emission and validated
 projection seams before exercising the bootstrap, freezer and growth/post joins.
 These controlled tool outputs and synthetic bytes grant no build or image authority.
+
+Post-ACK visibility uses the declared original count for the final slot; every
+interior probe must finish before its next mutation. The complete pure checker
+runs the actual Trial24 adapted read verifier with six and 48 synthetic writes,
+including the final48 probe and rejected slot5 boundary crossing. These reports
+test accounting only and grant no native-oracle or campaign authority.

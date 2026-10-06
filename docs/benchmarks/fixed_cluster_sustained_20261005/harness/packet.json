@@ -26,7 +26,7 @@
       },
       "output": {
         "path": "shared_read.py",
-        "sha256": "9d69cd0d900f1552e30fff5beb5d271680a11b09f22579d9a334514d5e4d09f9"
+        "sha256": "6390d6573d9f0e1681f4ef95f812e21477f7fd739e1f84ccc1f5ae6b1a8726f9"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "b8cb5d66271dcf515da1d9deeda31832843ef280dfdd5d0467a55260229615b2"
+        "sha256": "cbfe800e95e91194668c72e62247d72a5d04ca28b5fddc598bfb8dd9e038fc20"
       },
       "changes": [
         [

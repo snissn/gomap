@@ -9,7 +9,7 @@ from pathlib import Path
 sys.dont_write_bytecode=True
 if not __debug__: raise RuntimeError('ordinary Python required')
 READ=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_read.py')
-READ_SHA='9d69cd0d900f1552e30fff5beb5d271680a11b09f22579d9a334514d5e4d09f9'
+READ_SHA='6390d6573d9f0e1681f4ef95f812e21477f7fd739e1f84ccc1f5ae6b1a8726f9'
 AUDIT=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_audit.py')
 AUDIT_SHA='1ccb25b1a18df928135f6fdcabead753353ff3d9ca700f4aa5ec88a8fc2db7c4'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')

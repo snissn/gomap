@@ -204,7 +204,7 @@ def verifier(a,p,r,ptext,text,states,mean_recall_floor=None):
  visibility_hashes=[];previous_end=origin
  for i,(op,raw) in enumerate(raw_array(text,'Visibility',r['Visibility'])):
   successful(op,'visibility');start,end=interval(op,'visibility');v_origin=c.stamp(r['VisibilityOriginUTC'][i]);w=r['Writes'][i]
-  need(v_origin>=origin+w['EndNS'] and v_origin>=previous_end and v_origin+end<=origin+duration and (i==5 or v_origin+end<=origin+r['Writes'][i+1]['StartNS']),'post-ACK probe completes before next mutation/drain');previous_end=v_origin+end
+  need(v_origin>=origin+w['EndNS'] and v_origin>=previous_end and v_origin+end<=origin+duration and (i==count-1 or v_origin+end<=origin+r['Writes'][i+1]['StartNS']),'post-ACK probe completes before next mutation/drain');previous_end=v_origin+end
   need(op['Ordinal']==i and op['Kind']=='search' and op['Phase']=='post-ack-current-prefix' and op['InsertRequest'] is None,'declared exact visibility slot')
   q,qraw=queries[i%16];expected=copy.deepcopy(q['Request']);expected['VisibilityToken']=w['Response']['VisibilityToken'];need(expected['VisibilityToken'] and op['SearchRequest']['VisibilityToken']==expected['VisibilityToken'],'actual original ACK token floor')
   base_raw=raw_field(qraw,'Request',q['Request']);_,tokenraw=c.field(raw_array(text,'Writes',r['Writes'])[i][1],'Response');_,token=c.field(tokenraw,'VisibilityToken')
