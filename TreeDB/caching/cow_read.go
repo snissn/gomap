@@ -152,7 +152,15 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 	if err != nil {
 		return nil, err
 	}
-	count := len(s.rootIterator.immutables)
+	queue := s.rootIterator.immutables
+	count := 0
+	for _, source := range queue {
+		// The cut owns immutable roots. Len includes tombstones: only exact
+		// zero-entry roots can be omitted without changing precedence.
+		if source.Len() != 0 {
+			count++
+		}
+	}
 	if !empty {
 		count++
 	}
@@ -168,7 +176,7 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 		return nil, err
 	}
 	it := &cowMergeIterator{snapshot: s, lease: lease}
-	sources, err := s.cowIteratorSources(start, end, empty, it)
+	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it)
 	if err != nil {
 		it.workspace.close()
 		lease.Close()
@@ -188,14 +196,12 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 	return it, nil
 }
 
-func (s *Snapshot) cowIteratorSources(start, end []byte, empty bool, owner *cowMergeIterator) ([]merging.IteratorSource, error) {
-	queue := s.rootIterator.immutables
-	count := len(queue)
-	if !empty {
-		count++
-	}
+func (s *Snapshot) cowIteratorSources(start, end []byte, queue []memtable.Table, count int, empty bool, owner *cowMergeIterator) ([]merging.IteratorSource, error) {
 	sources := make([]merging.IteratorSource, 0, count)
 	for i := len(queue) - 1; i >= 0; i-- {
+		if queue[i].Len() == 0 {
+			continue
+		}
 		sources = append(sources, merging.IteratorSource{Iter: queue[i].NewIterator(start, end), Priority: len(sources)})
 	}
 	if !empty {

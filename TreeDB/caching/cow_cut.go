@@ -342,7 +342,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 	}
 	dedupBytes := uint64(0)
 	for _, group := range groups {
-		if len(group) > 0 {
+		if len(group) > 1 {
 			dedupBytes += memtable.COWAllocationCharge(uint64(len(group))*128 + 4096)
 		}
 	}
@@ -500,6 +500,17 @@ func (c *cowCache) close() {
 // wins without a capture-time census or cumulative history ledger.
 func cowChangedSize(old cowTable, next *memtable.COWRoot, group []memtable.COWMutation) int64 {
 	size := old.size
+	if len(group) == 1 {
+		key := group[0].Key
+		record, found := next.Get(key)
+		if !found {
+			panic("staged COW point disappeared")
+		}
+		if previous, found := old.root.Get(key); found {
+			size -= cowRecordSize(previous)
+		}
+		return size + cowRecordSize(record)
+	}
 	seen := make(map[string]struct{}, len(group))
 	for _, mutation := range group {
 		record, found := next.Get(mutation.Key)
