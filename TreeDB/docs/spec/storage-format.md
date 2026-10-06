@@ -1961,6 +1961,32 @@ the prior compatibility view only when the view still names the abandoned
 revision. A later view wins. Any ambiguous restore or cleanup poisons the live
 handle rather than guessing.
 
+Committed immutable revisions are reclaimed by `LeafGenerationGC` separately
+from leaf-log segments. After any GC manifest replacements, GC captures fresh
+current and both recoverable-root resource closures. The existing identity
+registry excludes prepared and published resources; held snapshot generation
+pins conservatively retain every matching revision. The current compatibility
+revision is always retained. GC validates the complete exact-parent revision
+inventory before deletion; it never selects revisions by age or a fixed count.
+
+Deletion uses an exact-parent private rename, validates the moved physical
+identity, then unlinks and syncs that retained directory before committing the
+delete lease. A rebound canonical name is preserved. An ambiguous identity,
+namespace observation, or deletion sync poisons the live handle. Private
+`manifest.gc.<sequence>.tmp` evidence left by an interrupted operation refuses
+further revision reclamation instead of being treated as disposable by age.
+The persistent version-2 JSON and dependency-manifest formats are unchanged.
+
+`ManifestRevisionsTotal`, `ManifestRevisionsProtected`,
+`ManifestRevisionsEligible`, `ManifestRevisionsDeleted`,
+`ManifestRevisionBytesEligible`, and `ManifestRevisionBytesDeleted` report
+revision files separately from segment counters. Deleted counts mean completed
+durable unlink, including its directory sync. Dry-run reports eligibility and
+performs no revision namespace mutation. Compatibility-only stores report
+`ManifestRevisionGCUnsupported=true`, preserve legacy segment GC, and delete no
+revision files. Losing required capabilities in a stable store returns an error.
+These counters do not independently establish a storage bound.
+
 Platforms without a retained-parent relative rename capability fail the
 strict stable operation before creating a temporary file. The compatibility
 replacement path returns no stable token; durable-root publication must not

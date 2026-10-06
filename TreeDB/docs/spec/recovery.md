@@ -740,3 +740,15 @@ progress in their existing order before success; no successful ACK is inferred
 from the witness alone. `TestColocatedVectorMutationFSMCoveredRecoveryV1` exercises
 real FSM open/apply at the publication/result/progress cuts for changed and
 metadata-only operations.
+
+### Committed leaf-manifest revision GC
+
+Leaf revision reclamation refreshes its recoverable-root capture after the
+segment GC phase publishes replacement manifests. Both meta-slot resource
+closures remain physical retention authority even if their logical roots match.
+Prepared and publication pins and held snapshot generation pins also prevent
+reclamation. Completed revision deletion is reported only after the retained
+parent directory sync; ambiguous deletion poisons the handle. Recovery does not
+interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
+revision to delete. Further revision maintenance refuses that evidence pending
+explicit recovery investigation.

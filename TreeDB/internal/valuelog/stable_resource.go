@@ -881,9 +881,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	lease, err := m.stableDeleteLease(file)
 	if errors.Is(err, ErrFilePinned) {
 		m.mu.Unlock()
-		if file.retryDeletePending.CompareAndSwap(false, true) {
-			go m.retryZombieDelete(file)
-		}
+		m.startZombieRetry(file)
 		return nil
 	}
 	if err != nil {
@@ -902,8 +900,8 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, lease != nil)
 	if !deleted {
 		abortStableDeleteLease(lease)
-		if isWindowsSharingViolationError(unlinkErr) && file.retryDeletePending.CompareAndSwap(false, true) {
-			go m.retryZombieDelete(file)
+		if isWindowsSharingViolationError(unlinkErr) {
+			m.startZombieRetry(file)
 			return nil
 		}
 		return unlinkErr

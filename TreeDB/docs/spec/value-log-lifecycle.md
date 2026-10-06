@@ -120,6 +120,15 @@ canonical name is never selected for cleanup. An interrupted quarantine is
 durable recovery state: read-write open reconciles it before scanning segments,
 while read-only open returns `ErrRecoveryRequired` without mutation.
 
+### Manager-owned deletion retries
+
+A manager owns every deferred zombie-deletion worker it admits. Admission and
+worker registration occur under the same manager lock that closes admission.
+`Manager.Close` cancels retry backoff and joins those workers outside the lock
+before closing tracked resources. Concurrent and repeated closes observe the
+same completion and error. Stable identity pins still prohibit deletion;
+shutdown does not bypass the gate or reclaim a pinned segment.
+
 ### 2.2 External-version logical pruning is not segment GC
 
 `TreeDB/mvcc.PruneVersions` deletes obsolete physical index keys only after its
@@ -613,3 +622,23 @@ The bound applies to eligible fresh cached ingestion, not every persisted frame:
 previously written files remain readable and maintenance rewrite independently
 groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
 an ingestion improvement alone is not a global post-maintenance size guarantee.
+
+## Immutable split-leaf manifest revision reclamation
+
+`LeafGenerationGC` also reclaims committed immutable manifest revision files
+through the existing physical identity registry and retained directory. This
+phase obtains fresh recovery authority after the segment phase's publications;
+it protects both recovery slots, current compatibility state, prepared and
+published resources, and held snapshot generation pins. Snapshot admission is
+excluded while checking held-generation protection. The regular foreground
+snapshot and read routes acquire no new identity token or lookup map.
+
+Revision inventory and bytes obey `LeafGenerationMaintenanceLimits` independently
+of the preceding segment scan. Cancellation is checked during inventory and
+before each candidate; already completed deletions remain reported. Malformed
+or rebound files, unsupported strict capabilities, and ambiguous namespace sync
+fail closed. Dry-run performs no revision unlink. Separate manifest counters and
+`ManifestRevisionGCUnsupported` distinguish this work from leaf segments.
+Compatibility-only stores retain their segment behavior and explicitly report
+revision GC unsupported. See the precise
+[storage contract](storage-format.md#split-leaf-generation-manifest).

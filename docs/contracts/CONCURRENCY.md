@@ -23,6 +23,15 @@
 - A TreeDB iterator is a point-in-time view of the DB as of iterator creation.
 - The iterator must be closed to release pinned resources.
 
+### Value-log manager shutdown
+
+A value-log manager closes retry admission under its manager lock, cancels
+owned deletion backoff, and joins every admitted worker outside that lock before
+closing tracked files. Concurrent and repeated closes wait for the same result.
+Shutdown never overrides a stable resource pin. Leaf-manifest revision GC uses
+existing snapshot admission and held-generation pins; it does not add a
+foreground snapshot resource-acquisition route.
+
 ### Immutable memtable foundation
 
 The internal immutable memtable foundation uses writer-private preparation and
