@@ -22,11 +22,27 @@ import (
 // This fixture exercises compressed physical outer leaves containing logical
 // value pointers. Paged-leaf rewrite fixtures cannot expose candidate decoding.
 func TestRewriteCompressedOuterLeavesExactClosure(t *testing.T) {
+	testCompressedOuterLeavesExactClosure(t, false, false)
+}
+
+func TestOrdinaryCompressedOuterLeavesExactClosure(t *testing.T) {
+	testCompressedOuterLeavesExactClosure(t, true, false)
+}
+
+func TestOrdinaryGroupedCompressedOuterLeavesExactClosure(t *testing.T) {
+	testCompressedOuterLeavesExactClosure(t, true, true)
+}
+
+func testCompressedOuterLeavesExactClosure(t *testing.T, ordinary, grouped bool) {
 	if !rootpublication.StableNamespaceCreationSupported() {
 		t.Skip("rotated producer creation requires stable creation authority")
 	}
 	const count, batchSize = 2048, 64
-	for _, serialized := range []bool{false, true} {
+	modes := []bool{false, true}
+	if grouped {
+		modes = modes[:1]
+	}
+	for _, serialized := range modes {
 		t.Run(fmt.Sprintf("serialized=%v", serialized), func(t *testing.T) {
 			dir := t.TempDir()
 			db, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed,
@@ -117,7 +133,46 @@ func TestRewriteCompressedOuterLeavesExactClosure(t *testing.T) {
 				beforeBodies := db.durableRootCandidateOuterBodies.Load()
 				beforeLeafScans := db.durableRootCandidateLeafOnlyScans.Load()
 				beforePages := db.durableRootCandidatePagesVisited.Load()
-				if serialized {
+				if grouped {
+					group, groupErr := db.BeginRootPublicationBuildGroup()
+					if groupErr != nil {
+						t.Fatal(groupErr)
+					}
+					for chunk := 0; chunk < 2; chunk++ {
+						b := db.NewPhysicalBatch().(*Batch)
+						for _, swap := range swaps[chunk*batchSize/2 : (chunk+1)*batchSize/2] {
+							if err := b.SetPointer(swap.key, swap.newPtr); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if err := b.SetRootPublicationBuildGroup(group, chunk == 1); err != nil {
+							t.Fatal(err)
+						}
+						if chunk == 1 {
+							err = b.WriteSync()
+						} else {
+							err = b.Write()
+						}
+						closeNoErr(t, b)
+						if err != nil {
+							break
+						}
+					}
+					closeNoErr(t, group)
+				} else if ordinary {
+					b := db.NewBatch().(*Batch)
+					for _, swap := range swaps {
+						if err := b.SetPointer(swap.key, swap.newPtr); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if serialized {
+						err = b.writeSerialized(true, nil, 0, nil)
+					} else {
+						err = b.WriteSync()
+					}
+					closeNoErr(t, b)
+				} else if serialized {
 					err = db.applyRewriteSwapBatchSerialized(swaps, true)
 				} else {
 					var committed bool
@@ -130,7 +185,7 @@ func TestRewriteCompressedOuterLeavesExactClosure(t *testing.T) {
 					t.Fatal(err)
 				}
 				if fullScans != 0 {
-					t.Fatalf("supported fixed-B rewrite ran %d full candidate scans after batch %d, want 0", fullScans, start/batchSize)
+					t.Fatalf("supported fixed-B publication ran %d full candidate scans after batch %d, want 0", fullScans, start/batchSize)
 				}
 				if got := db.durableRootCandidateOuterBodies.Load() - beforeBodies; got != 0 {
 					t.Fatalf("batch %d candidate projected %d outer bodies", start/batchSize, got)
@@ -166,7 +221,7 @@ func TestRewriteCompressedOuterLeavesExactClosure(t *testing.T) {
 			}
 			db.testScanCandidateExternalReferencesHook = nil
 			if fullScans != 0 {
-				t.Fatalf("supported fixed-B rewrite ran %d full candidate scans, want 0", fullScans)
+				t.Fatalf("supported fixed-B publication ran %d full candidate scans, want 0", fullScans)
 			}
 			final := make(map[uint32]bool)
 			for _, descriptor := range db.durableRoot.slotResources[db.durableRoot.slot].PhysicalDescriptors() {
@@ -255,7 +310,27 @@ func setupExactRewritePairWithValueLogOptions(t *testing.T, valueLogOptions Valu
 }
 
 func TestRewriteExactClosureFallbackRepairsOnlyOnActivation(t *testing.T) {
-	for _, condition := range []string{"unknown", "stale", "underflow"} {
+	testExactClosureFallbackRepairsOnlyOnActivation(t, false)
+}
+
+func TestOrdinaryExactClosureFallbackRepairsOnlyOnActivation(t *testing.T) {
+	testExactClosureFallbackRepairsOnlyOnActivation(t, true)
+}
+
+func applyExactClosureFixtureReplacement(db *DB, old, fresh page.ValuePtr, ordinary bool) error {
+	if !ordinary {
+		return db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+	}
+	b := db.NewBatch().(*Batch)
+	defer b.Close()
+	if err := b.SetPointer([]byte("a"), fresh); err != nil {
+		return err
+	}
+	return b.writeSerialized(true, nil, 0, nil)
+}
+
+func testExactClosureFallbackRepairsOnlyOnActivation(t *testing.T, ordinary bool) {
+	for _, condition := range []string{"unknown", "stale", "underflow", "overflow"} {
 		t.Run(condition, func(t *testing.T) {
 			db, _, old, fresh := setupExactRewritePair(t)
 			tracker := db.valueLogRefTracker
@@ -267,6 +342,8 @@ func TestRewriteExactClosureFallbackRepairsOnlyOnActivation(t *testing.T) {
 				tracker.commitSeq--
 			case "underflow":
 				tracker.counts[old.FileID] = 0
+			case "overflow":
+				tracker.counts[fresh.FileID] = ^uint64(0)
 			}
 			tracker.mu.Unlock()
 			before := snapshotCandidateTracker(db)
@@ -274,7 +351,7 @@ func TestRewriteExactClosureFallbackRepairsOnlyOnActivation(t *testing.T) {
 			scans := 0
 			db.testScanCandidateExternalReferencesHook = func() { scans++ }
 			db.testFailDurableRootVisibleInstall.Store(true)
-			err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+			err := applyExactClosureFixtureReplacement(db, old, fresh, ordinary)
 			db.testFailDurableRootVisibleInstall.Store(false)
 			if !errors.Is(err, errTestDurableRootVisibleInstallFailpoint) {
 				t.Fatalf("abort error=%v", err)
@@ -291,7 +368,7 @@ func TestRewriteExactClosureFallbackRepairsOnlyOnActivation(t *testing.T) {
 			if scans != 1 {
 				t.Fatalf("aborted fallback scans=%d", scans)
 			}
-			if err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true); err != nil {
+			if err := applyExactClosureFixtureReplacement(db, old, fresh, ordinary); err != nil {
 				t.Fatal(err)
 			}
 			db.testScanCandidateExternalReferencesHook = nil
@@ -417,6 +494,23 @@ func TestRewriteExactClosureOrdinarySystemValue(t *testing.T) {
 }
 
 func TestRewriteExactClosureOptimisticConflict(t *testing.T) {
+	testExactClosureOptimisticConflict(t, false)
+}
+func TestOrdinaryExactClosureOptimisticConflict(t *testing.T) {
+	testExactClosureOptimisticConflict(t, true)
+}
+func applyExactClosureFixtureOptimistic(db *DB, old, fresh page.ValuePtr, ordinary bool) (bool, error) {
+	if !ordinary {
+		return db.applyRewriteSwapBatchOptimistic([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+	}
+	b := db.NewBatch().(*Batch)
+	defer b.Close()
+	if err := b.SetPointer([]byte("a"), fresh); err != nil {
+		return false, err
+	}
+	return b.writeOptimistic(true, nil, 0, nil)
+}
+func testExactClosureOptimisticConflict(t *testing.T, ordinary bool) {
 	db, _, old, fresh := setupExactRewritePair(t)
 	beforeSeq := db.currentCommitSeq()
 	var competing candidateTrackerSnapshot
@@ -436,7 +530,7 @@ func TestRewriteExactClosureOptimisticConflict(t *testing.T) {
 		competingDescriptors = db.durableRoot.slotResources[db.durableRoot.slot].PhysicalDescriptors()
 	}
 	defer func() { db.testAfterOptimisticPublishPrepareHook = nil }()
-	committed, err := db.applyRewriteSwapBatchOptimistic([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+	committed, err := applyExactClosureFixtureOptimistic(db, old, fresh, ordinary)
 	if err != nil || committed {
 		t.Fatalf("conflicting rewrite committed=%v err=%v", committed, err)
 	}
@@ -450,7 +544,7 @@ func TestRewriteExactClosureOptimisticConflict(t *testing.T) {
 		t.Fatalf("conflicting rewrite read=%q %v", got, err)
 	}
 	assertCandidateTrackerMatchesFullScan(t, db)
-	committed, err = db.applyRewriteSwapBatchOptimistic([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+	committed, err = applyExactClosureFixtureOptimistic(db, old, fresh, ordinary)
 	if err != nil || !committed {
 		t.Fatalf("retry committed=%v err=%v", committed, err)
 	}
@@ -458,6 +552,12 @@ func TestRewriteExactClosureOptimisticConflict(t *testing.T) {
 }
 
 func TestRewriteExactClosureInvalidNewestReopensOlderRawGeneration(t *testing.T) {
+	testExactClosureInvalidNewestReopensOlderRawGeneration(t, false)
+}
+func TestOrdinaryExactClosureInvalidNewestReopensOlderRawGeneration(t *testing.T) {
+	testExactClosureInvalidNewestReopensOlderRawGeneration(t, true)
+}
+func testExactClosureInvalidNewestReopensOlderRawGeneration(t *testing.T, ordinary bool) {
 	if !rootpublication.StableNamespaceCreationSupported() {
 		t.Skip("rotated producer creation requires stable creation authority")
 	}
@@ -472,7 +572,7 @@ func TestRewriteExactClosureInvalidNewestReopensOlderRawGeneration(t *testing.T)
 	if err := writer.rotateLeaf(); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true); err != nil {
+	if err := applyExactClosureFixtureReplacement(db, old, fresh, ordinary); err != nil {
 		t.Fatal(err)
 	}
 	var newestPath string

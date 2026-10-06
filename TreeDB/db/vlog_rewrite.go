@@ -2649,9 +2649,9 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	systemDelta.Freeze()
 	systemIter := systemDelta.NewIterator(nil, nil)
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var systemLeafCapture *rewriteLeafResourceLog
+	var systemLeafCapture *applyLeafResourceLog
 	if systemOpts.outerLeavesInValueLog {
-		systemLeafCapture, err = newRewriteLeafResourceLog(systemOpts.leafPageLog)
+		systemLeafCapture, err = newApplyLeafResourceLog(systemOpts.leafPageLog)
 		if err != nil {
 			return err
 		}
@@ -2733,9 +2733,9 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 		releaseValueLogRefDelta(vlogRefDelta)
 		return rootID, nil, metrics, nil, nil, nil, false, err
 	}
-	var leafCapture *rewriteLeafResourceLog
+	var leafCapture *applyLeafResourceLog
 	if opts.outerLeavesInValueLog {
-		leafCapture, err = newRewriteLeafResourceLog(opts.leafPageLog)
+		leafCapture, err = newApplyLeafResourceLog(opts.leafPageLog)
 		if err != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 			return rootID, nil, metrics, nil, nil, nil, false, err
@@ -2884,9 +2884,9 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
-	var leafCapture *rewriteLeafResourceLog
+	var leafCapture *applyLeafResourceLog
 	if db.indexOuterLeavesInValueLog {
-		leafCapture, err = newRewriteLeafResourceLog(db.leafPageLog)
+		leafCapture, err = newApplyLeafResourceLog(db.leafPageLog)
 		if err != nil {
 			return false, err
 		}
@@ -3051,9 +3051,9 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 
 	z := idx.zipper.CloneWithAllocator(idx.allocator)
 	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
-	var leafCapture *rewriteLeafResourceLog
+	var leafCapture *applyLeafResourceLog
 	if db.indexOuterLeavesInValueLog {
-		leafCapture, err = newRewriteLeafResourceLog(db.leafPageLog)
+		leafCapture, err = newApplyLeafResourceLog(db.leafPageLog)
 		if err != nil {
 			return err
 		}

@@ -110,7 +110,9 @@ type valueLogRefDelta struct {
 	outerLeafDependencyReuse    bool
 	// exactRewriteProjection certifies a matched logical rewrite delta. Raw
 	// membership is collected exactly from the candidate; no base superset.
-	exactRewriteProjection bool
+	exactRewriteProjection  bool
+	ordinaryProjection      ordinaryApplyProjection
+	ordinaryProducerCapture bool
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -155,6 +157,8 @@ func (d *valueLogRefDelta) resetForReuse() {
 	d.allowEmptyDependencyReuse = false
 	d.outerLeafDependencyReuse = false
 	d.exactRewriteProjection = false
+	d.ordinaryProjection = ordinaryApplyProjection{}
+	d.ordinaryProducerCapture = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
@@ -256,6 +260,21 @@ func (d *valueLogRefDelta) forEachPositive(fn func(fileID uint32, count int64) e
 		}
 	}
 	return nil
+}
+
+func (d *valueLogRefDelta) changeFor(fileID uint32) int64 {
+	if d == nil {
+		return 0
+	}
+	if d.changes != nil {
+		return d.changes[fileID]
+	}
+	for i := 0; i < d.inlineN; i++ {
+		if d.inline[i].fileID == fileID {
+			return d.inline[i].delta
+		}
+	}
+	return 0
 }
 
 func (d *valueLogRefDelta) forEachChange(fn func(fileID uint32, change int64) error) error {
