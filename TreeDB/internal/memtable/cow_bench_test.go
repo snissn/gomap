@@ -1,12 +1,14 @@
 package memtable
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"unsafe"
 )
 
-// Fixed-count runs keep the measured foundation inside its finite generation.
+// Use -benchtime=1000x or less to keep this fixed-count foundation witness
+// inside its finite generation.
 // The public cached flush/rollover lifecycle is qualified by C2/C4.
 func BenchmarkCOWPrepareReplace(b *testing.B) {
 	for _, n := range []int{1024, 2048, 4096} {
@@ -167,7 +169,7 @@ func BenchmarkCOWLargeKeyLookup(b *testing.B) {
 	b.Run("RefusedPrepare", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, err := w.Prepare(entries, COWPrepareOptions{}); err != ErrCOWCapacity {
+			if _, err := w.Prepare(entries, COWPrepareOptions{}); !errors.Is(err, ErrCOWCapacity) {
 				b.Fatalf("refusal=%v", err)
 			}
 		}
