@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -278,6 +278,7 @@ def main():
         need(process.returncode == 0, "failed provenance/build command " + name)
         return (out / (name + ".stdout")).read_text()
     try:
+        toolchain = toolchain_inventory(controls["GOROOT"])
         version = run("go-version", [str(go), "version"]).strip()
         go_env = json.loads(run("go-env", [str(go), "env", "-json"]))
         validate_go_environment(go_env, env)
@@ -285,6 +286,7 @@ def main():
         argv = [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
         run("build", argv)
         packages = objects(run("compiled-dependencies", [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]))
+        validate_no_cgo(packages)
         modules = compiled_modules(packages, source)
         write(out / "module-graph.stdout", modules)
         write(out / "effective-module-graph.json", canonical_modules(modules, source))
@@ -304,7 +306,10 @@ def main():
         write(out / "compiled-input-closure.json", closure)
         write(out / "generated-nonpersistent-inputs.json", generated_missing)
         run("binary-buildinfo", [str(go), "version", "-m", str(binary)])
+        need(toolchain_inventory(controls["GOROOT"]) == toolchain, "Go toolchain drift during build")
+        write(out / "toolchain.json", toolchain)
         bindings = {
+            "toolchain": "toolchain.json",
             "git_source": "git-source-authority.json",
             "go_env": "go-env.stdout", "module_graph": "module-graph.stdout",
             "effective_module_graph": "effective-module-graph.json",
@@ -320,7 +325,8 @@ def main():
         verify_git_receipt(source, manifest, git_receipt)
         write(out / "build-receipt.json", {"binary_sha256": sha(binary), "source_tree_sha256": ident["tree_sha256"],
             "environment": controls, "effective_process_environment": env,
-            "race": False, "build_tags": [], "go_version": version, "go_binary_sha256": sha(go),
+            "race": False, "build_tags": [], "go_version": version, "go_binary_sha256": toolchain["go_binary_sha256"],
+            "toolchain_identity": validate_toolchain(toolchain),
             "command": argv, "exit_code": 0, "module_scope": "actual compiled package/test dependency Module records; all declared go.mod/go.sum retained separately",
             "module_producer_command": commands[-2]["command"], "effective_module_identity": sha(out / "effective-module-graph.json"),
             "artifacts": artifacts, "compiled_input_closure_sha256": sha(out / "compiled-input-closure.json"),
