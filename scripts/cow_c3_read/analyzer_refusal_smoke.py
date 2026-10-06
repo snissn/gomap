@@ -95,6 +95,7 @@ def main():
                         "race": False, "build_tags": [], "artifacts": artifacts})
         declaration.update(build_receipt="/synthetic/" + variant + "-build/build-receipt.json", build_receipt_sha256=sha(receipt))
     write(original / "config.json", config)
+    write(original / "live-toolchain.json", {"go_version": config["go_version"], "inventory": toolchain})
     write(original / "environment.json", {"effective_controls": config["environment"], "effective_process_environment": process_environment(config["environment"])})
     write(original / "receipts.json", [])
     hashes = {}
@@ -180,6 +181,17 @@ def main():
         completion["config_sha256"] = sha(packet / "config.json")
         write(packet / "completion.json", completion)
 
+    def damage_live_toolchain(packet, field):
+        path = packet / "live-toolchain.json"
+        value = json.loads(path.read_text())
+        if field == "version":
+            value["go_version"] = "different live version"
+        elif field == "launcher":
+            value["inventory"]["go_binary_sha256"] = "7" * 64
+        else:
+            value["inventory"]["executables"][1]["sha256"] = "6" * 64
+        write(path, value)
+
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
         ("empty-map", lambda packet: write(packet / "baseline-build-artifacts.json", {}), "missing/extra build provenance map"),
@@ -199,6 +211,10 @@ def main():
         ("rehashed-go-version", lambda p: damage_build_toolchain(p, "go_version", "different"), "toolchain mismatch"),
         ("rehashed-go-launcher", lambda p: damage_build_toolchain(p, "go_binary_sha256", "7" * 64), "toolchain mismatch"),
         ("rehashed-compiled-cgo", damage_compiled_cgo, "compiled Cgo inputs forbidden"),
+        ("missing-live-toolchain", lambda p: (p / "live-toolchain.json").unlink(), "FileNotFoundError"),
+        ("changed-live-version", lambda p: damage_live_toolchain(p, "version"), "live toolchain version mismatch"),
+        ("changed-live-launcher", lambda p: damage_live_toolchain(p, "launcher"), "Go toolchain inventory mismatch"),
+        ("changed-live-compiler", lambda p: damage_live_toolchain(p, "compiler"), "Go toolchain inventory mismatch"),
     ]
     results = []
     for label, mutation, expected in cases:
