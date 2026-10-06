@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import unittest
 
-from r1_lifecycle_validate import decode, manifest_hash, validate
+from r1_lifecycle_validate import decode, manifest_hash, validate, working_set
 
 
 @unittest.skipUnless(os.environ.get('R1_LIFECYCLE_TEST_PACKET'), 'set R1_LIFECYCLE_TEST_PACKET to a real rehearsal packet')
@@ -240,6 +240,60 @@ class RealPacketTests(unittest.TestCase):
 
     def test_rehearsal_cannot_be_relabeled_retained(self):
         self.packet['config']['qualification'] = 'retained'
+        self.reject()
+
+    def retained_declaration(self):
+        # Rebind only the declaration on actual recorded evidence. The negative
+        # must fail at provenance, before later raw dimension/run checks.
+        config = self.packet['config']
+        config.update(qualification='retained', repetitions=5, epochs=5,
+                      documents=4096, calls_per_epoch=1024,
+                      landed_tooling_commit=self.original['source_before']['commit'],
+                      review_url='https://github.com/snissn/gomap/pull/5065')
+        config['working_set'] = working_set(config)
+        self.save()
+
+    def frozen_bindings(self):
+        source = self.original['source_before']
+        return {'expected_runtime': source['runtime_sha256'],
+                'expected_harness': source['harness_sha256'],
+                'expected_commit': source['commit'],
+                'expected_landed_tooling_commit': source['commit']}
+
+    def test_relabel_valid_landing_shape_requires_independent_binding(self):
+        self.retained_declaration()
+        with self.assertRaisesRegex(ValueError, 'missing independently verified landing binding'):
+            validate(self.path)
+
+    def test_forged_valid_hex_landing_rejected_against_independent_binding(self):
+        self.retained_declaration()
+        self.packet['config']['landed_tooling_commit'] = 'f' * 40
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'verified landing commit mismatch'):
+            validate(self.path, **self.frozen_bindings())
+
+    def test_missing_landing_declaration(self):
+        self.retained_declaration()
+        self.packet['config']['landed_tooling_commit'] = None
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'missing review/landing declaration'):
+            validate(self.path, **self.frozen_bindings())
+
+    def test_retained_requires_all_independent_source_bindings(self):
+        self.retained_declaration()
+        for key in ('expected_runtime', 'expected_harness', 'expected_commit'):
+            with self.subTest(key=key):
+                bindings = self.frozen_bindings()
+                bindings.pop(key)
+                with self.assertRaisesRegex(ValueError, 'retained validation requires independent source bindings'):
+                    validate(self.path, **bindings)
+
+    def test_unknown_effective_child_environment_rejected(self):
+        self.packet['toolchain']['process_environment']['GOMAP_UNREPORTED_SETTING'] = '1'
+        self.reject()
+
+    def test_effective_godebug_rejected(self):
+        self.packet['toolchain']['process_environment']['GODEBUG'] = 'gctrace=1'
         self.reject()
 
 

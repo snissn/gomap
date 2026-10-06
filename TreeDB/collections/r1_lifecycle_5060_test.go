@@ -403,7 +403,11 @@ func TestR1LifecycleRecoveryAfterMaintenance5060(t *testing.T) {
 				t.Fatal(err)
 			}
 			r1LifecycleAssert5060(t, view, want, known)
-			r1LifecycleMaintenance5060(t, db, col, want, known, []*CollectionReadView{view}, []map[string]map[string]any{want})
+			captured := make(map[string]map[string]any, len(want))
+			for id, row := range want {
+				captured[id] = r1MutationCopy5059(row)
+			}
+			r1LifecycleMaintenance5060(t, db, col, want, known, []*CollectionReadView{view}, []map[string]map[string]any{captured})
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}

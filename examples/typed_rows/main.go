@@ -274,7 +274,10 @@ func run(dir string) (err error) {
 		}
 	}
 	if raw, found, e := col.GetInto([]byte(lin.ID), nil); e != nil || found || raw != nil {
-		return fmt.Errorf("deleted row after reopen: found=%t err=%v", found, e)
+		if e != nil {
+			return fmt.Errorf("deleted row after reopen: %w", e)
+		}
+		return fmt.Errorf("deleted row after reopen: found=%t raw=%v", found, raw)
 	}
 	if err = verifyIndexes(col, ada, grace, lin); err != nil {
 		return err

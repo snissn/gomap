@@ -168,7 +168,7 @@ supplies no automatic capacity threshold.
 
 The fixture is frozen by the compiled `r1MutationRow5059` recipe and a SHA-256
 of its ascending-ID JSON rows (newline delimited), not assumed equal to the
-#5057 fixture. Load batches contain 32 rows. The deterministic ordinal stride
+fixture from #5057. Load batches contain 32 rows. The deterministic ordinal stride
 is 37 with no epoch offset and no random seed. Every epoch addresses the same
 bounded working set: the default repeats 512 distinct IDs over 4,096 live rows,
 and the 32-row/eight-call rehearsal repeats four IDs. The nominal bound is
@@ -284,11 +284,19 @@ harness source and supply `--qualification retained --source-commit SHA
 --review-url https://github.com/... --out /durable/new-directory`. The capture
 checks the declared landed tooling commit is an ancestor of the measured clean
 source; coordinator review verifies the declaration against actual landing.
+Independent retained validation requires `--expected-landed-tooling-commit SHA`
+and `--expected-commit SHA --expected-runtime HASH --expected-harness HASH`.
+The verifier supplies these frozen values from independently checked landing,
+review and source evidence, never by copying declarations from the packet.
+Validation does not contact GitHub or require the historical checkout; rehearsal
+semantic replay needs no landing binding. Earlier frozen validators and packets
+remain historical evidence, rather than being relabeled with this repair.
 Defaults supply the retained five-by-five dimensions. A distinct output directory
 is mandatory and must be outside the source checkout. Each capture creates a
 fresh owned `benchmark-tmp/` directory there and binds the subprocess `TMPDIR`
 to it, so `testing.TempDir` database files use the capture filesystem. Effective
-subprocess environment, the actual directory's `df` observation and matching
+subprocess environment (only inherited `PATH`/`HOME`, explicit frozen settings,
+empty `GODEBUG` and fixture variables), the actual directory's `df` observation and matching
 filesystem device identities are recorded and validated. Benchmark cleanup only
 removes its own temporary database directories; raw logs and capture metadata
 remain. The caller's default `/tmp` is not assumed equivalent. Binary and raw logs are
@@ -317,7 +325,7 @@ does not qualify full-population stress or unlimited sustained capacity. Any
 further lifecycle action follows measured completed work, blockers and debt;
 this harness selects rewrite from actual complete-plan debt and public eligibility,
 with no unconditional rewrite or destructive shortcut. The active
-#5037 rewrite-resource owner remains authoritative. Earlier packets with the
+rewrite-resource owner #5037 remains authoritative. Earlier packets with the
 rotating epoch offset stay nonqualifying under their original harness identity.
 
 The frozen capture uses Linux amd64 Go 1.26.4, GOMAXPROCS=16, GOGC=100,

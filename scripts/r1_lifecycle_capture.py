@@ -61,6 +61,17 @@ def write(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
+def benchmark_environment(frozen, temporary_directory, documents, calls_per_epoch):
+    # Record exactly what Popen receives. Unknown caller Go/GOMAP settings must
+    # not silently alter the fixture or runtime. PATH/HOME support crash helpers.
+    environment = {key: os.environ[key] for key in ('PATH', 'HOME') if key in os.environ}
+    environment.update(frozen, GODEBUG='', TMPDIR=str(temporary_directory),
+                       GOWORK='off', GOTOOLCHAIN='local',
+                       GOMAP_R1_LIFECYCLE_DOCUMENTS=str(documents),
+                       GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH=str(calls_per_epoch))
+    return environment
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', required=True)
@@ -117,6 +128,8 @@ def main():
     write(out / 'source-before.json', before)
     env = json.loads(run([go, 'env', '-json']))
     cc = shlex.split(env['CC'])
+    process_env = benchmark_environment(frozen_environment, benchmark_tmpdir,
+                                        args.documents, args.calls_per_epoch)
     toolchain = {'go': run([go, 'version']), 'go_env': env,
                  'cc': run([*cc, '--version']), 'uname': platform.uname()._asdict(),
                  'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS', 'GOGC', 'GOMEMLIMIT', 'GOCACHE', 'GOMODCACHE', 'TMPDIR', 'GOFLAGS')},
@@ -125,9 +138,7 @@ def main():
                  'capture_filesystem_device': out.stat().st_dev,
                  'benchmark_filesystem_device': benchmark_tmpdir.stat().st_dev,
                  'benchmark_filesystem': run(['df', '-Pk', str(benchmark_tmpdir)]),
-                 'process_environment': {**frozen_environment, 'TMPDIR': str(benchmark_tmpdir), 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
-                                         'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(args.documents),
-                                         'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(args.calls_per_epoch)},
+                 'process_environment': process_env,
                  'filesystem': run(['df', '-Pk', str(out)])}
     binary = out / 'collections.test'
     command = [go, 'test', '-c', '-o', str(binary), './TreeDB/collections']
@@ -146,8 +157,6 @@ def main():
     config.update(execution_scope=SCOPE, schedule=SCHEDULE, runtime_environment=frozen_environment)
     invocation = [str(binary), '-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
                   f'-test.benchtime={args.epochs}x', '-test.count=1', '-test.benchmem', '-test.v']
-    process_env = dict(os.environ, GOMAP_R1_LIFECYCLE_DOCUMENTS=str(args.documents),
-                       GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH=str(args.calls_per_epoch), TMPDIR=str(benchmark_tmpdir))
     records = []
     for repetition in range(args.repetitions):
         name = f'run-{repetition + 1:03d}.log'
@@ -170,7 +179,8 @@ def main():
               'build_command': command, 'build_log_sha256': sha(out / 'build.log'),
               'invocation': invocation, 'runs': records}
     write(out / 'packet.json', packet)
-    results = validate(out / 'packet.json')
+    results = validate(out / 'packet.json', args.runtime_sha256, args.harness_sha256,
+                       args.source_commit, args.landed_tooling_commit)
     (out / 'summary.md').write_text(summarize(packet, results))
     print(f'{args.qualification}: validated {len(results)} fresh processes; {out}/packet.json')
 
