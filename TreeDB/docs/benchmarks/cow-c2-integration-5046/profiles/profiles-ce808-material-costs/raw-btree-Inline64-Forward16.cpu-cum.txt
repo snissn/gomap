@@ -1,0 +1,112 @@
+File: treedb-cost.test
+Build ID: 055c5cfc71a6bc838af7890b04fa742f7fc08241
+Type: cpu
+Time: 2026-10-05 19:23:10 HST
+Duration: 477.73ms, Total samples = 230ms (48.14%)
+Showing nodes accounting for 230ms, 100% of 230ms total
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      160ms 69.57%  github.com/snissn/gomap/TreeDB.BenchmarkCOWPublicDirtyCost.func1
+         0     0%     0%      160ms 69.57%  github.com/snissn/gomap/TreeDB.cowPublicDirtyCost
+         0     0%     0%      160ms 69.57%  testing.(*B).launch
+         0     0%     0%      160ms 69.57%  testing.(*B).runN
+         0     0%     0%      140ms 60.87%  runtime.systemstack
+         0     0%     0%      120ms 52.17%  runtime.ReadMemStats
+         0     0%     0%       60ms 26.09%  testing.(*B).StartTimer
+         0     0%     0%       60ms 26.09%  testing.(*B).StopTimer
+         0     0%     0%       50ms 21.74%  runtime.startTheWorld
+         0     0%     0%       50ms 21.74%  runtime.startTheWorld.func1
+         0     0%     0%       50ms 21.74%  runtime.startTheWorldWithSema
+         0     0%     0%       40ms 17.39%  runtime.ReadMemStats.func1
+         0     0%     0%       40ms 17.39%  runtime.flushallmcaches
+         0     0%     0%       40ms 17.39%  runtime.flushmcache
+         0     0%     0%       40ms 17.39%  runtime.readmemstats_m
+      30ms 13.04% 13.04%       30ms 13.04%  internal/runtime/syscall/linux.Syscall6
+         0     0% 13.04%       30ms 13.04%  runtime.mcall
+      10ms  4.35% 17.39%       30ms 13.04%  runtime.stackcache_clear
+         0     0% 17.39%       30ms 13.04%  runtime.stopTheWorld
+         0     0% 17.39%       30ms 13.04%  runtime.stopTheWorld.func1
+         0     0% 17.39%       30ms 13.04%  runtime.stopTheWorldWithSema
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushAllLocked.func2
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnits
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStableIteratorStreamed
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCanonicalPointUnitsStreamed
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCollectionMode (inline)
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCollectionModeFrontier
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLaneOnceWithCommandPublish (inline)
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/caching.(*snapshotBoundIterator).Next
+         0     0% 17.39%       20ms  8.70%  github.com/snissn/gomap/TreeDB/internal/merging.(*MergingIterator).Next
+         0     0% 17.39%       20ms  8.70%  internal/runtime/syscall/linux.EpollWait
+         0     0% 17.39%       20ms  8.70%  runtime.gcBgMarkWorker
+         0     0% 17.39%       20ms  8.70%  runtime.gcBgMarkWorker.func2
+         0     0% 17.39%       20ms  8.70%  runtime.gcDrain
+         0     0% 17.39%       20ms  8.70%  runtime.gcDrainMarkWorkerDedicated (inline)
+      20ms  8.70% 26.09%       20ms  8.70%  runtime.nanotime (inline)
+         0     0% 26.09%       20ms  8.70%  runtime.netpoll
+         0     0% 26.09%       20ms  8.70%  runtime.park_m
+      10ms  4.35% 30.43%       20ms  8.70%  runtime.scanObject
+      10ms  4.35% 34.78%       20ms  8.70%  runtime.schedule
+         0     0% 34.78%       20ms  8.70%  runtime.startm
+         0     0% 34.78%       20ms  8.70%  runtime.unlock (inline)
+      20ms  8.70% 43.48%       20ms  8.70%  runtime.unlock2
+         0     0% 43.48%       20ms  8.70%  runtime.unlockWithRank (inline)
+         0     0% 43.48%       20ms  8.70%  runtime.wakep
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB.(*DB).Stats
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*DB).Stats
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*DB).sampleProcessMemoryPeaks
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).Iterator
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).Iterator.func1
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).bindNewIterator
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).bindNewIteratorAtGeneration
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).buildIteratorLocked
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).iteratorSources
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*valueLogIterator).IsDeleted
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.(*valueLogIterator).Next
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.backendSnapshotLookup.Iterator
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.countCanonicalStableIteratorUnits
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.currentProcessRSSBytes
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/caching.rootDomainPublishedIterator
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).IteratorAtRoot
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).IteratorAtRootWithOptions (inline)
+         0     0% 43.48%       10ms  4.35%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).bindRootIterator
+      10ms  4.35% 47.83%       10ms  4.35%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).treeAtRoot
+      10ms  4.35% 52.17%       10ms  4.35%  github.com/snissn/gomap/TreeDB/internal/iterator.UnsafeEntryWithRevision
+      10ms  4.35% 56.52%       10ms  4.35%  github.com/snissn/gomap/TreeDB/internal/memtable.(*btreeIterator).IsDeleted
+         0     0% 56.52%       10ms  4.35%  github.com/snissn/gomap/TreeDB/internal/memtable.(*btreeIterator).Next
+      10ms  4.35% 60.87%       10ms  4.35%  github.com/snissn/gomap/TreeDB/internal/memtable.(*btreeIterator).refresh
+         0     0% 60.87%       10ms  4.35%  github.com/snissn/gomap/TreeDB/internal/merging.(*MergingIterator).advance
+         0     0% 60.87%       10ms  4.35%  internal/poll.(*FD).Close
+         0     0% 60.87%       10ms  4.35%  internal/poll.(*FD).decref
+         0     0% 60.87%       10ms  4.35%  internal/poll.(*FD).destroy
+         0     0% 60.87%       10ms  4.35%  internal/poll.(*SysFile).destroy (inline)
+      10ms  4.35% 65.22%       10ms  4.35%  internal/runtime/atomic.(*Uint32).CompareAndSwap (inline)
+         0     0% 65.22%       10ms  4.35%  os.(*File).Close
+         0     0% 65.22%       10ms  4.35%  os.(*file).close
+      10ms  4.35% 69.57%       10ms  4.35%  runtime.(*listHeadManual).pop
+      10ms  4.35% 73.91%       10ms  4.35%  runtime.(*mcache).releaseAll
+         0     0% 73.91%       10ms  4.35%  runtime.(*stkframe).getStackMap
+         0     0% 73.91%       10ms  4.35%  runtime.adjustframe
+         0     0% 73.91%       10ms  4.35%  runtime.casgstatus
+         0     0% 73.91%       10ms  4.35%  runtime.copystack
+         0     0% 73.91%       10ms  4.35%  runtime.findRunnable
+      10ms  4.35% 78.26%       10ms  4.35%  runtime.futex
+         0     0% 78.26%       10ms  4.35%  runtime.futexwakeup
+         0     0% 78.26%       10ms  4.35%  runtime.goschedImpl
+         0     0% 78.26%       10ms  4.35%  runtime.gosched_m
+         0     0% 78.26%       10ms  4.35%  runtime.lock (inline)
+         0     0% 78.26%       10ms  4.35%  runtime.lock2
+         0     0% 78.26%       10ms  4.35%  runtime.lockWithRank (inline)
+         0     0% 78.26%       10ms  4.35%  runtime.mget (inline)
+         0     0% 78.26%       10ms  4.35%  runtime.newstack
+         0     0% 78.26%       10ms  4.35%  runtime.notewakeup
+         0     0% 78.26%       10ms  4.35%  runtime.pcdatavalue
+         0     0% 78.26%       10ms  4.35%  runtime.pcvalue
+      10ms  4.35% 82.61%       10ms  4.35%  runtime.pidleput
+         0     0% 82.61%       10ms  4.35%  runtime.procresize
+         0     0% 82.61%       10ms  4.35%  runtime.procyield (inline)
+      10ms  4.35% 86.96%       10ms  4.35%  runtime.procyieldAsm
+      10ms  4.35% 91.30%       10ms  4.35%  runtime.stealWork
+      10ms  4.35% 95.65%       10ms  4.35%  runtime.step
+      10ms  4.35%   100%       10ms  4.35%  runtime.tryDeferToSpanScan
+         0     0%   100%       10ms  4.35%  syscall.Close
+         0     0%   100%       10ms  4.35%  syscall.RawSyscall6
+         0     0%   100%       10ms  4.35%  syscall.Syscall

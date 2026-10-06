@@ -1,0 +1,18 @@
+{
+  "raw_runs": 6,
+  "rows": 18,
+  "matched_cases": 6,
+  "paired_cases": 3,
+  "raw_hashes_verified": true,
+  "stderr_hashes_verified": true,
+  "exact_interleaving": true,
+  "commits": {
+    "main": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+    "candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63"
+  },
+  "source_tree_sha256": {
+    "main": "57c8d1801255fec2dcb4c9735a91a28cf3fc142f1795faf800998f3b3208abbb",
+    "candidate": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9"
+  },
+  "limitations": "three descriptive paired repeats; fixture final Close errors ignored; no persistence/drain/default-writer/all-profile/sustained claims"
+}

@@ -38,8 +38,13 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}
 	}
-	stats, err := db.backend.LeafGenerationPackFromPlan(ctx, treedbdb.LeafGenerationPackFromPlanOptions(opts))
-	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
+	var stats treedbdb.LeafGenerationPackStats
+	err := db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		stats, runErr = db.backend.LeafGenerationPackFromPlan(ctx, treedbdb.LeafGenerationPackFromPlanOptions(opts))
+		return runErr
+	})
+	if err != nil {
 		return out, err
 	}
 	success = true

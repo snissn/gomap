@@ -1,0 +1,46 @@
+{
+  "created_utc": "2026-10-06T04:45:07.847988+00:00",
+  "commits": {
+    "main": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+    "candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63"
+  },
+  "fixture_hashes": {
+    "TreeDB/bench_test.go": "dfaed5aaee7f264ac448dca5b07f9a549db90d526904d23b57a0f2b632cb232c",
+    "TreeDB/snapshot_read_bench_test.go": "8d0244fab4707e68b5f96d18e4445a18dc5b419895c5c9a33e8455daeb9030e0"
+  },
+  "pattern": "^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+  "orders": [
+    [
+      "main",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "main"
+    ],
+    [
+      "main",
+      "candidate"
+    ]
+  ],
+  "operations": 100000,
+  "GOMAXPROCS": 12,
+  "TREEDB_BENCH_SHARDS": 2,
+  "removed_memory_controls": {
+    "GOGC": null,
+    "GOMEMLIMIT": null
+  },
+  "host": {
+    "system": "Linux",
+    "node": "mikers-B560-DS3H-AC-Y1",
+    "release": "6.8.0-138-generic",
+    "version": "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "cpu_count": 12,
+  "noise_policy": "retain all three paired repeats; descriptive spread, no significance or sustained claim",
+  "runner_gate": "root serializes after raw27+MVCC18; no other owned jobs",
+  "scope": "unchanged default cached W0 and checkpointed pointer Get/GetAppend; benchmark setup/Close outside timer",
+  "limitation": "unchanged fixtures ignore final Close errors: no persistence/drain/Close proof from this diagnostic"
+}

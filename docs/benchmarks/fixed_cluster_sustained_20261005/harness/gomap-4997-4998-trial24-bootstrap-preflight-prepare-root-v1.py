@@ -1,11 +1,11 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
+PLAN_SHA='60eafea5704321177d82f3aa4932971e7f36d6018c6159b16ab00669be93ae07'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()
@@ -35,7 +35,7 @@ def main():
  remote=r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 
 import json,pathlib,subprocess,sys,time,os
-host=sys.argv[1];image=sys.argv[2];earliest=float(sys.argv[3]);latest=float(sys.argv[4]);assert earliest<=time.time()<latest-86400;root='/home/mikers/gomap-4250-twohost-rf4trial24mixedchangingc1'
+host=sys.argv[1];image=sys.argv[2];earliest=float(sys.argv[3]);latest=float(sys.argv[4]);assert earliest<=time.time()<latest-86400;root=sys.argv[5]
 assert not pathlib.Path(root).exists()
 disk=os.statvfs('/home/mikers');assert disk.f_bavail*disk.f_frsize>=50*1024**3
 mem={l.split(':')[0]:int(l.split()[1])*1024 for l in pathlib.Path('/proc/meminfo').read_text().splitlines() if ':' in l};assert mem['MemAvailable']>=16*1024**3 and os.getloadavg()[0]<4
@@ -47,12 +47,12 @@ for line in ss.splitlines():
 active=subprocess.check_output(['docker','ps','--format','{{.Names}}'],text=True).splitlines();assert not any(n.startswith('treedb-4250-') for n in active)
 inspect=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert inspect['Id']==image
 for n in ('a','b','c','d'):
- name='treedb-4250-rf4trial24mixedchangingc1-node-'+n;r=subprocess.run(['docker','inspect',name],capture_output=True,text=True);assert r.returncode and 'no such' in r.stderr.lower()
+ name='treedb-4250-'+sys.argv[6]+'-node-'+n;r=subprocess.run(['docker','inspect',name],capture_output=True,text=True);assert r.returncode and 'no such' in r.stderr.lower()
 print(json.dumps({'host':host,'image':image,'root_absent':True,'names_absent':True,'ports_free':sorted(ports),'active_fixture_daemons':0,'no_host_mutations':True,'checked_unix':time.time(),'credential_time_checked':True,'credential_not_before_unix':earliest,'credential_not_after_unix':latest}))
  '''
  receipts={}
  for host in m.HOSTS:
-  argv=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','mikers@'+host,shlex.join(['python3','-c',remote,host,manifest['image'][host],str(a['credential_not_before_unix']),str(a['credential_not_after_unix'])])]
+  argv=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','mikers@'+host,shlex.join(['python3','-c',remote,host,manifest['image'][host],str(a['credential_not_before_unix']),str(a['credential_not_after_unix']),W.remote_root,W.campaign])]
   start=time.time();r=subprocess.run(argv,capture_output=True,text=True,timeout=30)
   rec={'argv':argv,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr,'started_unix':start,'finished_unix':time.time()};(p/(host+'.json')).write_text(json.dumps(rec,indent=2)+'\n');assert r.returncode==0,r.stderr;receipts[host]=json.loads(r.stdout)
  proof={'state':'FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED','runtime_source_head':a['head'],'runtime_source_tree':a['tree'],'build_source_head':a['head'],'daemon_sha256':manifest['binary_sha256'],'qualification_source_sha256':a['qualification_source_sha256'],'launcher_sha256':pm.LAUNCHER_SHA,'manifest_sha256':hashlib.sha256(pm.read(planroot/'manifest.json')).hexdigest(),'plan_preparation_sha256':hashlib.sha256(pm.read(planroot/'plan-preparation.json')).hexdigest(),'build_receipt_sha256':a['build_sha256'],'images_receipt_sha256':a['images_sha256'],'source_review_sha256':a['source_acceptance_sha256'],'source_inventory_sha256':'__ROOT_FROZEN_INVENTORY_SHA__','driver_sha256':a['product']['driver_sha256'],'server_images':a['product']['server_images'],'driver_image':a['product']['driver_image'],'dataset':dataset,'hosts':receipts,'credential_validation':a['credential_validation'],'root_executor':True,'no_workload_retry':True,'final_close_required':True,'bootstrap_only_not_mixed_qualification':True,'artifact_volume':str(volume),'pins_sha256':hashlib.sha256(pm.read(args.pins)).hexdigest()}

@@ -91,13 +91,14 @@ type combinedLeafKeyState struct {
 	headerEnd    int
 	keysBlobBase int
 
-	keyScratch []byte
-	key        []byte
-	flags      byte
-	index      uint16
-	keyValid   bool
-	keyStart   int
-	keyEnd     int
+	keyScratch   []byte
+	fixedScratch bool
+	key          []byte
+	flags        byte
+	index        uint16
+	keyValid     bool
+	keyStart     int
+	keyEnd       int
 }
 
 func getUint16LE(b []byte) uint16 {
@@ -179,6 +180,9 @@ func (s *combinedLeafKeyState) ensureScratch(size int) []byte {
 		return []byte{}
 	}
 	if cap(s.keyScratch) < size {
+		if s.fixedScratch {
+			return nil
+		}
 		s.keyScratch = make([]byte, size)
 	}
 	s.keyScratch = s.keyScratch[:size]
@@ -298,6 +302,9 @@ func (s *combinedLeafKeyState) advanceOne(index uint16) (key []byte, flags byte,
 		return suffix, flags, nil
 	}
 	cur := s.ensureScratch(prefixLen + len(suffix))
+	if len(cur) != prefixLen+len(suffix) {
+		return nil, 0, node.ErrCorruptedNode
+	}
 	copy(cur, s.key[:prefixLen])
 	copy(cur[prefixLen:], suffix)
 	s.setKey(index, cur, flags, keyStart, keyEnd)
@@ -338,6 +345,9 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 			continue
 		}
 		cur := s.ensureScratch(prefixLen + len(suffix))
+		if len(cur) != prefixLen+len(suffix) {
+			return nil, 0, node.ErrCorruptedNode
+		}
 		copy(cur, prev[:prefixLen])
 		copy(cur[prefixLen:], suffix)
 		key = cur
@@ -350,27 +360,31 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 }
 
 type Iterator struct {
-	tree            *Tree
-	stack           []CursorItem
-	stackBuf        [16]CursorItem
-	leafState       combinedLeafKeyState
-	start           []byte
-	end             []byte
-	valid           bool
-	err             error
-	currKey         []byte
-	currVal         []byte
-	currPtr         page.ValuePtr
-	flags           byte
-	valOK           bool
-	ptrOK           bool
-	ptrScratch      []byte
-	leafRefScratch  []byte
-	slabAppender    slabUnsafeAppender
-	slabBatcher     slabUnsafeBatchAppender
-	slabKeyReader   slabUnsafeKeyReader
-	slabKeyAppender slabUnsafeKeyAppender
-	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	owned             bool
+	nodeKeyScratch    []byte
+	ownedStack        []CursorItem
+	boundedLeafReader func(page.LeafLogPtr, []byte) ([]byte, error)
+	tree              *Tree
+	stack             []CursorItem
+	stackBuf          [16]CursorItem
+	leafState         combinedLeafKeyState
+	start             []byte
+	end               []byte
+	valid             bool
+	err               error
+	currKey           []byte
+	currVal           []byte
+	currPtr           page.ValuePtr
+	flags             byte
+	valOK             bool
+	ptrOK             bool
+	ptrScratch        []byte
+	leafRefScratch    []byte
+	slabAppender      slabUnsafeAppender
+	slabBatcher       slabUnsafeBatchAppender
+	slabKeyReader     slabUnsafeKeyReader
+	slabKeyAppender   slabUnsafeKeyAppender
+	slabKeyBatcher    slabUnsafeKeyBatchAppender
 
 	prefetchRef       page.ChildRef
 	prefetchStart     int
@@ -658,7 +672,11 @@ func (it *Iterator) seek(key []byte) {
 }
 
 func (it *Iterator) resetStack() {
-	it.stack = it.stackBuf[:0]
+	if it.owned {
+		it.stack = it.ownedStack[:0]
+	} else {
+		it.stack = it.stackBuf[:0]
+	}
 }
 
 func (it *Iterator) loadCurrent() {
@@ -1031,6 +1049,10 @@ func (it *Iterator) Close() error {
 	if it == nil || it.tree == nil {
 		return nil
 	}
+	if it.owned {
+		*it = Iterator{}
+		return nil
+	}
 	buf := it.trimReusableBuffers()
 	*it = Iterator{}
 	it.installReusableBuffers(buf)
@@ -1119,6 +1141,23 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 	if it == nil || it.tree == nil {
 		return node.Node{}, errors.New("missing tree")
 	}
+	if it.owned && ref.Kind == page.ChildRefLeafLog {
+		if it.boundedLeafReader == nil {
+			return node.Node{}, ErrOwnedIteratorLeafReader
+		}
+		data, err := it.boundedLeafReader(ref.Log, it.leafRefScratch[:0])
+		if err != nil {
+			return node.Node{}, err
+		}
+		if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &it.leafRefScratch[:page.PageSize][0] {
+			return node.Node{}, ErrOwnedIteratorLeafReader
+		}
+		n, err := validateLeafLogNode(data, ref.Log, it.tree.shouldVerifyLeafRefChecksum(), true)
+		if err == nil {
+			n.SetFixedKeyScratch(it.nodeKeyScratch)
+		}
+		return n, err
+	}
 	if ref.Kind == page.ChildRefLeafLog && (it.tree.leafLogToState != nil || it.tree.leafLogToReader != nil) {
 		ptr := ref.Log
 		if cap(it.leafRefScratch) != page.PageSize {
@@ -1171,7 +1210,11 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}
-	return it.tree.loadChildRefView(ref, it.verifyAlways, true)
+	n, err := it.tree.loadChildRefView(ref, it.verifyAlways, true)
+	if err == nil && it.owned {
+		n.SetFixedKeyScratch(it.nodeKeyScratch)
+	}
+	return n, err
 }
 
 func (it *Iterator) ensurePointerLoaded() bool {

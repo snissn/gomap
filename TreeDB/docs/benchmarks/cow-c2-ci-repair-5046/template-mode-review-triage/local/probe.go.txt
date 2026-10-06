@@ -1,0 +1,28 @@
+package main
+import (
+ "encoding/json"
+ "fmt"
+ "os"
+ "path/filepath"
+ treedb "github.com/snissn/gomap/TreeDB"
+ "github.com/snissn/gomap/TreeDB/template"
+)
+func main() {
+ for _,profile:=range []treedb.Profile{treedb.ProfileCommandWALDurable,treedb.ProfileCommandWALRelaxed,treedb.ProfileNoWALFast} {
+  for _,mode:=range []template.Mode{template.TemplateOnly,template.TemplatePrepass} {
+   base,err:=os.MkdirTemp("","gomap-template-preflight-");if err!=nil{panic(err)}
+   dir:=filepath.Join(base,"absent")
+   opts:=treedb.OptionsFor(profile,dir);opts.MemtableMode="cow_btree";opts.ValueLog.TemplateMode=mode
+   database,err:=treedb.Open(opts)
+   if err!=nil {panic(fmt.Sprintf("non-off template Open profile=%s mode=%d: %v",profile,mode,err))}
+   if got:=database.Stats()["treedb.cache.memtable_mode"];got!="cow_btree" {panic("actual COW mode missing: "+got)}
+   _,templateErr:=os.Stat(filepath.Join(dir,"templatedb"));if !os.IsNotExist(templateErr){panic(fmt.Sprintf("template side store: %v",templateErr))}
+   if err:=database.SetSync([]byte("key"),[]byte("value"));err!=nil{panic(err)}
+   value,err:=database.Get([]byte("key"));if err!=nil||string(value)!="value"{panic(fmt.Sprintf("value %q: %v",value,err))}
+   if err:=database.Close();err!=nil{panic(err)}
+   row:=map[string]any{"profile":profile,"requested_template_mode":mode,"open_error":nil,"actual_memtable_mode":"cow_btree","templatedb_created":false,"set_sync_get_close":"PASS"}
+   if err:=json.NewEncoder(os.Stdout).Encode(row);err!=nil{panic(err)}
+   if err:=os.RemoveAll(base);err!=nil{panic(err)}
+  }
+ }
+}

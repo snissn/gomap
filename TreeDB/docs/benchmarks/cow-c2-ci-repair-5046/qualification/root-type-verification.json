@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "recorded_commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "verified_expected_Git_objects": 7330,
+  "actual_observed_regular_files": 7330,
+  "observed_types_and_exec_bits_match_Git": true,
+  "expected_mode_counts": {
+    "100644": 7207,
+    "100755": 123
+  },
+  "symlinks": [],
+  "limitations": "Independent reconstruction validates runner-observed rows and Git-mode bindings; root did not repeat remote lstat or timings."
+}

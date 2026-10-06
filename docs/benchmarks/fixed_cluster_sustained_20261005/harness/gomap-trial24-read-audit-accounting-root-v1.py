@@ -1,7 +1,7 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path
+from source_paths import source_path, W
 """Pure LOCAL Trial24 C1 read/audit accounting. No runtime or campaign acceptance.
 Native Go prefix tables determine rank; scalar FP32 recomputation checks returned
 scores only. Original Go JSON pieces, including -0, are never reserialized for
@@ -10,15 +10,15 @@ wire/retention accounting. All imported sources are inert and hash-pinned.
 import argparse, ast, hashlib, importlib.util, json, math, struct, sys
 from pathlib import Path
 READ=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_read.py')
-READ_SHA='3252a8109f64e4a9db8f56561d258f071f7cc10e9d5229281a6b6a83e0060020'
+READ_SHA='6f4530fa70a6bacd21cbd4ebbfd6268dff585b41e340712e9c9298e697aed28b'
 AUDIT=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_audit.py')
 AUDIT_SHA='8199998cdee169b849755ae35bfb8a204ef86804151ccae54d62925c85d07240'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
+COLLECTOR_SHA='7ba177dd3b64ee37ecbaf6f92f80d76efe4c931ac8cf9b5123dbbb3910d361df'
 HEAD='__ROOT_FROZEN_HEAD__'
 TREE='__ROOT_FROZEN_TREE__'
-RUN='rf4trial24mixedchangingc1'
-QUERY_RUN=RUN+'mixedc1v1'
+RUN=W.campaign
+QUERY_RUN=W.query_run
 PINS={READ:READ_SHA,AUDIT:AUDIT_SHA,COLLECTOR:COLLECTOR_SHA}
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def need(ok,label):
@@ -49,15 +49,15 @@ LIMITS=[
  'Read QPS includes validation, retention and drain; excludes setup, oracle derivation, warmup, postjoin recheck, retry, post-recall and audits. Client overlap is not server overlap or sustained capacity.'
 ]
 rd.LIMITATIONS=LIMITS
+rd.DURATION=W.duration_ns
+rd.SPACING=W.spacing_ns
+rd.CONCURRENCY=W.concurrency
 DERIVATION={}
 # Reuse the complete reviewed verifier, changing only invariant recall assumptions.
 node=next(n for n in ast.parse(read_source).body if isinstance(n,ast.FunctionDef) and n.name=='verifier')
 original=ast.get_source_segment(read_source,node)
 adapted=original
 replacements=[
- ("'PaceInterval':5_000_000_000", "'PaceInterval':6_000_000_000"),
- ("w['StartNS']>=i*5_000_000_000", "w['StartNS']>=i*6_000_000_000"),
- ("w['StartNS']>=r['Writes'][i-1]['StartNS']+5_000_000_000", "w['StartNS']>=r['Writes'][i-1]['StartNS']+6_000_000_000"),
  ('ACCEPT_MIXED_INVARIANT_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION','ACCEPT_MIXED_CHANGING_TOP10_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION'),
  ("matched,value=c.one_prefix(x['Response'],q['Request'],states,truth[ordinal%16],lo,hi)","mask,value=changing_response(x['Response'],q['Request'],states,p['Prefixes'],ordinal%16,lo,hi)\n   matched=min(i for i in range(len(states)) if mask&(1<<i))"),
  ("'independent single-prefix exact FP32/recall'","'all compatible prefixes conservative minimum recall'"),
@@ -128,7 +128,7 @@ exec(compile(paired_adapted,READ+'::trial24-current-corpus-paired','exec'),rd.__
 DERIVATION['paired']={'original_sha256':sha(paired_original.encode()),'adapted_sha256':sha(paired_adapted.encode()),'delta':'preserve pre corpus equality; post corpus scalar membership/order only; full native canonical prefix truth governs recall'}
 exec(compile(adapted,READ+'::trial24-adapted-verifier','exec'),rd.__dict__)
 def compare_prefixes(actual,expected):
- need(len(actual)==len(expected)==49,'49 native prefixes')
+ need(len(actual)==len(expected)==W.prefixes,'49 native prefixes')
  for p,want in zip(actual,expected):
   need(set(p)==set(want) and p==want,'native prefix structural/population/changed fields')
   need(type(p['Prefix'])is int and type(p['PopulationRows'])is int,'integer prefix scalars')
@@ -151,7 +151,7 @@ def native_binding(native,raw,oracle,planned,praw,report,rraw,a,initial):
   for prefix,piece in core.pieces(raw_report,'Prefixes'):
    need(sha(core.field(piece,'Truth')[1].encode())==prefix['Top10SHA256'],'actual native serialized truth digest')
  native_originals=core.pieces(raw,'OriginalRequests')
- need(len(native_originals)==48,'48 native original requests')
+ need(len(native_originals)==W.originals,'48 native original requests')
  expected=[core.field(piece,cc.operation_request(w)[0].capitalize())[1] for w,piece in native_originals]
  need(raw_originals(planned,praw)==raw_originals(report,rraw)==expected,'native/planned/actual original request exact raw FP32 including signed zero')
  need(cc.encode_go_json(cc.original_requests(report['Writes']))==cc.encode_go_json(oracle['OriginalRequests']),'promoted originals canonical omitted-pointer/signed-zero binding')
@@ -171,7 +171,7 @@ def validate_mutations(p,r,ptext,text):
 def population_accounting(C,a,pinned,nodes,states,r):
  cc.APPROVED=a
  results={}
- for phase,idx,floor in (('initial',0,a['baseline']['HighestCommitIndex']),('final',48,r['RequiredAppliedIndex'])):
+ for phase,idx,floor in (('initial',0,a['baseline']['HighestCommitIndex']),('final',W.originals,r['RequiredAppliedIndex'])):
   expected=cc.population_plan(states[idx],floor,None if idx==0 else r['AuditPlan'])
   planraw=bounded(C/(phase+'-population-plan.json'),512<<10)
   need(planraw==cc.encode_go_json(expected)+b'\n','actual full-population raw plan including original FP32 bytes')
@@ -234,13 +234,13 @@ def verify(manifest,manifest_sha,artifacts,inputs,native_path,native_sha,stdout_
   need(sha(bounded(I/cc.input_name(name),64<<20))==digest,'actual complete sealed input bytes '+name)
  need(bounded(I/'input-inventory.json',1<<20)==pinned[cc.LOCAL_INPUT_ROOT+'/input-inventory.json'],'actual staged inventory bytes')
  need(bounded(C/'input-inventory.json',1<<20)==pinned[cc.LOCAL_INPUT_ROOT+'/input-inventory.json'],'actual retained inventory bytes')
- states=[dict(initial)]+[cc.apply_prefix(initial,cc.strict_json(pinned[a['receipts']['prefix_oracles']])['OriginalRequests'][:i]) for i in range(1,49)]
+ states=[dict(initial)]+[cc.apply_prefix(initial,cc.strict_json(pinned[a['receipts']['prefix_oracles']])['OriginalRequests'][:i]) for i in range(1,W.prefixes)]
  need(len(initial)==10005 and len(states[-1])==10002,'native changed population 10005 to10002')
  stdout=bounded(C/'stdout.jsonl');need(core.digest(stdout_sha) and sha(stdout)==stdout_sha and stdout.endswith(b'\n'),'root-pinned complete raw stdout')
  lines=stdout.splitlines();need(len(lines)==2,'exact two original JSONL events')
  events=[core.strict(line) for line in lines]
  need(all(set(e)=={'Event','Report'} for e in events) and [e['Event'] for e in events]==['planned','result'],'exact planned/result event order')
- p,r=[e['Report'] for e in events];need(cc.original_count(p)==cc.original_count(r)==48,'exact campaign declared count');cc.sustained_shape(p,True);cc.sustained_shape(r);ptext=core.field(lines[0].decode(),'Report')[1];text=core.field(lines[1].decode(),'Report')[1]
+ p,r=[e['Report'] for e in events];need(cc.original_count(p)==cc.original_count(r)==W.originals,'exact campaign declared count');cc.sustained_shape(p,True);cc.sustained_shape(r);ptext=core.field(lines[0].decode(),'Report')[1];text=core.field(lines[1].decode(),'Report')[1]
  need(stdout==('{"Event":"planned","Report":'+ptext+'}\n{"Event":"result","Report":'+text+'}\n').encode(),'exact complete canonical producer wrappers')
  need(p['Profile']==r['Profile']=='changing-top10' and r['ResourceGateDir']==cc.MOUNT_GATE,'current profile/gate')
  oracle=cc.strict_json(pinned[a['receipts']['prefix_oracles']])

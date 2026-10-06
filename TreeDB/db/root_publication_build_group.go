@@ -23,13 +23,14 @@ type RootPublicationBuildGroup struct {
 	negativeCoverage *negativeRootCoverage
 	mu               sync.Mutex
 
-	db          *DB
-	coordinator *rootpublication.Coordinator
-	builder     *rootpublication.BuilderToken
-	idx         *indexGen
-	tracker     *allocTracker
-	registryID  int64
-	registered  bool
+	db            *DB
+	coordinator   *rootpublication.Coordinator
+	builder       *rootpublication.BuilderToken
+	idx           *indexGen
+	tracker       *allocTracker
+	registryID    int64
+	registered    bool
+	capturedBasis *Snapshot
 
 	baseRoot    uint64
 	currentRoot uint64
@@ -60,12 +61,38 @@ type rootPublicationBuildGroupVacuumMutation struct {
 // BeginRootPublicationBuildGroup admits one logical multi-batch root build.
 // Every batch must attach the returned group, marking exactly one final batch.
 // Close is mandatory on every path and aborts an unfinished build.
-func (db *DB) BeginRootPublicationBuildGroup() (_ *RootPublicationBuildGroup, retErr error) {
+func (db *DB) BeginRootPublicationBuildGroup() (*RootPublicationBuildGroup, error) {
+	return db.beginRootPublicationBuildGroup(nil)
+}
+
+var ErrRootPublicationBasisMismatch = errors.New("root publication captured basis mismatch")
+
+// BeginRootPublicationBuildGroupFromSnapshot uses the captured user tree as
+// the build basis. The active snapshot pin excludes in-place changes and page
+// reuse, so identical index handle/root identity proves the same user tree.
+// Fresh system-only publication state is preserved. A changed user tree must
+// first complete an explicit coherent cache handoff; this method never rebases.
+func (db *DB) BeginRootPublicationBuildGroupFromSnapshot(basis *Snapshot) (*RootPublicationBuildGroup, error) {
+	if basis == nil {
+		return nil, ErrRootPublicationBasisMismatch
+	}
+	return db.beginRootPublicationBuildGroup(basis)
+}
+
+func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicationBuildGroup, retErr error) {
 	if db == nil {
 		return nil, ErrClosed
 	}
 	db.teardownMu.RLock()
 	group := &RootPublicationBuildGroup{db: db, teardownLocked: true}
+	if basis != nil {
+		if err := basis.beginRead(); err != nil {
+			db.teardownMu.RUnlock()
+			return nil, err
+		}
+		group.capturedBasis = basis
+	}
+
 	defer func() {
 		if retErr == nil {
 			return
@@ -126,11 +153,26 @@ func (db *DB) BeginRootPublicationBuildGroup() (_ *RootPublicationBuildGroup, re
 
 	db.rootReuseMu.RLock()
 	db.mu.RLock()
+
+	if basis != nil && (basis.db != db || basis.idx != idx || basis.treeRoot != db.meta.UserRootPageID) {
+		db.mu.RUnlock()
+		db.rootReuseMu.RUnlock()
+		return nil, ErrRootPublicationBasisMismatch
+	}
 	group.baseRoot = db.meta.UserRootPageID
 	group.currentRoot = group.baseRoot
 	group.systemRoot = db.meta.SystemRootPageID
 	group.baseSeq = db.meta.CommitSeq
-	group.registryID = idx.registry.Register(group.baseSeq)
+	if basis == nil {
+		group.registryID = idx.registry.Register(group.baseSeq)
+	} else {
+		group.registryID, _ = idx.registry.RegisterFastWithHint(group.baseSeq, -1)
+		if group.registryID == 0 {
+			db.mu.RUnlock()
+			db.rootReuseMu.RUnlock()
+			return nil, ErrSnapshotCapacity
+		}
+	}
 	group.registered = true
 	group.negativeCoverage = db.prepareNegativeCoverage(idx, group.baseSeq, group.baseRoot, group.baseRoot, nil)
 	db.mu.RUnlock()
@@ -376,6 +418,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 			db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		if post.accepted {
+			// Accepted error post-work intentionally leaves this producer-owned
+			// delta for cleanup. Observation clears the pointer, so release first.
+			releaseValueLogRefDelta(group.vlogRefDelta)
 			group.observeAcceptedOutputLocked()
 			db.clearLeafGenerationReachabilityCaches()
 		} else {
@@ -417,6 +462,10 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	if group == nil || group.closed {
 		return nil
 	}
+	if group.capturedBasis != nil {
+		group.capturedBasis.endRead()
+		group.capturedBasis = nil
+	}
 	group.closed = true
 	var cleanupErr error
 	if abandon && group.tracker != nil {
@@ -449,6 +498,18 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		group.db.teardownMu.RUnlock()
 	}
 	return cleanupErr
+}
+
+// Accepted reports the existing publication receipt independently of write or
+// cleanup errors. Acceptance is irreversible and remains observable after Close.
+// Coordinators must retain coverage of an accepted group when later work fails.
+func (group *RootPublicationBuildGroup) Accepted() bool {
+	if group == nil {
+		return false
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	return group.accepted
 }
 
 // Close aborts an unfinished logical build. It is idempotent.

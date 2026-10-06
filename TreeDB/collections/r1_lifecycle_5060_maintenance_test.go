@@ -189,6 +189,7 @@ func r1LifecycleFold5060(t testing.TB, db *backenddb.DB, col *Collection, epoch 
 
 func TestR1LifecycleLogicalFoldAndVacuum5060(t *testing.T) {
 	requireStandaloneColumnProductionAuthorityTest(t)
+	requireLeafGenerationPackPromotionSupport(t)
 	dir, db, col, cleanup := r1LifecycleNew5060(t, true)
 	defer func() {
 		if err := cleanup(); err != nil {

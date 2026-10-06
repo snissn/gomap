@@ -1,0 +1,141 @@
+{
+  "scope": "actual historical raw parsing plus refusal mutations; no new measurement",
+  "checks": [
+    {
+      "case": "append_only/fresh",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "append_only/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "append_only/other",
+      "actual_historical_rows": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "append_only/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "append_only/durability",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "append_only/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/fresh",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "btree/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/other",
+      "actual_historical_rows": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "btree/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/durability",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "btree/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/fresh",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "cow_btree/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/other",
+      "actual_historical_rows": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "cow_btree/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/durability",
+      "actual_historical_rows": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "cow_btree/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "live-close-charge",
+      "refused": true
+    },
+    {
+      "case": "mvcc/append_only",
+      "actual_historical_rows": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "mvcc/btree",
+      "actual_historical_rows": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "mvcc/cow_btree",
+      "actual_historical_rows": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    }
+  ]
+}

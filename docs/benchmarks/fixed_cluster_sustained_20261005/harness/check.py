@@ -5,6 +5,7 @@ from pathlib import Path
 sys.dont_write_bytecode=True
 R=Path(__file__).parent
 ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--fixtures-root',type=Path,required=True,help='absolute fixture directory outside this source packet');args=ap.parse_args()
+if args.fixtures_root.is_absolute():args.fixtures_root=args.fixtures_root.resolve()
 from source_paths import isolate_paths
 try:isolate_paths([args.fixtures_root],[R.resolve()])
 except ValueError as error:ap.error(str(error))
@@ -543,7 +544,7 @@ for role in ('oracle_helper','collector'):
  target=stage_sources/Path(portable_sources[role]).name
  target.write_bytes(Path(portable_sources[role]).read_bytes());staged[role]=target
 staged['resolver']=stage_sources/'source_paths.py'
-staged['resolver'].write_bytes((R/'source_paths.py').read_bytes())
+staged['resolver'].write_bytes((R/'source_paths.py').read_bytes());(stage_sources/'workload_profile.py').write_bytes((R/'workload_profile.py').read_bytes())
 for name in ('oracle-pins.json','git-source-inventory.json','initial-oracle.json'):
  (layout/name).write_bytes(b'{"synthetic_only":true}\n')
 call=next(n for n in ast.walk(remote_ast) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and isinstance(n.func.value,ast.Name) and n.func.value.id=='helper' and n.func.attr=='prepare')
@@ -630,14 +631,15 @@ for label in permission_cases:
  pm.__file__=str(packet/'permission.py')
  payload=b'synthetic input bytes';inv={'sentinel':sha(payload)};ir=json.dumps(inv).encode()
  (inputs/'sentinel').write_bytes(payload);(inputs/'input-inventory.json').write_bytes(ir)
- mf=folder/'manifest.json';mf.write_text(json.dumps({'source_head':pm.HEAD,'source_tree':pm.TREE,'input_inventory_sha256':sha(ir)}))
+ predecl=folder/'fresh-predeclaration.json';predecl.write_text('{}')
+ mf=folder/'final-inactive-root-v1.json';mf.write_text(json.dumps({'source_head':pm.HEAD,'source_tree':pm.TREE,'input_inventory_sha256':sha(ir),'receipts':{'predeclaration':str(predecl)}}))
  ar=folder/'inputs.tar.gz'
  with tarfile.open(ar,'x:gz') as t:
   for name,raw in [('sentinel',payload),('input-inventory.json',ir)]:
    item=tarfile.TarInfo(name);item.size=len(raw);t.addfile(item,io.BytesIO(raw))
  pin=folder/'actual-consumed-pin.json';pin.write_bytes(b'{"synthetic_only":true}')
  pc.LOCAL_INPUT_ROOT=str(inputs);pc.INPUT_ROOT='/synthetic/remote-inputs'
- pc.prepare_local=lambda a:({str(pin):pin.read_bytes()},inv,[],[])
+ pc.prepare_local=lambda a:({str(pin):pin.read_bytes(),str(predecl):predecl.read_bytes()},inv,[],[])
  pm.load=lambda:(pc,lambda *a:None,None,[]);pm.isolated_arguments=lambda *a:['synthetic-no-transport']
  pm.MANIFEST=str(mf);pm.ARCHIVE=str(ar)
  calls=[]
@@ -666,8 +668,8 @@ for label in ('input_descendant','packet_descendant','input_symlink_parent','pos
  own=packet/'collector.py';own.write_bytes(Path(portable_sources['collector']).read_bytes());cm.__file__=str(own)
  manifest=folder/'manifest.json';manifest.write_text('{}')
  pin=folder/'oracle.json';pin.write_text('{}')
- cm.LOCAL_INPUT_ROOT=str(inputs);cm.validate_manifest=lambda *a:{'receipts':{'prefix_oracles':str(pin)}}
- cm.prepare_local=lambda a:({str(pin):b'{}',str(inputs/'input-inventory.json'):b'{}'},{},[],[])
+ cm.LOCAL_INPUT_ROOT=str(inputs);cm.validate_manifest=lambda *a:{'receipts':{'prefix_oracles':str(pin),'predeclaration':str(manifest)}}
+ cm.prepare_local=lambda a:({str(pin):b'{}',str(inputs/'input-inventory.json'):b'{}',str(manifest):b'{}'},{},[],[])
  alias=folder/'alias';alias.symlink_to(inputs,target_is_directory=True)
  target={'input_descendant':inputs/'bad','packet_descendant':packet/'bad','input_symlink_parent':alias/'bad','positive_sibling':folder/'allowed'}[label]
  cm.OUTPUT=target;argv_before=sys.argv;sys.argv=['synthetic-collector','--approved',str(manifest)];before=protected_snapshot(folder);denied=False
@@ -814,7 +816,7 @@ output_receipts.extend({'writer':'actual_remote_permission_stage',**r} for r in 
 # Actual assembled common program suppresses cache writes before staged imports.
 cache_layout=fixtures/'output-native-import-cache';cache_layout.mkdir();cache_sources=cache_layout/'preparation-sources';cache_sources.mkdir()
 for role in ('oracle_helper','collector'):(cache_sources/Path(portable_sources[role]).name).write_bytes(Path(portable_sources[role]).read_bytes())
-(cache_sources/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+(cache_sources/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes());(cache_sources/'workload_profile.py').write_bytes((R/'workload_profile.py').read_bytes())
 program=nr.remote_program('', 'a'*64)+"\nROOT=pathlib.Path("+repr(str(cache_layout))+")\nHELPER="+repr(str(cache_sources/Path(portable_sources['oracle_helper']).name))+"\n"
 remote_prepare_ast=ast.parse(nr.REMOTE_PREPARE)
 imports=[n for n in remote_prepare_ast.body if (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr in ('insert','exec_module')) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('spec','helper') for t in n.targets))]
@@ -838,13 +840,13 @@ active_importers=[]
 for apath in sorted(R.glob('*.py'))+sorted((R/'root-adapters').glob('*.py')):
  at=ast.parse(apath.read_bytes())
  local=next((n for n in at.body if isinstance(n,ast.ImportFrom) and n.module=='source_paths'),None)
- if local is None or apath.name=='check.py':continue
+ if local is None or apath.name in ('check.py','matched_report.py',m['roles']['guard']['output']['path']):continue
  active_importers.append((apath,local))
 assert len(active_importers)==17
 for apath,local in active_importers:
  at=ast.parse(apath.read_bytes())
  name=str(apath.relative_to(R));folder=fixtures/('ordinary-import-'+apath.stem);folder.mkdir();packet=folder/'packet';packet.mkdir()
- copied=packet/name;copied.parent.mkdir(parents=True,exist_ok=True);copied.write_bytes(apath.read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+ copied=packet/name;copied.parent.mkdir(parents=True,exist_ok=True);copied.write_bytes(apath.read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes());(packet/'workload_profile.py').write_bytes((R/'workload_profile.py').read_bytes())
  prefix=''.join(apath.read_text().splitlines(keepends=True)[:local.end_lineno])
  program='import sys\nsys.path.insert(0,'+repr(str(packet))+')\n__file__='+repr(str(copied))+'\n'+prefix+"\nprint('ACTUAL_IMPORT_PREFIX_COMPLETE')\n"
  before=protected_snapshot(packet)
@@ -883,7 +885,7 @@ for apath,local in active_importers:
 # A supported sealer child process must suppress caches before SourceFileLoader
 # loads the collector; the parent's flag is not inherited by a new interpreter.
 sealer_folder=fixtures/'ordinary-emitted-post-sealer';sealer_folder.mkdir();packet=sealer_folder/'packet';packet.mkdir()
-collector_copy=packet/Path(portable_sources['collector']).name;collector_copy.write_bytes(Path(portable_sources['collector']).read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+collector_copy=packet/Path(portable_sources['collector']).name;collector_copy.write_bytes(Path(portable_sources['collector']).read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes());(packet/'workload_profile.py').write_bytes((R/'workload_profile.py').read_bytes())
 st=ast.parse(post_source);top=[n for n in st.body if not (isinstance(n,ast.If) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Name) and n.test.left.id=='__name__')]
 main_node=next(n for n in st.body if isinstance(n,ast.FunctionDef) and n.name=='main')
 loader_nodes=[n for n in main_node.body if (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('spec','c') for t in n.targets)) or (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='exec_module')]
@@ -1045,4 +1047,9 @@ assert actual_core.pieces('{"nested":{"values":[9]},"values":[-0,1]}','values')[
 checks.append('metadata_repair_preserves_top_level_signed_zero_selectors')
 (fixtures/'review-batch-integrity-provenance-integration.json').write_text(json.dumps({'state':'PURE_SOURCE_INTEGRITY_AND_METADATA_ONLY_NOT_ACCEPTANCE','manifest_cases':manifest_cases,'collector_authenticated_sha256':authenticated_ra.COLLECTOR_SHA,'selector_helper_report':selector_report['helper_functions'],'runtime_started':False,'network_calls':0},indent=2)+'\n')
 
-print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
+assert len(checks)==590
+exec(compile((R/'matched_workload_checks.py').read_bytes(),'matched_workload_checks.py','exec'),globals())
+exec(compile((R/'checkpoint_window_checks.py').read_bytes(),'checkpoint_window_checks.py','exec'),globals())
+from recall_aggregation_checks import recall_aggregation_controls
+checks.extend(recall_aggregation_controls(R)['checks'])
+print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, native declared-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

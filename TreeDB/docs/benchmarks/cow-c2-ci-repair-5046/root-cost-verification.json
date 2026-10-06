@@ -1,0 +1,71 @@
+{
+  "cost-integrated-974d": {
+    "status": "PASS",
+    "literal_manifest_files": 70,
+    "transfer_manifest_sha256": "0af29eb544a9e6807c2e9046150d69d07c9bdee66a34734874ac69a8291b85a8",
+    "analyzer_command": [
+      "python3",
+      "-B",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-integrated-974d/collection-preparation/analyze.py",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/repair-root-cost-verification-v2/cost-integrated-974d"
+    ],
+    "analyzer_exit": 0,
+    "derived_files_byte_equal": [
+      "rows.json",
+      "matched-summary.json",
+      "cow-over-comparators.json",
+      "analysis-validation.json",
+      "N2048-over-N1024.json",
+      "close-charge-receipts.json"
+    ],
+    "source_file_count": 7330,
+    "source_normalized_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+    "validation": {
+      "raw_runs": 27,
+      "rows": 540,
+      "matched_cases": 180,
+      "raw_hashes_verified": true,
+      "stderr_hashes_verified": true,
+      "source_tree_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+      "scope": "bounded C2 diagnostic; no statistical significance or sustained C4 acceptance",
+      "fixture_charge_scope": "whole fixture setup/reseeds/last observed cut outside timer; not per-op heap",
+      "close_receipts": 360,
+      "tail_scope": "16/128 fixed samples per case; descriptive percentiles only",
+      "rss_scope": "whole child run includes setup/teardown; receipts are not per-op memory"
+    }
+  },
+  "mvcc-integrated-974d": {
+    "status": "PASS",
+    "literal_manifest_files": 50,
+    "transfer_manifest_sha256": "8e18f36ee63021e0fc3af119af4be76295e89c33f42f45d13ca3f49d6a9854bc",
+    "analyzer_command": [
+      "python3",
+      "-B",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-integrated-974d/collection-preparation/analyze_mvcc.py",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/repair-root-cost-verification-v2/mvcc-integrated-974d"
+    ],
+    "analyzer_exit": 0,
+    "derived_files_byte_equal": [
+      "rows.json",
+      "matched-summary.json",
+      "cow-over-comparators.json",
+      "analysis-validation.json"
+    ],
+    "source_file_count": 7330,
+    "source_normalized_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+    "validation": {
+      "raw_runs": 18,
+      "rows": 108,
+      "matched_cases": 36,
+      "raw_hashes_verified": true,
+      "stderr_hashes_verified": true,
+      "source_tree_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+      "scope": "tiny growing-history C2 public-MVCC diagnostic; fences retained; no sustained, significance, C3 or C4 claim",
+      "complete_history_outputs": {
+        "128": 8.5,
+        "256": 16.5
+      },
+      "final_close_drain": "validated separately by root-package dirty fixture"
+    }
+  }
+}

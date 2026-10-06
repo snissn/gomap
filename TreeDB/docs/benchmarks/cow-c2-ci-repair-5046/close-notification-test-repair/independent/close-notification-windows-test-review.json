@@ -1,0 +1,99 @@
+{
+  "disposition": "ACCEPT frozen test-only source and scoped local functional evidence; actual repaired Windows/final-head gates pending",
+  "at_utc": "2026-10-06T08:58:09.736888+00:00",
+  "base_commit": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "candidate_identity_kind": "single-file uncommitted frozen working-copy delta, not a committed descendant",
+  "candidate_test_path": "TreeDB/cow_close_notification_test.go",
+  "candidate_test_sha256": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+  "base_test_sha256": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+  "only_changed_tracked_path": [
+    "TreeDB/cow_close_notification_test.go"
+  ],
+  "index_changes": [],
+  "runtime_change_observed": false,
+  "local_evidence": [
+    {
+      "stage": "normal",
+      "exit_code": 0,
+      "test_subcase_pass_events": 18,
+      "package_pass_events": 1,
+      "skip_fail_race_events": 0,
+      "passes_per_each_two_parents_four_profile_subcases": 3,
+      "actual_elapsed_seconds": 17.52338695526123
+    },
+    {
+      "stage": "race",
+      "exit_code": 0,
+      "test_subcase_pass_events": 18,
+      "package_pass_events": 1,
+      "skip_fail_race_events": 0,
+      "passes_per_each_two_parents_four_profile_subcases": 3,
+      "actual_elapsed_seconds": 56.022599935531616
+    },
+    {
+      "stage": "safe",
+      "exit_code": 0,
+      "test_subcase_pass_events": 18,
+      "package_pass_events": 1,
+      "skip_fail_race_events": 0,
+      "passes_per_each_two_parents_four_profile_subcases": 3,
+      "actual_elapsed_seconds": 19.16214919090271
+    }
+  ],
+  "artifact_sha256": {
+    "before-source.json": "e7c545a75a94552cb28079576d19eec70b9289e1e27c73544b83a85b72b7879d",
+    "after-source.json": "711a5c3b0fb0fc8e281d76c769d5ecdd2317ff1beed93cc9fedccdaa841696dd",
+    "before.go.txt": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+    "runtime.diff": "dc4eebe1a5e3fa6484eb74e785ec15efa00ce8306445799fddb9049c28f90be3",
+    "run-targeted.py": "b1c0b0229bd1333844ba5a76dd2e1e3df24582f8c558563aafb8c2e39f754525",
+    "execution-receipts.json": "f67e715174cc6867a6dd4b36a999d75ad7918060cf9c36730aca3eace20a5ce3",
+    "go-environment.json": "570e98b02f271d04447529d7f7221b7ccf34e8a562e05935fc9dfeffde427fc4",
+    "normal.json": "2f63f01ce62ad7814e6aa950d2629d9e4b79554429ca380406ec7c637e5b3cf8",
+    "normal.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "race.json": "f07cee9c92ec51befd9cad41a97ecc1a50ebe4e544d3e4da1018c3a6e40b81c5",
+    "race.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "safe.json": "792bb18ba9628442c079db1c7b3463fecb36a818f583e6de4fcb832e11c37483",
+    "safe.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-windows-failure-events.json": "5588313102446e6a592c076e4e2da101eb12f7c38b4b22384120a3770a4c756c",
+    "original-windows-failure.log": "27131c64bae66d140c8ad89237a4389f43433a756beb29d9317b099f7a8b1583",
+    "completion-source-proof.json": "6260af30b597c54b789c77077533b97896e92bf34f231bcccbea34f1e7297a3a",
+    "diagnosis-and-change.md": "7aeff30267f70d0ed646550c45b42c8679b64d4697ae2cae6833ab8c6524289b",
+    "event-summary.json": "0f6fed252ccdab0239829a5f2445f6c71a9b900114179f01f01311d48bf02cfc",
+    "handoff.md": "bb64e8d6d40d548643a579b8c2729f7dfa92e1487f97c33bf5c1631a401bee52",
+    "packet-manifest.json": "9ad95f1e40f5448b3292cb6730b8b9a30e4101ebda21036f199bd5ed12793dc8"
+  },
+  "source_checks": {
+    "actual_entry_signal_before_Stats_Get": true,
+    "completed_read_result_after_Stats_Get": true,
+    "nil_Stats_and_ErrClosed_required": true,
+    "synchronous_callback_release_gate_with_unfinished_Close_observation": true,
+    "five_second_read_watchdog_starts_after_entry": true,
+    "single_thirty_second_whole_Close_timer_starts_before_launch_and_spans_entry_teardown": true,
+    "real_pressure_and_final_wrapped_ErrCOWCapacity_required": true,
+    "retained_cache_zero_TotalBytes_ExternalLeases_required_after_completed_Close": true,
+    "cleanup_releases_fixture_gate_pressure_before_join": true,
+    "cleanup_join_bounded_30_seconds": true,
+    "join_timeout_reports_error_preserves_owned_directory": true,
+    "directory_removal_only_after_actual_finished_signal": true,
+    "asynchronous_hook_test_byte_unchanged": true
+  },
+  "findings": [],
+  "limitations": [
+    "The nonblocking finished check observes unfinished Close at that point; it is not a universal proof against arbitrary future asynchronous dispatch. The unchanged direct reportError call supplies synchronous source ordering.",
+    "Local normal/race/safe source-bound count3 tests are not actual Windows runtime evidence. No runtime jobs were executed by the reviewer.",
+    "New test body and os/sync imports alter benchmark test binary inputs even though production runtime/modules and cost fixtures are untouched. No binary equality/new exact-head timing is claimed.",
+    "Original014 Windows failure remains a retained failure, not a relabeled repaired pass."
+  ],
+  "cost_applicability": "Historical974 measured source/commands/fixtures and production ownership paths remain unchanged. Test-only scope permits reasoned reuse of current experimental opt-in cost evidence without automatic45-run recollection; final-head strict hosted/default performance, Windows and review stay authoritative.",
+  "required_finalization": [
+    "Bind actual committed descendant, test source and literal packet manifest after publication.",
+    "Keep original old014 failure plus distinct new results.",
+    "Require actual repaired final-head Windows/requiredCI/strict performance/hosted review; no merge waiver."
+  ],
+  "sealed_packet": {
+    "manifest_sha256": "9ad95f1e40f5448b3292cb6730b8b9a30e4101ebda21036f199bd5ed12793dc8",
+    "literal_file_count_excluding_manifest": 18,
+    "all_hashes_and_no_extra_inventory_verified": true
+  },
+  "local_execution_platform": "Darwin/arm64 Go1.26.0"
+}

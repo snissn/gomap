@@ -1,7 +1,7 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path
+from source_paths import source_path, W
 """Pure bounded resource/gate/ownership accounting; never whole-campaign acceptance.
 No subprocess/network calls. Historical top-level is never imported/executed.
 verifier(..., permission_path=..., permission_sha256=..., collector_exit_path=..., collector_exit_sha256=...)
@@ -14,13 +14,13 @@ CORE_SHA='2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
 OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
-RUN='rf4trial24mixedchangingc1'; QUERY_RUN=RUN+'mixedc1v1'
-C=Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
+COLLECTOR_SHA='7ba177dd3b64ee37ecbaf6f92f80d76efe4c931ac8cf9b5123dbbb3910d361df'
+RUN=W.campaign; QUERY_RUN=W.query_run
+C=Path(W.output)
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN
 INPUT_ROOT='/home/mikers/gomap-4997-4998-'+RUN+'-inputs-root-v1'
-GATE='/home/mikers/gomap-4997-4998-trial24mixedchangingc1-window-resource-root-v1';GATE_DIR=GATE+'/gate'
-NAME='treedb-4250-'+RUN+'-mixed-window-c1-v1';MOUNT_GATE='/run-resource-gate'
+GATE=W.gate;GATE_DIR=GATE+'/gate'
+NAME=W.name;MOUNT_GATE='/run-resource-gate'
 HOSTS={'node-a':'192.168.0.111','node-b':'192.168.0.111','node-c':'192.168.0.185','node-d':'192.168.0.185'}
 FIELDS=('memory.current','memory.peak','memory.max','memory.events','memory.swap.current','memory.swap.max','memory.swap.events','cpu.max','cpu.stat','io.stat','process.status')
 PROVENANCE={}
@@ -47,7 +47,7 @@ CF,CONSTANTS=source_parts(COLLECTOR,COLLECTOR_SHA)
 OF,_=source_parts(OLD,OLD_SHA)
 
 def pure_collector(a,nonce):
- ns=dict(re=re,json=json,datetime=datetime,TOKEN_BYTES=2048,ROOT=ROOT,RUN=RUN,QUERY_RUN=QUERY_RUN,NAME=NAME,
+ ns=dict(W=W,re=re,json=json,datetime=datetime,TOKEN_BYTES=2048,ROOT=ROOT,RUN=RUN,QUERY_RUN=QUERY_RUN,NAME=NAME,
    INPUT_ROOT=INPUT_ROOT,GATE_DIR=GATE_DIR,MOUNT_GATE=MOUNT_GATE,
    APPROVED=a,root=ROOT,image=a['query_image'],launch_nonce=nonce)
  allow=('digest_valid','expected_binds','validate_voter','owned','driver_arguments','validate_gate_receipt','validate_ack_binding')
@@ -137,6 +137,8 @@ def permission_proof(pr,permission_raw,a):
  need(set(PERMISSION_PATH_KEYS)<=set(pr),'permission raw contract missing')
  px=strict(permission_raw[pr['inspect_path']]);need(isinstance(px,list) and len(px)==1,'one raw isolated inspect');px=px[0]
  pc=strict(permission_raw[pr['command_path']]);ps=permission_raw[pr['stdout_path']]
+ expected_name=NAME+('-trial24-checkpoint-window-v1' if W.issue=='5021' and a.get('receipts',{}).get('predeclaration','/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json')!='/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json' else '')+'-isolated-permission'
+ need(pc.count('--name')==1 and pc[pc.index('--name')+1]==expected_name and px['Name']=='/'+expected_name,'exact isolated phase name')
  need(px['Image']==a['query_image'] and px['HostConfig']['NetworkMode']=='none' and px['Config']['User']==a['driver_uid_gid'],'raw isolated image/network/user')
  binds=px['HostConfig']['Binds'];need(isinstance(binds,list) and len(binds)==len(set(binds)),'unique isolated mounts')
  required={ROOT+'/node-c/config.json:/config.json:ro',ROOT+'/node-c/credentials:/credentials:ro',ROOT+'/bootstrap-qualify.json:/bootstrap.json:ro'}
@@ -367,7 +369,7 @@ def self_check():
  pc[pc.index('-mode')+1]='read-window';j=pc.index('-mixed-interval');del pc[j:j+2];j=pc.index('-mixed-profile');del pc[j:j+2];j=pc.index('-mixed-originals');del pc[j:j+2]
  image_at=pc.index(a['query_image']);app=pc[image_at+1:]
  binds=[pc[i+1] for i,v in enumerate(pc) if v=='-v']
- px={'Id':'5'*64,'Image':a['query_image'],'Path':'/treedb-query-under-write','Args':app,
+ px={'Id':'5'*64,'Name':'/'+NAME+'-isolated-permission','Image':a['query_image'],'Path':'/treedb-query-under-write','Args':app,
   'Config':{'User':a['driver_uid_gid'],'Entrypoint':['/treedb-query-under-write'],'Cmd':app},
   'HostConfig':{'NetworkMode':'none','Binds':binds,'Mounts':[],'VolumesFrom':[]},
   'Mounts':[{'Source':b.split(':')[0],'Destination':b.split(':')[1],'Type':'bind','Mode':'ro','RW':False} for b in binds],

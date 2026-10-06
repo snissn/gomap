@@ -1,0 +1,58 @@
+{
+  "at_utc": "2026-10-06T09:50:41.840992+00:00",
+  "parent_head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "test_sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+  "packet_manifest_sha256": "f9d15d4cdfc0a76a2d7abf88515867d23da19e24fa194d9ec36f93fda4a4617f",
+  "literal_worker_entries": 30,
+  "tracked_pre_post_bytes_verified": 8057,
+  "actual_counts": {
+    "normal-coordinator": {
+      "test_subcase_pass": 6,
+      "package_pass": 1,
+      "exit_code": 0
+    },
+    "normal-cow-modeled": {
+      "test_subcase_pass": 123,
+      "package_pass": 1,
+      "exit_code": 0,
+      "actual_cut_receipts": 108,
+      "profile_boundary_combinations": 36,
+      "matching_attempts": [
+        1
+      ]
+    },
+    "race-coordinator": {
+      "test_subcase_pass": 6,
+      "package_pass": 1,
+      "exit_code": 0
+    },
+    "race-cow-modeled": {
+      "test_subcase_pass": 123,
+      "package_pass": 1,
+      "exit_code": 0,
+      "actual_cut_receipts": 108,
+      "profile_boundary_combinations": 36,
+      "matching_attempts": [
+        1
+      ]
+    },
+    "safe-coordinator": {
+      "test_subcase_pass": 6,
+      "package_pass": 1,
+      "exit_code": 0
+    },
+    "safe-cow-modeled": {
+      "test_subcase_pass": 123,
+      "package_pass": 1,
+      "exit_code": 0,
+      "actual_cut_receipts": 108,
+      "profile_boundary_combinations": 36,
+      "matching_attempts": [
+        1
+      ]
+    }
+  },
+  "actual_windows_execution_of_repair": false,
+  "exact_failed_schedule_reproduced": false,
+  "runtime_changes": []
+}

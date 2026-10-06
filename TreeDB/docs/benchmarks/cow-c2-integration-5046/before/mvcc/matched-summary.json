@@ -1,0 +1,8408 @@
+[
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          249229.0,
+          244147.0,
+          245338.0
+        ],
+        "median": 245338.0,
+        "minimum": 244147.0,
+        "maximum": 249229.0,
+        "max_over_min": 1.020815328470143
+      },
+      "allocs/op": {
+        "values": [
+          301.0,
+          292.0,
+          294.0
+        ],
+        "median": 294.0,
+        "minimum": 292.0,
+        "maximum": 301.0,
+        "max_over_min": 1.0308219178082192
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          70642240.0,
+          69406536.0,
+          69596272.0
+        ],
+        "median": 69596272.0,
+        "minimum": 69406536.0,
+        "maximum": 70642240.0,
+        "max_over_min": 1.0178038563976164
+      },
+      "ns/op": {
+        "values": [
+          7139728.0,
+          7629122.0,
+          6965504.0
+        ],
+        "median": 7139728.0,
+        "minimum": 6965504.0,
+        "maximum": 7629122.0,
+        "max_over_min": 1.0952720722003748
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6232710.0,
+          6193224.0,
+          6134477.0
+        ],
+        "median": 6193224.0,
+        "minimum": 6134477.0,
+        "maximum": 6232710.0,
+        "max_over_min": 1.0160132640484265
+      },
+      "p95_ns": {
+        "values": [
+          12441012.0,
+          12381481.0,
+          12071290.0
+        ],
+        "median": 12381481.0,
+        "minimum": 12071290.0,
+        "maximum": 12441012.0,
+        "max_over_min": 1.0306282095782637
+      },
+      "p99_ns": {
+        "values": [
+          12644229.0,
+          12726440.0,
+          12337731.0
+        ],
+        "median": 12644229.0,
+        "minimum": 12337731.0,
+        "maximum": 12726440.0,
+        "max_over_min": 1.0315057120308426
+      },
+      "process_alloc_B/op": {
+        "values": [
+          256255.0,
+          251224.0,
+          252417.0
+        ],
+        "median": 252417.0,
+        "minimum": 251224.0,
+        "maximum": 256255.0,
+        "max_over_min": 1.020025952934433
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          192998.0,
+          190926.0,
+          191454.0
+        ],
+        "median": 191454.0,
+        "minimum": 190926.0,
+        "maximum": 192998.0,
+        "max_over_min": 1.010852372123231
+      },
+      "allocs/op": {
+        "values": [
+          311.0,
+          309.0,
+          309.0
+        ],
+        "median": 309.0,
+        "minimum": 309.0,
+        "maximum": 311.0,
+        "max_over_min": 1.006472491909385
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          89903080.0,
+          88555640.0,
+          88617632.0
+        ],
+        "median": 88617632.0,
+        "minimum": 88555640.0,
+        "maximum": 89903080.0,
+        "max_over_min": 1.0152157445872447
+      },
+      "ns/op": {
+        "values": [
+          6984163.0,
+          7119732.0,
+          7282100.0
+        ],
+        "median": 7119732.0,
+        "minimum": 6984163.0,
+        "maximum": 7282100.0,
+        "max_over_min": 1.0426589413792318
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6172555.0,
+          6175674.0,
+          6144469.0
+        ],
+        "median": 6172555.0,
+        "minimum": 6144469.0,
+        "maximum": 6175674.0,
+        "max_over_min": 1.0050785511327343
+      },
+      "p95_ns": {
+        "values": [
+          12266043.0,
+          12210753.0,
+          12333403.0
+        ],
+        "median": 12266043.0,
+        "minimum": 12210753.0,
+        "maximum": 12333403.0,
+        "max_over_min": 1.010044425597668
+      },
+      "p99_ns": {
+        "values": [
+          12489885.0,
+          12466804.0,
+          12665355.0
+        ],
+        "median": 12489885.0,
+        "minimum": 12466804.0,
+        "maximum": 12665355.0,
+        "max_over_min": 1.0159263753565069
+      },
+      "process_alloc_B/op": {
+        "values": [
+          196512.0,
+          194441.0,
+          194967.0
+        ],
+        "median": 194967.0,
+        "minimum": 194441.0,
+        "maximum": 196512.0,
+        "max_over_min": 1.0106510458185258
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          2676.0,
+          2676.0,
+          2729.0
+        ],
+        "median": 2676.0,
+        "minimum": 2676.0,
+        "maximum": 2729.0,
+        "max_over_min": 1.0198056801195814
+      },
+      "allocs/op": {
+        "values": [
+          14.0,
+          14.0,
+          14.0
+        ],
+        "median": 14.0,
+        "minimum": 14.0,
+        "maximum": 14.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          49300968.0,
+          49318456.0,
+          49320616.0
+        ],
+        "median": 49318456.0,
+        "minimum": 49300968.0,
+        "maximum": 49320616.0,
+        "max_over_min": 1.0003985317286266
+      },
+      "ns/op": {
+        "values": [
+          6185480.0,
+          6143643.0,
+          6065785.0
+        ],
+        "median": 6143643.0,
+        "minimum": 6065785.0,
+        "maximum": 6185480.0,
+        "max_over_min": 1.0197328128181267
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6177696.0,
+          6126157.0,
+          6061804.0
+        ],
+        "median": 6126157.0,
+        "minimum": 6061804.0,
+        "maximum": 6177696.0,
+        "max_over_min": 1.019118401056847
+      },
+      "p95_ns": {
+        "values": [
+          6330411.0,
+          6292783.0,
+          6159041.0
+        ],
+        "median": 6292783.0,
+        "minimum": 6159041.0,
+        "maximum": 6330411.0,
+        "max_over_min": 1.0278241369070282
+      },
+      "p99_ns": {
+        "values": [
+          6387218.0,
+          6384735.0,
+          6264624.0
+        ],
+        "median": 6384735.0,
+        "minimum": 6264624.0,
+        "maximum": 6387218.0,
+        "max_over_min": 1.0195692510835446
+      },
+      "process_alloc_B/op": {
+        "values": [
+          9687.0,
+          9687.0,
+          9741.0
+        ],
+        "median": 9687.0,
+        "minimum": 9687.0,
+        "maximum": 9741.0,
+        "max_over_min": 1.005574481263549
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1868.0,
+          1868.0,
+          1867.0
+        ],
+        "median": 1868.0,
+        "minimum": 1867.0,
+        "maximum": 1868.0,
+        "max_over_min": 1.0005356186395287
+      },
+      "allocs/op": {
+        "values": [
+          14.0,
+          14.0,
+          14.0
+        ],
+        "median": 14.0,
+        "minimum": 14.0,
+        "maximum": 14.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          49454376.0,
+          49457464.0,
+          49442536.0
+        ],
+        "median": 49454376.0,
+        "minimum": 49442536.0,
+        "maximum": 49457464.0,
+        "max_over_min": 1.0003019262604167
+      },
+      "ns/op": {
+        "values": [
+          6566517.0,
+          6202015.0,
+          6129790.0
+        ],
+        "median": 6202015.0,
+        "minimum": 6129790.0,
+        "maximum": 6566517.0,
+        "max_over_min": 1.0712466495589572
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6178659.0,
+          6161077.0,
+          6093455.0
+        ],
+        "median": 6161077.0,
+        "minimum": 6093455.0,
+        "maximum": 6178659.0,
+        "max_over_min": 1.0139828717862034
+      },
+      "p95_ns": {
+        "values": [
+          10220189.0,
+          6408370.0,
+          6284422.0
+        ],
+        "median": 6408370.0,
+        "minimum": 6284422.0,
+        "maximum": 10220189.0,
+        "max_over_min": 1.6262735061394669
+      },
+      "p99_ns": {
+        "values": [
+          12610197.0,
+          6812368.0,
+          6482739.0
+        ],
+        "median": 6812368.0,
+        "minimum": 6482739.0,
+        "maximum": 12610197.0,
+        "max_over_min": 1.9451958500874398
+      },
+      "process_alloc_B/op": {
+        "values": [
+          5374.0,
+          5374.0,
+          5374.0
+        ],
+        "median": 5374.0,
+        "minimum": 5374.0,
+        "maximum": 5374.0,
+        "max_over_min": 1.0
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1262694.0,
+          1263652.0,
+          1268099.0
+        ],
+        "median": 1263652.0,
+        "minimum": 1262694.0,
+        "maximum": 1268099.0,
+        "max_over_min": 1.0042805303581073
+      },
+      "allocs/op": {
+        "values": [
+          329.0,
+          329.0,
+          324.0
+        ],
+        "median": 329.0,
+        "minimum": 324.0,
+        "maximum": 329.0,
+        "max_over_min": 1.0154320987654322
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          62734480.0,
+          62947904.0,
+          64264160.0
+        ],
+        "median": 62947904.0,
+        "minimum": 62734480.0,
+        "maximum": 64264160.0,
+        "max_over_min": 1.0243834012810817
+      },
+      "ns/op": {
+        "values": [
+          7243914.0,
+          7965987.0,
+          7297513.0
+        ],
+        "median": 7297513.0,
+        "minimum": 7243914.0,
+        "maximum": 7965987.0,
+        "max_over_min": 1.099679952025935
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6391050.0,
+          6380607.0,
+          6351329.0
+        ],
+        "median": 6380607.0,
+        "minimum": 6351329.0,
+        "maximum": 6391050.0,
+        "max_over_min": 1.0062539666894912
+      },
+      "p95_ns": {
+        "values": [
+          12386306.0,
+          12481946.0,
+          12366287.0
+        ],
+        "median": 12386306.0,
+        "minimum": 12366287.0,
+        "maximum": 12481946.0,
+        "max_over_min": 1.009352766921874
+      },
+      "p99_ns": {
+        "values": [
+          12689020.0,
+          12758240.0,
+          12493680.0
+        ],
+        "median": 12689020.0,
+        "minimum": 12493680.0,
+        "maximum": 12758240.0,
+        "max_over_min": 1.0211755063360035
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1269720.0,
+          1270678.0,
+          1275125.0
+        ],
+        "median": 1270678.0,
+        "minimum": 1269720.0,
+        "maximum": 1275125.0,
+        "max_over_min": 1.0042568440286048
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1225892.0,
+          1223395.0,
+          1226516.0
+        ],
+        "median": 1225892.0,
+        "minimum": 1223395.0,
+        "maximum": 1226516.0,
+        "max_over_min": 1.0025510975604772
+      },
+      "allocs/op": {
+        "values": [
+          338.0,
+          336.0,
+          337.0
+        ],
+        "median": 337.0,
+        "minimum": 336.0,
+        "maximum": 338.0,
+        "max_over_min": 1.005952380952381
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          105485160.0,
+          60143016.0,
+          63315336.0
+        ],
+        "median": 63315336.0,
+        "minimum": 60143016.0,
+        "maximum": 105485160.0,
+        "max_over_min": 1.7539053911097509
+      },
+      "ns/op": {
+        "values": [
+          7172212.0,
+          7383447.0,
+          7277362.0
+        ],
+        "median": 7277362.0,
+        "minimum": 7172212.0,
+        "maximum": 7383447.0,
+        "max_over_min": 1.0294518622706634
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6298019.0,
+          6294881.0,
+          6298079.0
+        ],
+        "median": 6298019.0,
+        "minimum": 6294881.0,
+        "maximum": 6298079.0,
+        "max_over_min": 1.0005080318436521
+      },
+      "p95_ns": {
+        "values": [
+          12355129.0,
+          12490975.0,
+          12302244.0
+        ],
+        "median": 12355129.0,
+        "minimum": 12302244.0,
+        "maximum": 12490975.0,
+        "max_over_min": 1.0153411849090297
+      },
+      "p99_ns": {
+        "values": [
+          12745818.0,
+          12972450.0,
+          12437310.0
+        ],
+        "median": 12745818.0,
+        "minimum": 12437310.0,
+        "maximum": 12972450.0,
+        "max_over_min": 1.0430269889550072
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1229406.0,
+          1226942.0,
+          1230030.0
+        ],
+        "median": 1229406.0,
+        "minimum": 1226942.0,
+        "maximum": 1230030.0,
+        "max_over_min": 1.0025168263862514
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          50352.0,
+          50353.0,
+          50352.0
+        ],
+        "median": 50352.0,
+        "minimum": 50352.0,
+        "maximum": 50353.0,
+        "max_over_min": 1.0000198601843024
+      },
+      "allocs/op": {
+        "values": [
+          15.0,
+          15.0,
+          15.0
+        ],
+        "median": 15.0,
+        "minimum": 15.0,
+        "maximum": 15.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          36135112.0,
+          36138128.0,
+          36113256.0
+        ],
+        "median": 36135112.0,
+        "minimum": 36113256.0,
+        "maximum": 36138128.0,
+        "max_over_min": 1.0006887221689453
+      },
+      "ns/op": {
+        "values": [
+          6140510.0,
+          6197108.0,
+          6135630.0
+        ],
+        "median": 6140510.0,
+        "minimum": 6135630.0,
+        "maximum": 6197108.0,
+        "max_over_min": 1.0100198349639726
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6097892.0,
+          6103071.0,
+          6104282.0
+        ],
+        "median": 6103071.0,
+        "minimum": 6097892.0,
+        "maximum": 6104282.0,
+        "max_over_min": 1.0010479031114359
+      },
+      "p95_ns": {
+        "values": [
+          6380296.0,
+          6484118.0,
+          6365710.0
+        ],
+        "median": 6380296.0,
+        "minimum": 6365710.0,
+        "maximum": 6484118.0,
+        "max_over_min": 1.0186009101891227
+      },
+      "p99_ns": {
+        "values": [
+          6499725.0,
+          6627345.0,
+          6410443.0
+        ],
+        "median": 6499725.0,
+        "minimum": 6410443.0,
+        "maximum": 6627345.0,
+        "max_over_min": 1.0338357271096552
+      },
+      "process_alloc_B/op": {
+        "values": [
+          57363.0,
+          57362.0,
+          57361.0
+        ],
+        "median": 57362.0,
+        "minimum": 57361.0,
+        "maximum": 57363.0,
+        "max_over_min": 1.000034866895626
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          25799.0,
+          25800.0,
+          25773.0
+        ],
+        "median": 25799.0,
+        "minimum": 25773.0,
+        "maximum": 25800.0,
+        "max_over_min": 1.0010476079618205
+      },
+      "allocs/op": {
+        "values": [
+          15.0,
+          15.0,
+          15.0
+        ],
+        "median": 15.0,
+        "minimum": 15.0,
+        "maximum": 15.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          36279816.0,
+          36296704.0,
+          36274304.0
+        ],
+        "median": 36279816.0,
+        "minimum": 36274304.0,
+        "maximum": 36296704.0,
+        "max_over_min": 1.0006175170170046
+      },
+      "ns/op": {
+        "values": [
+          6510281.0,
+          6160409.0,
+          6151458.0
+        ],
+        "median": 6160409.0,
+        "minimum": 6151458.0,
+        "maximum": 6510281.0,
+        "max_over_min": 1.0583313744481389
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6156808.0,
+          6085364.0,
+          6128321.0
+        ],
+        "median": 6128321.0,
+        "minimum": 6085364.0,
+        "maximum": 6156808.0,
+        "max_over_min": 1.01174030016939
+      },
+      "p95_ns": {
+        "values": [
+          9990652.0,
+          6389291.0,
+          6314052.0
+        ],
+        "median": 6389291.0,
+        "minimum": 6314052.0,
+        "maximum": 9990652.0,
+        "max_over_min": 1.5822885209054345
+      },
+      "p99_ns": {
+        "values": [
+          12534618.0,
+          6925542.0,
+          6890630.0
+        ],
+        "median": 6925542.0,
+        "minimum": 6890630.0,
+        "maximum": 12534618.0,
+        "max_over_min": 1.8190815643852594
+      },
+      "process_alloc_B/op": {
+        "values": [
+          29305.0,
+          29304.0,
+          29278.0
+        ],
+        "median": 29304.0,
+        "minimum": 29278.0,
+        "maximum": 29305.0,
+        "max_over_min": 1.000922194138944
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68960.0,
+          68961.0,
+          68960.0
+        ],
+        "median": 68960.0,
+        "minimum": 68960.0,
+        "maximum": 68961.0,
+        "max_over_min": 1.0000145011600927
+      },
+      "allocs/op": {
+        "values": [
+          147.0,
+          147.0,
+          147.0
+        ],
+        "median": 147.0,
+        "minimum": 147.0,
+        "maximum": 147.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371632.0,
+          1371632.0,
+          1371632.0
+        ],
+        "median": 1371632.0,
+        "minimum": 1371632.0,
+        "maximum": 1371632.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          38557408.0,
+          38587112.0,
+          38570408.0
+        ],
+        "median": 38570408.0,
+        "minimum": 38557408.0,
+        "maximum": 38587112.0,
+        "max_over_min": 1.0007703837353383
+      },
+      "ns/op": {
+        "values": [
+          6109754.0,
+          6259200.0,
+          6211303.0
+        ],
+        "median": 6211303.0,
+        "minimum": 6109754.0,
+        "maximum": 6259200.0,
+        "max_over_min": 1.024460231950419
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6106932.0,
+          6195847.0,
+          6096495.0
+        ],
+        "median": 6106932.0,
+        "minimum": 6096495.0,
+        "maximum": 6195847.0,
+        "max_over_min": 1.0162965769675856
+      },
+      "p95_ns": {
+        "values": [
+          6236686.0,
+          6446666.0,
+          6324611.0
+        ],
+        "median": 6324611.0,
+        "minimum": 6236686.0,
+        "maximum": 6446666.0,
+        "max_over_min": 1.0336685220323742
+      },
+      "p99_ns": {
+        "values": [
+          6282953.0,
+          6542602.0,
+          6357632.0
+        ],
+        "median": 6357632.0,
+        "minimum": 6282953.0,
+        "maximum": 6542602.0,
+        "max_over_min": 1.0413259497564282
+      },
+      "process_alloc_B/op": {
+        "values": [
+          75975.0,
+          75975.0,
+          75973.0
+        ],
+        "median": 75975.0,
+        "minimum": 75973.0,
+        "maximum": 75975.0,
+        "max_over_min": 1.0000263251418267
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          69652.0,
+          69677.0,
+          69652.0
+        ],
+        "median": 69652.0,
+        "minimum": 69652.0,
+        "maximum": 69677.0,
+        "max_over_min": 1.0003589272382702
+      },
+      "allocs/op": {
+        "values": [
+          148.0,
+          148.0,
+          148.0
+        ],
+        "median": 148.0,
+        "minimum": 148.0,
+        "maximum": 148.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609104.0,
+          4609104.0,
+          4609104.0
+        ],
+        "median": 4609104.0,
+        "minimum": 4609104.0,
+        "maximum": 4609104.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          31848864.0,
+          31856728.0,
+          31862456.0
+        ],
+        "median": 31856728.0,
+        "minimum": 31848864.0,
+        "maximum": 31862456.0,
+        "max_over_min": 1.000426765613995
+      },
+      "ns/op": {
+        "values": [
+          6257100.0,
+          6650842.0,
+          6253865.0
+        ],
+        "median": 6257100.0,
+        "minimum": 6253865.0,
+        "maximum": 6650842.0,
+        "max_over_min": 1.06347706578252
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6209418.0,
+          6141838.0,
+          6227031.0
+        ],
+        "median": 6209418.0,
+        "minimum": 6141838.0,
+        "maximum": 6227031.0,
+        "max_over_min": 1.0138709291909034
+      },
+      "p95_ns": {
+        "values": [
+          6464943.0,
+          12132430.0,
+          6523147.0
+        ],
+        "median": 6523147.0,
+        "minimum": 6464943.0,
+        "maximum": 12132430.0,
+        "max_over_min": 1.8766491831405165
+      },
+      "p99_ns": {
+        "values": [
+          6576255.0,
+          12323784.0,
+          6648873.0
+        ],
+        "median": 6648873.0,
+        "minimum": 6576255.0,
+        "maximum": 12323784.0,
+        "max_over_min": 1.8739820764249562
+      },
+      "process_alloc_B/op": {
+        "values": [
+          73167.0,
+          73192.0,
+          73166.0
+        ],
+        "median": 73167.0,
+        "minimum": 73166.0,
+        "maximum": 73192.0,
+        "max_over_min": 1.0003553563130416
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          69000.0,
+          69001.0,
+          69000.0
+        ],
+        "median": 69000.0,
+        "minimum": 69000.0,
+        "maximum": 69001.0,
+        "max_over_min": 1.0000144927536232
+      },
+      "allocs/op": {
+        "values": [
+          149.0,
+          149.0,
+          149.0
+        ],
+        "median": 149.0,
+        "minimum": 149.0,
+        "maximum": 149.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371856.0,
+          1371856.0,
+          1371856.0
+        ],
+        "median": 1371856.0,
+        "minimum": 1371856.0,
+        "maximum": 1371856.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          38554800.0,
+          38553568.0,
+          38540216.0
+        ],
+        "median": 38553568.0,
+        "minimum": 38540216.0,
+        "maximum": 38554800.0,
+        "max_over_min": 1.000378409918616
+      },
+      "ns/op": {
+        "values": [
+          6837122.0,
+          6222357.0,
+          6235507.0
+        ],
+        "median": 6235507.0,
+        "minimum": 6222357.0,
+        "maximum": 6837122.0,
+        "max_over_min": 1.0987993777920488
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6143810.0,
+          6179510.0,
+          6157679.0
+        ],
+        "median": 6157679.0,
+        "minimum": 6143810.0,
+        "maximum": 6179510.0,
+        "max_over_min": 1.0058107265686926
+      },
+      "p95_ns": {
+        "values": [
+          12420198.0,
+          6487478.0,
+          6421744.0
+        ],
+        "median": 6487478.0,
+        "minimum": 6421744.0,
+        "maximum": 12420198.0,
+        "max_over_min": 1.934084884106249
+      },
+      "p99_ns": {
+        "values": [
+          12615776.0,
+          6549141.0,
+          6484750.0
+        ],
+        "median": 6549141.0,
+        "minimum": 6484750.0,
+        "maximum": 12615776.0,
+        "max_over_min": 1.9454529472994333
+      },
+      "process_alloc_B/op": {
+        "values": [
+          76012.0,
+          76015.0,
+          76015.0
+        ],
+        "median": 76015.0,
+        "minimum": 76012.0,
+        "maximum": 76015.0,
+        "max_over_min": 1.0000394674525075
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          69715.0,
+          69715.0,
+          69736.0
+        ],
+        "median": 69715.0,
+        "minimum": 69715.0,
+        "maximum": 69736.0,
+        "max_over_min": 1.0003012264218605
+      },
+      "allocs/op": {
+        "values": [
+          150.0,
+          150.0,
+          150.0
+        ],
+        "median": 150.0,
+        "minimum": 150.0,
+        "maximum": 150.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609328.0,
+          4609328.0,
+          4609328.0
+        ],
+        "median": 4609328.0,
+        "minimum": 4609328.0,
+        "maximum": 4609328.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          31844904.0,
+          31845104.0,
+          31922720.0
+        ],
+        "median": 31845104.0,
+        "minimum": 31844904.0,
+        "maximum": 31922720.0,
+        "max_over_min": 1.0024435934867317
+      },
+      "ns/op": {
+        "values": [
+          6507964.0,
+          6206442.0,
+          6257922.0
+        ],
+        "median": 6257922.0,
+        "minimum": 6206442.0,
+        "maximum": 6507964.0,
+        "max_over_min": 1.0485821022737343
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          6149896.0,
+          6173698.0,
+          6167730.0
+        ],
+        "median": 6167730.0,
+        "minimum": 6149896.0,
+        "maximum": 6173698.0,
+        "max_over_min": 1.0038703093515728
+      },
+      "p95_ns": {
+        "values": [
+          10040734.0,
+          6437908.0,
+          6449334.0
+        ],
+        "median": 6449334.0,
+        "minimum": 6437908.0,
+        "maximum": 10040734.0,
+        "max_over_min": 1.5596268228747598
+      },
+      "p99_ns": {
+        "values": [
+          12343954.0,
+          6774765.0,
+          7557204.0
+        ],
+        "median": 7557204.0,
+        "minimum": 6774765.0,
+        "maximum": 12343954.0,
+        "max_over_min": 1.8220490304829762
+      },
+      "process_alloc_B/op": {
+        "values": [
+          73230.0,
+          73229.0,
+          73251.0
+        ],
+        "median": 73230.0,
+        "minimum": 73229.0,
+        "maximum": 73251.0,
+        "max_over_min": 1.0003004274262928
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          135259.0,
+          135248.0,
+          135272.0
+        ],
+        "median": 135259.0,
+        "minimum": 135248.0,
+        "maximum": 135272.0,
+        "max_over_min": 1.000177451792263
+      },
+      "allocs/op": {
+        "values": [
+          109.0,
+          109.0,
+          109.0
+        ],
+        "median": 109.0,
+        "minimum": 109.0,
+        "maximum": 109.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          76202696.0,
+          76218160.0,
+          76178608.0
+        ],
+        "median": 76202696.0,
+        "minimum": 76178608.0,
+        "maximum": 76218160.0,
+        "max_over_min": 1.0005192008759205
+      },
+      "ns/op": {
+        "values": [
+          94402.0,
+          113868.0,
+          96653.0
+        ],
+        "median": 96653.0,
+        "minimum": 94402.0,
+        "maximum": 113868.0,
+        "max_over_min": 1.2062032584055422
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          31845.0,
+          51557.0,
+          32631.0
+        ],
+        "median": 32631.0,
+        "minimum": 31845.0,
+        "maximum": 51557.0,
+        "max_over_min": 1.6189982728842833
+      },
+      "p95_ns": {
+        "values": [
+          105889.0,
+          101001.0,
+          116572.0
+        ],
+        "median": 105889.0,
+        "minimum": 101001.0,
+        "maximum": 116572.0,
+        "max_over_min": 1.1541667904278174
+      },
+      "p99_ns": {
+        "values": [
+          255115.0,
+          518597.0,
+          349187.0
+        ],
+        "median": 349187.0,
+        "minimum": 255115.0,
+        "maximum": 518597.0,
+        "max_over_min": 2.032796973913725
+      },
+      "process_alloc_B/op": {
+        "values": [
+          142290.0,
+          142279.0,
+          142303.0
+        ],
+        "median": 142290.0,
+        "minimum": 142279.0,
+        "maximum": 142303.0,
+        "max_over_min": 1.00016868265872
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          147824.0,
+          147931.0,
+          147808.0
+        ],
+        "median": 147824.0,
+        "minimum": 147808.0,
+        "maximum": 147931.0,
+        "max_over_min": 1.0008321606408312
+      },
+      "allocs/op": {
+        "values": [
+          150.0,
+          150.0,
+          150.0
+        ],
+        "median": 150.0,
+        "minimum": 150.0,
+        "maximum": 150.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          96839160.0,
+          96884656.0,
+          96833344.0
+        ],
+        "median": 96839160.0,
+        "minimum": 96833344.0,
+        "maximum": 96884656.0,
+        "max_over_min": 1.000529900113746
+      },
+      "ns/op": {
+        "values": [
+          107530.0,
+          107383.0,
+          106738.0
+        ],
+        "median": 107383.0,
+        "minimum": 106738.0,
+        "maximum": 107530.0,
+        "max_over_min": 1.007420037849688
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          40964.0,
+          43410.0,
+          40120.0
+        ],
+        "median": 40964.0,
+        "minimum": 40120.0,
+        "maximum": 43410.0,
+        "max_over_min": 1.0820039880358923
+      },
+      "p95_ns": {
+        "values": [
+          84822.0,
+          88068.0,
+          81745.0
+        ],
+        "median": 84822.0,
+        "minimum": 81745.0,
+        "maximum": 88068.0,
+        "max_over_min": 1.0773502966542297
+      },
+      "p99_ns": {
+        "values": [
+          324834.0,
+          198640.0,
+          243995.0
+        ],
+        "median": 243995.0,
+        "minimum": 198640.0,
+        "maximum": 324834.0,
+        "max_over_min": 1.6352899718082965
+      },
+      "process_alloc_B/op": {
+        "values": [
+          151333.0,
+          151438.0,
+          151316.0
+        ],
+        "median": 151333.0,
+        "minimum": 151316.0,
+        "maximum": 151438.0,
+        "max_over_min": 1.0008062597478125
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          2528.0,
+          2474.0,
+          2528.0
+        ],
+        "median": 2528.0,
+        "minimum": 2474.0,
+        "maximum": 2528.0,
+        "max_over_min": 1.0218270008084074
+      },
+      "allocs/op": {
+        "values": [
+          14.0,
+          14.0,
+          14.0
+        ],
+        "median": 14.0,
+        "minimum": 14.0,
+        "maximum": 14.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          61964464.0,
+          61934344.0,
+          61934336.0
+        ],
+        "median": 61934344.0,
+        "minimum": 61934336.0,
+        "maximum": 61964464.0,
+        "max_over_min": 1.0004864506822193
+      },
+      "ns/op": {
+        "values": [
+          4260.0,
+          4117.0,
+          4123.0
+        ],
+        "median": 4123.0,
+        "minimum": 4117.0,
+        "maximum": 4260.0,
+        "max_over_min": 1.0347340296332281
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          3270.0,
+          3258.0,
+          3261.0
+        ],
+        "median": 3261.0,
+        "minimum": 3258.0,
+        "maximum": 3270.0,
+        "max_over_min": 1.003683241252302
+      },
+      "p95_ns": {
+        "values": [
+          6347.0,
+          5909.0,
+          5948.0
+        ],
+        "median": 5948.0,
+        "minimum": 5909.0,
+        "maximum": 6347.0,
+        "max_over_min": 1.0741242172956507
+      },
+      "p99_ns": {
+        "values": [
+          7912.0,
+          11629.0,
+          9313.0
+        ],
+        "median": 9313.0,
+        "minimum": 7912.0,
+        "maximum": 11629.0,
+        "max_over_min": 1.4697927199191103
+      },
+      "process_alloc_B/op": {
+        "values": [
+          9543.0,
+          9489.0,
+          9543.0
+        ],
+        "median": 9543.0,
+        "minimum": 9489.0,
+        "maximum": 9543.0,
+        "max_over_min": 1.0056907998735378
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1676.0,
+          1703.0,
+          1676.0
+        ],
+        "median": 1676.0,
+        "minimum": 1676.0,
+        "maximum": 1703.0,
+        "max_over_min": 1.016109785202864
+      },
+      "allocs/op": {
+        "values": [
+          14.0,
+          14.0,
+          14.0
+        ],
+        "median": 14.0,
+        "minimum": 14.0,
+        "maximum": 14.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          62056592.0,
+          61858328.0,
+          62100400.0
+        ],
+        "median": 62056592.0,
+        "minimum": 61858328.0,
+        "maximum": 62100400.0,
+        "max_over_min": 1.0039133291801874
+      },
+      "ns/op": {
+        "values": [
+          3840.0,
+          4143.0,
+          3727.0
+        ],
+        "median": 3840.0,
+        "minimum": 3727.0,
+        "maximum": 4143.0,
+        "max_over_min": 1.1116179232626777
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          3085.0,
+          3238.0,
+          3190.0
+        ],
+        "median": 3190.0,
+        "minimum": 3085.0,
+        "maximum": 3238.0,
+        "max_over_min": 1.0495948136142625
+      },
+      "p95_ns": {
+        "values": [
+          5863.0,
+          6307.0,
+          5110.0
+        ],
+        "median": 5863.0,
+        "minimum": 5110.0,
+        "maximum": 6307.0,
+        "max_over_min": 1.2342465753424658
+      },
+      "p99_ns": {
+        "values": [
+          7932.0,
+          12163.0,
+          7308.0
+        ],
+        "median": 7932.0,
+        "minimum": 7308.0,
+        "maximum": 12163.0,
+        "max_over_min": 1.6643404488232074
+      },
+      "process_alloc_B/op": {
+        "values": [
+          5184.0,
+          5211.0,
+          5184.0
+        ],
+        "median": 5184.0,
+        "minimum": 5184.0,
+        "maximum": 5211.0,
+        "max_over_min": 1.0052083333333333
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1078991.0,
+          1079113.0,
+          1079095.0
+        ],
+        "median": 1079095.0,
+        "minimum": 1078991.0,
+        "maximum": 1079113.0,
+        "max_over_min": 1.000113068598348
+      },
+      "allocs/op": {
+        "values": [
+          144.0,
+          144.0,
+          144.0
+        ],
+        "median": 144.0,
+        "minimum": 144.0,
+        "maximum": 144.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          173170808.0,
+          173165224.0,
+          173215328.0
+        ],
+        "median": 173170808.0,
+        "minimum": 173165224.0,
+        "maximum": 173215328.0,
+        "max_over_min": 1.0002893421602943
+      },
+      "ns/op": {
+        "values": [
+          92255.0,
+          95984.0,
+          90320.0
+        ],
+        "median": 92255.0,
+        "minimum": 90320.0,
+        "maximum": 95984.0,
+        "max_over_min": 1.0627103631532329
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          31091.0,
+          31946.0,
+          31417.0
+        ],
+        "median": 31417.0,
+        "minimum": 31091.0,
+        "maximum": 31946.0,
+        "max_over_min": 1.0274999195908785
+      },
+      "p95_ns": {
+        "values": [
+          105229.0,
+          177296.0,
+          91957.0
+        ],
+        "median": 105229.0,
+        "minimum": 91957.0,
+        "maximum": 177296.0,
+        "max_over_min": 1.9280315799775982
+      },
+      "p99_ns": {
+        "values": [
+          238897.0,
+          351548.0,
+          230763.0
+        ],
+        "median": 238897.0,
+        "minimum": 230763.0,
+        "maximum": 351548.0,
+        "max_over_min": 1.5234157988932369
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1086020.0,
+          1086141.0,
+          1086124.0
+        ],
+        "median": 1086124.0,
+        "minimum": 1086020.0,
+        "maximum": 1086141.0,
+        "max_over_min": 1.0001114159960223
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1097136.0,
+          1097140.0,
+          1097141.0
+        ],
+        "median": 1097140.0,
+        "minimum": 1097136.0,
+        "maximum": 1097141.0,
+        "max_over_min": 1.00000455732015
+      },
+      "allocs/op": {
+        "values": [
+          199.0,
+          200.0,
+          199.0
+        ],
+        "median": 199.0,
+        "minimum": 199.0,
+        "maximum": 200.0,
+        "max_over_min": 1.0050251256281406
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          311372984.0,
+          311115992.0,
+          311115056.0
+        ],
+        "median": 311115992.0,
+        "minimum": 311115056.0,
+        "maximum": 311372984.0,
+        "max_over_min": 1.0008290437734393
+      },
+      "ns/op": {
+        "values": [
+          105516.0,
+          104376.0,
+          104689.0
+        ],
+        "median": 104689.0,
+        "minimum": 104376.0,
+        "maximum": 105516.0,
+        "max_over_min": 1.0109220510462176
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          40570.0,
+          39836.0,
+          39099.0
+        ],
+        "median": 39836.0,
+        "minimum": 39099.0,
+        "maximum": 40570.0,
+        "max_over_min": 1.0376224455868437
+      },
+      "p95_ns": {
+        "values": [
+          99029.0,
+          89067.0,
+          113431.0
+        ],
+        "median": 99029.0,
+        "minimum": 89067.0,
+        "maximum": 113431.0,
+        "max_over_min": 1.2735468804383216
+      },
+      "p99_ns": {
+        "values": [
+          275645.0,
+          302409.0,
+          292096.0
+        ],
+        "median": 292096.0,
+        "minimum": 275645.0,
+        "maximum": 302409.0,
+        "max_over_min": 1.0970959023381524
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1100645.0,
+          1100647.0,
+          1100649.0
+        ],
+        "median": 1100647.0,
+        "minimum": 1100645.0,
+        "maximum": 1100649.0,
+        "max_over_min": 1.0000036342326546
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          50206.0,
+          50205.0,
+          50259.0
+        ],
+        "median": 50206.0,
+        "minimum": 50205.0,
+        "maximum": 50259.0,
+        "max_over_min": 1.0010755900806692
+      },
+      "allocs/op": {
+        "values": [
+          15.0,
+          15.0,
+          15.0
+        ],
+        "median": 15.0,
+        "minimum": 15.0,
+        "maximum": 15.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          44572864.0,
+          44601432.0,
+          44586760.0
+        ],
+        "median": 44586760.0,
+        "minimum": 44572864.0,
+        "maximum": 44601432.0,
+        "max_over_min": 1.0006409280767778
+      },
+      "ns/op": {
+        "values": [
+          4711.0,
+          6287.0,
+          4538.0
+        ],
+        "median": 4711.0,
+        "minimum": 4538.0,
+        "maximum": 6287.0,
+        "max_over_min": 1.3854120758043191
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          3476.0,
+          3413.0,
+          3359.0
+        ],
+        "median": 3413.0,
+        "minimum": 3359.0,
+        "maximum": 3476.0,
+        "max_over_min": 1.034831795177136
+      },
+      "p95_ns": {
+        "values": [
+          8418.0,
+          10328.0,
+          7703.0
+        ],
+        "median": 8418.0,
+        "minimum": 7703.0,
+        "maximum": 10328.0,
+        "max_over_min": 1.3407763209139296
+      },
+      "p99_ns": {
+        "values": [
+          9968.0,
+          40945.0,
+          12459.0
+        ],
+        "median": 12459.0,
+        "minimum": 9968.0,
+        "maximum": 40945.0,
+        "max_over_min": 4.107644462279294
+      },
+      "process_alloc_B/op": {
+        "values": [
+          57218.0,
+          57218.0,
+          57274.0
+        ],
+        "median": 57218.0,
+        "minimum": 57218.0,
+        "maximum": 57274.0,
+        "max_over_min": 1.000978712992415
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          25581.0,
+          25581.0,
+          25581.0
+        ],
+        "median": 25581.0,
+        "minimum": 25581.0,
+        "maximum": 25581.0,
+        "max_over_min": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          15.0,
+          15.0,
+          15.0
+        ],
+        "median": 15.0,
+        "minimum": 15.0,
+        "maximum": 15.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          44723856.0,
+          44742160.0,
+          44727560.0
+        ],
+        "median": 44727560.0,
+        "minimum": 44723856.0,
+        "maximum": 44742160.0,
+        "max_over_min": 1.0004092670363665
+      },
+      "ns/op": {
+        "values": [
+          4755.0,
+          4838.0,
+          4280.0
+        ],
+        "median": 4755.0,
+        "minimum": 4280.0,
+        "maximum": 4838.0,
+        "max_over_min": 1.1303738317757008
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          3421.0,
+          3438.0,
+          3397.0
+        ],
+        "median": 3421.0,
+        "minimum": 3397.0,
+        "maximum": 3438.0,
+        "max_over_min": 1.0120694730644686
+      },
+      "p95_ns": {
+        "values": [
+          5283.0,
+          6730.0,
+          7362.0
+        ],
+        "median": 6730.0,
+        "minimum": 5283.0,
+        "maximum": 7362.0,
+        "max_over_min": 1.393526405451448
+      },
+      "p99_ns": {
+        "values": [
+          41433.0,
+          39002.0,
+          9935.0
+        ],
+        "median": 39002.0,
+        "minimum": 9935.0,
+        "maximum": 41433.0,
+        "max_over_min": 4.1704076497232005
+      },
+      "process_alloc_B/op": {
+        "values": [
+          29088.0,
+          29087.0,
+          29087.0
+        ],
+        "median": 29087.0,
+        "minimum": 29087.0,
+        "maximum": 29088.0,
+        "max_over_min": 1.0000343796197615
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68812.0,
+          68812.0,
+          68812.0
+        ],
+        "median": 68812.0,
+        "minimum": 68812.0,
+        "maximum": 68812.0,
+        "max_over_min": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          147.0,
+          147.0,
+          147.0
+        ],
+        "median": 147.0,
+        "minimum": 147.0,
+        "maximum": 147.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371632.0,
+          1371632.0,
+          1371632.0
+        ],
+        "median": 1371632.0,
+        "minimum": 1371632.0,
+        "maximum": 1371632.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          38579632.0,
+          38594432.0,
+          38582408.0
+        ],
+        "median": 38582408.0,
+        "minimum": 38579632.0,
+        "maximum": 38594432.0,
+        "max_over_min": 1.000383622114384
+      },
+      "ns/op": {
+        "values": [
+          31763.0,
+          31414.0,
+          31276.0
+        ],
+        "median": 31414.0,
+        "minimum": 31276.0,
+        "maximum": 31763.0,
+        "max_over_min": 1.015571044890651
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          30243.0,
+          29801.0,
+          29773.0
+        ],
+        "median": 29801.0,
+        "minimum": 29773.0,
+        "maximum": 30243.0,
+        "max_over_min": 1.0157861149363516
+      },
+      "p95_ns": {
+        "values": [
+          42686.0,
+          42541.0,
+          41029.0
+        ],
+        "median": 42541.0,
+        "minimum": 41029.0,
+        "maximum": 42686.0,
+        "max_over_min": 1.0403860683906505
+      },
+      "p99_ns": {
+        "values": [
+          59852.0,
+          51078.0,
+          49669.0
+        ],
+        "median": 51078.0,
+        "minimum": 49669.0,
+        "maximum": 59852.0,
+        "max_over_min": 1.2050172139563913
+      },
+      "process_alloc_B/op": {
+        "values": [
+          75825.0,
+          75825.0,
+          75825.0
+        ],
+        "median": 75825.0,
+        "minimum": 75825.0,
+        "maximum": 75825.0,
+        "max_over_min": 1.0
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          69461.0,
+          69461.0,
+          69461.0
+        ],
+        "median": 69461.0,
+        "minimum": 69461.0,
+        "maximum": 69461.0,
+        "max_over_min": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          148.0,
+          148.0,
+          148.0
+        ],
+        "median": 148.0,
+        "minimum": 148.0,
+        "maximum": 148.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609104.0,
+          4609104.0,
+          4609104.0
+        ],
+        "median": 4609104.0,
+        "minimum": 4609104.0,
+        "maximum": 4609104.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          31761120.0,
+          31754248.0,
+          31750464.0
+        ],
+        "median": 31754248.0,
+        "minimum": 31750464.0,
+        "maximum": 31761120.0,
+        "max_over_min": 1.000335617142477
+      },
+      "ns/op": {
+        "values": [
+          36662.0,
+          37840.0,
+          36721.0
+        ],
+        "median": 36721.0,
+        "minimum": 36662.0,
+        "maximum": 37840.0,
+        "max_over_min": 1.0321313621733674
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          34464.0,
+          34938.0,
+          34559.0
+        ],
+        "median": 34559.0,
+        "minimum": 34464.0,
+        "maximum": 34938.0,
+        "max_over_min": 1.0137534818941505
+      },
+      "p95_ns": {
+        "values": [
+          46557.0,
+          56605.0,
+          48391.0
+        ],
+        "median": 48391.0,
+        "minimum": 46557.0,
+        "maximum": 56605.0,
+        "max_over_min": 1.215821466159761
+      },
+      "p99_ns": {
+        "values": [
+          100915.0,
+          127772.0,
+          104516.0
+        ],
+        "median": 104516.0,
+        "minimum": 100915.0,
+        "maximum": 127772.0,
+        "max_over_min": 1.2661348659763167
+      },
+      "process_alloc_B/op": {
+        "values": [
+          72976.0,
+          72975.0,
+          72975.0
+        ],
+        "median": 72975.0,
+        "minimum": 72975.0,
+        "maximum": 72976.0,
+        "max_over_min": 1.0000137033230558
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68853.0,
+          68852.0,
+          68853.0
+        ],
+        "median": 68853.0,
+        "minimum": 68852.0,
+        "maximum": 68853.0,
+        "max_over_min": 1.0000145239063498
+      },
+      "allocs/op": {
+        "values": [
+          149.0,
+          149.0,
+          149.0
+        ],
+        "median": 149.0,
+        "minimum": 149.0,
+        "maximum": 149.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371856.0,
+          1371856.0,
+          1371856.0
+        ],
+        "median": 1371856.0,
+        "minimum": 1371856.0,
+        "maximum": 1371856.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          38573880.0,
+          38577640.0,
+          38586416.0
+        ],
+        "median": 38577640.0,
+        "minimum": 38573880.0,
+        "maximum": 38586416.0,
+        "max_over_min": 1.0003249867526938
+      },
+      "ns/op": {
+        "values": [
+          28155.0,
+          26557.0,
+          25788.0
+        ],
+        "median": 26557.0,
+        "minimum": 25788.0,
+        "maximum": 28155.0,
+        "max_over_min": 1.0917868776174966
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          25340.0,
+          25066.0,
+          24634.0
+        ],
+        "median": 25066.0,
+        "minimum": 24634.0,
+        "maximum": 25340.0,
+        "max_over_min": 1.0286595761955022
+      },
+      "p95_ns": {
+        "values": [
+          36217.0,
+          33574.0,
+          34855.0
+        ],
+        "median": 34855.0,
+        "minimum": 33574.0,
+        "maximum": 36217.0,
+        "max_over_min": 1.0787216298326086
+      },
+      "p99_ns": {
+        "values": [
+          47464.0,
+          53029.0,
+          43940.0
+        ],
+        "median": 47464.0,
+        "minimum": 43940.0,
+        "maximum": 53029.0,
+        "max_over_min": 1.2068502503413745
+      },
+      "process_alloc_B/op": {
+        "values": [
+          75866.0,
+          75865.0,
+          75866.0
+        ],
+        "median": 75866.0,
+        "minimum": 75865.0,
+        "maximum": 75866.0,
+        "max_over_min": 1.000013181308904
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          69522.0,
+          69501.0,
+          69522.0
+        ],
+        "median": 69522.0,
+        "minimum": 69501.0,
+        "maximum": 69522.0,
+        "max_over_min": 1.0003021539258428
+      },
+      "allocs/op": {
+        "values": [
+          150.0,
+          150.0,
+          150.0
+        ],
+        "median": 150.0,
+        "minimum": 150.0,
+        "maximum": 150.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609328.0,
+          4609328.0,
+          4609328.0
+        ],
+        "median": 4609328.0,
+        "minimum": 4609328.0,
+        "maximum": 4609328.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          31733080.0,
+          31741624.0,
+          31738880.0
+        ],
+        "median": 31738880.0,
+        "minimum": 31733080.0,
+        "maximum": 31741624.0,
+        "max_over_min": 1.0002692458469207
+      },
+      "ns/op": {
+        "values": [
+          26280.0,
+          27965.0,
+          28713.0
+        ],
+        "median": 27965.0,
+        "minimum": 26280.0,
+        "maximum": 28713.0,
+        "max_over_min": 1.092579908675799
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          24334.0,
+          24368.0,
+          25884.0
+        ],
+        "median": 24368.0,
+        "minimum": 24334.0,
+        "maximum": 25884.0,
+        "max_over_min": 1.063696885016849
+      },
+      "p95_ns": {
+        "values": [
+          34613.0,
+          40820.0,
+          37831.0
+        ],
+        "median": 37831.0,
+        "minimum": 34613.0,
+        "maximum": 40820.0,
+        "max_over_min": 1.1793256868806519
+      },
+      "p99_ns": {
+        "values": [
+          67051.0,
+          85761.0,
+          98409.0
+        ],
+        "median": 85761.0,
+        "minimum": 67051.0,
+        "maximum": 98409.0,
+        "max_over_min": 1.4676738601959702
+      },
+      "process_alloc_B/op": {
+        "values": [
+          73037.0,
+          73015.0,
+          73037.0
+        ],
+        "median": 73037.0,
+        "minimum": 73015.0,
+        "maximum": 73037.0,
+        "max_over_min": 1.000301307950421
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "wal_appends/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "wal_syncs/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          130652.0,
+          130548.0,
+          130561.0
+        ],
+        "median": 130561.0,
+        "minimum": 130548.0,
+        "maximum": 130652.0,
+        "max_over_min": 1.000796641848209
+      },
+      "allocs/op": {
+        "values": [
+          103.0,
+          103.0,
+          103.0
+        ],
+        "median": 103.0,
+        "minimum": 103.0,
+        "maximum": 103.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          70491776.0,
+          70442416.0,
+          70458080.0
+        ],
+        "median": 70458080.0,
+        "minimum": 70442416.0,
+        "maximum": 70491776.0,
+        "max_over_min": 1.0007007141833408
+      },
+      "ns/op": {
+        "values": [
+          82044.0,
+          78954.0,
+          79411.0
+        ],
+        "median": 79411.0,
+        "minimum": 78954.0,
+        "maximum": 82044.0,
+        "max_over_min": 1.0391367125161486
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          26054.0,
+          25152.0,
+          26299.0
+        ],
+        "median": 26054.0,
+        "minimum": 25152.0,
+        "maximum": 26299.0,
+        "max_over_min": 1.0456027353689568
+      },
+      "p95_ns": {
+        "values": [
+          48267.0,
+          39126.0,
+          41015.0
+        ],
+        "median": 41015.0,
+        "minimum": 39126.0,
+        "maximum": 48267.0,
+        "max_over_min": 1.2336298113786228
+      },
+      "p99_ns": {
+        "values": [
+          132198.0,
+          108065.0,
+          118891.0
+        ],
+        "median": 118891.0,
+        "minimum": 108065.0,
+        "maximum": 132198.0,
+        "max_over_min": 1.223319298570305
+      },
+      "process_alloc_B/op": {
+        "values": [
+          137659.0,
+          137556.0,
+          137568.0
+        ],
+        "median": 137568.0,
+        "minimum": 137556.0,
+        "maximum": 137659.0,
+        "max_over_min": 1.0007487859489954
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          144998.0,
+          145592.0,
+          145592.0
+        ],
+        "median": 145592.0,
+        "minimum": 144998.0,
+        "maximum": 145592.0,
+        "max_over_min": 1.004096608229079
+      },
+      "allocs/op": {
+        "values": [
+          144.0,
+          143.0,
+          143.0
+        ],
+        "median": 143.0,
+        "minimum": 143.0,
+        "maximum": 144.0,
+        "max_over_min": 1.006993006993007
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          99274168.0,
+          99444536.0,
+          99405088.0
+        ],
+        "median": 99405088.0,
+        "minimum": 99274168.0,
+        "maximum": 99444536.0,
+        "max_over_min": 1.0017161362661835
+      },
+      "ns/op": {
+        "values": [
+          61900.0,
+          62105.0,
+          64146.0
+        ],
+        "median": 62105.0,
+        "minimum": 61900.0,
+        "maximum": 64146.0,
+        "max_over_min": 1.0362843295638127
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          35556.0,
+          34405.0,
+          36450.0
+        ],
+        "median": 35556.0,
+        "minimum": 34405.0,
+        "maximum": 36450.0,
+        "max_over_min": 1.059439035023979
+      },
+      "p95_ns": {
+        "values": [
+          59679.0,
+          61804.0,
+          65424.0
+        ],
+        "median": 61804.0,
+        "minimum": 59679.0,
+        "maximum": 65424.0,
+        "max_over_min": 1.0962650178454734
+      },
+      "p99_ns": {
+        "values": [
+          77942.0,
+          90150.0,
+          128603.0
+        ],
+        "median": 90150.0,
+        "minimum": 77942.0,
+        "maximum": 128603.0,
+        "max_over_min": 1.6499833209309487
+      },
+      "process_alloc_B/op": {
+        "values": [
+          148502.0,
+          149096.0,
+          149097.0
+        ],
+        "median": 149096.0,
+        "minimum": 148502.0,
+        "maximum": 149097.0,
+        "max_over_min": 1.0040066800447132
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          2201.0,
+          2202.0,
+          2201.0
+        ],
+        "median": 2201.0,
+        "minimum": 2201.0,
+        "maximum": 2202.0,
+        "max_over_min": 1.000454338936847
+      },
+      "allocs/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          53519688.0,
+          53499840.0,
+          53486360.0
+        ],
+        "median": 53499840.0,
+        "minimum": 53486360.0,
+        "maximum": 53519688.0,
+        "max_over_min": 1.0006231121355051
+      },
+      "ns/op": {
+        "values": [
+          1758.0,
+          1540.0,
+          1539.0
+        ],
+        "median": 1540.0,
+        "minimum": 1539.0,
+        "maximum": 1758.0,
+        "max_over_min": 1.142300194931774
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          1144.0,
+          1147.0,
+          1144.0
+        ],
+        "median": 1144.0,
+        "minimum": 1144.0,
+        "maximum": 1147.0,
+        "max_over_min": 1.0026223776223777
+      },
+      "p95_ns": {
+        "values": [
+          2856.0,
+          2047.0,
+          1941.0
+        ],
+        "median": 2047.0,
+        "minimum": 1941.0,
+        "maximum": 2856.0,
+        "max_over_min": 1.4714064914992273
+      },
+      "p99_ns": {
+        "values": [
+          6723.0,
+          3193.0,
+          3204.0
+        ],
+        "median": 3204.0,
+        "minimum": 3193.0,
+        "maximum": 6723.0,
+        "max_over_min": 2.1055433761352957
+      },
+      "process_alloc_B/op": {
+        "values": [
+          9207.0,
+          9208.0,
+          9207.0
+        ],
+        "median": 9207.0,
+        "minimum": 9207.0,
+        "maximum": 9208.0,
+        "max_over_min": 1.0001086130118388
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1324.0,
+          1351.0,
+          1351.0
+        ],
+        "median": 1351.0,
+        "minimum": 1324.0,
+        "maximum": 1351.0,
+        "max_over_min": 1.020392749244713
+      },
+      "allocs/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          61954976.0,
+          61976968.0,
+          61964640.0
+        ],
+        "median": 61964640.0,
+        "minimum": 61954976.0,
+        "maximum": 61976968.0,
+        "max_over_min": 1.0003549674524932
+      },
+      "ns/op": {
+        "values": [
+          1443.0,
+          1394.0,
+          1426.0
+        ],
+        "median": 1426.0,
+        "minimum": 1394.0,
+        "maximum": 1443.0,
+        "max_over_min": 1.0351506456241033
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          1127.0,
+          1145.0,
+          1131.0
+        ],
+        "median": 1131.0,
+        "minimum": 1127.0,
+        "maximum": 1145.0,
+        "max_over_min": 1.0159716060337178
+      },
+      "p95_ns": {
+        "values": [
+          1947.0,
+          1510.0,
+          2021.0
+        ],
+        "median": 1947.0,
+        "minimum": 1510.0,
+        "maximum": 2021.0,
+        "max_over_min": 1.33841059602649
+      },
+      "p99_ns": {
+        "values": [
+          3086.0,
+          3629.0,
+          3605.0
+        ],
+        "median": 3605.0,
+        "minimum": 3086.0,
+        "maximum": 3629.0,
+        "max_over_min": 1.1759559300064808
+      },
+      "process_alloc_B/op": {
+        "values": [
+          4827.0,
+          4854.0,
+          4854.0
+        ],
+        "median": 4854.0,
+        "minimum": 4827.0,
+        "maximum": 4854.0,
+        "max_over_min": 1.0055935363579864
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1078892.0,
+          1078610.0,
+          1078747.0
+        ],
+        "median": 1078747.0,
+        "minimum": 1078610.0,
+        "maximum": 1078892.0,
+        "max_over_min": 1.0002614476038605
+      },
+      "allocs/op": {
+        "values": [
+          139.0,
+          137.0,
+          138.0
+        ],
+        "median": 138.0,
+        "minimum": 137.0,
+        "maximum": 139.0,
+        "max_over_min": 1.0145985401459854
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          163251864.0,
+          164354160.0,
+          163606312.0
+        ],
+        "median": 163606312.0,
+        "minimum": 163251864.0,
+        "maximum": 164354160.0,
+        "max_over_min": 1.0067521189222073
+      },
+      "ns/op": {
+        "values": [
+          84577.0,
+          84397.0,
+          82000.0
+        ],
+        "median": 84397.0,
+        "minimum": 82000.0,
+        "maximum": 84577.0,
+        "max_over_min": 1.0314268292682927
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          22797.0,
+          21937.0,
+          21675.0
+        ],
+        "median": 21937.0,
+        "minimum": 21675.0,
+        "maximum": 22797.0,
+        "max_over_min": 1.051764705882353
+      },
+      "p95_ns": {
+        "values": [
+          108321.0,
+          96726.0,
+          104566.0
+        ],
+        "median": 104566.0,
+        "minimum": 96726.0,
+        "maximum": 108321.0,
+        "max_over_min": 1.1198746975994045
+      },
+      "p99_ns": {
+        "values": [
+          196578.0,
+          285833.0,
+          146398.0
+        ],
+        "median": 196578.0,
+        "minimum": 146398.0,
+        "maximum": 285833.0,
+        "max_over_min": 1.9524378748343556
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1085910.0,
+          1085629.0,
+          1085767.0
+        ],
+        "median": 1085767.0,
+        "minimum": 1085629.0,
+        "maximum": 1085910.0,
+        "max_over_min": 1.0002588361217322
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          1095545.0,
+          1096266.0,
+          1095628.0
+        ],
+        "median": 1095628.0,
+        "minimum": 1095545.0,
+        "maximum": 1096266.0,
+        "max_over_min": 1.0006581199311757
+      },
+      "allocs/op": {
+        "values": [
+          193.0,
+          192.0,
+          192.0
+        ],
+        "median": 192.0,
+        "minimum": 192.0,
+        "maximum": 193.0,
+        "max_over_min": 1.0052083333333333
+      },
+      "enqueued_records/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "heap_end_B": {
+        "values": [
+          311352640.0,
+          311634656.0,
+          311443120.0
+        ],
+        "median": 311443120.0,
+        "minimum": 311352640.0,
+        "maximum": 311634656.0,
+        "max_over_min": 1.000905776806646
+      },
+      "ns/op": {
+        "values": [
+          60642.0,
+          62883.0,
+          61312.0
+        ],
+        "median": 61312.0,
+        "minimum": 60642.0,
+        "maximum": 62883.0,
+        "max_over_min": 1.0369545859305431
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          29400.0,
+          30542.0,
+          30089.0
+        ],
+        "median": 30089.0,
+        "minimum": 29400.0,
+        "maximum": 30542.0,
+        "max_over_min": 1.038843537414966
+      },
+      "p95_ns": {
+        "values": [
+          64707.0,
+          69977.0,
+          66901.0
+        ],
+        "median": 66901.0,
+        "minimum": 64707.0,
+        "maximum": 69977.0,
+        "max_over_min": 1.0814440477846292
+      },
+      "p99_ns": {
+        "values": [
+          220064.0,
+          171492.0,
+          156631.0
+        ],
+        "median": 171492.0,
+        "minimum": 156631.0,
+        "maximum": 220064.0,
+        "max_over_min": 1.4049836877757276
+      },
+      "process_alloc_B/op": {
+        "values": [
+          1099048.0,
+          1099769.0,
+          1099131.0
+        ],
+        "median": 1099131.0,
+        "minimum": 1099048.0,
+        "maximum": 1099769.0,
+        "max_over_min": 1.0006560223029386
+      },
+      "rotated_shards/op": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          49879.0,
+          49878.0,
+          49878.0
+        ],
+        "median": 49878.0,
+        "minimum": 49878.0,
+        "maximum": 49879.0,
+        "max_over_min": 1.0000200489193631
+      },
+      "allocs/op": {
+        "values": [
+          9.0,
+          9.0,
+          9.0
+        ],
+        "median": 9.0,
+        "minimum": 9.0,
+        "maximum": 9.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          36482880.0,
+          36480744.0,
+          36450008.0
+        ],
+        "median": 36480744.0,
+        "minimum": 36450008.0,
+        "maximum": 36482880.0,
+        "max_over_min": 1.0009018379364965
+      },
+      "ns/op": {
+        "values": [
+          3482.0,
+          4441.0,
+          3126.0
+        ],
+        "median": 3482.0,
+        "minimum": 3126.0,
+        "maximum": 4441.0,
+        "max_over_min": 1.4206653870761357
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          1279.0,
+          1240.0,
+          1204.0
+        ],
+        "median": 1240.0,
+        "minimum": 1204.0,
+        "maximum": 1279.0,
+        "max_over_min": 1.0622923588039868
+      },
+      "p95_ns": {
+        "values": [
+          3206.0,
+          6188.0,
+          2333.0
+        ],
+        "median": 3206.0,
+        "minimum": 2333.0,
+        "maximum": 6188.0,
+        "max_over_min": 2.652378911273039
+      },
+      "p99_ns": {
+        "values": [
+          9665.0,
+          11257.0,
+          8580.0
+        ],
+        "median": 9665.0,
+        "minimum": 8580.0,
+        "maximum": 11257.0,
+        "max_over_min": 1.312004662004662
+      },
+      "process_alloc_B/op": {
+        "values": [
+          56882.0,
+          56881.0,
+          56881.0
+        ],
+        "median": 56881.0,
+        "minimum": 56881.0,
+        "maximum": 56882.0,
+        "max_over_min": 1.0000175805629297
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          25255.0,
+          25255.0,
+          25229.0
+        ],
+        "median": 25255.0,
+        "minimum": 25229.0,
+        "maximum": 25255.0,
+        "max_over_min": 1.001030560069761
+      },
+      "allocs/op": {
+        "values": [
+          9.0,
+          9.0,
+          9.0
+        ],
+        "median": 9.0,
+        "minimum": 9.0,
+        "maximum": 9.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          44953056.0,
+          44955264.0,
+          44961968.0
+        ],
+        "median": 44955264.0,
+        "minimum": 44953056.0,
+        "maximum": 44961968.0,
+        "max_over_min": 1.000198251260159
+      },
+      "ns/op": {
+        "values": [
+          3922.0,
+          4361.0,
+          2576.0
+        ],
+        "median": 3922.0,
+        "minimum": 2576.0,
+        "maximum": 4361.0,
+        "max_over_min": 1.6929347826086956
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          1233.0,
+          1240.0,
+          1205.0
+        ],
+        "median": 1233.0,
+        "minimum": 1205.0,
+        "maximum": 1240.0,
+        "max_over_min": 1.0290456431535269
+      },
+      "p95_ns": {
+        "values": [
+          2278.0,
+          2130.0,
+          2460.0
+        ],
+        "median": 2278.0,
+        "minimum": 2130.0,
+        "maximum": 2460.0,
+        "max_over_min": 1.1549295774647887
+      },
+      "p99_ns": {
+        "values": [
+          8417.0,
+          9143.0,
+          10669.0
+        ],
+        "median": 9143.0,
+        "minimum": 8417.0,
+        "maximum": 10669.0,
+        "max_over_min": 1.267553760247119
+      },
+      "process_alloc_B/op": {
+        "values": [
+          28757.0,
+          28757.0,
+          28732.0
+        ],
+        "median": 28757.0,
+        "minimum": 28732.0,
+        "maximum": 28757.0,
+        "max_over_min": 1.0008701099819017
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68157.0,
+          68114.0,
+          68156.0
+        ],
+        "median": 68156.0,
+        "minimum": 68114.0,
+        "maximum": 68157.0,
+        "max_over_min": 1.0006312945943565
+      },
+      "allocs/op": {
+        "values": [
+          144.0,
+          144.0,
+          144.0
+        ],
+        "median": 144.0,
+        "minimum": 144.0,
+        "maximum": 144.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371632.0,
+          1371632.0,
+          1371632.0
+        ],
+        "median": 1371632.0,
+        "minimum": 1371632.0,
+        "maximum": 1371632.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          13072168.0,
+          14740104.0,
+          13693800.0
+        ],
+        "median": 13693800.0,
+        "minimum": 13072168.0,
+        "maximum": 14740104.0,
+        "max_over_min": 1.1275944434006662
+      },
+      "ns/op": {
+        "values": [
+          27747.0,
+          28437.0,
+          28369.0
+        ],
+        "median": 28369.0,
+        "minimum": 27747.0,
+        "maximum": 28437.0,
+        "max_over_min": 1.024867553249
+      },
+      "output/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          23483.0,
+          23499.0,
+          23559.0
+        ],
+        "median": 23499.0,
+        "minimum": 23483.0,
+        "maximum": 23559.0,
+        "max_over_min": 1.0032363837669804
+      },
+      "p95_ns": {
+        "values": [
+          42722.0,
+          59402.0,
+          57780.0
+        ],
+        "median": 57780.0,
+        "minimum": 42722.0,
+        "maximum": 59402.0,
+        "max_over_min": 1.3904311595899068
+      },
+      "p99_ns": {
+        "values": [
+          134731.0,
+          84100.0,
+          88312.0
+        ],
+        "median": 88312.0,
+        "minimum": 84100.0,
+        "maximum": 134731.0,
+        "max_over_min": 1.6020332936979786
+      },
+      "process_alloc_B/op": {
+        "values": [
+          75176.0,
+          75133.0,
+          75175.0
+        ],
+        "median": 75175.0,
+        "minimum": 75133.0,
+        "maximum": 75176.0,
+        "max_over_min": 1.0005723184219983
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          8.5,
+          8.5,
+          8.5
+        ],
+        "median": 8.5,
+        "minimum": 8.5,
+        "maximum": 8.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "read": "all_versions",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68763.0,
+          68763.0,
+          68763.0
+        ],
+        "median": 68763.0,
+        "minimum": 68763.0,
+        "maximum": 68763.0,
+        "max_over_min": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          145.0,
+          145.0,
+          145.0
+        ],
+        "median": 145.0,
+        "minimum": 145.0,
+        "maximum": 145.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609104.0,
+          4609104.0,
+          4609104.0
+        ],
+        "median": 4609104.0,
+        "minimum": 4609104.0,
+        "maximum": 4609104.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          21309320.0,
+          12796272.0,
+          12856440.0
+        ],
+        "median": 12856440.0,
+        "minimum": 12796272.0,
+        "maximum": 21309320.0,
+        "max_over_min": 1.665275636529139
+      },
+      "ns/op": {
+        "values": [
+          33119.0,
+          33415.0,
+          32792.0
+        ],
+        "median": 33119.0,
+        "minimum": 32792.0,
+        "maximum": 33415.0,
+        "max_over_min": 1.0189985362283485
+      },
+      "output/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          30313.0,
+          30008.0,
+          30009.0
+        ],
+        "median": 30009.0,
+        "minimum": 30008.0,
+        "maximum": 30313.0,
+        "max_over_min": 1.0101639562783258
+      },
+      "p95_ns": {
+        "values": [
+          46843.0,
+          48018.0,
+          46966.0
+        ],
+        "median": 46966.0,
+        "minimum": 46843.0,
+        "maximum": 48018.0,
+        "max_over_min": 1.0250837905343382
+      },
+      "p99_ns": {
+        "values": [
+          87958.0,
+          151270.0,
+          97529.0
+        ],
+        "median": 97529.0,
+        "minimum": 87958.0,
+        "maximum": 151270.0,
+        "max_over_min": 1.7197980854498738
+      },
+      "process_alloc_B/op": {
+        "values": [
+          72273.0,
+          72273.0,
+          72273.0
+        ],
+        "median": 72273.0,
+        "minimum": 72273.0,
+        "maximum": 72273.0,
+        "max_over_min": 1.0
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "visited/op": {
+        "values": [
+          16.5,
+          16.5,
+          16.5
+        ],
+        "median": 16.5,
+        "minimum": 16.5,
+        "maximum": 16.5,
+        "max_over_min": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 128,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68197.0,
+          68197.0,
+          68154.0
+        ],
+        "median": 68197.0,
+        "minimum": 68154.0,
+        "maximum": 68197.0,
+        "max_over_min": 1.0006309240836928
+      },
+      "allocs/op": {
+        "values": [
+          146.0,
+          146.0,
+          146.0
+        ],
+        "median": 146.0,
+        "minimum": 146.0,
+        "maximum": 146.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          129.0,
+          129.0,
+          129.0
+        ],
+        "median": 129.0,
+        "minimum": 129.0,
+        "maximum": 129.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          1252864.0,
+          1252864.0,
+          1252864.0
+        ],
+        "median": 1252864.0,
+        "minimum": 1252864.0,
+        "maximum": 1252864.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          1371856.0,
+          1371856.0,
+          1371856.0
+        ],
+        "median": 1371856.0,
+        "minimum": 1371856.0,
+        "maximum": 1371856.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "median": 128.0,
+        "minimum": 128.0,
+        "maximum": 128.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          1303280.0,
+          1303280.0,
+          1303280.0
+        ],
+        "median": 1303280.0,
+        "minimum": 1303280.0,
+        "maximum": 1303280.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          13271864.0,
+          12680704.0,
+          12583552.0
+        ],
+        "median": 12680704.0,
+        "minimum": 12583552.0,
+        "maximum": 13271864.0,
+        "max_over_min": 1.0546993408538383
+      },
+      "ns/op": {
+        "values": [
+          24274.0,
+          24757.0,
+          24795.0
+        ],
+        "median": 24757.0,
+        "minimum": 24274.0,
+        "maximum": 24795.0,
+        "max_over_min": 1.0214632940594874
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          19144.0,
+          18874.0,
+          19274.0
+        ],
+        "median": 19144.0,
+        "minimum": 18874.0,
+        "maximum": 19274.0,
+        "max_over_min": 1.0211931757973933
+      },
+      "p95_ns": {
+        "values": [
+          69009.0,
+          48263.0,
+          38301.0
+        ],
+        "median": 48263.0,
+        "minimum": 38301.0,
+        "maximum": 69009.0,
+        "max_over_min": 1.8017545233805905
+      },
+      "p99_ns": {
+        "values": [
+          98988.0,
+          128750.0,
+          142638.0
+        ],
+        "median": 128750.0,
+        "minimum": 98988.0,
+        "maximum": 142638.0,
+        "max_over_min": 1.4409625409140503
+      },
+      "process_alloc_B/op": {
+        "values": [
+          75215.0,
+          75215.0,
+          75173.0
+        ],
+        "median": 75215.0,
+        "minimum": 75173.0,
+        "maximum": 75215.0,
+        "max_over_min": 1.0005587112394079
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "read": "point",
+    "iterations": 256,
+    "metrics": {
+      "B/op": {
+        "values": [
+          68825.0,
+          68825.0,
+          68803.0
+        ],
+        "median": 68825.0,
+        "minimum": 68803.0,
+        "maximum": 68825.0,
+        "max_over_min": 1.0003197534991206
+      },
+      "allocs/op": {
+        "values": [
+          147.0,
+          147.0,
+          147.0
+        ],
+        "median": 147.0,
+        "minimum": 147.0,
+        "maximum": 147.0,
+        "max_over_min": 1.0
+      },
+      "enqueued_records/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_active_cuts": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_capture_calls_total": {
+        "values": [
+          257.0,
+          257.0,
+          257.0
+        ],
+        "median": 257.0,
+        "minimum": 257.0,
+        "maximum": 257.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_control_bytes": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_current_roots": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_deferred_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_external_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_external_leases": {
+        "values": [
+          11.0,
+          11.0,
+          11.0
+        ],
+        "median": 11.0,
+        "minimum": 11.0,
+        "maximum": 11.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_frozen_roots": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_generations": {
+        "values": [
+          8.0,
+          8.0,
+          8.0
+        ],
+        "median": 8.0,
+        "minimum": 8.0,
+        "maximum": 8.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_handoffs_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_history_bytes": {
+        "values": [
+          4490304.0,
+          4490304.0,
+          4490304.0
+        ],
+        "median": 4490304.0,
+        "minimum": 4490304.0,
+        "maximum": 4490304.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_peak_bytes": {
+        "values": [
+          4609328.0,
+          4609328.0,
+          4609328.0
+        ],
+        "median": 4609328.0,
+        "minimum": 4609328.0,
+        "maximum": 4609328.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_prepare_calls_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_publications_total": {
+        "values": [
+          256.0,
+          256.0,
+          256.0
+        ],
+        "median": 256.0,
+        "minimum": 256.0,
+        "maximum": 256.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_reserved_bytes": {
+        "values": [
+          50160.0,
+          50160.0,
+          50160.0
+        ],
+        "median": 50160.0,
+        "minimum": 50160.0,
+        "maximum": 50160.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_retired_bytes": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_rollovers_total": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_sources": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "fixture_cow_total_bytes": {
+        "values": [
+          4540720.0,
+          4540720.0,
+          4540720.0
+        ],
+        "median": 4540720.0,
+        "minimum": 4540720.0,
+        "maximum": 4540720.0,
+        "max_over_min": 1.0
+      },
+      "fixture_cow_views": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "heap_end_B": {
+        "values": [
+          21365448.0,
+          13610328.0,
+          12987744.0
+        ],
+        "median": 13610328.0,
+        "minimum": 12987744.0,
+        "maximum": 21365448.0,
+        "max_over_min": 1.6450468996001153
+      },
+      "ns/op": {
+        "values": [
+          23429.0,
+          24342.0,
+          24164.0
+        ],
+        "median": 24164.0,
+        "minimum": 23429.0,
+        "maximum": 24342.0,
+        "max_over_min": 1.0389687993512313
+      },
+      "output/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0,
+        "minimum": 1.0,
+        "maximum": 1.0,
+        "max_over_min": 1.0
+      },
+      "p50_ns": {
+        "values": [
+          20822.0,
+          19627.0,
+          20289.0
+        ],
+        "median": 20289.0,
+        "minimum": 19627.0,
+        "maximum": 20822.0,
+        "max_over_min": 1.0608855148519896
+      },
+      "p95_ns": {
+        "values": [
+          30709.0,
+          40175.0,
+          37924.0
+        ],
+        "median": 37924.0,
+        "minimum": 30709.0,
+        "maximum": 40175.0,
+        "max_over_min": 1.3082483962356313
+      },
+      "p99_ns": {
+        "values": [
+          101801.0,
+          121244.0,
+          109658.0
+        ],
+        "median": 109658.0,
+        "minimum": 101801.0,
+        "maximum": 121244.0,
+        "max_over_min": 1.1909902653215587
+      },
+      "process_alloc_B/op": {
+        "values": [
+          72334.0,
+          72335.0,
+          72313.0
+        ],
+        "median": 72334.0,
+        "minimum": 72313.0,
+        "maximum": 72335.0,
+        "max_over_min": 1.000304232987153
+      },
+      "rotated_shards/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      },
+      "snapshot_rotations/op": {
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "max_over_min": null
+      }
+    }
+  }
+]

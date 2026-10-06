@@ -45,7 +45,17 @@ type commandWALBatchIntent struct {
 	dependencyResources *rootpublication.StableResourceSet
 	statsPath           commandWALAppendStatsPath
 	statsPathSet        bool
+	rawKVFinalize       RawKVCommandWALFinalize
 }
+
+// RawKVCommandWALFinalize is the internal cached-publication validation seam.
+// It runs after canonical payload encoding and exact dependency capture, before
+// any command frame is accepted. payload and lookup are borrowed for this call;
+// callers must not retain them, mutate payload, or independently read buffered
+// pointers to reconstruct the producer RID. A refusal leaves the journal intact.
+// The callback acquires its own live-reader leases; dependency ownership remains
+// with the command intent and, after append, the existing WAL debt authority.
+type RawKVCommandWALFinalize func(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error
 
 const rawKVCommandWALRIDInlineCacheEntries = 4
 const rawKVCommandWALRIDMaxPooledOverflowEntries = 4 * 1024
@@ -1425,6 +1435,81 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode(prepa
 	return lsn, err
 }
 
+// AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode adds
+// final canonical metadata validation and independently owned live leases to
+// the existing prepared entry path. All fallible installation work belongs in
+// prepare/finalize; publication after a successful append cannot rebuild it.
+// With command WAL disabled it uses the same canonical metadata authority and
+// live-lease finalization without appending a journal frame, returning LSN zero.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if db == nil {
+		return 0, ErrClosed
+	}
+	if !db.commandWAL {
+		return 0, db.finalizeRawKVEntryScanWithoutCommandWAL(prepare, finalize, scanEntries, opHint)
+	}
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, false)
+	return lsn, err
+}
+
+func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	// Command-WAL barrier admission is a no-op for this profile. Pin teardown
+	// explicitly; the cache's writer owner serializes preparation/publication.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if prepare == nil || finalize == nil || scanEntries == nil {
+		return fmt.Errorf("prepared cached publication requires prepare, finalizer and entry scan")
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint, false)
+	if intent == nil || err != nil {
+		return err
+	}
+	defer releaseUnassignedCommandWALIntent(intent)
+	intent.rawKVFinalize = finalize
+	intent.payload, err = commitlog.EncodeRawKVBatchPayloadPlanned(intent.rawKVPlan, intent.rawKVScan)
+	if err != nil {
+		return err
+	}
+	// WAL-off cached publication has no journal dependency custody. Its exact
+	// producer RID planner and finalizer remain authoritative; the finalizer
+	// attaches independent live file/dictionary owners before cut visibility.
+	// Producer placement already establishes read visibility. Keep other
+	// recovery/helper profiles on their existing dependency capture path.
+	if db.durability != DurabilityWALOffRelaxed {
+		if _, err := db.captureCommandWALExternalDependencies(intent); err != nil {
+			return err
+		}
+	}
+	// This exact lookup includes registered producer pointers. It neither
+	// independently reads unflushed pointers nor allocates a second RID registry.
+	return finalize(intent.payload, intent.rawKVRIDCache.lookup)
+}
+
+// FinalizeRawKVEntryScanForCachedPublication borrows canonical metadata without
+// appending a command frame. Replay uses its existing recovery intent; WAL-off
+// cached publication uses the same pointer authority without journal effects.
+func (db *DB) FinalizeRawKVEntryScanForCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	if db == nil {
+		return ErrClosed
+	}
+	return db.finalizeRawKVEntryScanWithoutCommandWAL(prepare, finalize, scanEntries, opHint)
+}
+
+// AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured
+// reports the same phases as the prepared path while preserving its finalizer.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, true)
+}
+
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
 // diagnostic counterpart to the prepared ordered-entry scan append.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, CommandWALRequestTiming, error) {
@@ -1442,6 +1527,10 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndModeMeasur
 }
 
 func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, nil, scanEntries, opHint, mode, measured)
+}
+
+func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
 	var timing CommandWALRequestTiming
 	if db == nil || !db.commandWAL {
 		return 0, timing, nil
@@ -1501,6 +1590,7 @@ func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func
 	if intent == nil || err != nil {
 		return 0, timing, err
 	}
+	intent.rawKVFinalize = finalize
 	defer releaseUnassignedCommandWALIntent(intent)
 	lsn, err := db.appendCommandWALIntentWithTiming(intent, mode.sync(), func() *CommandWALRequestTiming {
 		if measured {
@@ -1739,7 +1829,9 @@ func (db *DB) captureCommandWALExternalDependencies(intent *commandWALBatchInten
 		return nil, err
 	}
 	intent.dependencyResources = resources
-	intent.rawKVRIDCache.release()
+	if intent.rawKVFinalize == nil {
+		intent.rawKVRIDCache.release()
+	}
 	return resources, nil
 }
 
@@ -2612,6 +2704,17 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	}
 	if err != nil {
 		return 0, err
+	}
+	if intent.rawKVFinalize != nil {
+		if err := intent.rawKVFinalize(intent.payload, intent.rawKVRIDCache.lookup); err != nil {
+			return 0, err
+		}
+		// The callback's borrowed identity authority ends here. Its separately
+		// acquired generation resources remain owned by the cache candidate.
+		if intent.rawKVRIDCache != nil {
+			intent.rawKVRIDCache.release()
+		}
+		intent.rawKVFinalize = nil
 	}
 	if intent.rawKVRIDCache != nil && dependencies == nil {
 		intent.rawKVRIDCache.release()

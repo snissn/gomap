@@ -1,0 +1,10 @@
+{
+  "commit": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "source": "git show exact hosted head, no checkout-byte equivalence asserted",
+  "sha256": {
+    "TreeDB/cow_public_review_regression_test.go": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "TreeDB/cow_close_notification_test.go": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+    "TreeDB/db/leaf_generation_gc.go": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+    "TreeDB/internal/valuelog/manager.go": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a"
+  }
+}

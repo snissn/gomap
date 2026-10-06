@@ -86,6 +86,7 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
+	producedFrameObserver  ProducedFrameObserver
 	f                      *os.File
 	stableParent           *os.File
 	stableParentErr        error
@@ -1315,11 +1316,11 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 			if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
 				recordLenHint = 0
 			}
-			return page.ValuePtr{
+			return w.observeProducedPointer(FrameHeader{Version: FrameVersion, K: 1}, page.ValuePtr{
 				Offset: uint64(start + 4),
 				Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 				FileID: w.fileID,
-			}, nil
+			}), nil
 		}
 
 		if cap(w.scratch) < recordLen {
@@ -1361,11 +1362,11 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
 			recordLenHint = 0
 		}
-		return page.ValuePtr{
+		return w.observeProducedPointer(FrameHeader{Version: FrameVersion, K: 1}, page.ValuePtr{
 			Offset: uint64(start + 4),
 			Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 			FileID: w.fileID,
-		}, nil
+		}), nil
 	}
 
 	ptrs, err := w.AppendFrame(dictID, dict, []Record{{RID: rid, Value: value}})
@@ -1496,11 +1497,11 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
 		recordLenHint = 0
 	}
-	return page.ValuePtr{
+	return w.observeProducedPointer(producedFrameHeader(body), page.ValuePtr{
 		Offset: uint64(start + 4),
 		Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 		FileID: w.fileID,
-	}, nil
+	}), nil
 }
 
 // AppendEncodedFrameInto appends a pre-encoded grouped frame body and fills dst
@@ -1574,6 +1575,7 @@ func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr)
 			FileID: w.fileID,
 		}
 	}
+	w.observeProducedFrame(producedFrameHeader(body), dst[0], k)
 	return dst[:k], nil
 }
 
@@ -1655,6 +1657,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 			FileID: w.fileID,
 		}
+		w.observeProducedFrame(FrameHeader{Version: FrameVersion, K: 1}, dst[0], 1)
 		return dst[:1], FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Kept: false}, nil
 	}
 
@@ -1844,6 +1847,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 		}
 
+		w.observeProducedFrame(FrameHeader{Version: FrameVersion, K: uint8(k)}, dst[0], k)
 		return dst, FrameStats{
 			Records:            k,
 			RawPayloadBytes:    rawPayloadBytes,
@@ -2089,6 +2093,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				}
 			}
 
+			w.observeProducedFrame(FrameHeader{Version: FrameVersion, Flags: FrameFlagCompressed, K: uint8(k), DictID: dictID}, dst[0], k)
 			return dst, FrameStats{
 				Records:            k,
 				RawPayloadBytes:    rawPayloadBytes,
@@ -2242,6 +2247,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 		}
 
+		w.observeProducedFrame(FrameHeader{Version: FrameVersion, Flags: FrameFlagCompressed, K: uint8(k), DictID: dictID}, dst[0], k)
 		return dst, FrameStats{
 			Records:            k,
 			RawPayloadBytes:    rawPayloadBytes,
@@ -2304,6 +2310,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	if storedPayloadBytes < 0 {
 		storedPayloadBytes = 0
 	}
+	w.observeProducedFrame(header, dst[0], k)
 	return dst, FrameStats{
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,
@@ -2529,6 +2536,7 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		}
 	}
 
+	w.observeProducedFrame(FrameHeader{Version: FrameVersion, Flags: FrameFlagCompressed, K: uint8(k), Reserved: uint8(w.blockCodec)}, dst[0], k)
 	return dst, FrameStats{
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,
@@ -2700,6 +2708,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 			FileID: w.fileID,
 		}
 	}
+	w.observeProducedFrame(FrameHeader{Version: FrameVersion, K: uint8(k), DictID: dictID}, dst[0], k)
 	return dst, FrameStats{
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,

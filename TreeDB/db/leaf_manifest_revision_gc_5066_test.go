@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,6 +225,7 @@ func TestLeafManifestRevisionGCReboundChild5066(t *testing.T) {
 }
 
 func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dirRoot := t.TempDir()
 	if err := SaveFormatConfig(dirRoot, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true}); err != nil {
 		t.Fatal(err)
@@ -377,5 +379,125 @@ func TestLeafManifestRevisionGCReadOnly5066(t *testing.T) {
 	after := revisionFiles5066(t, LeafLogDirPath(opts.Dir))
 	if len(after) != len(before) {
 		t.Fatalf("read-only changed revisions: %d -> %d", len(before), len(after))
+	}
+}
+
+func TestLeafManifestRevisionGCQuarantineCleanup5066(t *testing.T) {
+	for _, mode := range []string{"hook-clean", "rename-clean", "hook-cleanup-fails", "rename-cleanup-fails", "hook-directory-rebound", "rename-directory-rebound", "hook-file-rebound", "rename-file-rebound"} {
+		t.Run(mode, func(t *testing.T) {
+			permissionFailure := strings.HasSuffix(mode, "cleanup-fails")
+			if permissionFailure && os.Geteuid() == 0 {
+				t.Skip("permission refusal requires an unprivileged process")
+			}
+			s, old, _ := newRevisionStore5066(t)
+			old.Release()
+			original := filepath.Join(s.leafDir, leafGenerationDurableManifestFileName(old.Generation()))
+			contents, err := os.ReadFile(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cut := errors.New("before revision rename cut")
+			var quarantine, moved string
+			rebound := strings.HasSuffix(mode, "rebound")
+			failure := permissionFailure || rebound
+			defer os.Chmod(s.leafDir, 0700)
+			s.hooks.BeforeRename = func() error {
+				quarantine = filepath.Join(s.leafDir, fmt.Sprintf("manifest.gc.%016x.tmp", s.tempSeq))
+				if permissionFailure {
+					// Keep the exact placeholder, but deny its unlink (and the rename).
+					if err := os.Chmod(s.leafDir, 0500); err != nil {
+						return err
+					}
+				} else if rebound {
+					if err := os.Remove(quarantine); err != nil {
+						return err
+					}
+					if strings.Contains(mode, "directory") {
+						if err := os.Mkdir(quarantine, 0700); err != nil {
+							return err
+						}
+						if err := os.WriteFile(filepath.Join(quarantine, "evidence"), []byte("retain"), 0600); err != nil {
+							return err
+						}
+					} else if err := os.WriteFile(quarantine, []byte("foreign regular file"), 0600); err != nil {
+						return err
+					}
+				}
+				if strings.HasPrefix(mode, "hook-") {
+					return cut
+				}
+				if !failure {
+					moved = original + ".saved"
+					if err := os.Rename(original, moved); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			stats := LeafGenerationGCStats{}
+			err = s.gcRevisions(context.Background(), LeafGenerationGCOptions{}, &stats)
+			if err == nil || stats.ManifestRevisionsDeleted != 0 {
+				t.Fatalf("stats=%+v err=%v", stats, err)
+			}
+			if strings.HasPrefix(mode, "hook-") && !errors.Is(err, cut) {
+				t.Fatalf("lost primary hook cause: %v", err)
+			}
+			if mode == "rename-clean" && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("lost primary rename cause: %v", err)
+			}
+			preserved := original
+			if moved != "" {
+				preserved = moved
+			}
+			actual, readErr := os.ReadFile(preserved)
+			if readErr != nil || string(actual) != string(contents) {
+				t.Fatalf("original changed: data=%q err=%v", actual, readErr)
+			}
+			if failure {
+				if !s.poisoned || !errors.Is(err, ErrRecoveryRequired) || !strings.Contains(err.Error(), "revision quarantine") {
+					t.Fatalf("cleanup cause/poison missing: %v poisoned=%v", err, s.poisoned)
+				}
+				if permissionFailure && (!errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "remove revision quarantine")) {
+					t.Fatalf("unlink cleanup cause missing: %v", err)
+				}
+				if rebound && (!errors.Is(err, rootpublication.ErrResourceConflict) || !strings.Contains(err.Error(), "validate revision quarantine")) {
+					t.Fatalf("rebound cleanup cause missing: %v", err)
+				}
+				if strings.Contains(mode, "directory") {
+					if data, err := os.ReadFile(filepath.Join(quarantine, "evidence")); err != nil || string(data) != "retain" {
+						t.Fatalf("rebound evidence removed: %q %v", data, err)
+					}
+				} else if strings.Contains(mode, "file-rebound") {
+					if data, err := os.ReadFile(quarantine); err != nil || string(data) != "foreign regular file" {
+						t.Fatalf("foreign regular file removed: %q %v", data, err)
+					}
+				} else if _, err := os.Stat(quarantine); err != nil {
+					t.Fatalf("failed cleanup evidence removed: %v", err)
+				}
+				if err := s.gcRevisions(context.Background(), LeafGenerationGCOptions{}, &LeafGenerationGCStats{}); !errors.Is(err, ErrRecoveryRequired) {
+					t.Fatalf("poisoned retry admitted: %v", err)
+				}
+			} else {
+				if s.poisoned || errors.Is(err, ErrRecoveryRequired) {
+					t.Fatalf("successful cleanup poisoned store: %v", err)
+				}
+				if mode == "hook-clean" && err != cut {
+					t.Fatalf("primary error changed: %v", err)
+				}
+				if _, err := os.Stat(quarantine); !os.IsNotExist(err) {
+					t.Fatalf("quarantine remains: %v", err)
+				}
+				if moved != "" {
+					if err := os.Rename(moved, original); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s.hooks.BeforeRename = nil
+				retry := LeafGenerationGCStats{}
+				if err := s.gcRevisions(context.Background(), LeafGenerationGCOptions{}, &retry); err != nil || retry.ManifestRevisionsDeleted != 1 {
+					t.Fatalf("clean retry: %+v %v", retry, err)
+				}
+			}
+		})
 	}
 }

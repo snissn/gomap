@@ -1,0 +1,20 @@
+{"Time":"2026-10-05T21:25:24.62652-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Time":"2026-10-05T21:25:25.081925-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts"}
+{"Time":"2026-10-05T21:25:25.082008-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts","Output":"=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts\n"}
+{"Time":"2026-10-05T21:25:25.082032-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable"}
+{"Time":"2026-10-05T21:25:25.082045-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable","Output":"=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable\n"}
+{"Time":"2026-10-05T21:25:25.383576-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable","Output":"--- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable (0.30s)\n"}
+{"Time":"2026-10-05T21:25:25.383602-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable","Elapsed":0.3}
+{"Time":"2026-10-05T21:25:25.383616-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed"}
+{"Time":"2026-10-05T21:25:25.383622-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed","Output":"=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed\n"}
+{"Time":"2026-10-05T21:25:25.657452-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed","Output":"--- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed (0.27s)\n"}
+{"Time":"2026-10-05T21:25:25.657478-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed","Elapsed":0.27}
+{"Time":"2026-10-05T21:25:25.657498-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast"}
+{"Time":"2026-10-05T21:25:25.657514-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast","Output":"=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast\n"}
+{"Time":"2026-10-05T21:25:25.860033-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast","Output":"--- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast (0.20s)\n"}
+{"Time":"2026-10-05T21:25:25.860061-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast","Elapsed":0.2}
+{"Time":"2026-10-05T21:25:25.860069-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts","Output":"--- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts (0.78s)\n"}
+{"Time":"2026-10-05T21:25:25.860073-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicSelectedSourceRewriteKeepsOldCuts","Elapsed":0.78}
+{"Time":"2026-10-05T21:25:25.860108-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Time":"2026-10-05T21:25:25.862888-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"ok  \tgithub.com/snissn/gomap/TreeDB\t1.236s\n"}
+{"Time":"2026-10-05T21:25:25.862929-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Elapsed":1.236}

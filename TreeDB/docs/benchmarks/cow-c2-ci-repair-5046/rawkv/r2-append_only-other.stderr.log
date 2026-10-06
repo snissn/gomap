@@ -1,0 +1,10 @@
+2026/10/05 21:51:05 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006
+2026/10/05 21:51:05 treedb: value-log dict published class=single_value dict_id=9570609167320716760 k=8 payload_ratio=0.001 total_ratio=0.005
+2026/10/05 21:51:07 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006
+2026/10/05 21:51:07 treedb: value-log dict published class=single_value dict_id=3638822397999127798 k=8 payload_ratio=0.001 total_ratio=0.005
+2026/10/05 21:51:12 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006
+2026/10/05 21:51:12 treedb: value-log dict published class=single_value dict_id=15261386184695763077 k=8 payload_ratio=0.001 total_ratio=0.005
+2026/10/05 21:51:13 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006
+2026/10/05 21:51:13 treedb: value-log dict published class=single_value dict_id=11169037377622143110 k=8 payload_ratio=0.001 total_ratio=0.005
+2026/10/05 21:51:16 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006
+2026/10/05 21:51:17 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=131072 stored=784 ratio=0.006

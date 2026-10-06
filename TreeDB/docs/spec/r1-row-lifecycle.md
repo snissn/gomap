@@ -246,6 +246,20 @@ Separate immutable-manifest revision counts/bytes must report supported
 reclamation (`ManifestRevisionGCUnsupported=false`); compatibility-only platforms
 report unavailable reclamation and cannot qualify this supported-profile packet.
 The post-view-release pass repeats this final boundary after its rewrite work.
+
+Immutable-revision GC retains at most 16 selected deletion handles plus one scan
+child or quarantine placeholder and one temporary link-validation handle: at
+most 18 GC child descriptors, separate from existing parent/manager and other
+process descriptors. It validates the full retained directory before every batch
+and can complete multiple batches in one public call. It holds the writer and snapshot
+admission locks (`writeMu` and `rootReuseMu`) throughout that explicit call.
+Repeated full scans cost O(N²/16) in the worst case for N revisions. Per-phase
+footprint limits admit each inventory; they are not cumulative work or pause
+budgets. Finite sustained-workload maintenance cost and component capacity
+qualification remain pending; bounded descriptor demand does not establish an
+unlimited storage or latency bound. Failed quarantine cleanup preserves both
+causes and poisons further revision maintenance rather than claiming clean
+reclamation or removing rebound evidence.
 Held-old-view and complete current row/index oracles run between phases.
 
 Fresh creation and final reopen use

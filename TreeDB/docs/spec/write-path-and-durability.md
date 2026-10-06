@@ -263,6 +263,9 @@ For each write batch, implementation conceptually performs:
 5. Acknowledge caller based on sync mode and durability mode.
 
 Journal and value-log writes are decoupled resources with separate rotation/sync paths.
+The mutable-memtable installation above describes existing cached modes.
+Explicit immutable COW mode uses the prepared sequence below and preserves the
+selected profile's acknowledgement boundary.
 
 ### 3.1 Target raw-KV revision flow
 
@@ -400,6 +403,31 @@ acknowledgement semantics. Failed/abandoned output may set extra bits safely.
 Unknown root/index replacement publishes an uncovered view; descendants remain
 exact until a complete reopen bootstrap. See the
 [negative point lookup contract](contracts.md#251-optional-negative-point-lookup-coverage).
+
+### 3.4 Explicit immutable COW installation
+
+For `MemtableMode="cow_btree"`, final cached pointer/revision metadata is assigned
+under existing prepared-command authority. All changed-shard private roots,
+cut vectors and distinct resource leases are admitted before append. Canonical
+RID resolution, payload encoding and dependency closure remain owned by the
+existing backend intent. A pre-append finalizer verifies identical staged and
+canonical metadata and attaches independent generation read leases, including
+the self-contained materialized-RID case with a nil WAL external closure.
+
+WAL custody is not transferred to cache readers. After append and release of
+the WAL barrier, one already-prepared cut is installed without allocation,
+rebase or root rebuilding. The `no_wal_fast` profile uses the same final metadata authority;
+explicit sync releases writer/admission ownership before sealed-root Checkpoint.
+Unsupported surfaces and capacity refusal stop before acceptance. Post-append
+ambiguity/poison/reopen rules are unchanged.
+
+Checkpoint flushes one captured prefix against its captured backend basis,
+streams bounded private chunks through one backend publication group and removes
+only the proved-covered prefix at handoff. It retains the acceptance receipt
+even if later waiting/cleanup reports an error. A permitted retry completes
+handoff rather than reapplying the accepted prefix. Existing Applied-LSN,
+dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
+See [COW publication and lock ordering](cow-cache-publication.md).
 
 ## 4. Backend Commit Model
 

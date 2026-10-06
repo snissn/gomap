@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -52,7 +53,9 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 		return err
 	}
 	// Freeze snapshot admission while consulting existing stale-view generation
-	// pins. Ordinary snapshots retain these pins, not a manifest token.
+	// pins. Ordinary snapshots retain these pins, not a manifest token. The write
+	// and snapshot-admission locks stay held for the entire explicit GC call,
+	// including every full inventory rescan; footprint limits are not pause budgets.
 	db.rootReuseMu.Lock()
 	defer db.rootReuseMu.Unlock()
 	return db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {
@@ -65,12 +68,17 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	})
 }
 
+// Each selected handle remains live through unlink: Unix numeric identities
+// alone cannot authorize reopening an earlier capture after inode reuse.
+const leafManifestRevisionGCBatchSize = 16
+
 type leafManifestRevisionGCFile struct {
 	name     string
 	file     *os.File
 	identity rootpublication.StableIdentity
 	size     int64
 	manifest *leafGenerationManifest
+	lease    *rootpublication.IdentityDeleteLease
 }
 
 func (s *leafGenerationManifestStore) gcRevisions(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats) error {
@@ -102,126 +110,212 @@ func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Conte
 		return err
 	}
 	currentName := leafGenerationDurableManifestFileName(current.ManifestRevision)
-	// Enumerate the retained directory, never its possibly rebound diagnostic
-	// pathname. Seek resets the directory cursor while the store lock excludes
-	// replacement and other revision scans.
-	if _, err := s.parent.Seek(0, io.SeekStart); err != nil {
-		return err
+	// Saved names/digests control scheduling and detect inventory changes, never
+	// deletion authority. Every batch captures fresh exact handles and validates
+	// the entire directory before unlinking. This bounds descriptors independently
+	// of revision churn, at O(N²/batch-size) worst-case maintenance scan cost.
+	inventory := make(map[string][32]byte)
+	pending := make(map[string]bool)
+	first := true
+	for {
+		entries, scannedBytes := 0, int64(0)
+		files, census, err := s.scanRevisionGCBatch(ctx, opts, held, parentID, currentName, view, first, inventory, pending, &entries, &scannedBytes)
+		if err != nil {
+			return err
+		}
+		if first {
+			stats.ManifestRevisionsTotal += census.ManifestRevisionsTotal
+			stats.ManifestRevisionsProtected += census.ManifestRevisionsProtected
+			stats.ManifestRevisionsEligible += census.ManifestRevisionsEligible
+			stats.ManifestRevisionBytesEligible += census.ManifestRevisionBytesEligible
+			first = false
+		}
+		// All selected handles and leases survive validation and deletion. Close and
+		// abort every remaining capture on partial failure, including cancellation.
+		err = func() error {
+			defer closeRevisionGCBatch(files)
+			if opts.DryRun {
+				return nil
+			}
+			for _, f := range files {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := s.deleteRevisionLocked(f, f.lease); err != nil {
+					return err
+				}
+				stats.ManifestRevisionsDeleted++
+				stats.ManifestRevisionBytesDeleted += f.size
+				delete(pending, f.name)
+				delete(inventory, f.name)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+		if opts.DryRun || len(pending) == 0 {
+			return nil
+		}
 	}
-	var files []leafManifestRevisionGCFile
+}
+
+func closeRevisionGCBatch(files []leafManifestRevisionGCFile) {
+	for _, f := range files {
+		f.lease.Abort()
+		_ = f.file.Close()
+	}
+}
+
+// Footprint limits are checked independently for each complete inventory, as
+// required by MaintenanceLimits; they are not cumulative I/O quotas. Each scan
+// rechecks current/held/registry protection from fresh captures.
+func (s *leafGenerationManifestStore) scanRevisionGCBatch(ctx context.Context, opts LeafGenerationGCOptions, held func(*leafGenerationManifest) bool, parentID rootpublication.StableIdentity, currentName string, view []byte, first bool, inventory map[string][32]byte, pending map[string]bool, entries *int, scannedBytes *int64) (files []leafManifestRevisionGCFile, census LeafGenerationGCStats, resultErr error) {
 	defer func() {
-		for _, f := range files {
-			_ = f.file.Close()
+		if resultErr != nil {
+			closeRevisionGCBatch(files)
+			files = nil
 		}
 	}()
-	entries, scannedBytes := 0, int64(0)
+	if _, err := s.parent.Seek(0, io.SeekStart); err != nil {
+		return nil, census, err
+	}
 	currentFound := false
+	seenPending := make(map[string]bool)
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return files, census, err
 		}
 		batch, readErr := s.parent.ReadDir(64)
 		for _, entry := range batch {
-			entries++
-			if opts.MaintenanceLimits.enabled() && entries > opts.MaintenanceLimits.NativeEntries {
-				return ErrLeafGenerationMaintenanceLimit
+			*entries++
+			if opts.MaintenanceLimits.enabled() && *entries > opts.MaintenanceLimits.NativeEntries {
+				return files, census, ErrLeafGenerationMaintenanceLimit
 			}
 			name := entry.Name()
 			if strings.HasPrefix(name, "manifest.gc.") {
-				return ErrRecoveryRequired
+				return files, census, ErrRecoveryRequired
 			}
 			if !strings.HasPrefix(name, "manifest.durable.") {
 				continue
 			}
-			file, err := rootpublication.OpenStableChildFile(s.parent, name, os.O_RDONLY, 0)
-			if err != nil {
-				return err
-			}
-			info, err := file.Stat()
-			if err != nil {
-				_ = file.Close()
-				return err
-			}
-			if !info.Mode().IsRegular() || info.Size() < 0 {
-				_ = file.Close()
-				return rootpublication.ErrResourceConflict
-			}
-			scannedBytes += info.Size()
-			if opts.MaintenanceLimits.enabled() && scannedBytes > opts.MaintenanceLimits.NativeBytes {
-				_ = file.Close()
-				return ErrLeafGenerationMaintenanceLimit
-			}
-			identity, err := rootpublication.StableIdentityFromFile(file)
-			if err != nil {
-				_ = file.Close()
-				return err
-			}
-			f := leafManifestRevisionGCFile{name: name, file: file, identity: identity, size: info.Size()}
-			files = append(files, f)
-			data, err := io.ReadAll(file)
-			if err != nil {
-				return err
-			}
-			if name == currentName {
-				if !bytes.Equal(data, view) {
+			// An unselected capture is closed immediately. Selected exact handles are
+			// moved into files and kept open until the whole scan and deletion finish.
+			err := func() error {
+				file, err := rootpublication.OpenStableChildFile(s.parent, name, os.O_RDONLY, 0)
+				if err != nil {
+					return err
+				}
+				retained := false
+				defer func() {
+					if !retained {
+						_ = file.Close()
+					}
+				}()
+				info, err := file.Stat()
+				if err != nil {
+					return err
+				}
+				if !info.Mode().IsRegular() || info.Size() < 0 {
 					return rootpublication.ErrResourceConflict
 				}
-				currentFound = true
-			}
-			manifest, err := decodeLeafGenerationManifest(data, name)
+				*scannedBytes += info.Size()
+				if opts.MaintenanceLimits.enabled() && *scannedBytes > opts.MaintenanceLimits.NativeBytes {
+					return ErrLeafGenerationMaintenanceLimit
+				}
+				identity, err := rootpublication.StableIdentityFromFile(file)
+				if err != nil {
+					return err
+				}
+				data, err := io.ReadAll(file)
+				if err != nil {
+					return err
+				}
+				if name == currentName {
+					if !bytes.Equal(data, view) {
+						return rootpublication.ErrResourceConflict
+					}
+					currentFound = true
+				}
+				manifest, err := decodeLeafGenerationManifest(data, name)
+				if err != nil {
+					return err
+				}
+				if name != leafGenerationDurableManifestFileName(manifest.ManifestRevision) {
+					return rootpublication.ErrResourceConflict
+				}
+				if err := rootpublication.ValidateStableChildLink(s.parent, file, name); err != nil {
+					return err
+				}
+				digest := sha256.Sum256(data)
+				if first {
+					inventory[name] = digest
+				} else if expected, ok := inventory[name]; !ok || expected != digest {
+					return rootpublication.ErrResourceConflict
+				}
+				if pending[name] {
+					seenPending[name] = true
+				}
+				if first {
+					census.ManifestRevisionsTotal++
+				}
+				if name == currentName || (held != nil && held(manifest)) {
+					if first {
+						census.ManifestRevisionsProtected++
+					}
+					delete(pending, name)
+					return nil
+				}
+				if !first && !pending[name] {
+					return nil
+				}
+				namespace := fmt.Sprintf("%s:%d:%x/%s", parentID.Platform, parentID.VolumeID, parentID.ObjectID, name)
+				lease, err := s.registry.BeginDeleteAt(identity, namespace)
+				if errors.Is(err, rootpublication.ErrResourcePinned) {
+					if first {
+						census.ManifestRevisionsProtected++
+					}
+					delete(pending, name)
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if first {
+					census.ManifestRevisionsEligible++
+					census.ManifestRevisionBytesEligible += info.Size()
+					pending[name] = true
+				}
+				if opts.DryRun || len(files) == leafManifestRevisionGCBatchSize {
+					lease.Abort()
+					return nil
+				}
+				files = append(files, leafManifestRevisionGCFile{name: name, file: file, identity: identity, size: info.Size(), manifest: manifest, lease: lease})
+				retained = true
+				return nil
+			}()
 			if err != nil {
-				return err
-			}
-			files[len(files)-1].manifest = manifest
-			if name != leafGenerationDurableManifestFileName(manifest.ManifestRevision) {
-				return rootpublication.ErrResourceConflict
-			}
-			if err := rootpublication.ValidateStableChildLink(s.parent, file, name); err != nil {
-				return err
+				return files, census, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return readErr
+			return files, census, readErr
 		}
 	}
 	if !currentFound {
-		return rootpublication.ErrUnresolvedResource
+		return files, census, rootpublication.ErrUnresolvedResource
 	}
-	// Validate the complete candidate inventory before the first unlink.
-	for _, f := range files {
-		if err := ctx.Err(); err != nil {
-			return err
+	if !first {
+		for name := range pending {
+			if !seenPending[name] {
+				return files, census, rootpublication.ErrResourceConflict
+			}
 		}
-		stats.ManifestRevisionsTotal++
-		if f.name == currentName || (held != nil && held(f.manifest)) {
-			stats.ManifestRevisionsProtected++
-			continue
-		}
-		namespace := fmt.Sprintf("%s:%d:%x/%s", parentID.Platform, parentID.VolumeID, parentID.ObjectID, f.name)
-		lease, err := s.registry.BeginDeleteAt(f.identity, namespace)
-		if errors.Is(err, rootpublication.ErrResourcePinned) {
-			stats.ManifestRevisionsProtected++
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		stats.ManifestRevisionsEligible++
-		stats.ManifestRevisionBytesEligible += f.size
-		if opts.DryRun {
-			lease.Abort()
-			continue
-		}
-		if err := s.deleteRevisionLocked(f, lease); err != nil {
-			return err
-		}
-		stats.ManifestRevisionsDeleted++
-		stats.ManifestRevisionBytesDeleted += f.size
 	}
-	return nil
+	return files, census, nil
 }
 
 func (s *leafGenerationManifestStore) deleteRevisionLocked(f leafManifestRevisionGCFile, lease *rootpublication.IdentityDeleteLease) error {
@@ -238,16 +332,30 @@ func (s *leafGenerationManifestStore) deleteRevisionLocked(f leafManifestRevisio
 	if err != nil {
 		return err
 	}
-	_ = placeholder.Close()
+	defer placeholder.Close()
+	cleanupQuarantine := func(primary error) error {
+		// Keep the placeholder incarnation alive and never unlink a foreign child
+		// rebound under its private name. A failed cleanup retains ambiguity evidence.
+		if cleanupErr := rootpublication.ValidateStableChildLink(s.parent, placeholder, quarantine); cleanupErr != nil {
+			return s.ambiguous(errors.Join(primary, fmt.Errorf("validate revision quarantine %q: %w", quarantine, cleanupErr)))
+		}
+		if cleanupErr := rootpublication.RemoveStableChildFile(s.parent, quarantine); cleanupErr != nil {
+			return s.ambiguous(errors.Join(primary, fmt.Errorf("remove revision quarantine %q: %w", quarantine, cleanupErr)))
+		}
+		return primary
+	}
 	if s.hooks.BeforeRename != nil {
 		if err := s.hooks.BeforeRename(); err != nil {
-			_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
-			return err
+			return cleanupQuarantine(err)
 		}
 	}
+	// A successful hook may still have rebound the private destination. Validate
+	// its retained incarnation before the rename can overwrite anything there.
+	if err := rootpublication.ValidateStableChildLink(s.parent, placeholder, quarantine); err != nil {
+		return cleanupQuarantine(err)
+	}
 	if err := rootpublication.RenameStableChildFile(s.parent, f.name, quarantine); err != nil {
-		_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
-		return err
+		return cleanupQuarantine(err)
 	}
 	if err := rootpublication.ValidateStableChildLink(s.parent, f.file, quarantine); err != nil {
 		// Restore without overwriting any new canonical child. An unresolved

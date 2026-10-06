@@ -1,0 +1,52 @@
+{
+  "candidate": "8f47c8e3d536f0f8e8d8894d4e8aaf95bdc683dd",
+  "runner_exit": 0,
+  "checks": {
+    "normal.json": {
+      "test_passes": 518,
+      "package_passes": 7,
+      "sha256": "6a220f5b4997ea619641a3f0c946ace52769edf3f58c1621fc32d2b634b0b299"
+    },
+    "race.json": {
+      "test_passes": 517,
+      "package_passes": 7,
+      "sha256": "545b0fac178434168077ffb8f12401efbd006f30d32babad82d6e1684d5974f0"
+    },
+    "safe.json": {
+      "test_passes": 518,
+      "package_passes": 7,
+      "sha256": "7cb7b603dace4ea65d6cb2c050b334ae0cb8b6d589366dd0fcba99df91706ba0"
+    },
+    "tree-lifecycle-normal.json": {
+      "test_passes": 113,
+      "package_passes": 2,
+      "sha256": "ea8d40a68295b927b87fc48c50e526d7156ccc1e4c0e83df51032bcaac54183e"
+    },
+    "tree-lifecycle-race.json": {
+      "test_passes": 113,
+      "package_passes": 2,
+      "sha256": "de2b12d03c8b7219c9f5cc5a36fa51ab1505ae6363f7ab75f5d35c8d2a9c6d5a"
+    },
+    "compatibility.json": {
+      "test_passes": 49,
+      "package_passes": 2,
+      "sha256": "6ef15b50cde72f047dd1dd9aedbd432730c19231d296a190a02b80c7d1f625c8"
+    },
+    "vet": {
+      "output_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "candidate-review-fixed": {
+    "commit": "8f47c8e3d536f0f8e8d8894d4e8aaf95bdc683dd",
+    "git_tree": "5f7a5540fd1fd5a1edc44e488f939082fa63b4be",
+    "files": 6453,
+    "post_source_drift": []
+  },
+  "candidate-af59d": {
+    "commit": "af59d9fe0f62bb118d3a1d9004dc96c4717775aa",
+    "git_tree": "646dcef74ca665b841be2bf2e759caf272c71230",
+    "files": 6456,
+    "post_source_drift": []
+  }
+}

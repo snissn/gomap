@@ -1,0 +1,866 @@
+[
+  {
+    "label": "r1-append_only-fresh",
+    "started_utc": "2026-10-06T06:08:01.575882+00:00",
+    "completed_utc": "2026-10-06T06:08:20.376296+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 18.79546426422894,
+    "load_before": [
+      3.255859375,
+      5.25244140625,
+      5.01025390625
+    ],
+    "user_seconds": 2.548406,
+    "system_seconds": 1.6205829999999999,
+    "child_max_rss_kib": 345028,
+    "log_sha256": "fdd46126efb95fa53a7c136b2d499d59d24636a089deccabfbc2ade20894532c",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-append_only-other",
+    "started_utc": "2026-10-06T06:08:20.978117+00:00",
+    "completed_utc": "2026-10-06T06:08:38.804207+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 17.825163840781897,
+    "load_before": [
+      4.0869140625,
+      5.31640625,
+      5.03662109375
+    ],
+    "user_seconds": 2.894414,
+    "system_seconds": 1.7210299999999998,
+    "child_max_rss_kib": 285740,
+    "log_sha256": "620ca73c7a52cb98243dcef1997779a1ff3e74cd2c1f32d140a279de5a84d540",
+    "stderr_sha256": "f3a25830553f35f68fb2de4a16dcdba4362f2051dbb6970b23c9f3bd1d6edb4d",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-append_only-durability",
+    "started_utc": "2026-10-06T06:08:39.401172+00:00",
+    "completed_utc": "2026-10-06T06:09:07.185985+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 27.78439380414784,
+    "load_before": [
+      4.1796875,
+      5.26220703125,
+      5.0244140625
+    ],
+    "user_seconds": 2.9805989999999998,
+    "system_seconds": 2.65867,
+    "child_max_rss_kib": 329556,
+    "log_sha256": "97090f39332247fa1aa2211a51ef3978cc351fbb42b6a1693a09fa16a5040cba",
+    "stderr_sha256": "3d074bff054d70dda6919a0063b7c43b0925dda03eb14b994901b1a6a55248d3",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-fresh",
+    "started_utc": "2026-10-06T06:09:07.812008+00:00",
+    "completed_utc": "2026-10-06T06:09:27.080330+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 19.26778965489939,
+    "load_before": [
+      5.86181640625,
+      5.5244140625,
+      5.11376953125
+    ],
+    "user_seconds": 2.185977,
+    "system_seconds": 0.961194,
+    "child_max_rss_kib": 156556,
+    "log_sha256": "9ced10efbc313627c8fc426aa5ea91126bd0c22f0faba8614094d12b4deb54a0",
+    "stderr_sha256": "8ac3f1358242ceb7c0f968598a8692a5e9caac5acf6267b4fbf0054ae2d857ac",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-other",
+    "started_utc": "2026-10-06T06:09:28.186706+00:00",
+    "completed_utc": "2026-10-06T06:09:50.841314+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 22.654072685167193,
+    "load_before": [
+      7.91357421875,
+      6.00927734375,
+      5.28125
+    ],
+    "user_seconds": 1.706798,
+    "system_seconds": 0.8838769999999999,
+    "child_max_rss_kib": 114100,
+    "log_sha256": "660806b616c1bd3b988d117453272cbcb5c60d8d0dfd87ce5f8ebdb00f648b1a",
+    "stderr_sha256": "950b521cbf8cd85edb696f1dc75247ab00a62cfe16e34920a31388a965a7770d",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-durability",
+    "started_utc": "2026-10-06T06:09:51.570044+00:00",
+    "completed_utc": "2026-10-06T06:10:17.596755+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 26.026300882920623,
+    "load_before": [
+      9.0185546875,
+      6.4248046875,
+      5.4384765625
+    ],
+    "user_seconds": 2.221161,
+    "system_seconds": 1.049698,
+    "child_max_rss_kib": 138024,
+    "log_sha256": "32cc9319c11bc6c2beb7391447ef44c582f88fd42adc71cf18852cb8eff3ee09",
+    "stderr_sha256": "8605ca1bd153cf7851fa0f8783297f189bf56ee75f79f4561a4f98603ce3b61f",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-fresh",
+    "started_utc": "2026-10-06T06:10:18.223043+00:00",
+    "completed_utc": "2026-10-06T06:10:39.751358+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 21.527825283817947,
+    "load_before": [
+      8.5078125,
+      6.5302734375,
+      5.50048828125
+    ],
+    "user_seconds": 2.426301,
+    "system_seconds": 0.939279,
+    "child_max_rss_kib": 225288,
+    "log_sha256": "cf5a616f8ceb318ec5a20005cd6f160c2689235d292572c64f371c2d42c78a5e",
+    "stderr_sha256": "a409dd1e7f0691cfa771e4dc38fd458eca3cb001d05ac3c63d7cec0d0a2a3340",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-other",
+    "started_utc": "2026-10-06T06:10:40.355412+00:00",
+    "completed_utc": "2026-10-06T06:11:09.111929+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 28.755434839986265,
+    "load_before": [
+      8.3056640625,
+      6.67236328125,
+      5.576171875
+    ],
+    "user_seconds": 1.869035,
+    "system_seconds": 0.982213,
+    "child_max_rss_kib": 114104,
+    "log_sha256": "e4883ee65c8d3cac6d88d9d34588a04a787cc33ce3ef898524dcb5d3a2aa6fc2",
+    "stderr_sha256": "5289dd1b2d6c5ab25a2a64d09cd41054b7b25fe09539bf63e0a7b2a441a437b4",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-durability",
+    "started_utc": "2026-10-06T06:11:09.777425+00:00",
+    "completed_utc": "2026-10-06T06:11:44.024530+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 34.24571972992271,
+    "load_before": [
+      7.453125,
+      6.63623046875,
+      5.599609375
+    ],
+    "user_seconds": 3.2633010000000002,
+    "system_seconds": 1.63165,
+    "child_max_rss_kib": 215896,
+    "log_sha256": "e989728dab0df737f57b045d20f529472f3b979efb6cfcb8c8ddd33a79891496",
+    "stderr_sha256": "5f59847101b94ae20de58b61b70b93000b21988260cd93a9645aa994469db6a6",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-fresh",
+    "started_utc": "2026-10-06T06:11:44.677673+00:00",
+    "completed_utc": "2026-10-06T06:12:13.584875+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 28.906715357210487,
+    "load_before": [
+      8.2001953125,
+      6.92626953125,
+      5.7373046875
+    ],
+    "user_seconds": 2.444472,
+    "system_seconds": 1.060327,
+    "child_max_rss_kib": 221220,
+    "log_sha256": "29aca21b451adb6c3f5311475a2d92996a7f2346096b2b0aba3c7e080d803af5",
+    "stderr_sha256": "e8fb5feb682a4155af49db407ac896e50f8d13c751a2e60fdf935516a6e2e77f",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-other",
+    "started_utc": "2026-10-06T06:12:14.252768+00:00",
+    "completed_utc": "2026-10-06T06:12:57.034762+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 42.780915149953216,
+    "load_before": [
+      9.89111328125,
+      7.3818359375,
+      5.92236328125
+    ],
+    "user_seconds": 1.7407949999999999,
+    "system_seconds": 1.076166,
+    "child_max_rss_kib": 114104,
+    "log_sha256": "2c61572cd020b4c4ac92f7f4e3c279c5f12453bfc75c200eb312ffb61c26bcbc",
+    "stderr_sha256": "73286e547b0d6e94fa05c522738e6032ce0ba580e3af18af28763a0ce68f4205",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-durability",
+    "started_utc": "2026-10-06T06:12:57.623609+00:00",
+    "completed_utc": "2026-10-06T06:13:41.172903+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 43.54842884838581,
+    "load_before": [
+      7.66796875,
+      7.140625,
+      5.90283203125
+    ],
+    "user_seconds": 2.501848,
+    "system_seconds": 1.328231,
+    "child_max_rss_kib": 225020,
+    "log_sha256": "ec4641d61ea756fce3b2d99251cdf509a915f59146dff1117115d727d3241ccf",
+    "stderr_sha256": "dedba31720b828622e6264ac082727805ea644a45aa75916f5e0d8a48bff5c16",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-btree-fresh",
+    "started_utc": "2026-10-06T06:13:41.816759+00:00",
+    "completed_utc": "2026-10-06T06:14:07.341376+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 25.524346575140953,
+    "load_before": [
+      6.39404296875,
+      6.8720703125,
+      5.87109375
+    ],
+    "user_seconds": 1.871856,
+    "system_seconds": 0.831819,
+    "child_max_rss_kib": 152924,
+    "log_sha256": "162c9f130f3f2cf0286f6886cd1b88b09ec39bd68c939a66e54c829a34f13855",
+    "stderr_sha256": "0da689f478c820de769b9ccf0762d5f8056d266bda033883eafaed82ffca6aec",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-btree-other",
+    "started_utc": "2026-10-06T06:14:07.935311+00:00",
+    "completed_utc": "2026-10-06T06:14:32.679312+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 24.74347423017025,
+    "load_before": [
+      5.83740234375,
+      6.7041015625,
+      5.84130859375
+    ],
+    "user_seconds": 1.443222,
+    "system_seconds": 0.734525,
+    "child_max_rss_kib": 114104,
+    "log_sha256": "1a51822d1af9bf62ac615f9fa8b5de8a0ddd715744885897ead7a12baece8ff7",
+    "stderr_sha256": "41fa86dcbc488acbb202ed413005070c00f423bd4c8fa89124f779be9055d242",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-btree-durability",
+    "started_utc": "2026-10-06T06:14:33.263806+00:00",
+    "completed_utc": "2026-10-06T06:15:09.101830+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 35.83761777635664,
+    "load_before": [
+      6.42529296875,
+      6.7490234375,
+      5.87744140625
+    ],
+    "user_seconds": 2.360878,
+    "system_seconds": 1.248232,
+    "child_max_rss_kib": 136844,
+    "log_sha256": "5cd17895d478dc67d0a837c7c7f45653034d6c020a2d68952d77fe369a0bf7c2",
+    "stderr_sha256": "a0bd780ef4ce781a3b1b8fa64fd118f2c93e2445e0d920b8b59b52162d19bb59",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-append_only-fresh",
+    "started_utc": "2026-10-06T06:15:09.792856+00:00",
+    "completed_utc": "2026-10-06T06:15:30.193191+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 20.399857826996595,
+    "load_before": [
+      9.67041015625,
+      7.44677734375,
+      6.14453125
+    ],
+    "user_seconds": 2.732958,
+    "system_seconds": 1.7825419999999998,
+    "child_max_rss_kib": 347108,
+    "log_sha256": "236fe6c9cc6c3e4b00a94f8e5ecfea6da0cf322ce03d8a98d1bf522a87788f15",
+    "stderr_sha256": "67560276de2ad02fbe831d969cc079fe858d89954e3841e12be23154b79191ed",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-append_only-other",
+    "started_utc": "2026-10-06T06:15:31.030174+00:00",
+    "completed_utc": "2026-10-06T06:15:58.795129+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 27.76442832686007,
+    "load_before": [
+      9.3193359375,
+      7.50048828125,
+      6.18896484375
+    ],
+    "user_seconds": 3.244274,
+    "system_seconds": 2.16834,
+    "child_max_rss_kib": 287444,
+    "log_sha256": "9820e67e82f4286910e8bbd8b8dfa0b34aae0ab029117309ce1a5e74bef0437e",
+    "stderr_sha256": "cfaf335ac88a9eaa3e779d2c9e62049edd13e89ae3b7d51fc0ae80e4b6e53809",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-append_only-durability",
+    "started_utc": "2026-10-06T06:15:59.391683+00:00",
+    "completed_utc": "2026-10-06T06:16:34.167261+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 34.7748817037791,
+    "load_before": [
+      9.12060546875,
+      7.62841796875,
+      6.2734375
+    ],
+    "user_seconds": 3.263363,
+    "system_seconds": 2.788217,
+    "child_max_rss_kib": 326280,
+    "log_sha256": "992610e9db9e4d441961459920c7e1bcc1c3c0f01ba8c9af002a0716b6ba448f",
+    "stderr_sha256": "ddaae91171fcc8916392bb87cfa65d0ab8d2ded64bb8fe7798dc50672b045bbc",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-btree-fresh",
+    "started_utc": "2026-10-06T06:16:34.771832+00:00",
+    "completed_utc": "2026-10-06T06:16:54.086420+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 19.31431216839701,
+    "load_before": [
+      8.4912109375,
+      7.6376953125,
+      6.3271484375
+    ],
+    "user_seconds": 2.054958,
+    "system_seconds": 0.869485,
+    "child_max_rss_kib": 153276,
+    "log_sha256": "e0af2d37e94dcb9299b26ad9f24d5ae732fb2e55d0818c98caf4db82dbde0a31",
+    "stderr_sha256": "22523ac97035d648af933e9418a343f12fac567554a0dbadceef773713ce752c",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-btree-other",
+    "started_utc": "2026-10-06T06:16:54.685185+00:00",
+    "completed_utc": "2026-10-06T06:17:19.314619+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 24.628920888062567,
+    "load_before": [
+      8.54248046875,
+      7.6953125,
+      6.373046875
+    ],
+    "user_seconds": 1.637833,
+    "system_seconds": 0.832341,
+    "child_max_rss_kib": 114104,
+    "log_sha256": "553f2ce466503c3a012247532ea342048da64551b7d46924376bc3772dbba933",
+    "stderr_sha256": "c3d9a031abb408c414e37e6932975127bf94a9e150d3795967c160f534f385e4",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-btree-durability",
+    "started_utc": "2026-10-06T06:17:19.998620+00:00",
+    "completed_utc": "2026-10-06T06:18:06.850841+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 46.85181690612808,
+    "load_before": [
+      7.41796875,
+      7.49462890625,
+      6.34130859375
+    ],
+    "user_seconds": 2.19205,
+    "system_seconds": 1.072443,
+    "child_max_rss_kib": 137544,
+    "log_sha256": "78b589d4c632a9bb1ff368708de34c813dc266408682fea59cdc9462885d219e",
+    "stderr_sha256": "eaa41d6f962b7eedc93adc1dfe07c9662343ac6f0e78725078c54eb6921948e2",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-append_only-fresh",
+    "started_utc": "2026-10-06T06:18:07.441533+00:00",
+    "completed_utc": "2026-10-06T06:18:43.600511+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 36.15853578504175,
+    "load_before": [
+      6.31005859375,
+      7.1904296875,
+      6.2919921875
+    ],
+    "user_seconds": 2.229861,
+    "system_seconds": 1.569847,
+    "child_max_rss_kib": 348516,
+    "log_sha256": "9f730480e32512709bed1d61b50f3849e50719192bff5594c9f2ddc9c6839dce",
+    "stderr_sha256": "7f321a037ea5a112cdd2a49696b7a22801d3b488ba5f9d74b8d6f09392875fc3",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-append_only-other",
+    "started_utc": "2026-10-06T06:18:44.602177+00:00",
+    "completed_utc": "2026-10-06T06:19:10.299512+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 25.69682443095371,
+    "load_before": [
+      6.82373046875,
+      7.1484375,
+      6.3125
+    ],
+    "user_seconds": 2.760927,
+    "system_seconds": 1.726726,
+    "child_max_rss_kib": 286868,
+    "log_sha256": "800f159c311a216389a3ed687058d3fd7380a205be5de93a27121f731964a2d0",
+    "stderr_sha256": "f9d80fad4689b6bcf84472f27c4837984283874c41b7246601f004c70e7a8422",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-append_only-durability",
+    "started_utc": "2026-10-06T06:19:10.884331+00:00",
+    "completed_utc": "2026-10-06T06:19:47.824971+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 36.9402441191487,
+    "load_before": [
+      5.96826171875,
+      6.9248046875,
+      6.26025390625
+    ],
+    "user_seconds": 2.697236,
+    "system_seconds": 2.592985,
+    "child_max_rss_kib": 326136,
+    "log_sha256": "f043427c39c924789899a616ae20b58b23d30785d841faa592b44ee80aa7a27c",
+    "stderr_sha256": "63982b4442a1b6deb79d5eac3840b35c33f325696e4056b277746fad4a29fa57",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-cow_btree-fresh",
+    "started_utc": "2026-10-06T06:19:48.425260+00:00",
+    "completed_utc": "2026-10-06T06:20:09.850297+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^FreshCapture$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 21.42457928881049,
+    "load_before": [
+      5.20556640625,
+      6.630859375,
+      6.185546875
+    ],
+    "user_seconds": 2.28584,
+    "system_seconds": 0.952774,
+    "child_max_rss_kib": 224668,
+    "log_sha256": "8b56c349b0e4c158c4fa0f11470c243ef80bb9fcea1b310e95ce6eb380c97b9e",
+    "stderr_sha256": "4b39ef09b3a9cc2ee237919deebd95fe04863b48de4e16b382e92d0ac15b279f",
+    "case_validation": {
+      "rows": 12,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-cow_btree-other",
+    "started_utc": "2026-10-06T06:20:10.448235+00:00",
+    "completed_utc": "2026-10-06T06:20:34.053728+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(CaptureReadRelease|Forward16|IncrementalWrite)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 23.604442335199565,
+    "load_before": [
+      4.86767578125,
+      6.4345703125,
+      6.1318359375
+    ],
+    "user_seconds": 1.73053,
+    "system_seconds": 0.9195049999999999,
+    "child_max_rss_kib": 114104,
+    "log_sha256": "67d421a455582343dc39699a59f4de5261e6108d9f2759beeedff0f778378147",
+    "stderr_sha256": "18d939004bc8a8a8c553111a6c70d05efb6231ca3d87df74e47fa5b8eea30841",
+    "case_validation": {
+      "rows": 36,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-cow_btree-durability",
+    "started_utc": "2026-10-06T06:20:34.661834+00:00",
+    "completed_utc": "2026-10-06T06:21:08.296665+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(Inline64|Pointer4096)$/^N=(1024|2048)$/^(DirtyCheckpoint|IncrementalWriteSync)$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 33.63365375902504,
+    "load_before": [
+      5.0068359375,
+      6.33642578125,
+      6.10595703125
+    ],
+    "user_seconds": 3.127218,
+    "system_seconds": 1.543882,
+    "child_max_rss_kib": 225260,
+    "log_sha256": "44550264961d6a45bae281868311f508415409400b97a35b45f84b36914a6ba3",
+    "stderr_sha256": "369ed744a24161ad103a03ce566df2235d1cfc9c71c79b4698a8280b5d401b1b",
+    "case_validation": {
+      "rows": 24,
+      "exact_case_set": true,
+      "iterations": 16
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  }
+]

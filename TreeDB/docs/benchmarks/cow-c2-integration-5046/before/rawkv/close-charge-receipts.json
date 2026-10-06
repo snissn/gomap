@@ -1,0 +1,6914 @@
+[
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r1-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16549984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r1-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16419968
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19796848
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19770352
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16549984
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19805392
+    }
+  },
+  {
+    "run": "r1-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19778896
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16419968
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16682112
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r2-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16549984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r2-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19796848
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19770352
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16549984
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19805392
+    }
+  },
+  {
+    "run": "r2-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19778896
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16419968
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r3-cow_btree-fresh",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16681056
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3872528
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 5798096
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7387712
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8608720
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22805984
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22849248
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25312288
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25682144
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25725408
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r3-cow_btree-other",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 28057376
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16551040
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3900848
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3873584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7416032
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7388768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8235328
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8252320
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22633808
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 22964768
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16087584
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16419968
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25378896
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 25709856
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 3899792
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 7414976
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19782496
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19757920
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8234272
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 8251264
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19796848
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19770352
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16086528
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 16549984
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19805392
+    }
+  },
+  {
+    "run": "r3-cow_btree-durability",
+    "values": {
+      "total": 0,
+      "history": 0,
+      "reserved": 0,
+      "retired": 0,
+      "controls": 0,
+      "external": 0,
+      "generations": 0,
+      "sources": 0,
+      "views": 0,
+      "leases": 0,
+      "peak": 19778896
+    }
+  }
+]

@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCOWPublicDirtyCost/no_wal_fast/btree/Pointer4096/N=2048/CaptureReadRelease-12         	    8192	      5659 ns/op	         0 fixture_checkpoint_runs	         0 fixture_command_wal_file_sync_calls	         0 fixture_command_wal_sync_count	         0 fixture_value_log_sync_calls	      4598 p50-ns	      9235 p95-ns	     29290 p99-ns	         0 snapshot_rotations/op	         0 warm_snapshot_rotations	    6179 B/op	       3 allocs/op
+PASS

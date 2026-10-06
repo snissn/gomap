@@ -1,0 +1,62 @@
+[
+  {
+    "label": "normal",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-run",
+      "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 7.376506090164185
+  },
+  {
+    "label": "race",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-race",
+      "-count=3",
+      "-run",
+      "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 10.394418001174927
+  },
+  {
+    "label": "safe",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-tags",
+      "treedb_safe",
+      "-count=3",
+      "-run",
+      "^TestCOWPublicEmptyCheckpointLeafRegistrationProgress$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 6.1901538372039795
+  }
+]

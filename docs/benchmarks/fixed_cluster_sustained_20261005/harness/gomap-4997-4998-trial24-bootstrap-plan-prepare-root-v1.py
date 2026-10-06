@@ -1,11 +1,11 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths, reviewer_identity
+from source_paths import source_path, isolate_paths, reviewer_identity, W
 """Inert Trial24 bootstrap constructor. Root supplies final accepted pins; no network here."""
 import argparse,hashlib,importlib.util,json,pathlib,re,subprocess,ssl
-CAMPAIGN='rf4trial24mixedchangingc1'
-PREFIX='gomap-4997-4998-rf4trial24mixedchangingc1'
+CAMPAIGN=W.campaign
+PREFIX='gomap-4997-4998-'+W.campaign
 LAUNCHER=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'))
 LAUNCHER_SHA='f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605'
 def read(path,digest=None):
@@ -132,7 +132,7 @@ def context(pinfile):
   assert {n['ID']:n['Address'] for n in x['Groups'][0]['Peers']}=={n:h+':'+str(19301+j) for j,(n,h) in enumerate(hosts.items())}
   config_sha[str(p)]=meta['sha256'];nodes.append({'host':m.HOSTS[0 if i<2 else 1],'config':str(p)})
  guard_path=pathlib.Path(source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-rf4trial24-credential-preactivation-guard-root-v1.py'))
- assert hashlib.sha256(read(guard_path)).hexdigest()=='bbca8e84b31b0c80506586dbba511168075bfc6fc9af1b1ec70b43d942ca8e9a'
+ assert hashlib.sha256(read(guard_path)).hexdigest()=='db18dc71c9ec017779049ed3ca3b648947209dcda8120e338afcf4a194352e50'
  gs=importlib.util.spec_from_file_location('fresh_credential_guard',guard_path);g=importlib.util.module_from_spec(gs);gs.loader.exec_module(g)
  assert a['credential_minimum_remaining_seconds']==86400
  proof=g.validate_configs(credential_configs,minimum_remaining_seconds=86400)

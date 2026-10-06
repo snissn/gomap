@@ -1,0 +1,110 @@
+{
+  "head": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "functional_disposition": "ACCEPT (affected integrated packet)",
+  "collector_disposition": "READY (expected path/content-byte contracts)",
+  "whole_C2_disposition": "HELD",
+  "functional_packet_manifest_sha256": "4b1eee4370284cb9b745356f537afa7ad2125d46048f7b97ea347b0bfee0763c",
+  "packet_bindings_verified": 19,
+  "actual_events": {
+    "normal": {
+      "test_events": {
+        "run": 276,
+        "output": 1518,
+        "pass": 275,
+        "skip": 1
+      },
+      "package_events": {
+        "start": 4,
+        "output": 8,
+        "pass": 4
+      },
+      "skips": [
+        "TestCOWPublicEncodedMVCCProcessHelper"
+      ],
+      "exit": 0
+    },
+    "race": {
+      "test_events": {
+        "run": 276,
+        "output": 1518,
+        "pass": 275,
+        "skip": 1
+      },
+      "package_events": {
+        "start": 4,
+        "output": 8,
+        "pass": 4
+      },
+      "skips": [
+        "TestCOWPublicEncodedMVCCProcessHelper"
+      ],
+      "exit": 0
+    },
+    "safe": {
+      "test_events": {
+        "run": 276,
+        "output": 1518,
+        "pass": 275,
+        "skip": 1
+      },
+      "package_events": {
+        "start": 4,
+        "output": 8,
+        "pass": 4
+      },
+      "skips": [
+        "TestCOWPublicEncodedMVCCProcessHelper"
+      ],
+      "exit": 0
+    }
+  },
+  "vet_exit": 0,
+  "source_before_after": {
+    "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "files": 7330,
+    "manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+    "extra": [],
+    "missing": [],
+    "changed": []
+  },
+  "source_proof_scope": "expected complete path and content identity; bound symlink types are not rejected by the verifier",
+  "go_environment": {
+    "GOVERSION": "go1.26.3",
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "GOWORK": "off"
+  },
+  "collector_contract": {
+    "raw_runs": 27,
+    "raw_rows": 540,
+    "raw_matched_cases": 180,
+    "mvcc_runs": 18,
+    "mvcc_rows": 108,
+    "mvcc_matched_cases": 36,
+    "combined_runs": 45,
+    "combined_rows": 648,
+    "combined_matched_cases": 216,
+    "current_DirtyCheckpoint_timing": false,
+    "scripts_sha256": {
+      "analyze_mvcc.py": "65f0f44c860f52dcf5f5b17e9bbcee543b6c95bf51e1f8b3c8ecaf8bfea7c47c",
+      "collect.py": "5767db90236ef2b3ae38d7873cee24a7163e5f94b0c3680f5ec4ad817765687e",
+      "collect_mvcc.py": "21830b08199bcfb0e353c92b1f24f08dcb10eebc7061c104ceec6c01533305fe",
+      "analyze.py": "31ff665da22e579074835568f39c1bcf4ee8986f16c008cc206ce9d32b0a3a53"
+    },
+    "reconstructed_check_artifact_sha256": "2e8f53ea15797420f740211b1c0c41b665bae4d1c161a0d35aaefac2830b4ae1"
+  },
+  "pending": [
+    "current actual cost packet and explicit residual disposition",
+    "actual hosted default performance under unchanged policy",
+    "actual Windows hosted runtime",
+    "current hosted review/CI",
+    "final publication/doc descendant reconciliation"
+  ],
+  "limitations": [
+    "The 22 collector probes parse actual historical 4add logs or intentionally reject altered logs; they supply no current measurement.",
+    "COW close guard requires complete zero-live accounting with positive retained-authority peak, at least one receipt per case; no nil post-Close authority shortcut.",
+    "Public MVCC full-history output/visited counts are validated for supported 128/256 counts; this is a small diagnostic, not sustained or C3 qualification.",
+    "The runner is serialized within each collector; coordinator owns cross-collector/foreign-work exclusivity and retains load/process diagnostics privately.",
+    "Expected-byte drift guards do not reject a bound symlink resolving to identical bytes. Parent will separately audit actual archive file types after timing; this does not justify repeating measured runs."
+  ]
+}

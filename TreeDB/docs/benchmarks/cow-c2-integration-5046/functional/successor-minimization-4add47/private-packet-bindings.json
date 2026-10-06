@@ -1,0 +1,35 @@
+{
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "file_count": 23,
+  "files": {
+    "retained-source-applicability.json": "d923c70c66050a70fd206b78abf7564dabdcc334bc7698e9d2eb8d06aa87c50b",
+    "source-identity.json": "3067972507021206cb6bf3fe478df354747ab0de38064652df81f71154e7569a",
+    "vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "full-normal.json": "4a5be8c56bba7626884b10eb82632cd6c4119a29891546dafee22bbb2ed65125",
+    "runtime.patch": "50575350ac27ca7eac7eda124b9f4a9f7a76c8b019cac88f60dc4db6c3d5253b",
+    "go-version.txt": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7",
+    "summarize.py": "e6db639e3c74786b211f6d4bc5572bb2874bf8f5e41662de83e66a19ee7d6ec8",
+    "execution-receipts.json": "d5eac66ecaf64c81ad5e69383f436eeb3b76236c9cbc0ac0e88a9a7cdbd2993f",
+    "initial-source-check.json": "d05cc79220473c27946bfe7b5fe83f89e08b7d0f6b7a0eb18da6207164db293a",
+    "processes-at-release.json": "1f370074ac4e4334c02d895f11df682db74e233bee268858783dec8040fb3aa4",
+    "run-gates.sh": "b9918cda4461a81ee2418e79b7ed8a5ac073158f0cdd9a0957cc4edecce0eb2e",
+    "gate-exits.tsv": "484542f49482ac20ed1cd2f6c899e9cbd4bf81e5bd5ed7cf0c770e7f54adf712",
+    "event-summary.json": "9f1c86512adda29823c9fd15ef3aa24c6d7d585647e2521e76193b666687fa27",
+    "full-race.json": "830ec46db32950475bd168abe4ae2c42fa0ef8cb58cbb9067c1700617c0ce87e",
+    "original-red-binding.json": "04a60bedf1a6a92a2844f965f3b74470ace83ae4e74230c0a99429413941ea07",
+    "full-safe.json": "cb07d7767f34dcac5f8fa65dedff2ebaa6208c92422b4bc64c71f5f20ad0abf7",
+    "post-gate-source-check.json": "d05cc79220473c27946bfe7b5fe83f89e08b7d0f6b7a0eb18da6207164db293a",
+    "verify.py": "6d0522f7744f5731a56de6d73b925d2d95c3b3978f711a9ec0ab27f56e99e31c",
+    "initial.json": "e15d7caad9c9f52a36f7683133e4d642661506c0c0d5e8f6ec7138df8ca697f4",
+    "goenv.json": "7276bc3dceecbcecfde29161f475c46ce4944edcfa602e6743a91342e7c84bf6",
+    "execution-policy.json": "b09620ce89e62cf9b0812725660318311669a9ceb64a041f9b7646bf6221a60a",
+    "handoff.md": "a6c944c13c576860f8db913531e0e8bbdc7ba8fd88604e63da4a4d493ec4e42d",
+    "initial-exit.tsv": "1f3790059e8c17c0c6675a06756143b71a0882385e7616df67775e715e443637"
+  },
+  "private_only": [
+    "processes-at-release.json"
+  ],
+  "remote_additional_private": [
+    "source.tar"
+  ]
+}
