@@ -32202,6 +32202,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.auto_vacuum_last_internal_fill_p50_ppm"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastInternalP50.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_internal_fill_avg_ppm"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastInternalAvg.Load())
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
+	if db.cow != nil {
+		stats["treedb.cache.memtable_mode"] = "cow_btree"
+	}
 	if memtableAdaptive {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
 	} else {
