@@ -543,6 +543,21 @@ leaf segments are registered before each root publication captures their
 identity, and their pending registration inventory is consumed before later
 pack/GC phases can retire them.
 
+For the rebuilt current index, inherited immutable packed-leaf dependencies
+are selected by the existing exact candidate-root scan whenever the source
+closure contains packs. Selection retains the original producer tokens, exact
+identities, namespace obligations, digest and frontier; it does not reclassify a
+pack as a raw leaf log. Malformed or ambiguous packed identities fail publication.
+Non-packed dependencies retain their existing ownership rules. The independently
+recovery-selectable older root retains its whole packed closure, including on an
+exact-scan fallback. Only lawful fallback convergence and release of held views
+or prepared publication members can remove the remaining physical pins.
+`ExactCandidateScan` and durable resource capture work/timing report the current
+maintenance cost. Sources without packed dependencies keep the existing
+projection path. Subsequent leaf GC still reports logical `BytesDeleted`
+separately from actual `FilesDeleted`; pruning a current closure does not itself
+unlink a pack or its record-length index.
+
 A successful phase sequence can still leave resources retained by an older
 durable slot or another recoverable root. Report that remaining debt and the
 completion flags from the final audit; a successful call alone does not establish
