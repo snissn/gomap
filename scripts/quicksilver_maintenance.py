@@ -270,11 +270,7 @@ def capture(manifest_path, plan_path):
         raw = (root/receipt['path']).read_bytes()
         require(hashlib.sha256(raw).hexdigest() == receipt['sha256'], 'receipt hash: '+role)
         (out/(role+'-receipt.json')).write_bytes(raw)
-    env = {k: v for k, v in os.environ.items() if not k.startswith('TREEDB_')}
-    env.update(manifest['build_env'])
-    require(env['GOWORK'] == 'off', 'workspace drift')
-    env.update(GOMAXPROCS='12', GOGC='100', GODEBUG='', GOMEMLIMIT='off',
-               TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824', TMPDIR=str(root/'working-dbs'))
+    env = unified.capture_environment(manifest['build_env'], root/'working-dbs')
     (root/'working-dbs').mkdir(exist_ok=True)
     for cell, fixture in zip(plan['cells'], fixtures):
         directory = out/cell['label']
@@ -283,9 +279,7 @@ def capture(manifest_path, plan_path):
         require(pathlib.Path(source['binary']).name == source['binary'], 'binary must be root/bin basename')
         binary, database = root/'bin'/source['binary'], directory/'db'
         metadata = dict(schema=1, cell=cell, source=source, command=compact_command(binary, database, cell),
-                        env={k: v for k, v in env.items() if k.startswith(('TREEDB_', 'LD_')) or k in
-                             ('GOROOT', 'GOWORK', 'GOGC', 'GODEBUG', 'GOMAXPROCS', 'GOMEMLIMIT', 'TMPDIR', 'GLIBC_TUNABLES',
-                              'PATH', 'CGO_ENABLED', 'GOFLAGS', 'GOENV', 'GOTOOLCHAIN', 'CC', 'CXX', 'CGO_CFLAGS', 'CGO_LDFLAGS')},
+                        environment_policy=unified.ENVIRONMENT_POLICY, env=dict(env),
                         manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(), plan_sha256=hashlib.sha256(plan_raw).hexdigest(),
                         harness={name: unified.sha256(pathlib.Path(module.__file__)) for name, module in
                                  [('collector', sys.modules[__name__]), ('unified_collector', unified), ('rss_observer', owned_process_rss)]},
@@ -349,6 +343,10 @@ def load_run(path):
     parent = path.parent.parent
     require(unified.sha256(parent/'manifest.json') == run['manifest_sha256'] and unified.sha256(parent/'plan.json') == run['plan_sha256'], 'manifest/plan drift')
     manifest, plan = json.loads((parent/'manifest.json').read_bytes()), json.loads((parent/'plan.json').read_bytes())
+    try:
+        unified.validate_environment_receipt(run, manifest)
+    except (AssertionError, KeyError, TypeError) as error:
+        raise ValueError('environment receipt: '+str(error)) from None
     require(run['cell'] in plan['cells'] and run['source'] == manifest['sources'][run['cell']['source']], 'source/cell binding drift')
     require(set(manifest['receipts']) == {'source', 'build', 'native', 'runner'}, 'missing campaign receipts')
     for role, receipt in manifest['receipts'].items():
@@ -382,7 +380,8 @@ def contract(run):
     # Product identity may vary A/B. All other workload/observer/runner controls
     # must match, including explicit timeout. Fixture contents identify workload.
     return dict(fixture=run['fixture'], mode=run['cell']['mode'], batch_size=run['cell']['batch_size'], endpoint=run['endpoint'],
-                timeout_seconds=run['cell'].get('timeout_seconds', 1800), harness=run['harness'], env=run['env'],
+                timeout_seconds=run['cell'].get('timeout_seconds', 1800), harness=run['harness'],
+                environment_policy=run['environment_policy'], env=run['env'],
                 loader=run['native_resolution']['libraries'], interval=run['rss_sampling']['interval_ms'],
                 restore=run['snapshot_restore']['source'], restore_loader=run['snapshot_restore']['native'],
                 campaign_receipts=run['comparison_receipts'])
