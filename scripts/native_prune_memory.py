@@ -94,6 +94,10 @@ def validate_case(x, n, mode, pinned):
         for k in ('HeapAlloc','HeapInuse','HeapObjects','TotalAlloc','Mallocs','RSS','ProcessHWM','OutputPages','OutputBufferBytes'):
             require(k in s and type(s[k]) is int and s[k]>=0,'invalid/missing memory sample '+k)
         require(s['RSS']>0 and s['ProcessHWM']>0,'missing Linux RSS/HWM observation')
+        require(s['HeapAlloc']<=s['HeapInuse'],'heap allocation exceeds in-use spans')
+        require(s['HeapAlloc']<=s['TotalAlloc'],'heap allocation exceeds cumulative allocation')
+        require(s['HeapObjects']<=s['Mallocs'],'heap objects exceed cumulative allocations')
+        require(s['RSS']<=s['ProcessHWM'],'RSS exceeds process high-water mark')
         require(s['TotalAlloc']>=previous_alloc and s['Mallocs']>=previous_malloc,'allocation counter regression')
         previous_alloc,previous_malloc=s['TotalAlloc'],s['Mallocs']
         a=s.get('State');require(isinstance(a,dict),'missing custody sample')
@@ -264,8 +268,11 @@ def self_test(out):
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
-        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type','summary-missing','summary-malformed','summary-value','summary-case','summary-label','summary-type','summary-extra'):
+        for fault in ('missing','malformed','raw-drift','source-drift','allocator-zero','retirement-zero','native-pages-zero','native-buffer-zero','missing-case','duplicate-case','replacement-duplicate','bool-exit','bool-n','invalid-pinned','invalid-mode','receipt-errors','binary-drift','build-command-drift','build-log-drift','case-command-drift','binary-stability','build-argv','case-argv','case-env','version-command-env','version-output','heap-inuse','heap-total','heap-objects','rss-hwm','inflated-overall-peak','inflated-source-peak','peak-call','source-peak-phase','overall-peak-source-phase','schema-v1','rss-peak-inflated','rss-witness-missing','rss-witness-type','rss-witness-zero','rss-witness-call','rss-witness-alignment','rss-schedule-missing','rss-schedule-type','summary-missing','summary-malformed','summary-value','summary-case','summary-label','summary-type','summary-extra'):
             shutil.copyfile(out/'summary.json',tmp/'summary.json')
+            # Each version fault starts from both original artifacts.
+            shutil.copyfile(out/'version-command.json',tmp/'version-command.json')
+            shutil.copyfile(out/'version.log',tmp/'version.log')
             original=(out/witness_case['result']).read_bytes();(tmp/witness_case['result']).write_bytes(original)
             shutil.copyfile(out/witness_case['raw'],tmp/witness_case['raw']);shutil.copyfile(out/'source-bindings.json',tmp/'source-bindings.json')
             shutil.copyfile(out/witness_case['command'],tmp/witness_case['command']);shutil.copyfile(out/'build-command.json',tmp/'build-command.json')
@@ -312,6 +319,19 @@ def self_test(out):
                 elif fault=='rss-schedule-type':altered['RSSPeriodicSamples']=True
                 else:altered['schema']='gomap-native-memory-v1'
                 (tmp/case['result']).write_text(json.dumps(altered));case['result_sha256']=sha(tmp/case['result'])
+            elif fault in ('heap-inuse','heap-total','heap-objects','rss-hwm'):
+                altered=json.loads(original);cut=altered['cuts'][0]
+                if fault=='heap-inuse':cut['HeapInuse']=max(0,cut['HeapAlloc']-1)
+                elif fault=='heap-total':cut['HeapAlloc']=cut['TotalAlloc']+1;cut['HeapInuse']=max(cut['HeapInuse'],cut['HeapAlloc'])
+                elif fault=='heap-objects':cut['HeapObjects']=cut['Mallocs']+1
+                else:cut['RSS']=cut['ProcessHWM']+1
+                (tmp/case['result']).write_text(json.dumps(altered));case['result_sha256']=sha(tmp/case['result'])
+            elif fault=='version-command-env':
+                altered=json.loads((tmp/'version-command.json').read_text());altered['env']['GOFLAGS']='changed'
+                (tmp/'version-command.json').write_text(json.dumps(altered));test_receipt['version_command_sha256']=sha(tmp/'version-command.json')
+            elif fault=='version-output':
+                (tmp/'version.log').write_bytes((tmp/'version.log').read_bytes()+b'changed')
+                test_receipt['version_log_sha256']=sha(tmp/'version.log')
             elif fault=='receipt-errors':test_receipt['errors']=['rejected']
             elif fault=='binary-drift':test_receipt['binary_sha256']='0'*64
             elif fault=='build-command-drift':test_receipt['build_command_sha256']='0'*64
@@ -343,7 +363,9 @@ def self_test(out):
                 except (KeyError,TypeError,json.JSONDecodeError):pass
                 else:(tmp/'summary.json').write_text(json.dumps(derived))
             try:validate_packet(tmp)
-            except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError):pass
+            except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError) as e:
+                if fault in ('version-command-env','version-output'):
+                    require(str(e)==('version invocation binding' if fault=='version-command-env' else 'version output binding'),'version refusal at wrong boundary: '+fault)
             else:raise ValueError('invalid packet accepted: '+fault)
     measurement_self_test(out,r,witness_case)
     print('failclosed genuine allocator/retirement/native-output consistency and malformed/missing/bounds/schema/source-drift checks PASS')

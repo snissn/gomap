@@ -284,6 +284,10 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			overlap := inQuantum.Load()
 			writeInCall.Store(true)
 			e := s.CommitAt(ts, mutations, CommitRelaxed)
+			// The final public write return ends the finite burst activity phase.
+			if mode == "burst" && i == limit {
+				active.Store(false)
+			}
 			overlap = overlap || inQuantum.Load()
 			writeInCall.Store(false)
 			r.WriteLatency.add(time.Since(start))
@@ -301,7 +305,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 				return
 			}
 			if mode == "burst" {
-				time.Sleep(time.Millisecond)
+				if i < limit {
+					time.Sleep(time.Millisecond)
+				}
 			} else {
 				runtime.Gosched()
 			}
