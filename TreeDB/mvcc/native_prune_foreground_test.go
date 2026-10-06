@@ -50,6 +50,9 @@ func (h *foregroundLatency) add(d time.Duration) {
 // qualification; it never silently drops a sample. Each worker owns its buffers.
 const foregroundSampleCapacity = 65536
 
+// The retained driver requires this many real post-writer reads per run.
+const foregroundDrainMinimumSamples = 1000
+
 type foregroundSamples struct {
 	DurationsNS             []uint64
 	FirstStartNS, LastEndNS uint64
@@ -320,6 +323,10 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	writerDone := make(chan struct{})
 	readerDone := make(chan struct{})
 	postWriterRead := make(chan struct{})
+	drainReadTarget := uint64(1)
+	if retained {
+		drainReadTarget = foregroundDrainMinimumSamples
+	}
 	writerStarted := make(chan struct{})
 	errCh := make(chan error, 2)
 	if retained {
@@ -456,7 +463,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			r.Reads++
 			if afterWriter {
 				r.ReadsAfterWriterStop++
-				if r.ReadsAfterWriterStop == 1 {
+				if r.ReadsAfterWriterStop == drainReadTarget {
 					close(postWriterRead)
 				}
 			}
@@ -703,6 +710,41 @@ func TestNativePruneForegroundBudgetErrorJoinsWorkers(t *testing.T) {
 	}
 	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || result.ReadsAfterWriterStop == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
 		t.Fatalf("error did not reach joined cleanup/oracles: %+v\n%s", result, raw)
+	}
+}
+
+// Run the real continuing-reader fixture and require its retained drain phase
+// to meet the driver's coverage gate before joining workers. Unbounded pruning
+// isolates this harness check from bounded M7 publication qualification.
+func TestNativePruneForegroundRetainedDrainCoverage(t *testing.T) {
+	if !foregroundMetricsEnabled {
+		t.Skip("retained fixture requires mvcc_native_prune observer")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"growth", "churn"} {
+		t.Run(mode, func(t *testing.T) {
+			out := t.TempDir() + "/retained-drain.json"
+			command := exec.Command(binary, "-test.run=^TestNativePruneForegroundPilot$", "-test.count=1", "-test.timeout=30s", "-test.v")
+			command.Env = append(os.Environ(), "MVCC_FOREGROUND_RESULT="+out, "MVCC_FOREGROUND_N=64", "MVCC_FOREGROUND_MODE="+mode, "MVCC_FOREGROUND_ALGORITHM=unbounded", "MVCC_FOREGROUND_RETAINED=1", "MVCC_FOREGROUND_READER_STOP_WITH_WRITER=0", "MVCC_FOREGROUND_FORCE_BUDGET_ERROR=0")
+			raw, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("retained fixture failed: %v\n%s", err, raw)
+			}
+			data, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result foregroundResult
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Error != "" || result.Retained == nil || result.ReadersStopWithWriter || result.ReadsAfterWriterStop < foregroundDrainMinimumSamples || uint64(len(result.Retained.ReadDrain.DurationsNS)) != result.ReadsAfterWriterStop || result.Retained.ReadDrain.Overflow || !result.Retained.OwnersClosed || !result.ReopenOracle {
+				t.Fatalf("incomplete reader drain: %+v\n%s", result, raw)
+			}
+		})
 	}
 }
 
