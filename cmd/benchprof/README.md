@@ -548,6 +548,15 @@ produces a `gomap-r1-row-v1` packet and summary through
 `scripts/r1_collection_capture.sh`. These dedicated workload artifacts are not
 benchprof inputs and do not change the unified-bench profile filename contract.
 
+The [R1 mutation width and request-size sweep](../collection_workload_bench/README.md#r1-mutation-width-and-request-size-sweep)
+uses `R1_MODE=r1-mutation-sweep scripts/r1_collection_capture.sh` and the separate
+`gomap-r1-mutation-sweep-v1` packet. A nonqualifying rehearsal uses
+`-documents 32 -operations 2 -repetitions 1 -qualification rehearsal`.
+It measures public cached durable acknowledgement costs and separate flush
+counters across field widths and actual mutation request sizes. Its JSON,
+source manifest and validator output are separate from benchprof inputs;
+profile filenames and parsers are unchanged.
+
 The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
 with the supported-profile `gomap-r1-lifecycle-packet-v3` format, raw calibration/final process logs
 and strict source/count validation. For a small nonqualifying rehearsal, use

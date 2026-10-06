@@ -138,3 +138,53 @@ A clean source manifest and five repetitions are necessary but do not certify
 review or landing. The coordinator records those external gates. Rehearsal tests
 run genuine public routes and deliberately reject invalid packets; they do not
 establish a performance target or R1 completion.
+
+## R1 mutation width and request-size sweep
+
+`r1-mutation-sweep` is a separate `gomap-r1-mutation-sweep-v1` packet, reusing
+the R1 four-string fixture and public generic update route. Its 16 cells vary
+bio width 96/4,096 bytes, **actual UpdateBatch request rows** 1/32, indexed versus
+unindexed schemas, and bio versus email/city changes. Retained configuration is
+4,096 live rows, 100 requests per cell and five fresh database repetitions in
+one serial process. Larger populations and concurrency remain deferred.
+
+After this mode is reviewed and landed, with the selected source frozen:
+
+```sh
+R1_MODE=r1-mutation-sweep R1_OUT=/retained/r1-mutation-sweep-001 \
+  scripts/r1_collection_capture.sh \
+  -documents 4096 -operations 100 -repetitions 5 -qualification retained
+```
+
+A pre-review diagnostic uses `-documents 32 -operations 2 -repetitions 1
+-qualification rehearsal`. Keep it explicitly nonqualifying. Both modes retain
+the source manifest, executable/hash/build information, args, host/toolchain,
+original packet and validator result. This sweep does not emit A's `summary.json`.
+Download/restore the original files and replay:
+
+```sh
+./collection_workload_bench r1-mutation-sweep-validate \
+  -source-manifest source.json packet.json
+```
+
+Each acknowledgement observation times request encoding through public durable
+ACK. Caller fixture construction, seeding, stats sampling, final `Flush`, complete
+row/index verification and close/reopen are outside that timer. All current and
+historical email postings and complete city postings are checked after flush and
+reopen. The public cached-leaf durable opener and its default background maintenance
+are preserved; detailed UpdateBatch statistics are enabled in every cell.
+The callback receives the complete current row and returns an encoded complete
+replacement with only the selected fields changed. This measures generic row
+reconstruction/replacement, rather than a native partial-column setter.
+
+The packet reports ns/request, latency percentiles, B/request, allocations/request,
+heap after requests and a separate explicit-flush timer. Required existing WAL,
+file-sync, sync and collection publication counters are recorded before requests,
+after all ACKs and after `Flush`, with checked deltas. They measure aggregate work
+and may include background/asynchronous activity; no individual-request attribution
+or invented materialization counts is claimed. A measured zero stays zero; a
+missing counter rejects the packet. Go allocations include background activity;
+heap is neither RSS, peak nor collection-owned retained memory. Restricted `meta.*`
+reference preservation remains separately qualified. Original A noisy observations
+remain historical, with no current numerical reuse claim. These packets are not
+unified-bench profiles or benchprof inputs.

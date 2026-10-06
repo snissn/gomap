@@ -1256,6 +1256,14 @@ and strict source/count validation. For a small nonqualifying rehearsal, use
 --documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
 These artifacts are separate from unified-bench profiles and benchprof inputs.
 
+The sibling `r1-mutation-sweep` command uses the same capture script with
+`R1_MODE=r1-mutation-sweep` and its separate `gomap-r1-mutation-sweep-v1` packet.
+It varies bio width and actual public UpdateBatch request rows, with aggregate
+WAL/sync/publication counters and separate ACK/Flush timers. See the
+[sweep contract](../collection_workload_bench/README.md#r1-mutation-width-and-request-size-sweep)
+for the 16-cell matrix, reviewed/landed requirement and replay command. It emits
+no unified-bench or benchprof profile files.
+
 Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings

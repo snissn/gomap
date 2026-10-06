@@ -106,12 +106,35 @@ Reuse existing suites for broader machinery rather than duplicating it:
 
 ## Cost evidence boundary
 
-The accepted #5057 harness owns equivalent fixture, field/row-size,
-batch/concurrency, indexed/nonindexed mutation, WAL/sync/publication and ownership
-cost evidence. Use its reviewed, landed harness and freeze the runtime/harness
-identities before retained collection. Report time/throughput, `B/op`,
-`allocs/op`, materialization and fallback/path counters, actual durable work,
-and retained/peak memory with their measured scope. Keep setup, durability,
-cache state and timer boundaries identical. Unsupported comparison cells stay
-explicit. The tests above establish correctness and selected API boundaries;
-they do not establish a speedup or waive unexplained material regressions.
+The accepted #5057 comparator owns its fixed-shape fixture and indexed/nonindexed
+mutation observations. Its 32-row flag controls load/read batches, not mutation
+request size; it does not establish field-width or mutation-batch scaling.
+Historical noisy observations remain inconclusive under their original source
+identities. Larger populations and concurrent writers are explicit successor
+evidence decisions, outside this selected serial qualification.
+
+The sibling `r1-mutation-sweep` mode in the
+[collection workload harness](../../../cmd/collection_workload_bench/README.md#r1-mutation-width-and-request-size-sweep)
+owns the remaining selected field/row-size and actual request-size measurements:
+4,096 live rows, bio width 96/4,096 bytes, request rows 1/32, indexed/unindexed
+schemas, and changes to bio or email/city through public generic `UpdateBatch`.
+It preserves the four required strings and residual fields, the supported cached
+`command_wal_durable` opener, default maintenance, and serial execution. Five
+fresh database repetitions contain 100 requests per cell. These complete-row
+callbacks measure reconstruction/replacement; they are not native partial-column
+setters or restricted metadata-reference updates.
+
+The sweep separately reports request encoding through durable ACK, process-wide
+Go allocation deltas, and explicit final `Flush` time. Required existing WAL,
+sync and collection publication counters are sampled before requests, after ACKs
+and after `Flush`; their deltas are aggregate work, including asynchronous or
+background work, not isolated per-call causality. No fabricated materialization
+counters are emitted. Complete rows and all current/historical email and city
+postings are verified after flush and reopen outside timing. Heap observations
+are neither RSS, peak memory nor retained ownership attribution.
+
+Review and land the harness/schema before retained collection, then freeze exact
+runtime/harness identities and keep source-bound original packets, binaries and
+logs. Restricted `meta.*` reference preservation retains its existing separate
+tests and dimension/batch benchmarks. Unsupported cells stay explicit. These
+measurements neither establish a speedup nor waive unexplained regressions.
