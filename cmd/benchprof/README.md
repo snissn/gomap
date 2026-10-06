@@ -566,8 +566,10 @@ uses actual CommitAt/GetAt and full exact-key history, and limits fixed counts
 to128/256. Balanced fresh-process repetitions and all failures/spread must be
 retained before comparing costs. These are bounded integration diagnostics;
 sustained C4 qualification requires its separately landed retained harness.
-See the [source-bound integration packet](../../TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md)
-for exact collection policies, commands and limitations.
+See the [current repair and cost packet](../../TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md)
+for exact collection policies, commands and limitations. The
+[earlier integration packet](../../TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md)
+retains its historical source identity.
 
 The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
 produces a `gomap-r1-row-v1` packet and summary through

@@ -1,0 +1,955 @@
+diff --git a/TreeDB/caching/cow_batch.go b/TreeDB/caching/cow_batch.go
+index 29001534a..56847c1f3 100644
+--- a/TreeDB/caching/cow_batch.go
++++ b/TreeDB/caching/cow_batch.go
+@@ -32,11 +32,11 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
+ 	if b.db.cow == nil {
+ 		return nil
+ 	}
+-	if b.cowPrepared != nil {
++	if b.cowState.prepared != nil {
+ 		return fmt.Errorf("COW batch already prepared")
+ 	}
+-	if b.cowProducer != nil && b.cowProducer.err != nil {
+-		return b.cowProducer.err
++	if b.cowState.producer != nil && b.cowState.producer.err != nil {
++		return b.cowState.producer.err
+ 	}
+ 	if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir); err != nil {
+ 		return err
+@@ -52,7 +52,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
+ 	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
+ 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
+ 		memtable.COWAllocationCharge(uint64(n)*8)
+-	reusePrediction := len(b.shardCnts) == shards && len(b.cowPredictionGroups) == shards && len(b.cowPredictionStorage) == n
++	reusePrediction := len(b.shardCnts) == shards && len(b.cowState.predictionGroups) == shards && len(b.cowState.predictionStorage) == n
+ 	if !reusePrediction {
+ 		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
+ 			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
+@@ -63,10 +63,10 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
+ 		return err
+ 	}
+ 	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
+-	b.cowPrepared = p // caller drains all cancellation, including partial stage
++	b.cowState.prepared = p // caller drains all cancellation, including partial stage
+ 	// Prediction has finished. Reuse its admitted scalar/group/mutation backing,
+ 	// replacing predicted pointers/revisions with the final canonical entries.
+-	counts, groups, mutations := b.shardCnts, b.cowPredictionGroups, b.cowPredictionStorage
++	counts, groups, mutations := b.shardCnts, b.cowState.predictionGroups, b.cowState.predictionStorage
+ 	if !reusePrediction {
+ 		counts = make([]int, shards)
+ 		groups = make([][]memtable.COWMutation, shards)
+@@ -98,10 +98,10 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
+ 			if e.IsPtr {
+ 				m.Flags = node.FlagPointer
+ 				m.Value = nil
+-				if b.cowProducer == nil {
++				if b.cowState.producer == nil {
+ 					return ErrCOWUnsupported
+ 				}
+-				header, ok := b.cowProducer.frame(e.ValuePtr)
++				header, ok := b.cowState.producer.frame(e.ValuePtr)
+ 				if !ok {
+ 					return ErrCOWUnsupported
+ 				}
+@@ -177,31 +177,31 @@ func (b *Batch) ExternalCommandWALFinalizer() backenddb.RawKVCommandWALFinalize
+ }
+ 
+ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error {
+-	if b.cowPrepared == nil || b.cowPrepared.cut == nil {
++	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
+ 		return fmt.Errorf("COW publication was not prepared")
+ 	}
+ 	if err := validateCOWCanonicalEntries(payload, b.entries, lookup); err != nil {
+ 		return err
+ 	}
+-	for _, resource := range b.cowPrepared.resources {
++	for _, resource := range b.cowState.prepared.resources {
+ 		if resource.id.Kind != cowResourceDictionary {
+ 			continue
+ 		}
+ 		shard := resource.shard
+-		if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
++		if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
+ 			return err
+ 		}
+ 		ids := [1]memtable.COWResourceID{resource.id}
+-		if err := b.cowPrepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
++		if err := b.cowState.prepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
+ 			return err
+ 		}
+ 		resource.attached = true
+ 	}
+-	for shard, files := range b.cowPrepared.files {
++	for shard, files := range b.cowState.prepared.files {
+ 		for _, fileID := range files {
+ 			manager := b.db.valueLogReader
+ 			resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
+-			b.cowPrepared.resources = append(b.cowPrepared.resources, resource)
++			b.cowState.prepared.resources = append(b.cowState.prepared.resources, resource)
+ 			registry := manager.StableResourcePinRegistry()
+ 			identity, registered := manager.StableSegmentIdentity(fileID)
+ 			if !registered || registry == nil || registry != b.db.valueLogIdentityPins {
+@@ -218,10 +218,10 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
+ 				return fmt.Errorf("COW value-log file %d is not registered", fileID)
+ 			}
+ 			id := [1]memtable.COWResourceID{{Kind: cowResourceValueLogFile, ID: uint64(fileID)}}
+-			if err := b.cowPrepared.cut.next.shards[shard].resources.add(resource); err != nil {
++			if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
+ 				return err
+ 			}
+-			if err := b.cowPrepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
++			if err := b.cowState.prepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
+ 				return err
+ 			}
+ 			resource.attached = true
+@@ -231,8 +231,11 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
+ }
+ 
+ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
+-	p := b.cowPrepared
+-	b.cowPrepared = nil
++	if b.cowState == nil {
++		return nil
++	}
++	p := b.cowState.prepared
++	b.cowState.prepared = nil
+ 	if p != nil && p.cut != nil {
+ 		p.cut.cancel()
+ 	}
+@@ -274,11 +277,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
+ 		}
+ 		return err
+ 	}
+-	if b.cowPrepared == nil || b.cowPrepared.cut == nil {
++	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
+ 		panic("COW append succeeded without staged publication")
+ 	}
+-	p := b.cowPrepared
+-	b.cowPrepared = nil
++	p := b.cowState.prepared
++	b.cowState.prepared = nil
+ 	// Accepted publication is nonfallible. This existing internal observation
+ 	// seam may pause tests, but an observer cannot revoke an accepted frame.
+ 	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
+diff --git a/TreeDB/caching/cow_batch_storage.go b/TreeDB/caching/cow_batch_storage.go
+index a65e0307f..85eddaf1b 100644
+--- a/TreeDB/caching/cow_batch_storage.go
++++ b/TreeDB/caching/cow_batch_storage.go
+@@ -9,6 +9,18 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/page"
+ )
+ 
++// cowBatchState exists only for explicitly admitted COW batches. Keeping its
++// ownership and prediction fields separate preserves ordinary batch allocations.
++type cowBatchState struct {
++	lease             *memtable.COWExternalLease
++	storage           *cowBatchStorage
++	err               error
++	prepared          *cowBatchPreparation
++	producer          *cowFrameCapture
++	predictionGroups  [][]memtable.COWMutation
++	predictionStorage []memtable.COWMutation
++}
++
+ // A batch owns every admitted backing, including discarded growth arrays,
+ // until Reset drops its references. These leases never enter legacy pools.
+ type cowBatchStorage struct {
+@@ -17,8 +29,8 @@ type cowBatchStorage struct {
+ }
+ 
+ // Shared immutable refusal carrier: constructing a refused batch allocates no
+-// wrapper. All COW staging/write/close paths test cowErr before mutation.
+-var cowDeniedBatch = Batch{cowErr: memtable.ErrCOWCapacity, closed: true}
++// wrapper. All COW staging/write/close paths test the state error before mutation.
++var cowDeniedBatch = Batch{cowState: &cowBatchState{err: memtable.ErrCOWCapacity}, closed: true}
+ 
+ // AcquireCOWAllocation admits concrete caller-owned wrapper/backing capacities
+ // before allocation. The returned independent lease lasts until that caller
+@@ -31,18 +43,18 @@ func (db *DB) AcquireCOWAllocation(bytes uint64) (*memtable.COWExternalLease, er
+ }
+ 
+ func (db *DB) newCOWBatch(hint int) *Batch {
+-	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Batch{}))))
++	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Batch{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchState{}))))
+ 	if err != nil {
+ 		return &cowDeniedBatch
+ 	}
+-	b := &Batch{db: db, cowLease: lease, streamBypassOff: true}
++	b := &Batch{db: db, cowState: &cowBatchState{lease: lease}, streamBypassOff: true}
+ 	b.cowReserve(hint)
+ 	return b
+ }
+ 
+ func (b *Batch) cowAdmitStorage(bytes uint64) error {
+-	if b.cowErr != nil {
+-		return b.cowErr
++	if b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	ownerCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchStorage{})))
+ 	if bytes > ^uint64(0)-ownerCharge {
+@@ -52,20 +64,20 @@ func (b *Batch) cowAdmitStorage(bytes uint64) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	b.cowStorage = &cowBatchStorage{lease: lease, next: b.cowStorage}
++	b.cowState.storage = &cowBatchStorage{lease: lease, next: b.cowState.storage}
+ 	return nil
+ }
+ 
+ func (b *Batch) cowReserve(n int) {
+-	if b.cowErr != nil || b.closed || n <= cap(b.entries) {
++	if b.cowState.err != nil || b.closed || n <= cap(b.entries) {
+ 		return
+ 	}
+ 	if n < 0 || uint64(n) > ^uint64(0)/uint64(unsafe.Sizeof(batch.Entry{})) {
+-		b.cowErr = memtable.ErrCOWCapacity
++		b.cowState.err = memtable.ErrCOWCapacity
+ 		return
+ 	}
+ 	if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(batch.Entry{})))); err != nil {
+-		b.cowErr = err
++		b.cowState.err = err
+ 		return
+ 	}
+ 	entries := make([]batch.Entry, len(b.entries), n)
+@@ -74,8 +86,8 @@ func (b *Batch) cowReserve(n int) {
+ }
+ 
+ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
+-	if b.cowErr != nil {
+-		return b.cowErr
++	if b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b.closed {
+ 		return ErrBatchClosed
+@@ -89,8 +101,8 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
+ 			return memtable.ErrCOWCapacity
+ 		}
+ 		b.cowReserve(next)
+-		if b.cowErr != nil {
+-			return b.cowErr
++		if b.cowState.err != nil {
++			return b.cowState.err
+ 		}
+ 	}
+ 	if owned {
+@@ -132,8 +144,8 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
+ }
+ 
+ func (b *Batch) cowSetOps(ops []batch.Entry) error {
+-	if b.cowErr != nil {
+-		return b.cowErr
++	if b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b.closed {
+ 		return ErrBatchClosed
+@@ -168,8 +180,8 @@ func (b *Batch) cowReset() {
+ 	b.eligibleIdxs = nil
+ 	b.shardEntries = nil
+ 	b.shardIdxSets = nil
+-	b.cowPredictionGroups = nil
+-	b.cowPredictionStorage = nil
++	b.cowState.predictionGroups = nil
++	b.cowState.predictionStorage = nil
+ 	b.firstKey, b.lastKey = nil, nil
+ 	b.stableViewValueLeaseChunks = nil
+ 	b.size, b.maxEntries = 0, 0
+@@ -177,10 +189,10 @@ func (b *Batch) cowReset() {
+ 	b.commandWALAppend = nil
+ 	b.commandWALPreparedRevision, b.commandWALMaterializedRID = false, false
+ 	b.entryRevision = page.LegacyEntryRevision
+-	b.cowErr = nil
+-	for b.cowStorage != nil {
+-		owner := b.cowStorage
+-		b.cowStorage = owner.next
++	b.cowState.err = nil
++	for b.cowState.storage != nil {
++		owner := b.cowState.storage
++		b.cowState.storage = owner.next
+ 		owner.next = nil
+ 		owner.lease.Close()
+ 	}
+@@ -192,7 +204,7 @@ func (b *Batch) cowClose() error {
+ 	}
+ 	b.cowReset()
+ 	b.closed = true
+-	b.cowLease.Close()
++	b.cowState.lease.Close()
+ 	// Keep the closed lease identity so repeated methods stay on the COW path.
+ 	return nil
+ }
+@@ -216,8 +228,8 @@ func (b *Batch) cowPrepareWriteStorage() error {
+ 	if err := b.cowAdmitStorage(bytes); err != nil {
+ 		return err
+ 	}
+-	b.cowPredictionGroups = make([][]memtable.COWMutation, shards)
+-	b.cowPredictionStorage = make([]memtable.COWMutation, n)
++	b.cowState.predictionGroups = make([][]memtable.COWMutation, shards)
++	b.cowState.predictionStorage = make([]memtable.COWMutation, n)
+ 	b.shardAdds = make([]int64, shards)
+ 	b.shardCnts = make([]int, shards)
+ 	b.shardIdxs = make([]int, n)
+diff --git a/TreeDB/caching/cow_batch_storage_test.go b/TreeDB/caching/cow_batch_storage_test.go
+index 5f90c0817..021040deb 100644
+--- a/TreeDB/caching/cow_batch_storage_test.go
++++ b/TreeDB/caching/cow_batch_storage_test.go
+@@ -18,14 +18,14 @@ func TestCOWBatchStorageAdmissionAndReset(t *testing.T) {
+ 			t.Fatal(err)
+ 		}
+ 	}
+-	if b.cowStorage == nil || cap(b.entries) < 65 {
++	if b.cowState.storage == nil || cap(b.entries) < 65 {
+ 		t.Fatal("missing admitted growth")
+ 	}
+ 	if db.cow.budget.Stats().ExternalBytes <= baseline {
+ 		t.Fatal("batch capacity uncharged")
+ 	}
+ 	b.Reset()
+-	if len(b.entries) != 0 || b.copyArena != nil || b.cowStorage != nil {
++	if len(b.entries) != 0 || b.copyArena != nil || b.cowState.storage != nil {
+ 		t.Fatal("reset retained batch storage")
+ 	}
+ 	if err := b.Set([]byte("again"), []byte("value")); err != nil {
+diff --git a/TreeDB/caching/cow_batch_test.go b/TreeDB/caching/cow_batch_test.go
+index 593535c8c..14941847b 100644
+--- a/TreeDB/caching/cow_batch_test.go
++++ b/TreeDB/caching/cow_batch_test.go
+@@ -29,9 +29,9 @@ func TestCOWBatchCanonicalPreparationPublishesFinalRevisions(t *testing.T) {
+ 		c.writerMu.Unlock()
+ 		t.Fatalf("staged value=%q err=%v", value, err)
+ 	}
+-	retired := b.cowPrepared.cut.publish()
+-	p := b.cowPrepared
+-	b.cowPrepared = nil
++	retired := b.cowState.prepared.cut.publish()
++	p := b.cowState.prepared
++	b.cowState.prepared = nil
+ 	c.writerMu.Unlock()
+ 	if retired != nil {
+ 		retired.drain()
+@@ -98,7 +98,7 @@ func TestCOWLogicalSizeChangedKeysAndDuplicates(t *testing.T) {
+ 			}
+ 			t.Fatal(err)
+ 		}
+-		p := b.cowPrepared
++		p := b.cowState.prepared
+ 		old := p.cut.publish()
+ 		c.writerMu.Unlock()
+ 		if old != nil {
+diff --git a/TreeDB/caching/cow_dictionary_cleanup_test.go b/TreeDB/caching/cow_dictionary_cleanup_test.go
+index 190299778..72483772a 100644
+--- a/TreeDB/caching/cow_dictionary_cleanup_test.go
++++ b/TreeDB/caching/cow_dictionary_cleanup_test.go
+@@ -102,7 +102,7 @@ func TestCOWDictionaryCleanupPrepareRefusalTransfersOwner(t *testing.T) {
+ 				owner, err := store.PrepareDictionaryReadDefinition(id, c.readLimits(), c.budget.Limits().MaxResources, probe.admit)
+ 				// The same carrier used by partial batch cancellation must preserve
+ 				// transferred ownership without executing callbacks in cancel.
+-				b := &Batch{db: db, cowPrepared: &cowBatchPreparation{resources: []*cowLiveResource{{definition: owner}}}}
++				b := &Batch{db: db, cowState: &cowBatchState{prepared: &cowBatchPreparation{resources: []*cowLiveResource{{definition: owner}}}}}
+ 				cancelled := b.cancelCOWPublication()
+ 				held := c.budget.Stats()
+ 				c.writerMu.Unlock()
+diff --git a/TreeDB/caching/cow_generation_preflight.go b/TreeDB/caching/cow_generation_preflight.go
+index ce6f1d142..f67fd65a4 100644
+--- a/TreeDB/caching/cow_generation_preflight.go
++++ b/TreeDB/caching/cow_generation_preflight.go
+@@ -17,8 +17,8 @@ func (b *Batch) cowGenerationRollover() (*cowRollover, error) {
+ 	for _, entry := range b.entries {
+ 		b.shardCnts[b.db.shardIndex(entry.Key)]++
+ 	}
+-	groups := b.cowPredictionGroups
+-	storage := b.cowPredictionStorage
++	groups := b.cowState.predictionGroups
++	storage := b.cowState.predictionStorage
+ 	start := 0
+ 	for i, count := range b.shardCnts {
+ 		groups[i] = storage[start : start : start+count]
+diff --git a/TreeDB/caching/cow_producer.go b/TreeDB/caching/cow_producer.go
+index 44c82c132..1f6c23104 100644
+--- a/TreeDB/caching/cow_producer.go
++++ b/TreeDB/caching/cow_producer.go
+@@ -91,10 +91,10 @@ func compareCOWProducedFrames(a, b cowProducedFrame) int {
+ }
+ 
+ func (b *Batch) cowProducedFrameObserver() valuelog.ProducedFrameObserver {
+-	if b.cowProducer == nil {
++	if b.cowState == nil || b.cowState.producer == nil {
+ 		return nil
+ 	}
+-	return b.cowProducer.observer
++	return b.cowState.producer.observer
+ }
+ 
+ func (c *cowFrameCapture) close() {
+diff --git a/TreeDB/caching/db.go b/TreeDB/caching/db.go
+index ef98e65d5..262856368 100644
+--- a/TreeDB/caching/db.go
++++ b/TreeDB/caching/db.go
+@@ -34322,6 +34322,16 @@ func (db *DB) Print() error {
+ // should ensure no writes occur concurrently if they require a fully drained
+ // state.
+ func (db *DB) Drain() error {
++	if db.cow != nil {
++		// Admission may wait for an existing checkpoint, so acquire flushMu
++		// only after rotating the active immutable sources into the frontier.
++		if err := db.rolloverCOWForFlush(); err != nil {
++			return err
++		}
++		db.flushMu.Lock()
++		defer db.flushMu.Unlock()
++		return db.flushCOWFrozen(db.flushSyncRequested(false), nil)
++	}
+ 	db.writeMu.Lock()
+ 	db.mu.Lock()
+ 	if db.mutableBytes.Load() > 0 {
+@@ -35024,13 +35034,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+ // batchOp removed, using batch.Entry directly
+ 
+ type Batch struct {
+-	cowLease                  *memtable.COWExternalLease
+-	cowStorage                *cowBatchStorage
+-	cowErr                    error
+-	cowPrepared               *cowBatchPreparation
+-	cowProducer               *cowFrameCapture
+-	cowPredictionGroups       [][]memtable.COWMutation
+-	cowPredictionStorage      []memtable.COWMutation
++	cowState                  *cowBatchState
+ 	db                        *DB
+ 	entries                   []batch.Entry
+ 	backend                   batch.Interface
+@@ -35119,7 +35123,7 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
+ 
+ // Reserve ensures the batch has capacity for at least n staged entries.
+ func (b *Batch) Reserve(n int) {
+-	if b != nil && (b.cowLease != nil || b.cowErr != nil) {
++	if b != nil && b.cowState != nil {
+ 		b.cowReserve(n)
+ 		return
+ 	}
+@@ -36133,7 +36137,7 @@ func (b *Batch) copyValueToAppendOnlyDirectArena(value []byte) []byte {
+ // This intentionally keeps internal buffers to avoid per-batch allocations in
+ // callers that frequently reset (e.g. geth benchmarks).
+ func (b *Batch) Reset() {
+-	if b != nil && (b.cowLease != nil || b.cowErr != nil) {
++	if b != nil && b.cowState != nil {
+ 		b.cowReset()
+ 		return
+ 	}
+@@ -36723,7 +36727,7 @@ func (b *Batch) Set(key, value []byte) error {
+ }
+ 
+ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: normalizeRawKVPointKey(key), Value: normalizeRawKVValue(value), Revision: revision}, true)
+ 	}
+ 	if b.closed {
+@@ -36811,8 +36815,8 @@ func (b *Batch) SetView(key, value []byte) error {
+ }
+ 
+ func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
+-	if b.cowErr != nil {
+-		return b.cowErr
++	if b.cowState != nil && b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b.closed {
+ 		return ErrBatchClosed
+@@ -36829,7 +36833,7 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
+ }
+ 
+ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.EntryRevision) error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision}, false)
+ 	}
+ 	if hotPathStatsEnabled {
+@@ -36897,7 +36901,7 @@ func (b *Batch) Delete(key []byte) error {
+ }
+ 
+ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowAddEntry(batch.Entry{Type: batch.OpDelete, Key: normalizeRawKVPointKey(key), Revision: revision}, true)
+ 	}
+ 	if b.closed {
+@@ -37006,8 +37010,8 @@ func (b *Batch) DeleteView(key []byte) error {
+ }
+ 
+ func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
+-	if b.cowErr != nil {
+-		return b.cowErr
++	if b.cowState != nil && b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b.closed {
+ 		return ErrBatchClosed
+@@ -37023,7 +37027,7 @@ func (b *Batch) DeleteViewValidated(key []byte) error {
+ }
+ 
+ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryRevision) error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowAddEntry(batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}, false)
+ 	}
+ 	if hotPathStatsEnabled {
+@@ -37086,7 +37090,7 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
+ }
+ 
+ func (b *Batch) SetOps(ops []batch.Entry) error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowSetOps(ops)
+ 	}
+ 	if b.closed {
+@@ -37355,8 +37359,8 @@ type CommandWALBatchWriteTiming struct {
+ // visible in the mutable table. This is intentionally limited to command-WAL
+ // public mode, where the cached redo log is disabled.
+ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error {
+-	if b != nil && b.cowErr != nil {
+-		return b.cowErr
++	if b != nil && b.cowState != nil && b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b == nil || b.db == nil {
+ 		return backenddb.ErrClosed
+@@ -37391,8 +37395,8 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
+ // unassigned through preflight; appendCommand must arrange their assignment
+ // while holding the command-WAL append serialization boundary.
+ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func() error) error {
+-	if b != nil && b.cowErr != nil {
+-		return b.cowErr
++	if b != nil && b.cowState != nil && b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b == nil || b.db == nil {
+ 		return backenddb.ErrClosed
+@@ -37430,8 +37434,8 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
+ // measuring non-overlapping request phases. Normal writes use the unmeasured
+ // method above and do not pay these clock reads.
+ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
+-	if b != nil && b.cowErr != nil {
+-		return timing, b.cowErr
++	if b != nil && b.cowState != nil && b.cowState.err != nil {
++		return timing, b.cowState.err
+ 	}
+ 	if b == nil || b.db == nil {
+ 		return timing, backenddb.ErrClosed
+@@ -37488,8 +37492,8 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
+ // revision ordering while exposing the same phase diagnostics as the ordinary
+ // measured command-WAL batch path.
+ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
+-	if b != nil && b.cowErr != nil {
+-		return timing, b.cowErr
++	if b != nil && b.cowState != nil && b.cowState.err != nil {
++		return timing, b.cowState.err
+ 	}
+ 	if b == nil || b.db == nil {
+ 		return timing, backenddb.ErrClosed
+@@ -37546,8 +37550,8 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool
+ }
+ 
+ func (b *Batch) write(sync bool) error {
+-	if b != nil && b.cowErr != nil {
+-		return b.cowErr
++	if b != nil && b.cowState != nil && b.cowState.err != nil {
++		return b.cowState.err
+ 	}
+ 	if b.closed {
+ 		return ErrBatchClosed
+@@ -37964,12 +37968,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
+ 			unlockWriteMu()
+ 			return err
+ 		}
+-		b.cowProducer = capture
++		b.cowState.producer = capture
+ 		previousUnlock := unlockWriteMu
+ 		unlockWriteMu = func() {
+ 			b.db.cow.writerMu.Unlock()
+ 			previousUnlock()
+-			b.cowProducer = nil
++			b.cowState.producer = nil
+ 			capture.close()
+ 		}
+ 	}
+@@ -39410,7 +39414,7 @@ func (b *Batch) writeBypass(sync bool) (err error) {
+ }
+ 
+ func (b *Batch) Close() error {
+-	if b.cowLease != nil || b.cowErr != nil {
++	if b.cowState != nil {
+ 		return b.cowClose()
+ 	}
+ 	if b.closed {
+diff --git a/TreeDB/command_wal_public_cached.go b/TreeDB/command_wal_public_cached.go
+index e64171621..c7c3ccd60 100644
+--- a/TreeDB/command_wal_public_cached.go
++++ b/TreeDB/command_wal_public_cached.go
+@@ -468,13 +468,19 @@ func (tdb *DB) syncPublicCommandWALDirect() (db.CommandWALBarrierResult, error)
+ 
+ // Refused constructors return an immutable carrier rather than allocating an
+ // uncharged public wrapper. Every mutable entry point checks batchError first.
+-var cowDeniedPublicBatch = commandWALPublicBatch{batchError: memtable.ErrCOWCapacity}
+-var cowClosedPublicBatch = commandWALPublicBatch{batchError: ErrClosed}
++var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}
++var cowClosedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: ErrClosed}}
++
++type commandWALPublicCOWState struct {
++	lease      *memtable.COWExternalLease
++	batchError error
++	cow        bool
++}
++
++func (b *commandWALPublicBatch) isCOW() bool { return b.cowState != nil && b.cowState.cow }
+ 
+ type commandWALPublicBatch struct {
+-	cowLease                 *memtable.COWExternalLease
+-	cow                      bool
+-	batchError               error
++	cowState                 *commandWALPublicCOWState
+ 	db                       *DB
+ 	inner                    Batch
+ 	innerSetViewValidated    commandWALPublicInnerSetViewValidated
+@@ -485,16 +491,11 @@ type commandWALPublicBatch struct {
+ 	payloadOpHint            int
+ 	payloadByteHint          int
+ 	payloadSoftCapBytes      int
+-	payloadBypass            bool
+-	payloadLeasedToMemtable  bool
+ 	payloadLeasedBufferMask  commitlog.RawKVBatchPayloadBufferMask
+ 	payloadLeaseAttachedMask commitlog.RawKVBatchPayloadBufferMask
+ 	knownZeroValueRef        []byte
+ 	knownZeroValueLen        uint64
+-	knownZeroValueValid      bool
+ 	opCount                  int
+-	hasDeleteRange           bool
+-	dirty                    bool
+ 	setCalls                 int
+ 	setBytes                 int
+ 	setViewCalls             int
+@@ -503,6 +504,11 @@ type commandWALPublicBatch struct {
+ 	deleteBytes              int
+ 	deleteViewCalls          int
+ 	deleteViewBytes          int
++	payloadBypass            bool
++	payloadLeasedToMemtable  bool
++	knownZeroValueValid      bool
++	hasDeleteRange           bool
++	dirty                    bool
+ 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
+ 	// keeps payload-owned key/value views valid after a successful Write until
+ 	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
+@@ -561,7 +567,7 @@ type commandWALPublicInnerStableViewValueLease interface {
+ 
+ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
+ 	if tdb != nil && tdb.cached != nil && tdb.cached.COWMode() {
+-		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicBatch{}))))
++		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicBatch{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicCOWState{}))))
+ 		if err != nil {
+ 			if inner != nil {
+ 				_ = inner.Close()
+@@ -573,7 +579,7 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
+ 		}
+ 		// Canonical preparation scans the inner immutable staged entries. A
+ 		// second payload builder would duplicate their bytes and retention.
+-		b := &commandWALPublicBatch{db: tdb, inner: inner, cow: true, cowLease: lease, payloadBypass: true}
++		b := &commandWALPublicBatch{db: tdb, inner: inner, cowState: &commandWALPublicCOWState{cow: true, lease: lease}, payloadBypass: true}
+ 		b.disableInnerStreamingBypass()
+ 		b.rebindInnerViewers()
+ 		return b
+@@ -605,7 +611,7 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
+ 	if b == nil {
+ 		return
+ 	}
+-	if b.cow {
++	if b.isCOW() {
+ 		b.payloadBypass = true
+ 		b.hasDeleteRange = false
+ 		return
+@@ -744,13 +750,13 @@ func (b *commandWALPublicBatch) SetViewWithReplayBytes(key, value []byte) (keyVi
+ }
+ 
+ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, useInnerView bool) (keyView, valueView []byte, err error) {
+-	if b != nil && b.batchError != nil {
+-		return nil, nil, b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return nil, nil, b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return nil, nil, ErrClosed
+ 	}
+-	if b.cow && retainReplayViews {
++	if b.isCOW() && retainReplayViews {
+ 		return nil, nil, caching.ErrCOWUnsupported
+ 	}
+ 	b.preparePayloadForAppend()
+@@ -767,7 +773,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
+ 		b.dirty = true
+ 		return nil, nil, nil
+ 	}
+-	if b.cow || b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
++	if b.isCOW() || b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
+ 		if useInnerView {
+ 			err = b.innerSetView(key, value)
+ 		} else {
+@@ -836,13 +842,13 @@ func (b *commandWALPublicBatch) DeleteViewWithReplayBytes(key []byte) (keyView [
+ }
+ 
+ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInnerView bool) (keyView []byte, err error) {
+-	if b != nil && b.batchError != nil {
+-		return nil, b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return nil, b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return nil, ErrClosed
+ 	}
+-	if b.cow && retainReplayViews {
++	if b.isCOW() && retainReplayViews {
+ 		return nil, caching.ErrCOWUnsupported
+ 	}
+ 	b.preparePayloadForAppend()
+@@ -858,7 +864,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
+ 		b.dirty = true
+ 		return nil, nil
+ 	}
+-	if b.cow || b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
++	if b.isCOW() || b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
+ 		if useInnerView {
+ 			err = b.innerDeleteView(key)
+ 		} else {
+@@ -892,8 +898,8 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
+ }
+ 
+ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
+-	if b != nil && b.batchError != nil {
+-		return b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return ErrClosed
+@@ -1041,8 +1047,8 @@ func (b *commandWALPublicBatch) WriteSync() error {
+ }
+ 
+ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error) {
+-	if b != nil && b.batchError != nil {
+-		return b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return ErrClosed
+@@ -1176,7 +1182,7 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
+ }
+ 
+ func (b *commandWALPublicBatch) Close() error {
+-	if b != nil && b.batchError != nil {
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+ 		return nil
+ 	}
+ 	if b == nil || b.inner == nil {
+@@ -1191,7 +1197,7 @@ func (b *commandWALPublicBatch) Close() error {
+ 	keepPayload := false
+ 	if b.payloadLeasedToMemtable {
+ 		payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+-	} else if !b.cow {
++	} else if !b.isCOW() {
+ 		keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+ 	}
+ 	b.inner = nil
+@@ -1213,8 +1219,8 @@ func (b *commandWALPublicBatch) Close() error {
+ 	b.dirty = false
+ 	b.retainPayloadAfterWrite = false
+ 	b.closed = true
+-	if b.cowLease != nil {
+-		b.cowLease.Close()
++	if b.cowState != nil && b.cowState.lease != nil {
++		b.cowState.lease.Close()
+ 	}
+ 	if owner != nil && keepPayload {
+ 		owner.commandWALPublicPayloadPool.Put(payload)
+@@ -1223,7 +1229,7 @@ func (b *commandWALPublicBatch) Close() error {
+ }
+ 
+ func (b *commandWALPublicBatch) Reset() {
+-	if b != nil && b.batchError != nil {
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+ 		return
+ 	}
+ 	if b == nil || b.inner == nil {
+@@ -1287,7 +1293,7 @@ func (b *commandWALPublicBatch) knownZeroValue(value []byte) bool {
+ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
+ 	// COW production always uses canonical prepared entry scan, never a second
+ 	// independently allocated payload encoder.
+-	if b != nil && b.cow {
++	if b != nil && b.isCOW() {
+ 		return nil, caching.ErrCOWUnsupported
+ 	}
+ 	if b == nil || b.inner == nil {
+@@ -1518,8 +1524,8 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
+ }
+ 
+ func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
+-	if b != nil && b.batchError != nil {
+-		return b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return nil
+@@ -1528,8 +1534,8 @@ func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
+ }
+ 
+ func (b *commandWALPublicBatch) GetByteSize() (int, error) {
+-	if b != nil && b.batchError != nil {
+-		return 0, b.batchError
++	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
++		return 0, b.cowState.batchError
+ 	}
+ 	if b == nil || b.inner == nil {
+ 		return 0, nil
+diff --git a/TreeDB/cow_public_batch_allocation_test.go b/TreeDB/cow_public_batch_allocation_test.go
+index f90006a56..c9a6d2ecc 100644
+--- a/TreeDB/cow_public_batch_allocation_test.go
++++ b/TreeDB/cow_public_batch_allocation_test.go
+@@ -16,7 +16,7 @@ func TestCOWPublicCommandBatchOwnedStagingAndWrapperAdmission(t *testing.T) {
+ 			database, _, _ := cowPublicContractOpen(t, profile)
+ 			before := database.cached.COWMemoryStats()
+ 			command := database.NewBatch().(*commandWALPublicBatch)
+-			if !command.cow || command.cowLease == nil || !command.payloadBypass || command.payload.RetainedCap() != 0 {
++			if !command.isCOW() || command.cowState.lease == nil || !command.payloadBypass || command.payload.RetainedCap() != 0 {
+ 				t.Fatal("COW wrapper constructed a second payload owner")
+ 			}
+ 			opened := database.cached.COWMemoryStats()
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index bfbfea5bb..71c8fabaa 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -1701,9 +1701,120 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
+ 	return db.captureSnapshotBoundedWithValueLogPublicationLockHeld(nil, admit, true)
+ }
+ 
++// Ordinary snapshots keep the established fast capture path. Bounded COW
++// captures below use their separate admission and fixed-registry policy.
+ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
+-	_, err := db.captureSnapshotBoundedWithValueLogPublicationLockHeld(snap, nil, false)
+-	return err == nil
++	db.rootReuseMu.RLock()
++	defer db.rootReuseMu.RUnlock()
++	if db.closing.Load() || db.publicationPoisoned.Load() {
++		return false
++	}
++	if snap.registryShardHint == snapshotShardHintUnset {
++		snap.registryShardHint = registryHintFromSnapshot(snap)
++	}
++	acqShard := snapshotAcquireShard()
++	db.snapshotAcquireRO[acqShard].Add(1)
++	db.snapshotAcquireEpoch.Add(1)
++	defer func() {
++		// Publish the completion epoch before dropping the in-flight count so
++		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
++		db.snapshotAcquireEpoch.Add(1)
++		db.snapshotAcquireRO[acqShard].Add(-1)
++	}()
++	if db.closing.Load() {
++		return false
++	}
++
++	view := db.snapshotViewRO.Load()
++	if view == nil || view.idx == nil || view.state == nil {
++		return false
++	}
++	idx := view.idx
++	state := view.state
++	vm := view.vlogManager
++	vlogSet := state.ValueLogSet
++	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
++	if vlogNeedsPin {
++		if vm == nil {
++			return false
++		}
++		vm.Acquire(vlogSet)
++	}
++
++	var registryID int64
++	if idx != nil {
++		if idx.registry == nil {
++			if vlogNeedsPin && vm != nil {
++				_ = vm.Release(vlogSet)
++			}
++			return false
++		}
++		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
++	}
++	if state.LeafGenerations != nil {
++		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
++		if state.LeafGenerations.PinSet != nil {
++			snap.leafGenerationPinSet = state.LeafGenerations.PinSet
++			if db.retainLeafGenerationPinSet(snap.leafGenerationPinSet) {
++				snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
++			} else {
++				snap.leafGenerationPinnedIDs = nil
++			}
++			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
++		} else if len(state.LeafGenerations.PinRefs) == len(state.LeafGenerations.GenerationOrder) && len(state.LeafGenerations.PinRefs) > 0 {
++			snap.leafGenerationRefs = append(snap.leafGenerationRefs[:0], state.LeafGenerations.PinRefs...)
++			db.pinLeafGenerationRefs(snap.leafGenerationRefs)
++			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
++		} else {
++			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
++			db.pinLeafGenerationIDs(snap.leafGenerationIDs)
++			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
++		}
++	} else {
++		snap.leafGenerationIDs = nil
++		snap.leafGenerationPinnedIDs = nil
++		snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
++		snap.leafGenerationPinSet = nil
++	}
++
++	snap.db = db
++	snap.idx = idx
++	snap.state = state
++	snap.vlogManager = vm
++	snap.vlogPinned = vlogNeedsPin
++	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
++	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
++	for i := range snap.rootTrees {
++		snap.rootTrees[i].root = 0
++		snap.rootTrees[i].tree.Reset(nil, nil, 0)
++	}
++	if cap(snap.rootTrees) > snapshotRootTreeRetainMax {
++		snap.rootTrees = nil
++	} else {
++		snap.rootTrees = snap.rootTrees[:0]
++	}
++	snap.registryID = registryID
++	if idx != nil {
++		sameTree := snap.treePager == idx.pager &&
++			snap.treeRoot == state.RootPageID
++		if !sameTree {
++			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
++			snap.treePager = idx.pager
++			snap.treeRoot = state.RootPageID
++		}
++	} else {
++		if snap.treePager != nil || snap.treeRoot != 0 {
++			snap.tree.Reset(nil, nil, 0)
++			snap.treePager = nil
++			snap.treeRoot = 0
++		}
++	}
++	snap.tree.SetNegativeFilter(view.negativeFilter)
++	snap.iteratorMu.Lock()
++	snap.closed.Store(false)
++	snap.readState.Store(0)
++	snap.iteratorMu.Unlock()
++	return true
+ }
+ 
+ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool) (*Snapshot, error) {

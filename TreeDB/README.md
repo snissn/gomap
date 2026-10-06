@@ -112,7 +112,7 @@ bypass are unsupported in this explicit mode and refuse before effects. Existing
 adaptive/append_only/btree selection remains available. COW does not add MVCC
 conflict detection or remove Store fences, and selection makes no throughput
 promise. See [capabilities, limits and lifecycle](docs/spec/cow-cache-publication.md)
-and the [matched cost measurements](docs/benchmarks/cow-c2-integration-5046/report.md).
+and the [current repair and cost measurements](docs/benchmarks/cow-c2-ci-repair-5046/report.md).
 The measurements include the remaining write and pointer-read overhead; sustained
 workload suitability is part of the later qualification.
 

@@ -1,0 +1,2428 @@
+{
+  "runtime_candidate": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "runtime_tree": "b06dc9f41b8593f1c9f87d5b6d0e1a23a853b822",
+  "base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "disposition": "CURRENT_ACTUAL_EVIDENCE_ACCEPT; RESIDUAL_COST_DISPOSITION_AND_WHOLE_C2_HELD",
+  "proofs": {
+    "bindings.json": "3acde2f02e6312ff853670da22e702121fae89256fcb7fe5596c9ff2b3225c15",
+    "direct-reconstruction.json": "9e2ef0ac81ffc4465cf4c0bab8e50bcff300f620a70bc82de54345977b212d13"
+  },
+  "verified": {
+    "sealed_collection_files": 26,
+    "raw_transfer_files": 70,
+    "mvcc_transfer_files": 50,
+    "actual_runs": 45,
+    "actual_rows": 648,
+    "raw_rows": 540,
+    "raw_cases": 180,
+    "mvcc_rows": 108,
+    "mvcc_cases": 36,
+    "stream_files": 90,
+    "actual_retained_raw_cache_close_receipts": 360,
+    "all_close_zero_live_and_positive_peak": true,
+    "all_cow_snapshot_rotations_zero": true,
+    "own_copy_analyzers_exit_zero": true,
+    "derivatives_byte_identical": true,
+    "direct_rows_all_metrics_ratios_scaling_exact": true,
+    "actual_intervals_nonoverlapping": true,
+    "source_files": 7330,
+    "actual_regular_files": 7330,
+    "actual_executable_files": 123,
+    "actual_symlinks_or_extras": 0,
+    "git_modes_exact": true
+  },
+  "environment": {
+    "go": "1.26.3 linux/amd64",
+    "GOMAXPROCS": 12,
+    "GOGC_and_GOMEMLIMIT": "unset by collection policy",
+    "raw_load_1min": [
+      2.87744140625,
+      6.3818359375
+    ],
+    "mvcc_load_1min": [
+      2.83349609375,
+      3.50390625
+    ]
+  },
+  "material_raw_N2048": [
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            1362.0,
+            1230.0,
+            1222.0
+          ],
+          "median": 1230.0,
+          "minimum": 1222.0,
+          "maximum": 1362.0,
+          "max_over_min": 1.1145662847790507
+        },
+        "B/op": {
+          "values": [
+            440.0,
+            440.0,
+            440.0
+          ],
+          "median": 440.0,
+          "minimum": 440.0,
+          "maximum": 440.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            3.0,
+            3.0,
+            3.0
+          ],
+          "median": 3.0,
+          "minimum": 3.0,
+          "maximum": 3.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            0.7579298831385642,
+            0.6453305351521511,
+            0.4969499796665311
+          ],
+          "median": 0.6453305351521511
+        },
+        "B/op": {
+          "values": [
+            0.4238921001926782,
+            0.42348411934552455,
+            0.4238921001926782
+          ],
+          "median": 0.4238921001926782
+        },
+        "allocs/op": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            8965.0,
+            9392.0,
+            8661.0
+          ],
+          "median": 8965.0,
+          "minimum": 8661.0,
+          "maximum": 9392.0,
+          "max_over_min": 1.084401339337259
+        },
+        "B/op": {
+          "values": [
+            1640.0,
+            1640.0,
+            1640.0
+          ],
+          "median": 1640.0,
+          "minimum": 1640.0,
+          "maximum": 1640.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            20.0,
+            20.0,
+            20.0
+          ],
+          "median": 20.0,
+          "minimum": 20.0,
+          "maximum": 20.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.3966349898738122,
+            1.4774264590215511,
+            1.2817818558531893
+          ],
+          "median": 1.3966349898738122
+        },
+        "B/op": {
+          "values": [
+            0.5811481218993622,
+            0.5924855491329479,
+            0.5811481218993622
+          ],
+          "median": 0.5811481218993622
+        },
+        "allocs/op": {
+          "values": [
+            0.9090909090909091,
+            0.9090909090909091,
+            0.9090909090909091
+          ],
+          "median": 0.9090909090909091
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            6205483.0,
+            6200637.0,
+            6813634.0
+          ],
+          "median": 6205483.0,
+          "minimum": 6200637.0,
+          "maximum": 6813634.0,
+          "max_over_min": 1.0988603267696528
+        },
+        "B/op": {
+          "values": [
+            11842.0,
+            11842.0,
+            11891.0
+          ],
+          "median": 11842.0,
+          "minimum": 11842.0,
+          "maximum": 11891.0,
+          "max_over_min": 1.0041378145583517
+        },
+        "allocs/op": {
+          "values": [
+            71.0,
+            71.0,
+            71.0
+          ],
+          "median": 71.0,
+          "minimum": 71.0,
+          "maximum": 71.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.002681580710716,
+            0.9882203485860099,
+            1.117110231125045
+          ],
+          "median": 1.002681580710716
+        },
+        "B/op": {
+          "values": [
+            28.81265206812652,
+            28.81265206812652,
+            28.931873479318735
+          ],
+          "median": 28.81265206812652
+        },
+        "allocs/op": {
+          "values": [
+            11.833333333333334,
+            11.833333333333334,
+            11.833333333333334
+          ],
+          "median": 11.833333333333334
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            6307869.0,
+            6117188.0,
+            6179565.0
+          ],
+          "median": 6179565.0,
+          "minimum": 6117188.0,
+          "maximum": 6307869.0,
+          "max_over_min": 1.0311713486654326
+        },
+        "B/op": {
+          "values": [
+            11747.0,
+            11744.0,
+            11744.0
+          ],
+          "median": 11744.0,
+          "minimum": 11744.0,
+          "maximum": 11747.0,
+          "max_over_min": 1.0002554495912805
+        },
+        "allocs/op": {
+          "values": [
+            71.0,
+            71.0,
+            71.0
+          ],
+          "median": 71.0,
+          "minimum": 71.0,
+          "maximum": 71.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.0078118222232875,
+            0.9966323756593912,
+            0.9982174587277485
+          ],
+          "median": 0.9982174587277485
+        },
+        "B/op": {
+          "values": [
+            44.496212121212125,
+            44.484848484848484,
+            44.484848484848484
+          ],
+          "median": 44.484848484848484
+        },
+        "allocs/op": {
+          "values": [
+            11.833333333333334,
+            11.833333333333334,
+            11.833333333333334
+          ],
+          "median": 11.833333333333334
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            21992.0,
+            23156.0,
+            27338.0
+          ],
+          "median": 23156.0,
+          "minimum": 21992.0,
+          "maximum": 27338.0,
+          "max_over_min": 1.2430883957802839
+        },
+        "B/op": {
+          "values": [
+            43776.0,
+            43776.0,
+            43776.0
+          ],
+          "median": 43776.0,
+          "minimum": 43776.0,
+          "maximum": 43776.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            16.0,
+            16.0,
+            16.0
+          ],
+          "median": 16.0,
+          "minimum": 16.0,
+          "maximum": 16.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            3.681901891846643,
+            3.2924783165078915,
+            2.8919919602242676
+          ],
+          "median": 3.2924783165078915
+        },
+        "B/op": {
+          "values": [
+            4.357555245869003,
+            4.357989049278248,
+            4.357555245869003
+          ],
+          "median": 4.357555245869003
+        },
+        "allocs/op": {
+          "values": [
+            5.333333333333333,
+            5.333333333333333,
+            5.333333333333333
+          ],
+          "median": 5.333333333333333
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            251629.0,
+            255541.0,
+            257049.0
+          ],
+          "median": 255541.0,
+          "minimum": 251629.0,
+          "maximum": 257049.0,
+          "max_over_min": 1.0215396476558742
+        },
+        "B/op": {
+          "values": [
+            40944.0,
+            40944.0,
+            40944.0
+          ],
+          "median": 40944.0,
+          "minimum": 40944.0,
+          "maximum": 40944.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            33.0,
+            33.0,
+            33.0
+          ],
+          "median": 33.0,
+          "minimum": 33.0,
+          "maximum": 33.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            0.9662133103967315,
+            0.9896327908976137,
+            0.9915483721647894
+          ],
+          "median": 0.9896327908976137
+        },
+        "B/op": {
+          "values": [
+            0.4201108146932075,
+            0.42034371599285464,
+            0.42034371599285464
+          ],
+          "median": 0.42034371599285464
+        },
+        "allocs/op": {
+          "values": [
+            0.4583333333333333,
+            0.4583333333333333,
+            0.4583333333333333
+          ],
+          "median": 0.4583333333333333
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            6649388.0,
+            6988586.0,
+            7235829.0
+          ],
+          "median": 6988586.0,
+          "minimum": 6649388.0,
+          "maximum": 7235829.0,
+          "max_over_min": 1.0881947331092725
+        },
+        "B/op": {
+          "values": [
+            205436.0,
+            200022.0,
+            195871.0
+          ],
+          "median": 200022.0,
+          "minimum": 195871.0,
+          "maximum": 205436.0,
+          "max_over_min": 1.0488331606005994
+        },
+        "allocs/op": {
+          "values": [
+            117.0,
+            117.0,
+            117.0
+          ],
+          "median": 117.0,
+          "minimum": 117.0,
+          "maximum": 117.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            0.9195036657002001,
+            1.0713711266083399,
+            1.1088105014007568
+          ],
+          "median": 1.0713711266083399
+        },
+        "B/op": {
+          "values": [
+            1.0192957473939082,
+            0.9700246844129329,
+            0.9231316658890287
+          ],
+          "median": 0.9700246844129329
+        },
+        "allocs/op": {
+          "values": [
+            2.659090909090909,
+            2.6,
+            2.5434782608695654
+          ],
+          "median": 2.6
+        }
+      }
+    },
+    {
+      "profile": "command_wal_durable",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            7056190.0,
+            7049572.0,
+            7037159.0
+          ],
+          "median": 7049572.0,
+          "minimum": 7037159.0,
+          "maximum": 7056190.0,
+          "max_over_min": 1.002704358392357
+        },
+        "B/op": {
+          "values": [
+            28198.0,
+            28198.0,
+            28196.0
+          ],
+          "median": 28198.0,
+          "minimum": 28196.0,
+          "maximum": 28198.0,
+          "max_over_min": 1.0000709320470988
+        },
+        "allocs/op": {
+          "values": [
+            87.0,
+            87.0,
+            87.0
+          ],
+          "median": 87.0,
+          "minimum": 87.0,
+          "maximum": 87.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.1442829636974003,
+            1.1440518512531943,
+            1.1255105427262906
+          ],
+          "median": 1.1440518512531943
+        },
+        "B/op": {
+          "values": [
+            0.20666808364054792,
+            0.20666808364054792,
+            0.20665342529005212
+          ],
+          "median": 0.20666808364054792
+        },
+        "allocs/op": {
+          "values": [
+            14.5,
+            14.5,
+            14.5
+          ],
+          "median": 14.5
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            1697.0,
+            2144.0,
+            1246.0
+          ],
+          "median": 1697.0,
+          "minimum": 1246.0,
+          "maximum": 2144.0,
+          "max_over_min": 1.7207062600321028
+        },
+        "B/op": {
+          "values": [
+            440.0,
+            440.0,
+            440.0
+          ],
+          "median": 440.0,
+          "minimum": 440.0,
+          "maximum": 440.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            3.0,
+            3.0,
+            3.0
+          ],
+          "median": 3.0,
+          "minimum": 3.0,
+          "maximum": 3.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.0417434008594229,
+            1.2946859903381642,
+            0.7672413793103449
+          ],
+          "median": 1.0417434008594229
+        },
+        "B/op": {
+          "values": [
+            0.4238921001926782,
+            0.4238921001926782,
+            0.4238921001926782
+          ],
+          "median": 0.4238921001926782
+        },
+        "allocs/op": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            8427.0,
+            8618.0,
+            8654.0
+          ],
+          "median": 8618.0,
+          "minimum": 8427.0,
+          "maximum": 8654.0,
+          "max_over_min": 1.026937225584431
+        },
+        "B/op": {
+          "values": [
+            1640.0,
+            1640.0,
+            1640.0
+          ],
+          "median": 1640.0,
+          "minimum": 1640.0,
+          "maximum": 1640.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            20.0,
+            20.0,
+            20.0
+          ],
+          "median": 20.0,
+          "minimum": 20.0,
+          "maximum": 20.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.4023964053919122,
+            1.330965250965251,
+            1.5058291282408214
+          ],
+          "median": 1.4023964053919122
+        },
+        "B/op": {
+          "values": [
+            0.5895039539899353,
+            0.5782792665726375,
+            0.5782792665726375
+          ],
+          "median": 0.5782792665726375
+        },
+        "allocs/op": {
+          "values": [
+            0.9090909090909091,
+            0.9090909090909091,
+            0.9090909090909091
+          ],
+          "median": 0.9090909090909091
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            15924.0,
+            20320.0,
+            15531.0
+          ],
+          "median": 15924.0,
+          "minimum": 15531.0,
+          "maximum": 20320.0,
+          "max_over_min": 1.3083510398557723
+        },
+        "B/op": {
+          "values": [
+            11694.0,
+            11694.0,
+            11694.0
+          ],
+          "median": 11694.0,
+          "minimum": 11694.0,
+          "maximum": 11694.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            70.0,
+            70.0,
+            70.0
+          ],
+          "median": 70.0,
+          "minimum": 70.0,
+          "maximum": 70.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            3.9048553212359,
+            5.25879917184265,
+            4.280871003307608
+          ],
+          "median": 4.280871003307608
+        },
+        "B/op": {
+          "values": [
+            44.29545454545455,
+            44.29545454545455,
+            44.29545454545455
+          ],
+          "median": 44.29545454545455
+        },
+        "allocs/op": {
+          "values": [
+            11.666666666666666,
+            11.666666666666666,
+            11.666666666666666
+          ],
+          "median": 11.666666666666666
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            6120010.0,
+            6994006.0,
+            6115424.0
+          ],
+          "median": 6120010.0,
+          "minimum": 6115424.0,
+          "maximum": 6994006.0,
+          "max_over_min": 1.1436665716064822
+        },
+        "B/op": {
+          "values": [
+            11747.0,
+            11744.0,
+            11744.0
+          ],
+          "median": 11744.0,
+          "minimum": 11744.0,
+          "maximum": 11747.0,
+          "max_over_min": 1.0002554495912805
+        },
+        "allocs/op": {
+          "values": [
+            71.0,
+            71.0,
+            71.0
+          ],
+          "median": 71.0,
+          "minimum": 71.0,
+          "maximum": 71.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            0.9912270074581612,
+            1.1272218855566156,
+            0.9937787103320469
+          ],
+          "median": 0.9937787103320469
+        },
+        "B/op": {
+          "values": [
+            44.496212121212125,
+            44.484848484848484,
+            44.484848484848484
+          ],
+          "median": 44.484848484848484
+        },
+        "allocs/op": {
+          "values": [
+            11.833333333333334,
+            11.833333333333334,
+            11.833333333333334
+          ],
+          "median": 11.833333333333334
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            24783.0,
+            24674.0,
+            24499.0
+          ],
+          "median": 24674.0,
+          "minimum": 24499.0,
+          "maximum": 24783.0,
+          "max_over_min": 1.0115923098901995
+        },
+        "B/op": {
+          "values": [
+            43776.0,
+            43776.0,
+            43776.0
+          ],
+          "median": 43776.0,
+          "minimum": 43776.0,
+          "maximum": 43776.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            16.0,
+            16.0,
+            16.0
+          ],
+          "median": 16.0,
+          "minimum": 16.0,
+          "maximum": 16.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            2.808590208522212,
+            3.050692383778437,
+            2.889714555319651
+          ],
+          "median": 2.889714555319651
+        },
+        "B/op": {
+          "values": [
+            4.344150044656148,
+            4.357555245869003,
+            4.357989049278248
+          ],
+          "median": 4.357555245869003
+        },
+        "allocs/op": {
+          "values": [
+            5.333333333333333,
+            5.333333333333333,
+            5.333333333333333
+          ],
+          "median": 5.333333333333333
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            259034.0,
+            318029.0,
+            257268.0
+          ],
+          "median": 259034.0,
+          "minimum": 257268.0,
+          "maximum": 318029.0,
+          "max_over_min": 1.2361778378966681
+        },
+        "B/op": {
+          "values": [
+            40944.0,
+            40944.0,
+            40944.0
+          ],
+          "median": 40944.0,
+          "minimum": 40944.0,
+          "maximum": 40944.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            33.0,
+            33.0,
+            33.0
+          ],
+          "median": 33.0,
+          "minimum": 33.0,
+          "maximum": 33.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.0633972519510162,
+            1.166364099799389,
+            1.0129299483432028
+          ],
+          "median": 1.0633972519510162
+        },
+        "B/op": {
+          "values": [
+            0.4201108146932075,
+            0.4201108146932075,
+            0.41987817133949995
+          ],
+          "median": 0.4201108146932075
+        },
+        "allocs/op": {
+          "values": [
+            0.4583333333333333,
+            0.4583333333333333,
+            0.4583333333333333
+          ],
+          "median": 0.4583333333333333
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            152414.0,
+            157834.0,
+            152429.0
+          ],
+          "median": 152429.0,
+          "minimum": 152414.0,
+          "maximum": 157834.0,
+          "max_over_min": 1.035561037699949
+        },
+        "B/op": {
+          "values": [
+            169605.0,
+            168964.0,
+            166811.0
+          ],
+          "median": 168964.0,
+          "minimum": 166811.0,
+          "maximum": 169605.0,
+          "max_over_min": 1.0167494949373843
+        },
+        "allocs/op": {
+          "values": [
+            177.0,
+            177.0,
+            177.0
+          ],
+          "median": 177.0,
+          "minimum": 177.0,
+          "maximum": 177.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            8.24572603332612,
+            9.245196813495783,
+            9.868509646510423
+          ],
+          "median": 9.245196813495783
+        },
+        "B/op": {
+          "values": [
+            1.6436822824801813,
+            1.6264366709662514,
+            1.6174514214792692
+          ],
+          "median": 1.6264366709662514
+        },
+        "allocs/op": {
+          "values": [
+            11.0625,
+            11.0625,
+            11.0625
+          ],
+          "median": 11.0625
+        }
+      }
+    },
+    {
+      "profile": "command_wal_relaxed",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            13630302.0,
+            13728943.0,
+            13596261.0
+          ],
+          "median": 13630302.0,
+          "minimum": 13596261.0,
+          "maximum": 13728943.0,
+          "max_over_min": 1.009758712340106
+        },
+        "B/op": {
+          "values": [
+            27062.0,
+            27060.0,
+            27062.0
+          ],
+          "median": 27062.0,
+          "minimum": 27060.0,
+          "maximum": 27062.0,
+          "max_over_min": 1.0000739098300073
+        },
+        "allocs/op": {
+          "values": [
+            177.0,
+            177.0,
+            177.0
+          ],
+          "median": 177.0,
+          "minimum": 177.0,
+          "maximum": 177.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            2.092040690594498,
+            2.076535056440575,
+            2.068051049885374
+          ],
+          "median": 2.076535056440575
+        },
+        "B/op": {
+          "values": [
+            0.19671725982786695,
+            0.19670272156315421,
+            0.19671725982786695
+          ],
+          "median": 0.19671725982786695
+        },
+        "allocs/op": {
+          "values": [
+            25.285714285714285,
+            25.285714285714285,
+            25.285714285714285
+          ],
+          "median": 25.285714285714285
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            992.3,
+            1274.0,
+            1480.0
+          ],
+          "median": 1274.0,
+          "minimum": 992.3,
+          "maximum": 1480.0,
+          "max_over_min": 1.4914844301118615
+        },
+        "B/op": {
+          "values": [
+            440.0,
+            440.0,
+            440.0
+          ],
+          "median": 440.0,
+          "minimum": 440.0,
+          "maximum": 440.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            3.0,
+            3.0,
+            3.0
+          ],
+          "median": 3.0,
+          "minimum": 3.0,
+          "maximum": 3.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            0.5458195819581958,
+            0.9205202312138728,
+            0.8530259365994236
+          ],
+          "median": 0.8530259365994236
+        },
+        "B/op": {
+          "values": [
+            0.4238921001926782,
+            0.43737574552683894,
+            0.4238921001926782
+          ],
+          "median": 0.4238921001926782
+        },
+        "allocs/op": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            8264.0,
+            13012.0,
+            8440.0
+          ],
+          "median": 8440.0,
+          "minimum": 8264.0,
+          "maximum": 13012.0,
+          "max_over_min": 1.574540174249758
+        },
+        "B/op": {
+          "values": [
+            1640.0,
+            1640.0,
+            1640.0
+          ],
+          "median": 1640.0,
+          "minimum": 1640.0,
+          "maximum": 1640.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            20.0,
+            20.0,
+            20.0
+          ],
+          "median": 20.0,
+          "minimum": 20.0,
+          "maximum": 20.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.4327323162274619,
+            2.2223740392826645,
+            1.4809615722056502
+          ],
+          "median": 1.4809615722056502
+        },
+        "B/op": {
+          "values": [
+            0.5924855491329479,
+            0.5924855491329479,
+            0.5924855491329479
+          ],
+          "median": 0.5924855491329479
+        },
+        "allocs/op": {
+          "values": [
+            0.9090909090909091,
+            0.9090909090909091,
+            0.9090909090909091
+          ],
+          "median": 0.9090909090909091
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            7815.0,
+            16823.0,
+            8086.0
+          ],
+          "median": 8086.0,
+          "minimum": 7815.0,
+          "maximum": 16823.0,
+          "max_over_min": 2.1526551503518876
+        },
+        "B/op": {
+          "values": [
+            10998.0,
+            10998.0,
+            10998.0
+          ],
+          "median": 10998.0,
+          "minimum": 10998.0,
+          "maximum": 10998.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            67.0,
+            67.0,
+            67.0
+          ],
+          "median": 67.0,
+          "minimum": 67.0,
+          "maximum": 67.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            2.4614173228346456,
+            4.775191598069827,
+            2.288058856819468
+          ],
+          "median": 2.4614173228346456
+        },
+        "B/op": {
+          "values": [
+            0.6712646484375,
+            0.6712646484375,
+            0.6712646484375
+          ],
+          "median": 0.6712646484375
+        },
+        "allocs/op": {
+          "values": [
+            null,
+            null,
+            null
+          ],
+          "median": null
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            21882866.0,
+            22294988.0,
+            21480375.0
+          ],
+          "median": 21882866.0,
+          "minimum": 21480375.0,
+          "maximum": 22294988.0,
+          "max_over_min": 1.0379235930471418
+        },
+        "B/op": {
+          "values": [
+            869650.0,
+            911605.0,
+            879824.0
+          ],
+          "median": 879824.0,
+          "minimum": 869650.0,
+          "maximum": 911605.0,
+          "max_over_min": 1.0482435462542403
+        },
+        "allocs/op": {
+          "values": [
+            1115.0,
+            1123.0,
+            1115.0
+          ],
+          "median": 1115.0,
+          "minimum": 1115.0,
+          "maximum": 1123.0,
+          "max_over_min": 1.0071748878923767
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.5739987877193249,
+            1.6276747046365647,
+            1.57123023790044
+          ],
+          "median": 1.5739987877193249
+        },
+        "B/op": {
+          "values": [
+            0.5594259395062204,
+            0.5932923706117529,
+            0.5694226194020384
+          ],
+          "median": 0.5694226194020384
+        },
+        "allocs/op": {
+          "values": [
+            1.4405684754521964,
+            1.4527813712807245,
+            1.4424320827943078
+          ],
+          "median": 1.4424320827943078
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "CaptureReadRelease",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            19935.0,
+            25394.0,
+            20007.0
+          ],
+          "median": 20007.0,
+          "minimum": 19935.0,
+          "maximum": 25394.0,
+          "max_over_min": 1.2738399799347881
+        },
+        "B/op": {
+          "values": [
+            43776.0,
+            43776.0,
+            43776.0
+          ],
+          "median": 43776.0,
+          "minimum": 43776.0,
+          "maximum": 43776.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            16.0,
+            16.0,
+            16.0
+          ],
+          "median": 16.0,
+          "minimum": 16.0,
+          "maximum": 16.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            3.2194767441860463,
+            4.687834594794166,
+            3.0103821847727956
+          ],
+          "median": 3.2194767441860463
+        },
+        "B/op": {
+          "values": [
+            4.357989049278248,
+            4.3719165085389,
+            4.357989049278248
+          ],
+          "median": 4.357989049278248
+        },
+        "allocs/op": {
+          "values": [
+            5.333333333333333,
+            5.333333333333333,
+            5.333333333333333
+          ],
+          "median": 5.333333333333333
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "Forward16",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            249699.0,
+            257529.0,
+            249347.0
+          ],
+          "median": 249699.0,
+          "minimum": 249347.0,
+          "maximum": 257529.0,
+          "max_over_min": 1.0328137094089762
+        },
+        "B/op": {
+          "values": [
+            40944.0,
+            40944.0,
+            40944.0
+          ],
+          "median": 40944.0,
+          "minimum": 40944.0,
+          "maximum": 40944.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            33.0,
+            33.0,
+            33.0
+          ],
+          "median": 33.0,
+          "minimum": 33.0,
+          "maximum": 33.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.0012149352836452,
+            1.0290910253387626,
+            0.9795099837761183
+          ],
+          "median": 1.0012149352836452
+        },
+        "B/op": {
+          "values": [
+            0.4204041399704288,
+            0.41987817133949995,
+            0.42039982339593196
+          ],
+          "median": 0.42039982339593196
+        },
+        "allocs/op": {
+          "values": [
+            0.4583333333333333,
+            0.4583333333333333,
+            0.4583333333333333
+          ],
+          "median": 0.4583333333333333
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWrite",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            117932.0,
+            116587.0,
+            114314.0
+          ],
+          "median": 116587.0,
+          "minimum": 114314.0,
+          "maximum": 117932.0,
+          "max_over_min": 1.03164966670749
+        },
+        "B/op": {
+          "values": [
+            108729.0,
+            108473.0,
+            108731.0
+          ],
+          "median": 108729.0,
+          "minimum": 108473.0,
+          "maximum": 108731.0,
+          "max_over_min": 1.0023784720621722
+        },
+        "allocs/op": {
+          "values": [
+            85.0,
+            85.0,
+            85.0
+          ],
+          "median": 85.0,
+          "minimum": 85.0,
+          "maximum": 85.0,
+          "max_over_min": 1.0
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            33.17355836849508,
+            21.972672446287223,
+            18.234806189184877
+          ],
+          "median": 21.972672446287223
+        },
+        "B/op": {
+          "values": [
+            2.3902787548364404,
+            2.68457654803742,
+            2.573210270973849
+          ],
+          "median": 2.573210270973849
+        },
+        "allocs/op": {
+          "values": [
+            12.142857142857142,
+            21.25,
+            17.0
+          ],
+          "median": 17.0
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "records": 2048,
+      "operation": "IncrementalWriteSync",
+      "metrics": {
+        "ns/op": {
+          "values": [
+            29435137.0,
+            30874863.0,
+            27467651.0
+          ],
+          "median": 29435137.0,
+          "minimum": 27467651.0,
+          "maximum": 30874863.0,
+          "max_over_min": 1.1240445351515498
+        },
+        "B/op": {
+          "values": [
+            2284936.0,
+            2330159.0,
+            2300367.0
+          ],
+          "median": 2300367.0,
+          "minimum": 2284936.0,
+          "maximum": 2330159.0,
+          "max_over_min": 1.0197918016084477
+        },
+        "allocs/op": {
+          "values": [
+            1455.0,
+            1458.0,
+            1456.0
+          ],
+          "median": 1456.0,
+          "minimum": 1455.0,
+          "maximum": 1458.0,
+          "max_over_min": 1.002061855670103
+        }
+      },
+      "paired_over_btree": {
+        "ns/op": {
+          "values": [
+            1.6855451618064288,
+            1.693220949395804,
+            1.5539565777105553
+          ],
+          "median": 1.6855451618064288
+        },
+        "B/op": {
+          "values": [
+            0.853775061895755,
+            0.875916642483494,
+            0.8629824943793163
+          ],
+          "median": 0.8629824943793163
+        },
+        "allocs/op": {
+          "values": [
+            1.4153696498054475,
+            1.4196689386562804,
+            1.4191033138401559
+          ],
+          "median": 1.4191033138401559
+        }
+      }
+    }
+  ],
+  "material_mvcc_N256": [
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "read": "all_versions",
+      "iterations": 256,
+      "metrics": {
+        "B/op": {
+          "values": [
+            14410.0,
+            14410.0,
+            14411.0
+          ],
+          "median": 14410.0,
+          "minimum": 14410.0,
+          "maximum": 14411.0,
+          "max_over_min": 1.0000693962526024
+        },
+        "allocs/op": {
+          "values": [
+            124.0,
+            124.0,
+            124.0
+          ],
+          "median": 124.0,
+          "minimum": 124.0,
+          "maximum": 124.0,
+          "max_over_min": 1.0
+        },
+        "enqueued_records/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_active_cuts": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0,
+          "minimum": 1.0,
+          "maximum": 1.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_capture_calls_total": {
+          "values": [
+            257.0,
+            257.0,
+            257.0
+          ],
+          "median": 257.0,
+          "minimum": 257.0,
+          "maximum": 257.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_control_bytes": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_current_roots": {
+          "values": [
+            8.0,
+            8.0,
+            8.0
+          ],
+          "median": 8.0,
+          "minimum": 8.0,
+          "maximum": 8.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_deferred_bytes": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_external_bytes": {
+          "values": [
+            41968.0,
+            41968.0,
+            41968.0
+          ],
+          "median": 41968.0,
+          "minimum": 41968.0,
+          "maximum": 41968.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_external_leases": {
+          "values": [
+            11.0,
+            11.0,
+            11.0
+          ],
+          "median": 11.0,
+          "minimum": 11.0,
+          "maximum": 11.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_frozen_roots": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_generations": {
+          "values": [
+            8.0,
+            8.0,
+            8.0
+          ],
+          "median": 8.0,
+          "minimum": 8.0,
+          "maximum": 8.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_handoffs_total": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_history_bytes": {
+          "values": [
+            4490304.0,
+            4490304.0,
+            4490304.0
+          ],
+          "median": 4490304.0,
+          "minimum": 4490304.0,
+          "maximum": 4490304.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_peak_bytes": {
+          "values": [
+            4538224.0,
+            4538224.0,
+            4538224.0
+          ],
+          "median": 4538224.0,
+          "minimum": 4538224.0,
+          "maximum": 4538224.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_prepare_calls_total": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_publications_total": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_reserved_bytes": {
+          "values": [
+            41968.0,
+            41968.0,
+            41968.0
+          ],
+          "median": 41968.0,
+          "minimum": 41968.0,
+          "maximum": 41968.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_retired_bytes": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_rollovers_total": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_sources": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_total_bytes": {
+          "values": [
+            4532528.0,
+            4532528.0,
+            4532528.0
+          ],
+          "median": 4532528.0,
+          "minimum": 4532528.0,
+          "maximum": 4532528.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_views": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "heap_end_B": {
+          "values": [
+            16625096.0,
+            16615536.0,
+            16627136.0
+          ],
+          "median": 16625096.0,
+          "minimum": 16615536.0,
+          "maximum": 16627136.0,
+          "max_over_min": 1.0006981417873007
+        },
+        "ns/op": {
+          "values": [
+            21052.0,
+            21278.0,
+            20675.0
+          ],
+          "median": 21052.0,
+          "minimum": 20675.0,
+          "maximum": 21278.0,
+          "max_over_min": 1.0291656590084644
+        },
+        "output/op": {
+          "values": [
+            16.5,
+            16.5,
+            16.5
+          ],
+          "median": 16.5,
+          "minimum": 16.5,
+          "maximum": 16.5,
+          "max_over_min": 1.0
+        },
+        "p50_ns": {
+          "values": [
+            20678.0,
+            20046.0,
+            20485.0
+          ],
+          "median": 20485.0,
+          "minimum": 20046.0,
+          "maximum": 20678.0,
+          "max_over_min": 1.0315274867804052
+        },
+        "p95_ns": {
+          "values": [
+            31481.0,
+            33013.0,
+            30699.0
+          ],
+          "median": 31481.0,
+          "minimum": 30699.0,
+          "maximum": 33013.0,
+          "max_over_min": 1.0753770481123164
+        },
+        "p99_ns": {
+          "values": [
+            40778.0,
+            41444.0,
+            36611.0
+          ],
+          "median": 40778.0,
+          "minimum": 36611.0,
+          "maximum": 41444.0,
+          "max_over_min": 1.132009505339925
+        },
+        "process_alloc_B/op": {
+          "values": [
+            17912.0,
+            17912.0,
+            17912.0
+          ],
+          "median": 17912.0,
+          "minimum": 17912.0,
+          "maximum": 17912.0,
+          "max_over_min": 1.0
+        },
+        "rotated_shards/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "snapshot_rotations/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "visited/op": {
+          "values": [
+            16.5,
+            16.5,
+            16.5
+          ],
+          "median": 16.5,
+          "minimum": 16.5,
+          "maximum": 16.5,
+          "max_over_min": 1.0
+        }
+      }
+    },
+    {
+      "profile": "no_wal_fast",
+      "mode": "cow_btree",
+      "read": "point",
+      "iterations": 256,
+      "metrics": {
+        "B/op": {
+          "values": [
+            11069.0,
+            11069.0,
+            11069.0
+          ],
+          "median": 11069.0,
+          "minimum": 11069.0,
+          "maximum": 11069.0,
+          "max_over_min": 1.0
+        },
+        "allocs/op": {
+          "values": [
+            75.0,
+            75.0,
+            75.0
+          ],
+          "median": 75.0,
+          "minimum": 75.0,
+          "maximum": 75.0,
+          "max_over_min": 1.0
+        },
+        "enqueued_records/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_active_cuts": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0,
+          "minimum": 1.0,
+          "maximum": 1.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_capture_calls_total": {
+          "values": [
+            257.0,
+            257.0,
+            257.0
+          ],
+          "median": 257.0,
+          "minimum": 257.0,
+          "maximum": 257.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_control_bytes": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_current_roots": {
+          "values": [
+            8.0,
+            8.0,
+            8.0
+          ],
+          "median": 8.0,
+          "minimum": 8.0,
+          "maximum": 8.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_deferred_bytes": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_external_bytes": {
+          "values": [
+            41968.0,
+            41968.0,
+            41968.0
+          ],
+          "median": 41968.0,
+          "minimum": 41968.0,
+          "maximum": 41968.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_external_leases": {
+          "values": [
+            11.0,
+            11.0,
+            11.0
+          ],
+          "median": 11.0,
+          "minimum": 11.0,
+          "maximum": 11.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_frozen_roots": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_generations": {
+          "values": [
+            8.0,
+            8.0,
+            8.0
+          ],
+          "median": 8.0,
+          "minimum": 8.0,
+          "maximum": 8.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_handoffs_total": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_history_bytes": {
+          "values": [
+            4490304.0,
+            4490304.0,
+            4490304.0
+          ],
+          "median": 4490304.0,
+          "minimum": 4490304.0,
+          "maximum": 4490304.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_peak_bytes": {
+          "values": [
+            4538048.0,
+            4538048.0,
+            4538048.0
+          ],
+          "median": 4538048.0,
+          "minimum": 4538048.0,
+          "maximum": 4538048.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_prepare_calls_total": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_publications_total": {
+          "values": [
+            256.0,
+            256.0,
+            256.0
+          ],
+          "median": 256.0,
+          "minimum": 256.0,
+          "maximum": 256.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_reserved_bytes": {
+          "values": [
+            41968.0,
+            41968.0,
+            41968.0
+          ],
+          "median": 41968.0,
+          "minimum": 41968.0,
+          "maximum": 41968.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_retired_bytes": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_rollovers_total": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_sources": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "fixture_cow_total_bytes": {
+          "values": [
+            4532528.0,
+            4532528.0,
+            4532528.0
+          ],
+          "median": 4532528.0,
+          "minimum": 4532528.0,
+          "maximum": 4532528.0,
+          "max_over_min": 1.0
+        },
+        "fixture_cow_views": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "heap_end_B": {
+          "values": [
+            15770136.0,
+            15750760.0,
+            15762880.0
+          ],
+          "median": 15762880.0,
+          "minimum": 15750760.0,
+          "maximum": 15770136.0,
+          "max_over_min": 1.0012301628619826
+        },
+        "ns/op": {
+          "values": [
+            8760.0,
+            8772.0,
+            9019.0
+          ],
+          "median": 8772.0,
+          "minimum": 8760.0,
+          "maximum": 9019.0,
+          "max_over_min": 1.0295662100456622
+        },
+        "output/op": {
+          "values": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "median": 1.0,
+          "minimum": 1.0,
+          "maximum": 1.0,
+          "max_over_min": 1.0
+        },
+        "p50_ns": {
+          "values": [
+            7910.0,
+            8016.0,
+            8276.0
+          ],
+          "median": 8016.0,
+          "minimum": 7910.0,
+          "maximum": 8276.0,
+          "max_over_min": 1.0462705436156763
+        },
+        "p95_ns": {
+          "values": [
+            14001.0,
+            13036.0,
+            14282.0
+          ],
+          "median": 14001.0,
+          "minimum": 13036.0,
+          "maximum": 14282.0,
+          "max_over_min": 1.095581466707579
+        },
+        "p99_ns": {
+          "values": [
+            19157.0,
+            17857.0,
+            19134.0
+          ],
+          "median": 19134.0,
+          "minimum": 17857.0,
+          "maximum": 19157.0,
+          "max_over_min": 1.0728005824046591
+        },
+        "process_alloc_B/op": {
+          "values": [
+            14571.0,
+            14571.0,
+            14571.0
+          ],
+          "median": 14571.0,
+          "minimum": 14571.0,
+          "maximum": 14571.0,
+          "max_over_min": 1.0
+        },
+        "rotated_shards/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        },
+        "snapshot_rotations/op": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "max_over_min": null
+        }
+      }
+    }
+  ],
+  "source_applicability": "At review snapshot, every tracked frozen974d path still matched except the four owning README/spec docs and .github/ci/ci_impact.json. New publication directory is artifact-only draft. Exact descendant proof remains required after commit.",
+  "publication_snapshot": "630 provenance entries inspected; original private artifact bytes and copied public destination SHA matched for each. No process dumps, dependency dumps, executable binaries or archive contents detected in the explicit published filenames. Current final report/disposition/manifest not yet finalized; no approval of future draft bytes.",
+  "limits": [
+    "Private binary/dependency/process bytes were not copied locally; local review establishes metadata/index/receipt mutual SHA binding, not independent content hashing of those private files.",
+    "Actual source file-type/mode audit matches frozen Git modes and resolves the concrete archive symlink concern; generic content drift functions alone do not prove regular-file type immutability.",
+    "Three sequential repeats and small N/fixed counts are bounded premerge diagnostics. Preserve all spread; no significance, interleaved before/after, quiet-host, sustained scaling or irreducible cost claim.",
+    "CaptureReadRelease fixture measures seeded hits only; no point-miss claim.",
+    "No new current profiles collected; earlier exact-source profiles inform mechanism hypotheses only, with setup and Stats/timer work included.",
+    "Current 360 Close receipts belong to the raw retained-authority fixture. MVCC output/history verification is separately explicit; do not relabel it as raw Close evidence.",
+    "Historical 4add packet has756rows/432Close; current974d has648rows/360Close. No DirtyCheckpoint case in current raw matrix.",
+    "Strict hosted default-path performance, actual Windows runtime, CI and current hosted review remain separate blocking merge gates; opt-in COW cost disposition cannot waive them.",
+    "Inherited Print/FragmentationReport diagnostic Close limitations remain outside the repaired ordinary-read contract."
+  ],
+  "source_cost_judgment": "Prior exact source audit found no established safe local dead-owner deletion left within the canonical planner/finalizer/native-reader seams. Necessary authority does not prove globally optimal representation or exact allocation counts. Nonempty retained-backend successor still uses general merge fallback. Severe pointer/ACK costs require explicit quantified experimental opt-in disposition; no expected-overhead waiver."
+}

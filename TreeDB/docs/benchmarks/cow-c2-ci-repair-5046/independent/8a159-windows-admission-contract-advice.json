@@ -1,0 +1,52 @@
+{
+  "candidate": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "disposition": "REVISE Windows allocation admission and unsupported-operation test contracts; root-owned repair pending",
+  "source_sha256": {
+    "TreeDB/internal/valuelog/cow_reader.go": "eddc6d47c0719d91cd27ad605d6cfb5f125799a09f16b718d0e1dd884b61ee86",
+    "TreeDB/internal/valuelog/cow_reader_test.go": "0e7ceb33765ebec38325b150a46e5504b36eb9474521e51e131414d61b467122",
+    "TreeDB/internal/valuelog/leaf_page_payload.go": "9c7efc06c2a9d38b95519f0face46d9af19dcfa09c73e4f784128838694355ae",
+    "TreeDB/internal/valuelog/valuelog.go": "ba1d1771e3e11b9b16c5376ed3153d75dc16760ba942a090517b8e641702f298",
+    "TreeDB/caching/cow_read_workspace.go": "84b2ecd1e596648cb5e683a248f152d7774b2dd767e7c1bf7a08487bf98a396d",
+    "TreeDB/caching/cow_pointer_read_test.go": "3c05aabcce431bce4d596ae47b1856a29a35464db198b35e5f70f52e48b39e89",
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "41ee539d41bfbba61342b731fc2c601d775ad15a03b970712ecdfe0a252f6abd",
+    "TreeDB/internal/memtable/cow_budget.go": "1275a60a88b26830bb6bd5ef29106490fe7179de378cab17e6f47c182a6db2bf",
+    "TreeDB/docs/spec/cow-cache-publication.md": "1cf70932cdd6452891218621ada9d0ab4cfbf69aa925c4e5eae5c19fa707368f",
+    "TreeDB/cow_public_review_regression_test.go": "55a541e37b043ffd23da7880e7e08047bfc8f189b583d256f58da2be08be3c0f"
+  },
+  "evidence_sha256": {
+    "pr5069-job-112144641622-first-failure.log": "47f7c3dfa99d2f88bd4b17161dbf87838bb1749e4dd055e7d60d6cff724dfb63",
+    "pr5069-job-112144641641-first-failure.log": "e3dec6347a3762b8780b9da60ea6849ca18d777a73330306482fa880255c4165",
+    "pr5069-job-112144641784-first-failure.log": "54a497cac1d02da3129195b3265aabddc011448e0f12ad7a1e8b8f2c33922f49",
+    "pr5069-job-112144641753-first-failure.log": "a9dc5e45110f534acfcf43d2163124972c30b18124799c20d3bf7cb08c9a8d6c",
+    "windows-contract-repair/escape-windows.stderr": "0a4b8081f3f71c041e5f172fff15874b37b2c98e58f6d25df56c98473e0d1f82",
+    "windows-contract-repair/escape-windows.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "windows-contract-repair/escape-windows-receipt.json": "297d094899b307b2a7449017f0b96df4ed0fb779d0f17e086034380dc5aabc64",
+    "windows-contract-repair/valuelog.test.exe": "0961d2f9db043db2941d5dfe4a1a0d9e55ebad6af3fd07e3b241bffb17b2071e"
+  },
+  "observed_allocations": {
+    "raw_inspect": 3,
+    "grouped_inspect": 3,
+    "leaf_read_raw": 1,
+    "leaf_read_compact": 1,
+    "leaf_read_compressed_compact": 1
+  },
+  "escape_packet": "Go1.26.8 windows/amd64 cross-compile exit0; confirms Inspect header/prefix/valuePrefix heap movement, no cowShape metadata movement reported",
+  "known_escaping_capacities": [
+    20,
+    3076,
+    12
+  ],
+  "separate_charges": [
+    32,
+    4096,
+    16
+  ],
+  "known_fixed_inspection_charge": 4144,
+  "leaf_read_additional_allocation_cause": "unresolved; do not assert SHA or allow unknown bytes",
+  "limitations": [
+    "No builds, Go jobs, source edits, remote actions, or GitHub mutation.",
+    "Cross-compile receipt currently contains command/toolchain/exit but no source identity; exact source evidence is separately recorded here, compiler applicability needs coordinator source binding.",
+    "Windows success/error bytes and final repaired native hosted runtime remain pending.",
+    "No blanket allow-allocation waiver, no Linux zero limit relaxation, no unsafe syscall or global pool proposed."
+  ]
+}

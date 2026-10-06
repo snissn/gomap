@@ -1,0 +1,112 @@
+{
+  "scope": "affected integrated repair source, exact Git identity, retained lane evidence applicability",
+  "source_disposition": "ACCEPT",
+  "whole_C2_disposition": "HELD",
+  "findings": [],
+  "source_proof_sha256": "c42f1b2e0d0f9d6a8fc868ed27c843f6848e3f372bef9eb1dde9796d58a4ece6",
+  "identity": {
+    "head": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+    "tree": "b06dc9f41b8593f1c9f87d5b6d0e1a23a853b822",
+    "file_count": 7330,
+    "aggregate_sha256": "9a2f85e57f217671a936de7e3dee724d98c56466be8fb9e9d031506541fc17c4",
+    "source_manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79"
+  },
+  "prior_default_v3_actual_events": {
+    "repair-v3-normal-caching": {
+      "pass_test": 24,
+      "pass_package": 1
+    },
+    "repair-v3-normal-public-calibration": {
+      "pass_test": 103,
+      "pass_package": 2
+    },
+    "repair-v3-race": {
+      "pass_test": 127,
+      "pass_package": 3
+    },
+    "repair-v3-safe": {
+      "pass_test": 127,
+      "pass_package": 3
+    }
+  },
+  "windows_v4_local_evidence": {
+    "validation-v4-admission": {
+      "file_count": 7286,
+      "zero_drift": true,
+      "aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+      "receipts_sha256": "dd562926aa106eed939786820e79477007aed4895b6acec384ae86a9dc531fc6",
+      "jobs": [
+        {
+          "label": "normal-cache",
+          "exit": 0,
+          "stdout_sha256": "651e029316122f3d2ec2da9bcfac6fa4148c04c4e07c34fe43f83bdff998cf47",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "pass_test": 1,
+          "pass_package": 1
+        },
+        {
+          "label": "race-cache",
+          "exit": 0,
+          "stdout_sha256": "9086a3885976bd0f075436e9c34918049c5a6bb9ef76954f33e5bc334ebd9f4c",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "pass_test": 1,
+          "pass_package": 1
+        },
+        {
+          "label": "safe-cache",
+          "exit": 0,
+          "stdout_sha256": "04c1ee0b6da0ecf02379cc562ddb9d0a3c014bfa30695cb46e565da4cdde9beb",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "pass_test": 1,
+          "pass_package": 1
+        }
+      ]
+    },
+    "crosscompile-v4": {
+      "file_count": 7286,
+      "zero_drift": true,
+      "aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+      "receipts_sha256": "174d08be140532e5d590b09444e132726a35a0c9c3945bb73dd2a8cf81844221",
+      "jobs": [
+        {
+          "label": "windows-valuelog",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "bb3b708161f4862381d97c91910b2c90b68218bebd77c7b5b770322db1ad1700",
+          "binary_sha256": "6abcad1ed3bf11fde0bb5084cddb1717cfe67a416596295931eb114add282e4e"
+        },
+        {
+          "label": "windows-cache",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "binary_sha256": "959f8eb4192cca573b93792c96256f259a9ddd93bf52907038332d55c2c303e8"
+        },
+        {
+          "label": "windows-public",
+          "exit": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "binary_sha256": "009a0e52a20d09a0f8a8fdbd20f820983d6dae6a80be60d090a1bbbc91069265"
+        }
+      ]
+    }
+  },
+  "pending": [
+    "fresh integrated normal/race/treedb_safe/vet packet",
+    "source-bound actual affected COW write/sync/MVCC costs and explicit cost applicability/disposition",
+    "strict hosted default raw-path performance gate with original policy",
+    "actual hosted Windows runtime CI",
+    "current-head hosted Codex/review and CI",
+    "final published evidence/docs descendant reconciliation"
+  ],
+  "limitations": [
+    "Go1.26.8 local paired timings have high spread and do not demonstrate hosted performance acceptance.",
+    "Windows cross-compilation and Unix/race metadata witnesses do not demonstrate Windows runtime acceptance.",
+    "Drain does not exclude concurrent writers; its existing documented caller contract remains.",
+    "COW constructor owner classes preserved; allocation counts and performance are measured properties, not proven irreducible.",
+    "Legacy WAL CompactIndex refuses unlogged root rebuilds; public regression checks that capability boundary instead of claiming support.",
+    "Inherited Print/FragmentationReport diagnostic Close limitations remain outside the ordinary read-selector repair."
+  ]
+}

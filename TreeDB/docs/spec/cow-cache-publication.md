@@ -240,9 +240,10 @@ same profile/instrumentation, including acquire/read/release, allocations,
 tails, sync/checkpoint and pinned/retired/drained memory. Tiny MVCC fixtures are
 diagnostic. No production speedup or default promotion follows from C1's
 internal benchmarks; sustained public qualification belongs to C4.
-The [matched integration cost report](../benchmarks/cow-c2-integration-5046/report.md)
+The [current repair and cost report](../benchmarks/cow-c2-ci-repair-5046/report.md)
 and coordinator disposition quantify the remaining pointer-read, acknowledged-write
-and public MVCC costs. Snapshot gains alone do not establish workload suitability.
+and public MVCC costs. The [earlier integration packet](../benchmarks/cow-c2-integration-5046/report.md)
+retains its historical source identity. Snapshot gains alone do not establish workload suitability.
 
 The allocation bound and safe-build tradeoff are specified separately in
 [immutable memtable ownership](cow-memtable-ownership.md).

@@ -1,0 +1,157 @@
+{
+  "scope": "hash-only index; actual binaries/dependency dumps/process argv remain private",
+  "files": {
+    "mvcc-cost.test": {
+      "sha256": "68b3b59a5b45409b53096dc71f4b0937f79ef56bba2b69048e2ffae85d58fc15",
+      "bytes": 24821118
+    },
+    "compiled-dependencies.json": {
+      "sha256": "6adf6db1b35080be1f389404b6959a198f2bdca06a9ae8bf6c2c13461773dfa2",
+      "bytes": 673769
+    },
+    "r3-btree-N256-processes-after.txt": {
+      "sha256": "5e978bb6f25a76ec2ccc40ac6025db0cc52b6e2754a5684deb3b1b7b296b6eb1",
+      "bytes": 41816
+    },
+    "r1-append_only-N256-processes-after.txt": {
+      "sha256": "6c1fb9b8e762bb8436b3cf904a582e487aa20cee5be542c7810a94e691342ec3",
+      "bytes": 41878
+    },
+    "r1-btree-N128-processes-before.txt": {
+      "sha256": "7dbe77b64ef2424f315e2c492626672e8948f3662a1379d24110a3e4dffb481c",
+      "bytes": 41878
+    },
+    "r3-btree-N128-processes-after.txt": {
+      "sha256": "c0ee869fc800411623e9f7a3086c8cc9f5662a74d7dd81f8006e3fbc13bf06e3",
+      "bytes": 41826
+    },
+    "r3-cow_btree-N128-processes-before.txt": {
+      "sha256": "6999cd68374e289193fa85879ede9c7bd1fcfda58a32e96ecb108d6c0face11d",
+      "bytes": 42010
+    },
+    "r1-cow_btree-N256-processes-before.txt": {
+      "sha256": "ef5e2fc80be539a295ea7798605c712054ef3a376ab5db383936da4d21b08d72",
+      "bytes": 41924
+    },
+    "r2-btree-N256-processes-before.txt": {
+      "sha256": "d04ac22e69291b3f5dbbbc99eb3722e9ffec943e909951f3f4ed30a1b08ac48f",
+      "bytes": 41814
+    },
+    "r1-cow_btree-N256-processes-after.txt": {
+      "sha256": "1abc2e86e42fde1d01dc00933816ce5bd29ab3bde42e5093c59bf7590a3ecb65",
+      "bytes": 41870
+    },
+    "r2-btree-N128-processes-after.txt": {
+      "sha256": "a9ad58d4a54f950058637fc92e45ae1cc267ef121a135a2602ea8ca8fc80559e",
+      "bytes": 41814
+    },
+    "r2-append_only-N256-processes-after.txt": {
+      "sha256": "66d5aeb55b03633845e5e1e5f3bca883c5212dd63e62f2ffd7a9171da99a395b",
+      "bytes": 41821
+    },
+    "r1-cow_btree-N128-processes-after.txt": {
+      "sha256": "73203cebc12b2b22cb8cd8026ec4b8223c0b229c261e05646174cf9eda241774",
+      "bytes": 41919
+    },
+    "r3-cow_btree-N256-processes-before.txt": {
+      "sha256": "99480ddca862d784b9973ce00940526a200df02d63c7c6e1485344b0f8d90abd",
+      "bytes": 41991
+    },
+    "r3-append_only-N128-processes-after.txt": {
+      "sha256": "cde941c6e7d405f8ba5995068d8c5f544572fd3f7f02202a3f39213f24bfc54c",
+      "bytes": 43535
+    },
+    "r2-cow_btree-N256-processes-before.txt": {
+      "sha256": "bb327915b4befdda3450641e2e2738b5c10d070063ea49912e214346597edf9e",
+      "bytes": 41828
+    },
+    "r2-btree-N128-processes-before.txt": {
+      "sha256": "ad84fc1ea18d1e7680549a0abb3ad2cc6c61dfcd56d6b3a4ca3e752c7ffcc6fc",
+      "bytes": 41825
+    },
+    "r3-append_only-N256-processes-after.txt": {
+      "sha256": "e919c09262dacb31b5090a329f7c94bc69a4b9a20a434aa53135817f2f81054e",
+      "bytes": 42000
+    },
+    "r1-btree-N128-processes-after.txt": {
+      "sha256": "f4beadb78c343ea3c95d7374684abcaa8b266810aa1722f886a4c326372c33c9",
+      "bytes": 43443
+    },
+    "r3-append_only-N128-processes-before.txt": {
+      "sha256": "2b75555637829486954a73723cea092db9d6671f819a803a967e0b6257e72a41",
+      "bytes": 41826
+    },
+    "r2-cow_btree-N128-processes-before.txt": {
+      "sha256": "a57405c0ef4e9a5b2ad9150c95eab7cf9f2d091d00ad9f0d0a4db840f217f36b",
+      "bytes": 41880
+    },
+    "r3-btree-N256-processes-before.txt": {
+      "sha256": "402fee8bb34e2b1f72ddcde3b0cbb3ab95c17fe9ab133af3b2beefca0c82b135",
+      "bytes": 41831
+    },
+    "r1-btree-N256-processes-after.txt": {
+      "sha256": "5c2de5a33eabb8cf67f217a3e7bd10f47f7e915c6ec1916deb6c7dafc80a284d",
+      "bytes": 41859
+    },
+    "r2-append_only-N256-processes-before.txt": {
+      "sha256": "e89cba4d159e72ec630bcf6c27e0c64aa29a955f2c99067fd02fc3dd77ddc41e",
+      "bytes": 41814
+    },
+    "r1-append_only-N256-processes-before.txt": {
+      "sha256": "daeac5694b735cb437622c2b3b61a61de0c7acec59eb256762546b6172502cd2",
+      "bytes": 41887
+    },
+    "r2-append_only-N128-processes-after.txt": {
+      "sha256": "8a2eabc8e256c35d70cc4e1f8d0b04b576f34eeeaad543d7f21134099aceaac6",
+      "bytes": 41814
+    },
+    "r1-btree-N256-processes-before.txt": {
+      "sha256": "dbf9b3c4938dcb123eaa4942d10734e416da16cd644d887bf87bb1282cca284a",
+      "bytes": 43437
+    },
+    "r3-btree-N128-processes-before.txt": {
+      "sha256": "d377c3ff4fe5b317eb03c56415865f0e9d62bab10a006ea77a12e0f1d7a93dbb",
+      "bytes": 41821
+    },
+    "r2-cow_btree-N256-processes-after.txt": {
+      "sha256": "6c5f63f54cee477f3f41e4a1e1ed67e93bad3e0d41ef59ef2a74f47372731d3c",
+      "bytes": 41820
+    },
+    "r1-cow_btree-N128-processes-before.txt": {
+      "sha256": "32e7a9df067223fe58c55270edad89e5712acceb287baef5105facd6c989fdb5",
+      "bytes": 41859
+    },
+    "r1-append_only-N128-processes-after.txt": {
+      "sha256": "49c829b82c9154750996f899ca1c3731af4dd19e21ac078964ff486471c034b1",
+      "bytes": 41887
+    },
+    "r2-append_only-N128-processes-before.txt": {
+      "sha256": "fba19d2c1bd7f83508f6fd69e13104ab380e7c09005e03099f04cefaab17679b",
+      "bytes": 41819
+    },
+    "r3-cow_btree-N256-processes-after.txt": {
+      "sha256": "a200727736de3baa904acc4329963148039a752fe32a44abb447e1f50c1296ed",
+      "bytes": 41985
+    },
+    "r3-cow_btree-N128-processes-after.txt": {
+      "sha256": "122904170d4903122da25514f7774df1d5431210580d90df7b6e1cf7aca013d2",
+      "bytes": 41983
+    },
+    "r2-cow_btree-N128-processes-after.txt": {
+      "sha256": "d1734bbc4654af155a1118935a40e4e91c36b89794ed44ca88dfd5e9b6ab86bf",
+      "bytes": 41818
+    },
+    "r2-btree-N256-processes-after.txt": {
+      "sha256": "42ea1f07421c2affe86792bcbd395b4bcf77264669f6786a9a373d0121bb43ef",
+      "bytes": 41819
+    },
+    "r1-append_only-N128-processes-before.txt": {
+      "sha256": "466e8561c7e1f9a7bc6e2918cc8601bd0427aacf4ba6031916ec747b0364eeed",
+      "bytes": 41819
+    },
+    "r3-append_only-N256-processes-before.txt": {
+      "sha256": "2ff02de44a4e09dfd1dfaa6e1670691e5018f8d85c27f0143e3bbf772aa0c49c",
+      "bytes": 43534
+    }
+  }
+}

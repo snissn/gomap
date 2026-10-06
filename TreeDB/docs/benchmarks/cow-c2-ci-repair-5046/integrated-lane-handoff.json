@@ -1,0 +1,36 @@
+{
+  "base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "writer_files": {
+    "TreeDB/caching/cow_batch.go": "87be22f652e2befd4ad32e6697d518b056667fbb5e28a75069ef412e2c004d46",
+    "TreeDB/caching/cow_batch_storage.go": "1b5d75f228f511208d21f5aa60ad21996c14a692cbe692b1c078544865b7fa6a",
+    "TreeDB/caching/cow_batch_storage_test.go": "4afdff46fad0c2f26a88932144c6a7ca656798ab1a931b2a5efd02cbafcf2a83",
+    "TreeDB/caching/cow_batch_test.go": "584d091e6e89da42e01a886c7f430ddccea17f1a4fcb60cecf0b4a6c2e8917e9",
+    "TreeDB/caching/cow_dictionary_cleanup_test.go": "02909eaba4d7891cc2af7768d3580ee269da6d9fb3b7d70c0aa4669a2c9eb553",
+    "TreeDB/caching/cow_drain_test.go": "931573f3b2bc38445877e7703044d099e87a7caa0495a8c09c27582d9230a638",
+    "TreeDB/caching/cow_generation_preflight.go": "02dea3a28d310b0cdf13703bcd7fc61b2ee3bbbf837ab8a469a5fa98ad186c63",
+    "TreeDB/caching/cow_producer.go": "2ea054dd6e2b317f7eb8497e05a3400a19cf798973276a6b14f10e1c16dcb39f",
+    "TreeDB/caching/db.go": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+    "TreeDB/command_wal_public_cached.go": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+    "TreeDB/cow_public_batch_allocation_test.go": "ff0aef6e9cd83dd7a9655dd544b41bb776288033b25944e3d106ab1113635300",
+    "TreeDB/cow_public_drain_test.go": "d9985ef768f742ffe399598d2a792edc1aa176dde32f2490675fba7f28c78027",
+    "TreeDB/db/db.go": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+  },
+  "windows_files": {
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "a7f108461898ba5bfd56a9f3d8f2c1300ac60d7a7c3e55858fcef2a2093ca2a5",
+    "TreeDB/caching/cow_pointer_read_test.go": "d0f75793711599f421ad53803b510c75fbbdfb7cabb906a3371f48d446308ba5",
+    "TreeDB/caching/cow_read_metadata_admission_test.go": "53daf4d7d0824e25c165fc5835d3b5086b00e57c9eac497efb8a930d76e58b2c",
+    "TreeDB/caching/cow_read_workspace.go": "56dc92be58a19b178bac99cdcfd72c7142928adc44bac8f4d3373b57476e4496",
+    "TreeDB/cow_power_loss_test.go": "b9c8b406409431618f78eedf92e101427c5d44a3346e18ffd63e165dbbe1faad",
+    "TreeDB/cow_public_review_regression_test.go": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "TreeDB/docs/spec/cow-cache-publication.md": "eebaacf6878444b0df3a43008c81f545a5509ac52874c542b146c1e4c39f85cd",
+    "TreeDB/internal/valuelog/cow_inspection_heap.go": "d26852c5d004a13722f5a83107a432ef28b2e673ea2598021328007e71257d1e",
+    "TreeDB/internal/valuelog/cow_inspection_stack.go": "1c309e708dbda7272f7a2d2bb66c19437718511b7d6c18e90fb880caa18340c5",
+    "TreeDB/internal/valuelog/cow_namespace_contract_test.go": "333c70d5bacec8f6eb2b8103038380f056b8e453bab8c9de41cd2f062066d982",
+    "TreeDB/internal/valuelog/cow_reader.go": "6ecda5c7ccab087e880b2856598e91c24bebacc41e5b5511bdd84c7a1c491b6f",
+    "TreeDB/internal/valuelog/cow_reader_test.go": "0d8793e468cdceaff5ee5fe454d2ef6a70fdf4505ca4363a009605c209c17504",
+    "TreeDB/internal/valuelog/leaf_page_payload.go": "bc851c40b262583d0f5194d973ba489a6270035ea72af26f3415193921fc6364"
+  },
+  "path_count": 26,
+  "no_overlap": true,
+  "changed_allowlist_exact": true
+}

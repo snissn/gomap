@@ -1,0 +1,11 @@
+{
+  "pre": {
+    "base": "669176d74297d40ff50b4cec51b6af918e4607f558fba694b9b95b580c3bff59",
+    "repaired": "34857c07d15f1b372be7929cc307646e5a0ebc344c10d161145ad1595acc81bb"
+  },
+  "post": {
+    "base": "669176d74297d40ff50b4cec51b6af918e4607f558fba694b9b95b580c3bff59",
+    "repaired": "34857c07d15f1b372be7929cc307646e5a0ebc344c10d161145ad1595acc81bb"
+  },
+  "same": true
+}

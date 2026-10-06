@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "literal_files_verified": 19,
+  "manifest_sha256": "4b1eee4370284cb9b745356f537afa7ad2125d46048f7b97ea347b0bfee0763c",
+  "actual_events": {
+    "normal": {
+      "test_passes": 275,
+      "package_passes": 4,
+      "skips": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicEncodedMVCCProcessHelper",
+          "Action": "skip"
+        }
+      ],
+      "failures": []
+    },
+    "race": {
+      "test_passes": 275,
+      "package_passes": 4,
+      "skips": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicEncodedMVCCProcessHelper",
+          "Action": "skip"
+        }
+      ],
+      "failures": []
+    },
+    "safe": {
+      "test_passes": 275,
+      "package_passes": 4,
+      "skips": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicEncodedMVCCProcessHelper",
+          "Action": "skip"
+        }
+      ],
+      "failures": []
+    }
+  },
+  "vet_exit": 0,
+  "source_pre_post": {
+    "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "files": 7330,
+    "manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+    "extra": [],
+    "missing": [],
+    "changed": []
+  },
+  "limits": "Selected affected suites; Windows crosscompile/Unix execution does not establish hosted Windows runtime or default strict gate."
+}
