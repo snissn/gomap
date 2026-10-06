@@ -712,3 +712,18 @@ Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
 GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.
+
+### Stable child identity probe
+
+`BenchmarkStableChildIdentityProbe` compares linked and mismatched exact-parent
+identity probes in the root publication package on supported Unix platforms:
+
+```sh
+GOWORK=off GOTOOLCHAIN=go1.26.3 GOMAXPROCS=2 go test -p 1 ./TreeDB/internal/rootpublication \
+  -run '^$' -bench '^BenchmarkStableChildIdentityProbe$' -benchmem -benchtime=2000x -count=3
+```
+
+Retain raw Go benchmark output (`ns/op`, `B/op`, `allocs/op`) with source identity;
+use the same test fixture and an exact prior-source overlay for comparisons.
+These local probe diagnostics are not benchprof inputs or a substitute for the
+fixed-duration Quicksilver process allocation guard.
