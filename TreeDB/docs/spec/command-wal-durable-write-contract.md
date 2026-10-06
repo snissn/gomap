@@ -61,7 +61,7 @@ Readers acquire the complete old or new cut. Capacity/unsupported refusal is
 pre-append; later failures retain existing ambiguity/poison/reopen semantics.
 No command payload is re-encoded for COW. The
 [COW publication contract](cow-cache-publication.md) also covers accepted backend
-flush receipts, checkpoint handoff and no-WAL explicit sync.
+flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
 
 ## Current ordered paths
 

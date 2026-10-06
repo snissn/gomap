@@ -1,0 +1,52 @@
+{"Time":"2026-10-05T19:01:03.052864623-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Time":"2026-10-05T19:01:03.053003457-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog"}
+{"Time":"2026-10-05T19:01:03.054649699-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState"}
+{"Time":"2026-10-05T19:01:03.054667162-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState","Output":"=== RUN   TestCOWNativeBlockOwnerAvoidsZSTDState\n"}
+{"Time":"2026-10-05T19:01:03.054773669-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/1"}
+{"Time":"2026-10-05T19:01:03.054776146-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/1","Output":"=== RUN   TestCOWNativeBlockOwnerAvoidsZSTDState/1\n"}
+{"Time":"2026-10-05T19:01:03.055589157-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyBasisIteratorNeedsNoReadWorkspace"}
+{"Time":"2026-10-05T19:01:03.055596261-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyBasisIteratorNeedsNoReadWorkspace","Output":"=== RUN   TestCOWEmptyBasisIteratorNeedsNoReadWorkspace\n"}
+{"Time":"2026-10-05T19:01:03.062199145-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/1","Output":"--- PASS: TestCOWNativeBlockOwnerAvoidsZSTDState/1 (0.01s)\n"}
+{"Time":"2026-10-05T19:01:03.062216295-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/1","Elapsed":0.01}
+{"Time":"2026-10-05T19:01:03.062223719-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/2"}
+{"Time":"2026-10-05T19:01:03.062225543-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/2","Output":"=== RUN   TestCOWNativeBlockOwnerAvoidsZSTDState/2\n"}
+{"Time":"2026-10-05T19:01:03.073790789-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/2","Output":"--- PASS: TestCOWNativeBlockOwnerAvoidsZSTDState/2 (0.01s)\n"}
+{"Time":"2026-10-05T19:01:03.073816354-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState/2","Elapsed":0.01}
+{"Time":"2026-10-05T19:01:03.073822904-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState","Output":"--- PASS: TestCOWNativeBlockOwnerAvoidsZSTDState (0.02s)\n"}
+{"Time":"2026-10-05T19:01:03.073828372-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Test":"TestCOWNativeBlockOwnerAvoidsZSTDState","Elapsed":0.02}
+{"Time":"2026-10-05T19:01:03.073900345-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Output":"PASS\n"}
+{"Time":"2026-10-05T19:01:03.074428249-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/internal/valuelog\t0.021s\n"}
+{"Time":"2026-10-05T19:01:03.074451997-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/valuelog","Elapsed":0.021}
+{"Time":"2026-10-05T19:01:03.149730702-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyBasisIteratorNeedsNoReadWorkspace","Output":"--- PASS: TestCOWEmptyBasisIteratorNeedsNoReadWorkspace (0.09s)\n"}
+{"Time":"2026-10-05T19:01:03.149763292-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWEmptyBasisIteratorNeedsNoReadWorkspace","Elapsed":0.09}
+{"Time":"2026-10-05T19:01:03.149807178-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWCodecSlotsGrowWithinActualAdmission"}
+{"Time":"2026-10-05T19:01:03.149811554-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWCodecSlotsGrowWithinActualAdmission","Output":"=== RUN   TestCOWCodecSlotsGrowWithinActualAdmission\n"}
+{"Time":"2026-10-05T19:01:03.206262234-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWCodecSlotsGrowWithinActualAdmission","Output":"--- PASS: TestCOWCodecSlotsGrowWithinActualAdmission (0.06s)\n"}
+{"Time":"2026-10-05T19:01:03.206294659-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWCodecSlotsGrowWithinActualAdmission","Elapsed":0.06}
+{"Time":"2026-10-05T19:01:03.206301779-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"PASS\n"}
+{"Time":"2026-10-05T19:01:03.210756983-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/caching\t0.158s\n"}
+{"Time":"2026-10-05T19:01:03.210790765-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Elapsed":0.158}
+{"Time":"2026-10-05T19:01:10.554102751-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/db"}
+{"Time":"2026-10-05T19:01:10.556641304-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend"}
+{"Time":"2026-10-05T19:01:10.556677387-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend","Output":"=== RUN   TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend\n"}
+{"Time":"2026-10-05T19:01:10.556702761-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external"}
+{"Time":"2026-10-05T19:01:10.556707572-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external","Output":"=== RUN   TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external\n"}
+{"Time":"2026-10-05T19:01:10.608743884-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external","Output":"--- PASS: TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external (0.05s)\n"}
+{"Time":"2026-10-05T19:01:10.608766198-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/external","Elapsed":0.05}
+{"Time":"2026-10-05T19:01:10.608770335-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized"}
+{"Time":"2026-10-05T19:01:10.608772368-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized","Output":"=== RUN   TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized\n"}
+{"Time":"2026-10-05T19:01:10.666634188-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized","Output":"--- PASS: TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized (0.06s)\n"}
+{"Time":"2026-10-05T19:01:10.666658404-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend/materialized","Elapsed":0.06}
+{"Time":"2026-10-05T19:01:10.666662931-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend","Output":"--- PASS: TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend (0.11s)\n"}
+{"Time":"2026-10-05T19:01:10.666665136-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend","Elapsed":0.11}
+{"Time":"2026-10-05T19:01:10.666676104-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend"}
+{"Time":"2026-10-05T19:01:10.666677779-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend","Output":"=== RUN   TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend\n"}
+{"Time":"2026-10-05T19:01:10.722044296-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend","Output":"--- PASS: TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend (0.06s)\n"}
+{"Time":"2026-10-05T19:01:10.722065194-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerRefusalReleasesDependencyWithoutAppend","Elapsed":0.06}
+{"Time":"2026-10-05T19:01:10.722073441-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity"}
+{"Time":"2026-10-05T19:01:10.722075345-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity","Output":"=== RUN   TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity\n"}
+{"Time":"2026-10-05T19:01:10.759310788-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity","Output":"--- PASS: TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity (0.04s)\n"}
+{"Time":"2026-10-05T19:01:10.759323319-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity","Elapsed":0.04}
+{"Time":"2026-10-05T19:01:10.759527674-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"PASS\n"}
+{"Time":"2026-10-05T19:01:10.761182089-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.207s\n"}
+{"Time":"2026-10-05T19:01:10.761196968-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Elapsed":0.207}

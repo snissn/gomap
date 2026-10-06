@@ -416,7 +416,7 @@ the self-contained materialized-RID case with a nil WAL external closure.
 
 WAL custody is not transferred to cache readers. After append and release of
 the WAL barrier, one already-prepared cut is installed without allocation,
-rebase or root rebuilding. No-WAL uses the same final metadata authority;
+rebase or root rebuilding. The `no_wal_fast` profile uses the same final metadata authority;
 explicit sync releases writer/admission ownership before sealed-root Checkpoint.
 Unsupported surfaces and capacity refusal stop before acceptance. Post-append
 ambiguity/poison/reopen rules are unchanged.

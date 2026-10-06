@@ -91,8 +91,8 @@ func main() {
 
 ## Explicit immutable COW cache
 
-For workloads that repeatedly acquire dirty cached snapshots, explicitly select
-the pre-alpha immutable cache before Open:
+To use immutable dirty-cache snapshots, explicitly select the pre-alpha cache
+before Open:
 
 ```go
 opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./cow-data")
@@ -111,7 +111,10 @@ Callback/conditional writes, range deletion, reverse traversal and manual backen
 bypass are unsupported in this explicit mode and refuse before effects. Existing
 adaptive/append_only/btree selection remains available. COW does not add MVCC
 conflict detection or remove Store fences, and selection makes no throughput
-promise. See [capabilities, limits and lifecycle](docs/spec/cow-cache-publication.md).
+promise. See [capabilities, limits and lifecycle](docs/spec/cow-cache-publication.md)
+and the [matched cost measurements](docs/benchmarks/cow-c2-integration-5046/report.md).
+The measurements include the remaining write and pointer-read overhead; sustained
+workload suitability is part of the later qualification.
 
 ## Optional negative point lookups
 

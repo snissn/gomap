@@ -1,0 +1,8 @@
+--- FAIL: BenchmarkCOWPublicDirtyCost/no_wal_fast/cow_btree/Inline64/N=2048/FreshCapture
+    cow_public_cost_bench_test.go:81: final Close: EOF
+    cow_public_cost_bench_test.go:85: COW_FINAL_CLOSE total=0 history=0 reserved=0 retired=0 controls=0 external=0 generations=0 sources=0 views=0 leases=0 peak=7414976
+--- FAIL: BenchmarkCOWPublicDirtyCost
+FAIL
+exit status 1
+FAIL	github.com/snissn/gomap/TreeDB	0.263s
+FAIL

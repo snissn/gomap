@@ -83,6 +83,8 @@ cut and admitted scratch through Close. Snapshot Close invalidates its bound
 iterators, and physical ownership drains after admitted operations/cursors
 finish. DB Close denies new reads and waits for admitted reads before storage
 teardown; it does not promise storage reads after DB Close.
+The inherited `Print` and `FragmentationReport` diagnostics require caller
+synchronization with Close.
 Public reads capture their existing cached/backend owner under the public
 lifecycle lock, then release that lock before lower-layer read admission or
 callbacks. A callback may therefore close the DB without retaining that lock.
@@ -95,8 +97,23 @@ for private COW build chunks: a later chunk may read external leaves buffered
 by an earlier chunk. Close removes that authority before lane teardown.
 
 Cached inline values, tombstones and pointer metadata need no decoder workspace.
-The snapshot admits that workspace only for backend lookup or pointer decoding;
-owned callback copies remain separately admitted even for inline values.
+Forward iterators omit only zero-entry roots from their exact captured immutable
+cache-source vector; tombstone-bearing roots retain precedence. They omit the
+disk cursor only when their exact retained backend root is a validated empty normal leaf; later backend state cannot establish
+that fact for an old cut. Value/leaf workspace and point page scratch are
+admitted only when actually needed. Codec slots grow within finite admission,
+and actual Snappy/LZ4 headers use bounded native owners without constructing
+ZSTD state. Owned callback copies remain separately admitted even for inline
+values.
+
+Successor reads search the captured cache roots using existing immutable
+lower-bound lookups only when the exact retained backend user root is proven
+empty. They inspect all captured shards/sources and preserve newest-source
+ties. Winning physical tombstones, nonempty disk bases and missing successor
+capabilities use the general merge on that same captured snapshot. Selection,
+materialization and caller copies retain the ordinary read/Close ownership;
+this fast path does not change MVCC Store fencing.
+
 
 `GetManyView` retains one immutable snapshot, materializes bounded admitted
 temporary value ownership per callback, and invokes callbacks outside read,
@@ -109,6 +126,9 @@ The initial capability supports `Set`, `SetSync`, `Delete`, `DeleteSync`, point
 batches, encoded MVCC point/grouped commits and recorded raw physical deletion
 replay. Reads include owned point/versioned reads, presence/prefix queries,
 forward successor and forward iteration over the same coherent cut.
+Empty point keys and values preserve the ordinary public API semantics through
+staging, checkpoint and reopen. Successor presence is reported by `found`; a
+zero-length returned key/value alone does not indicate absence.
 
 Callback mutation (`Update`/`UpdateSync`), CAS/conditional transactions, range
 deletion, reverse traversal, adapter-only after-write `SetViewWithReplayBytes` /
@@ -147,10 +167,13 @@ distinct resource rather than one per historical RID. Actual frame dictionary
 IDs select retained definitions; cut readers do not resolve through unrelated
 global definition/codec state.
 
-No-WAL uses the same final metadata authority without appending a journal.
-Explicit NoWAL sync releases command/writer/admission ownership before the
-existing sealed-root Checkpoint. Pre-append refusal has no visible effect;
-post-append errors retain existing ambiguous/poison/reopen rules.
+`no_wal_fast` uses the same canonical RID planner and final metadata authority
+without appending a journal or retaining journal dependency custody. Registered
+producer visibility and independently owned live file/dictionary pins still
+precede cut publication. Explicit NoWAL sync releases command/writer/admission
+ownership before the existing sealed-root Checkpoint. Pre-append refusal has
+no visible effect; post-append errors retain existing ambiguous/poison/reopen
+rules.
 
 ## Captured-prefix flush and backend maintenance
 
@@ -208,6 +231,9 @@ same profile/instrumentation, including acquire/read/release, allocations,
 tails, sync/checkpoint and pinned/retired/drained memory. Tiny MVCC fixtures are
 diagnostic. No production speedup or default promotion follows from C1's
 internal benchmarks; sustained public qualification belongs to C4.
+The [matched integration cost report](../benchmarks/cow-c2-integration-5046/report.md)
+and coordinator disposition quantify the remaining pointer-read, acknowledged-write
+and public MVCC costs. Snapshot gains alone do not establish workload suitability.
 
 The allocation bound and safe-build tradeoff are specified separately in
 [immutable memtable ownership](cow-memtable-ownership.md).

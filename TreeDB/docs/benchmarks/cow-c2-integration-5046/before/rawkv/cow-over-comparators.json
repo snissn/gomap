@@ -1,0 +1,4898 @@
+[
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.01572635356939642,
+          0.013278847075429777,
+          0.012497499699963995
+        ],
+        "median": 0.013278847075429777
+      },
+      "B/op": {
+        "values": [
+          0.002818696352936767,
+          0.002818696352936767,
+          0.002818696352936767
+        ],
+        "median": 0.002818696352936767
+      },
+      "allocs/op": {
+        "values": [
+          0.1,
+          0.1,
+          0.1
+        ],
+        "median": 0.1
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.22921850079744815,
+          0.19443735646848687,
+          0.23316912972085385
+        ],
+        "median": 0.22921850079744815
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.601980198019802,
+          0.49823182711198427,
+          0.5802098950524738
+        ],
+        "median": 0.5802098950524738
+      },
+      "B/op": {
+        "values": [
+          0.42348411934552455,
+          0.4230769230769231,
+          0.42348411934552455
+        ],
+        "median": 0.42348411934552455
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6013847675568744,
+          0.6182350073135056,
+          0.5633187772925764
+        ],
+        "median": 0.6013847675568744
+      },
+      "B/op": {
+        "values": [
+          0.42348411934552455,
+          0.4238921001926782,
+          0.42348411934552455
+        ],
+        "median": 0.42348411934552455
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.178910471739448,
+          2.1641509433962263,
+          2.173040570015995
+        ],
+        "median": 2.173040570015995
+      },
+      "B/op": {
+        "values": [
+          20.91271056661562,
+          20.90470723306544,
+          20.90470723306544
+        ],
+        "median": 20.90470723306544
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.1215870307167237,
+          2.2012105107764985,
+          2.1179138321995463
+        ],
+        "median": 2.1215870307167237
+      },
+      "B/op": {
+        "values": [
+          19.734104046242773,
+          19.734104046242773,
+          19.734104046242773
+        ],
+        "median": 19.734104046242773
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0133483012930504,
+          1.0090388321604846,
+          0.9972608661991565
+        ],
+        "median": 1.0090388321604846
+      },
+      "B/op": {
+        "values": [
+          11.522896698615549,
+          11.521831735889243,
+          11.52076677316294
+        ],
+        "median": 11.521831735889243
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0060742763332882,
+          1.0125265904596852,
+          1.0107306306651669
+        ],
+        "median": 1.0107306306651669
+      },
+      "B/op": {
+        "values": [
+          26.262135922330096,
+          26.323600973236008,
+          26.32116788321168
+        ],
+        "median": 26.32116788321168
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1064677964734613,
+          1.0762298101202432,
+          1.070170137620713
+        ],
+        "median": 1.0762298101202432
+      },
+      "B/op": {
+        "values": [
+          0.17045625839273087,
+          0.17007092451142328,
+          0.16690189109960543
+        ],
+        "median": 0.17007092451142328
+      },
+      "allocs/op": {
+        "values": [
+          1.1131359149582385,
+          1.1124620060790273,
+          1.1095890410958904
+        ],
+        "median": 1.1124620060790273
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1074390844569473,
+          1.117343589398026,
+          1.1065553317827452
+        ],
+        "median": 1.1074390844569473
+      },
+      "B/op": {
+        "values": [
+          1.1069368416599688,
+          1.1701762732234964,
+          1.1309916012353944
+        ],
+        "median": 1.1309916012353944
+      },
+      "allocs/op": {
+        "values": [
+          1.1122913505311078,
+          1.1158536585365855,
+          1.1129770992366412
+        ],
+        "median": 1.1129770992366412
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0158195178686282,
+          0.9981127810850398,
+          1.0084872132351541
+        ],
+        "median": 1.0084872132351541
+      },
+      "B/op": {
+        "values": [
+          2.388059701492537,
+          2.388059701492537,
+          2.388059701492537
+        ],
+        "median": 2.388059701492537
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9937544229816309,
+          0.9985799056322293,
+          0.5197085112534938
+        ],
+        "median": 0.9937544229816309
+      },
+      "B/op": {
+        "values": [
+          40.60606060606061,
+          40.60606060606061,
+          40.60606060606061
+        ],
+        "median": 40.60606060606061
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.007206963781163596,
+          0.007735494506761352,
+          0.007206076724879649
+        ],
+        "median": 0.007206963781163596
+      },
+      "B/op": {
+        "values": [
+          0.0028188865398167725,
+          0.0028188865398167725,
+          0.002818823141338491
+        ],
+        "median": 0.0028188865398167725
+      },
+      "allocs/op": {
+        "values": [
+          0.1,
+          0.1,
+          0.1
+        ],
+        "median": 0.1
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.17646723321736155,
+          0.2299047488521894,
+          0.1671482075976458
+        ],
+        "median": 0.17646723321736155
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6005208333333333,
+          0.7185906351414001,
+          0.5832113225963885
+        ],
+        "median": 0.6005208333333333
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6074815595363541,
+          0.7746126936531734,
+          0.6515812431842967
+        ],
+        "median": 0.6515812431842967
+      },
+      "B/op": {
+        "values": [
+          0.42348411934552455,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.5309694793536806,
+          2.4202512934220253,
+          1.9733333333333334
+        ],
+        "median": 2.4202512934220253
+      },
+      "B/op": {
+        "values": [
+          21.345838218053927,
+          21.354182955433934,
+          20.90470723306544
+        ],
+        "median": 21.345838218053927
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.5010348905972797,
+          2.453251423434222,
+          2.354494972234729
+        ],
+        "median": 2.453251423434222
+      },
+      "B/op": {
+        "values": [
+          19.35648476257973,
+          19.734104046242773,
+          19.734104046242773
+        ],
+        "median": 19.734104046242773
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0063960745196294,
+          0.9925052106112235,
+          1.0104408745088231
+        ],
+        "median": 1.0063960745196294
+      },
+      "B/op": {
+        "values": [
+          12.534031413612565,
+          12.534031413612565,
+          12.535078534031413
+        ],
+        "median": 12.534031413612565
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0121531391054575,
+          1.0106054004446459,
+          1.0076313408477995
+        ],
+        "median": 1.0106054004446459
+      },
+      "B/op": {
+        "values": [
+          29.124087591240876,
+          29.124087591240876,
+          29.126520681265205
+        ],
+        "median": 29.124087591240876
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.145534709499154,
+          1.1302102796555868,
+          1.14324699355325
+        ],
+        "median": 1.14324699355325
+      },
+      "B/op": {
+        "values": [
+          0.22917644987271268,
+          0.2323846629575014,
+          0.22507108298012216
+        ],
+        "median": 0.22917644987271268
+      },
+      "allocs/op": {
+        "values": [
+          1.2241509433962263,
+          1.2293716881150643,
+          1.222473604826546
+        ],
+        "median": 1.2241509433962263
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1241247881216059,
+          1.145889457214985,
+          1.1127178772588096
+        ],
+        "median": 1.1241247881216059
+      },
+      "B/op": {
+        "values": [
+          1.2999806105460028,
+          1.3122505304970544,
+          1.2044316264311021
+        ],
+        "median": 1.2999806105460028
+      },
+      "allocs/op": {
+        "values": [
+          1.219548872180451,
+          1.2228915662650603,
+          1.216054013503376
+        ],
+        "median": 1.219548872180451
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0029361981921574,
+          1.0275710212863693,
+          0.999134008061651
+        ],
+        "median": 1.0029361981921574
+      },
+      "B/op": {
+        "values": [
+          2.645355312987302,
+          2.6446870126977053,
+          2.6429207479964383
+        ],
+        "median": 2.6446870126977053
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9935558296452152,
+          0.9739032335221106,
+          0.9926482869798829
+        ],
+        "median": 0.9926482869798829
+      },
+      "B/op": {
+        "values": [
+          44.98106060606061,
+          44.96969696969697,
+          44.96969696969697
+        ],
+        "median": 44.96969696969697
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.011591891606916913,
+          0.012247978878555107,
+          0.015339821174486623
+        ],
+        "median": 0.012247978878555107
+      },
+      "B/op": {
+        "values": [
+          0.0028139500074839097,
+          0.0028139500074839097,
+          0.0028139500074839097
+        ],
+        "median": 0.0028139500074839097
+      },
+      "allocs/op": {
+        "values": [
+          0.1,
+          0.1,
+          0.1
+        ],
+        "median": 0.1
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.20810411120970126,
+          0.1927335268193056,
+          0.20486803519061583
+        ],
+        "median": 0.20486803519061583
+      },
+      "B/op": {
+        "values": [
+          0.12287581699346405,
+          0.12287581699346405,
+          0.12287581699346405
+        ],
+        "median": 0.12287581699346405
+      },
+      "allocs/op": {
+        "values": [
+          0.08333333333333333,
+          0.08333333333333333,
+          0.08333333333333333
+        ],
+        "median": 0.08333333333333333
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          5.5894719687092564,
+          3.6779264924580413,
+          4.692970673830311
+        ],
+        "median": 4.692970673830311
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.643639259406729,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          4.0694114855244425,
+          4.083018867924529,
+          4.743946594252093
+        ],
+        "median": 4.083018867924529
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0194535798538076,
+          1.0940244690385377,
+          1.0564395559549362
+        ],
+        "median": 1.0564395559549362
+      },
+      "B/op": {
+        "values": [
+          0.9774879932535969,
+          0.9774980459911967,
+          0.9774980459911967
+        ],
+        "median": 0.9774980459911967
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0226862052483707,
+          1.0088332635026311,
+          1.046855800787022
+        ],
+        "median": 1.0226862052483707
+      },
+      "B/op": {
+        "values": [
+          0.9757820279856684,
+          0.975251385183665,
+          0.9757920456645381
+        ],
+        "median": 0.9757820279856684
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0193037183316707,
+          1.1615818096107113,
+          1.0203287052866847
+        ],
+        "median": 1.0203287052866847
+      },
+      "B/op": {
+        "values": [
+          0.9509387002336679,
+          0.9928817303857983,
+          0.9305990652362366
+        ],
+        "median": 0.9509387002336679
+      },
+      "allocs/op": {
+        "values": [
+          2.595744680851064,
+          2.75,
+          2.608695652173913
+        ],
+        "median": 2.608695652173913
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9216395478222059,
+          1.1621818695674135,
+          0.9315786221550016
+        ],
+        "median": 0.9315786221550016
+      },
+      "B/op": {
+        "values": [
+          0.8704171105465869,
+          0.923870208301346,
+          0.8474348318220358
+        ],
+        "median": 0.8704171105465869
+      },
+      "allocs/op": {
+        "values": [
+          2.652173913043478,
+          2.688888888888889,
+          2.5531914893617023
+        ],
+        "median": 2.652173913043478
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.116962644665855,
+          1.1098767577142372,
+          1.1794251796103807
+        ],
+        "median": 1.116962644665855
+      },
+      "B/op": {
+        "values": [
+          0.1739039575928228,
+          0.16323009626366672,
+          0.16905163096038753
+        ],
+        "median": 0.16905163096038753
+      },
+      "allocs/op": {
+        "values": [
+          1.144708423326134,
+          1.1381294964028776,
+          1.1458483754512636
+        ],
+        "median": 1.144708423326134
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0925892132493509,
+          1.1223676599746217,
+          1.265128668778208
+        ],
+        "median": 1.1223676599746217
+      },
+      "B/op": {
+        "values": [
+          1.3367296771061385,
+          1.2462062990520844,
+          1.3284880043850402
+        ],
+        "median": 1.3284880043850402
+      },
+      "allocs/op": {
+        "values": [
+          1.1397849462365592,
+          1.1340501792114694,
+          1.139267767408471
+        ],
+        "median": 1.139267767408471
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1205976969366511,
+          1.2390181120671013,
+          1.1423348606691879
+        ],
+        "median": 1.1423348606691879
+      },
+      "B/op": {
+        "values": [
+          5.0344186046511625,
+          5.037230081906181,
+          5.036857781087118
+        ],
+        "median": 5.036857781087118
+      },
+      "allocs/op": {
+        "values": [
+          14.833333333333334,
+          14.833333333333334,
+          14.833333333333334
+        ],
+        "median": 14.833333333333334
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1366906322050774,
+          1.2260031487774785,
+          1.1512217931318343
+        ],
+        "median": 1.1512217931318343
+      },
+      "B/op": {
+        "values": [
+          0.19832748220842708,
+          0.19832748220842708,
+          0.19830846354548387
+        ],
+        "median": 0.19832748220842708
+      },
+      "allocs/op": {
+        "values": [
+          14.833333333333334,
+          14.833333333333334,
+          14.833333333333334
+        ],
+        "median": 14.833333333333334
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.007885613895488794,
+          0.009990127538427982,
+          0.010976792005297022
+        ],
+        "median": 0.009990127538427982
+      },
+      "B/op": {
+        "values": [
+          0.0028139500074839097,
+          0.0028139500074839097,
+          0.0028138868308599566
+        ],
+        "median": 0.0028139500074839097
+      },
+      "allocs/op": {
+        "values": [
+          0.1,
+          0.1,
+          0.1
+        ],
+        "median": 0.1
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.20876974968933074,
+          0.20098152424942264,
+          0.21094169440566948
+        ],
+        "median": 0.20876974968933074
+      },
+      "B/op": {
+        "values": [
+          0.12287581699346405,
+          0.12287581699346405,
+          0.12287581699346405
+        ],
+        "median": 0.12287581699346405
+      },
+      "allocs/op": {
+        "values": [
+          0.08333333333333333,
+          0.08333333333333333,
+          0.08333333333333333
+        ],
+        "median": 0.08333333333333333
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.5770037767519933,
+          2.821682108049573,
+          3.4627823065615395
+        ],
+        "median": 2.821682108049573
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.643639259406729
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.7856656838285327,
+          2.448934837092732,
+          3.5035154137371554
+        ],
+        "median": 2.7856656838285327
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.643639259406729
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0390708187419997,
+          1.0242879438158408,
+          1.0327456896217415
+        ],
+        "median": 1.0327456896217415
+      },
+      "B/op": {
+        "values": [
+          0.9774980459911967,
+          0.9774980459911967,
+          0.9769454523028852
+        ],
+        "median": 0.9774980459911967
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0772593764571319,
+          0.9556580489687156,
+          1.066284959260075
+        ],
+        "median": 1.066284959260075
+      },
+      "B/op": {
+        "values": [
+          0.9747113235022663,
+          0.9757920456645381,
+          0.975251385183665
+        ],
+        "median": 0.975251385183665
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0021281234412722,
+          0.9286743498787503,
+          1.0305150978000743
+        ],
+        "median": 1.0021281234412722
+      },
+      "B/op": {
+        "values": [
+          1.0540742891194401,
+          1.1125738794943358,
+          1.0574757934443972
+        ],
+        "median": 1.0574757934443972
+      },
+      "allocs/op": {
+        "values": [
+          2.630434782608696,
+          2.630434782608696,
+          2.5531914893617023
+        ],
+        "median": 2.630434782608696
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9206398217125032,
+          1.0268212701413684,
+          1.012383624352932
+        ],
+        "median": 1.012383624352932
+      },
+      "B/op": {
+        "values": [
+          0.9515879110015771,
+          1.0694158143388337,
+          0.9927350385195853
+        ],
+        "median": 0.9927350385195853
+      },
+      "allocs/op": {
+        "values": [
+          2.574468085106383,
+          2.630434782608696,
+          2.608695652173913
+        ],
+        "median": 2.608695652173913
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0691750406078615,
+          1.0931899469672384,
+          1.1240530404770028
+        ],
+        "median": 1.0931899469672384
+      },
+      "B/op": {
+        "values": [
+          0.2046883454968595,
+          0.1917397909541743,
+          0.193607108278554
+        ],
+        "median": 0.193607108278554
+      },
+      "allocs/op": {
+        "values": [
+          1.2642450142450143,
+          1.262857142857143,
+          1.2601568068424804
+        ],
+        "median": 1.262857142857143
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0671468972732352,
+          1.1036391957501752,
+          1.0995673680759896
+        ],
+        "median": 1.0995673680759896
+      },
+      "B/op": {
+        "values": [
+          1.2697620847223012,
+          1.1977768725371967,
+          1.207871063136706
+        ],
+        "median": 1.207871063136706
+      },
+      "allocs/op": {
+        "values": [
+          1.2553041018387554,
+          1.2521246458923512,
+          1.2539007092198582
+        ],
+        "median": 1.2539007092198582
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1564046943473585,
+          1.137563924254466,
+          1.1289232884660165
+        ],
+        "median": 1.137563924254466
+      },
+      "B/op": {
+        "values": [
+          5.251675353685778,
+          5.251675353685778,
+          5.251675353685778
+        ],
+        "median": 5.251675353685778
+      },
+      "allocs/op": {
+        "values": [
+          14.833333333333334,
+          14.833333333333334,
+          14.833333333333334
+        ],
+        "median": 14.833333333333334
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1278711149042515,
+          1.1212382686139806,
+          1.1216821436949824
+        ],
+        "median": 1.1216821436949824
+      },
+      "B/op": {
+        "values": [
+          0.20677069209401866,
+          0.20677069209401866,
+          0.20677069209401866
+        ],
+        "median": 0.20677069209401866
+      },
+      "allocs/op": {
+        "values": [
+          14.833333333333334,
+          14.833333333333334,
+          14.833333333333334
+        ],
+        "median": 14.833333333333334
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.008554756254195451,
+          0.007829621590031517,
+          0.009654148390565847
+        ],
+        "median": 0.008554756254195451
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.002818949941146923,
+          0.0028190133453291346
+        ],
+        "median": 0.0028190133453291346
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.1,
+          0.10526315789473684
+        ],
+        "median": 0.10526315789473684
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.21721916521272314,
+          0.17372930415653584,
+          0.2389864864864865
+        ],
+        "median": 0.21721916521272314
+      },
+      "B/op": {
+        "values": [
+          0.13319164009918527,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08333333333333333,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6115857605177993,
+          0.5876670716889428,
+          0.6106423173803527
+        ],
+        "median": 0.6106423173803527
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.40904761904761905,
+          0.44391922900413033,
+          0.6034225264467953
+        ],
+        "median": 0.44391922900413033
+      },
+      "B/op": {
+        "values": [
+          0.411214953271028,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.736101337086559,
+          2.5414548919949174,
+          2.578276389597144
+        ],
+        "median": 2.578276389597144
+      },
+      "B/op": {
+        "values": [
+          20.91271056661562,
+          21.354182955433934,
+          21.354182955433934
+        ],
+        "median": 21.354182955433934
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.631472081218274,
+          2.4590441063470108,
+          2.4655396618985694
+        ],
+        "median": 2.4655396618985694
+      },
+      "B/op": {
+        "values": [
+          19.634795111430627,
+          19.26093088857546,
+          19.254141698977794
+        ],
+        "median": 19.26093088857546
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.914493972525932,
+          4.983461962513782,
+          4.401882092443953
+        ],
+        "median": 4.401882092443953
+      },
+      "B/op": {
+        "values": [
+          13.472222222222221,
+          13.472222222222221,
+          13.472222222222221
+        ],
+        "median": 13.472222222222221
+      },
+      "allocs/op": {
+        "values": [
+          12.0,
+          12.0,
+          12.0
+        ],
+        "median": 12.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.6267532467532466,
+          4.535875564475665,
+          2.6769904056556135
+        ],
+        "median": 3.6267532467532466
+      },
+      "B/op": {
+        "values": [
+          40.416666666666664,
+          40.416666666666664,
+          40.416666666666664
+        ],
+        "median": 40.416666666666664
+      },
+      "allocs/op": {
+        "values": [
+          12.0,
+          12.0,
+          12.0
+        ],
+        "median": 12.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0989792843100905,
+          1.140688420433649,
+          1.1248056594423694
+        ],
+        "median": 1.1248056594423694
+      },
+      "B/op": {
+        "values": [
+          0.18856396837537584,
+          0.18852151980921225,
+          0.18020740948202088
+        ],
+        "median": 0.18852151980921225
+      },
+      "allocs/op": {
+        "values": [
+          1.1274217585692996,
+          1.1186943620178043,
+          1.1094674556213018
+        ],
+        "median": 1.1186943620178043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0957071278827715,
+          1.1528814865847918,
+          1.1494141794986998
+        ],
+        "median": 1.1494141794986998
+      },
+      "B/op": {
+        "values": [
+          1.2311145646685735,
+          1.2445955692941784,
+          1.1694022359671479
+        ],
+        "median": 1.2311145646685735
+      },
+      "allocs/op": {
+        "values": [
+          1.1207407407407408,
+          1.117865085248332,
+          1.1086474501108647
+        ],
+        "median": 1.117865085248332
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.954967681171339,
+          0.9980157513261539,
+          0.9965602908663481
+        ],
+        "median": 0.9965602908663481
+      },
+      "B/op": {
+        "values": [
+          2.388059701492537,
+          2.388059701492537,
+          2.388059701492537
+        ],
+        "median": 2.388059701492537
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9840832399937616,
+          1.0058623109513753,
+          0.9954670283044028
+        ],
+        "median": 0.9954670283044028
+      },
+      "B/op": {
+        "values": [
+          40.60606060606061,
+          40.149812734082396,
+          40.60606060606061
+        ],
+        "median": 40.60606060606061
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.008483909017839434,
+          0.008191612038604985,
+          0.009030527193165242
+        ],
+        "median": 0.008483909017839434
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.0028190133453291346,
+          0.002810731612507756
+        ],
+        "median": 0.0028190133453291346
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.10526315789473684,
+          0.1
+        ],
+        "median": 0.10526315789473684
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.22060120784420167,
+          0.1834574220567706,
+          0.235657966286025
+        ],
+        "median": 0.22060120784420167
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.7315614617940199,
+          0.6737305348679756,
+          0.9274770173646578
+        ],
+        "median": 0.7315614617940199
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.7814052519517388,
+          0.5926742108397856,
+          0.9816216216216216
+        ],
+        "median": 0.7814052519517388
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.836650652024708,
+          2.968217734855136,
+          2.468273092369478
+        ],
+        "median": 2.836650652024708
+      },
+      "B/op": {
+        "values": [
+          21.354182955433934,
+          21.354182955433934,
+          21.354182955433934
+        ],
+        "median": 21.354182955433934
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.786918408631153,
+          2.9059652741963213,
+          2.5689683999331216
+        ],
+        "median": 2.786918408631153
+      },
+      "B/op": {
+        "values": [
+          19.26093088857546,
+          19.634795111430627,
+          19.634795111430627
+        ],
+        "median": 19.634795111430627
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          4.796222095020035,
+          5.356599674090169,
+          4.223430279967382
+        ],
+        "median": 4.796222095020035
+      },
+      "B/op": {
+        "values": [
+          14.631188118811881,
+          14.632425742574258,
+          14.632425742574258
+        ],
+        "median": 14.632425742574258
+      },
+      "allocs/op": {
+        "values": [
+          12.0,
+          12.0,
+          12.0
+        ],
+        "median": 12.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          4.360655737704918,
+          5.313308189655173,
+          4.1656836461126
+        ],
+        "median": 4.360655737704918
+      },
+      "B/op": {
+        "values": [
+          44.78030303030303,
+          44.78409090909091,
+          44.78409090909091
+        ],
+        "median": 44.78409090909091
+      },
+      "allocs/op": {
+        "values": [
+          12.0,
+          12.0,
+          12.0
+        ],
+        "median": 12.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.136514342411844,
+          1.137564471604592,
+          1.1598936899227155
+        ],
+        "median": 1.137564471604592
+      },
+      "B/op": {
+        "values": [
+          0.24642689727433612,
+          0.2522390668033369,
+          0.23740984877859636
+        ],
+        "median": 0.24642689727433612
+      },
+      "allocs/op": {
+        "values": [
+          1.2214912280701755,
+          1.2205128205128206,
+          1.217008797653959
+        ],
+        "median": 1.2205128205128206
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0811943183473063,
+          1.1256422568971833,
+          1.19340675288669
+        ],
+        "median": 1.1256422568971833
+      },
+      "B/op": {
+        "values": [
+          1.2110257319954132,
+          1.2984852163890546,
+          1.2049691148420567
+        ],
+        "median": 1.2110257319954132
+      },
+      "allocs/op": {
+        "values": [
+          1.2099927588703838,
+          1.2116363636363636,
+          1.208151382823872
+        ],
+        "median": 1.2099927588703838
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0287914973784584,
+          0.9677231603848363,
+          1.0318451631181471
+        ],
+        "median": 1.0287914973784584
+      },
+      "B/op": {
+        "values": [
+          2.6446870126977053,
+          2.6446870126977053,
+          2.6446870126977053
+        ],
+        "median": 2.6446870126977053
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0331747344097821,
+          0.978809573865907,
+          1.044353434799475
+        ],
+        "median": 1.0331747344097821
+      },
+      "B/op": {
+        "values": [
+          44.96969696969697,
+          44.96969696969697,
+          44.96969696969697
+        ],
+        "median": 44.96969696969697
+      },
+      "allocs/op": {
+        "values": [
+          12.166666666666666,
+          12.166666666666666,
+          12.166666666666666
+        ],
+        "median": 12.166666666666666
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.009307081851046362,
+          0.009600874225945777,
+          0.00910391830416553
+        ],
+        "median": 0.009307081851046362
+      },
+      "B/op": {
+        "values": [
+          0.002351160885687308,
+          0.0028190133453291346,
+          0.002292640988274605
+        ],
+        "median": 0.002351160885687308
+      },
+      "allocs/op": {
+        "values": [
+          0.09523809523809523,
+          0.10526315789473684,
+          0.09523809523809523
+        ],
+        "median": 0.09523809523809523
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.17661528369957363,
+          0.19168831168831169,
+          0.18607033117104813
+        ],
+        "median": 0.18607033117104813
+      },
+      "B/op": {
+        "values": [
+          0.07902480033627575,
+          0.13333333333333333,
+          0.13309734513274335
+        ],
+        "median": 0.13309734513274335
+      },
+      "allocs/op": {
+        "values": [
+          0.04878048780487805,
+          0.08695652173913043,
+          0.08333333333333333
+        ],
+        "median": 0.08333333333333333
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          4.416758275314523,
+          3.869164472109169,
+          3.565139922439996
+        ],
+        "median": 3.869164472109169
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          5.872990092577554,
+          5.391659716430358,
+          3.956152593626425
+        ],
+        "median": 5.391659716430358
+      },
+      "B/op": {
+        "values": [
+          5.643639259406729,
+          5.643077535582761,
+          5.644201095072175
+        ],
+        "median": 5.643639259406729
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0155763359659173,
+          1.0021796716530211,
+          1.0470367290204943
+        ],
+        "median": 1.0155763359659173
+      },
+      "B/op": {
+        "values": [
+          0.9774980459911967,
+          0.9774980459911967,
+          0.9774980459911967
+        ],
+        "median": 0.9774980459911967
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0569354574084522,
+          1.0200416860754298,
+          1.0417045410402828
+        ],
+        "median": 1.0417045410402828
+      },
+      "B/op": {
+        "values": [
+          0.975251385183665,
+          0.975251385183665,
+          0.975251385183665
+        ],
+        "median": 0.975251385183665
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          17.185831457060146,
+          16.00357439733998,
+          14.412944679517317
+        ],
+        "median": 16.00357439733998
+      },
+      "B/op": {
+        "values": [
+          2.1526454348484494,
+          2.188602979719734,
+          2.188148683122299
+        ],
+        "median": 2.188148683122299
+      },
+      "allocs/op": {
+        "values": [
+          12.066666666666666,
+          12.133333333333333,
+          12.133333333333333
+        ],
+        "median": 12.133333333333333
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          19.204151316380628,
+          9.83313754532918,
+          14.407300070494243
+        ],
+        "median": 14.407300070494243
+      },
+      "B/op": {
+        "values": [
+          1.7921002356546447,
+          1.8220211600190073,
+          1.7634810364250846
+        ],
+        "median": 1.7921002356546447
+      },
+      "allocs/op": {
+        "values": [
+          11.3125,
+          11.375,
+          11.375
+        ],
+        "median": 11.375
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1114835455036365,
+          1.0954468098762176,
+          1.0677061549726594
+        ],
+        "median": 1.0954468098762176
+      },
+      "B/op": {
+        "values": [
+          0.16482868786915472,
+          0.17259554529190735,
+          0.14503346799255243
+        ],
+        "median": 0.16482868786915472
+      },
+      "allocs/op": {
+        "values": [
+          1.140592694693315,
+          1.1459197786998616,
+          0.2828351836037575
+        ],
+        "median": 1.140592694693315
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0971584181031355,
+          1.1465474767651778,
+          1.0995517664015606
+        ],
+        "median": 1.0995517664015606
+      },
+      "B/op": {
+        "values": [
+          0.5446389226959879,
+          0.5539900975059437,
+          0.5615209105645831
+        ],
+        "median": 0.5539900975059437
+      },
+      "allocs/op": {
+        "values": [
+          0.2839739190116678,
+          0.2839273474982865,
+          0.28409675759135355
+        ],
+        "median": 0.2839739190116678
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.0489157138666543,
+          2.1536805049091354,
+          2.0657708455660395
+        ],
+        "median": 2.0657708455660395
+      },
+      "B/op": {
+        "values": [
+          4.263571070653081,
+          4.264072156338734,
+          4.263571070653081
+        ],
+        "median": 4.263571070653081
+      },
+      "allocs/op": {
+        "values": [
+          25.571428571428573,
+          25.571428571428573,
+          25.571428571428573
+        ],
+        "median": 25.571428571428573
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.0448835455151197,
+          2.162978020468944,
+          2.04494192283901
+        ],
+        "median": 2.04494192283901
+      },
+      "B/op": {
+        "values": [
+          0.18624503852439878,
+          0.18626692738734532,
+          0.18624503852439878
+        ],
+        "median": 0.18624503852439878
+      },
+      "allocs/op": {
+        "values": [
+          25.571428571428573,
+          25.571428571428573,
+          25.571428571428573
+        ],
+        "median": 25.571428571428573
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.010332846978923671,
+          0.01087318189577601,
+          0.009268987020029146
+        ],
+        "median": 0.010332846978923671
+      },
+      "B/op": {
+        "values": [
+          0.002810731612507756,
+          0.0028190133453291346,
+          0.002818949941146923
+        ],
+        "median": 0.002818949941146923
+      },
+      "allocs/op": {
+        "values": [
+          0.1,
+          0.10526315789473684,
+          0.1
+        ],
+        "median": 0.1
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.20601556149111602,
+          0.22799247709761572,
+          0.18668941979522186
+        ],
+        "median": 0.20601556149111602
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.0266838607281024,
+          3.508680142687277,
+          3.587807205917442
+        ],
+        "median": 3.508680142687277
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.5441979323963295,
+          3.869394177812746,
+          5.059387617765815
+        ],
+        "median": 3.869394177812746
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.643639259406729,
+          5.643639259406729
+        ],
+        "median": 5.643639259406729
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0402383329272031,
+          1.0367088168261278,
+          1.0519949880574808
+        ],
+        "median": 1.0402383329272031
+      },
+      "B/op": {
+        "values": [
+          0.9774980459911967,
+          0.9774980459911967,
+          0.9780412010454611
+        ],
+        "median": 0.9774980459911967
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0455888627277468,
+          1.0798900948815386,
+          1.0804281997353913
+        ],
+        "median": 1.0798900948815386
+      },
+      "B/op": {
+        "values": [
+          0.9757920456645381,
+          0.9757920456645381,
+          0.975251385183665
+        ],
+        "median": 0.9757920456645381
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          12.952208970267092,
+          11.803612783696156,
+          12.308432594462412
+        ],
+        "median": 12.308432594462412
+      },
+      "B/op": {
+        "values": [
+          2.1266400029903187,
+          1.9851744255840196,
+          1.9762606882426246
+        ],
+        "median": 1.9851744255840196
+      },
+      "allocs/op": {
+        "values": [
+          11.933333333333334,
+          11.933333333333334,
+          11.933333333333334
+        ],
+        "median": 11.933333333333334
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          12.658758824495157,
+          11.15924682528098,
+          11.973143032535297
+        ],
+        "median": 11.973143032535297
+      },
+      "B/op": {
+        "values": [
+          1.6555155724109836,
+          1.6041692938973877,
+          1.565551417763833
+        ],
+        "median": 1.6041692938973877
+      },
+      "allocs/op": {
+        "values": [
+          11.1875,
+          11.1875,
+          11.1875
+        ],
+        "median": 11.1875
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0702635219236116,
+          1.083827061824226,
+          1.1261040437712466
+        ],
+        "median": 1.083827061824226
+      },
+      "B/op": {
+        "values": [
+          0.21682230317656936,
+          0.2188494020348815,
+          0.22425355047187145
+        ],
+        "median": 0.2188494020348815
+      },
+      "allocs/op": {
+        "values": [
+          1.2796725784447476,
+          1.2843472317156528,
+          1.2815269256987047
+        ],
+        "median": 1.2815269256987047
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.111909978126739,
+          1.0511511991160578,
+          1.1308823097638934
+        ],
+        "median": 1.111909978126739
+      },
+      "B/op": {
+        "values": [
+          1.298261485689263,
+          1.2523619945215656,
+          1.2678585206797912
+        ],
+        "median": 1.2678585206797912
+      },
+      "allocs/op": {
+        "values": [
+          1.275322909585316,
+          1.2730352303523036,
+          1.2737127371273713
+        ],
+        "median": 1.2737127371273713
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.0108131200201416,
+          2.0192176808595153,
+          2.070172623828099
+        ],
+        "median": 2.0192176808595153
+      },
+      "B/op": {
+        "values": [
+          4.18387444222188,
+          4.183720572395753,
+          4.183720572395753
+        ],
+        "median": 4.183720572395753
+      },
+      "allocs/op": {
+        "values": [
+          25.571428571428573,
+          25.571428571428573,
+          25.571428571428573
+        ],
+        "median": 25.571428571428573
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.007576417092613,
+          2.0776171207206713,
+          2.066267269169912
+        ],
+        "median": 2.066267269169912
+      },
+      "B/op": {
+        "values": [
+          0.19765497790183764,
+          0.19764770876948126,
+          0.19764770876948126
+        ],
+        "median": 0.19764770876948126
+      },
+      "allocs/op": {
+        "values": [
+          25.571428571428573,
+          25.571428571428573,
+          25.571428571428573
+        ],
+        "median": 25.571428571428573
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.008293513918335918,
+          0.0095487952075364,
+          0.007834943849569079
+        ],
+        "median": 0.008293513918335918
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.0028190133453291346,
+          0.0028190133453291346
+        ],
+        "median": 0.0028190133453291346
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.10526315789473684,
+          0.10526315789473684
+        ],
+        "median": 0.10526315789473684
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.24601063829787234,
+          0.23026897335522162,
+          0.23135652039793322
+        ],
+        "median": 0.23135652039793322
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13319164009918527
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08333333333333333
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6218876664736538,
+          0.6256267409470752,
+          0.44227707006369427
+        ],
+        "median": 0.6218876664736538
+      },
+      "B/op": {
+        "values": [
+          0.42348411934552455,
+          0.42348411934552455,
+          0.42348411934552455
+        ],
+        "median": 0.42348411934552455
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.5078014184397163,
+          0.5836798336798337,
+          0.7080943275971957
+        ],
+        "median": 0.5836798336798337
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.43737574552683894
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.2166561314791404,
+          2.331845238095238,
+          2.542493386243386
+        ],
+        "median": 2.331845238095238
+      },
+      "B/op": {
+        "values": [
+          20.90470723306544,
+          20.90470723306544,
+          21.345838218053927
+        ],
+        "median": 20.90470723306544
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.1317629179331306,
+          2.0708338839698692,
+          2.4373117768267556
+        ],
+        "median": 2.1317629179331306
+      },
+      "B/op": {
+        "values": [
+          19.734104046242773,
+          19.734104046242773,
+          19.734104046242773
+        ],
+        "median": 19.734104046242773
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          15.034173430158052,
+          10.442711774811682,
+          14.710592160133444
+        ],
+        "median": 14.710592160133444
+      },
+      "B/op": {
+        "values": [
+          18.925996204933586,
+          18.925996204933586,
+          18.925996204933586
+        ],
+        "median": 18.925996204933586
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.2861811391223155,
+          2.6490110626885683,
+          3.696144174350377
+        ],
+        "median": 3.2861811391223155
+      },
+      "B/op": {
+        "values": [
+          0.6087646484375,
+          0.6087646484375,
+          0.6087646484375
+        ],
+        "median": 0.6087646484375
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0266622738672209,
+          1.1964445489837159,
+          1.1453193127839514
+        ],
+        "median": 1.1453193127839514
+      },
+      "B/op": {
+        "values": [
+          0.13783719786227897,
+          0.13736963183641976,
+          0.13636201721674732
+        ],
+        "median": 0.13736963183641976
+      },
+      "allocs/op": {
+        "values": [
+          1.150259067357513,
+          1.1472868217054264,
+          1.150388936905791
+        ],
+        "median": 1.150259067357513
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1903793731538779,
+          1.278938705843824,
+          1.1627491577584976
+        ],
+        "median": 1.1903793731538779
+      },
+      "B/op": {
+        "values": [
+          1.1731238394316887,
+          1.1895773554550497,
+          1.2127618925549783
+        ],
+        "median": 1.1895773554550497
+      },
+      "allocs/op": {
+        "values": [
+          1.1462994836488813,
+          1.1472868217054264,
+          1.1493955094991364
+        ],
+        "median": 1.1472868217054264
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.4706116965909277,
+          1.5199057519254744,
+          1.5501758594699329
+        ],
+        "median": 1.5199057519254744
+      },
+      "B/op": {
+        "values": [
+          0.10898770337587334,
+          0.10960902304236822,
+          0.10940397124458814
+        ],
+        "median": 0.10940397124458814
+      },
+      "allocs/op": {
+        "values": [
+          1.4328165374677002,
+          1.4466145833333333,
+          1.4509803921568627
+        ],
+        "median": 1.4466145833333333
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.6343051436343865,
+          1.619237819165008,
+          1.6144000050472098
+        ],
+        "median": 1.619237819165008
+      },
+      "B/op": {
+        "values": [
+          0.5595999387445807,
+          0.5640506423424478,
+          0.5637067183669545
+        ],
+        "median": 0.5637067183669545
+      },
+      "allocs/op": {
+        "values": [
+          1.4383916990920882,
+          1.4447334200260078,
+          1.4434330299089726
+        ],
+        "median": 1.4434330299089726
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.008949856991541591,
+          0.00748648068828277,
+          0.010868497021067501
+        ],
+        "median": 0.008949856991541591
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.0028190133453291346,
+          0.0028190133453291346
+        ],
+        "median": 0.0028190133453291346
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.10526315789473684,
+          0.10526315789473684
+        ],
+        "median": 0.10526315789473684
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.22866947434097645,
+          0.20917734601074825,
+          0.21474514563106797
+        ],
+        "median": 0.21474514563106797
+      },
+      "B/op": {
+        "values": [
+          0.13333333333333333,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08695652173913043,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.7296511627906976,
+          0.515075639019301,
+          0.48154093097913325
+        ],
+        "median": 0.515075639019301
+      },
+      "B/op": {
+        "values": [
+          0.42348411934552455,
+          0.42348411934552455,
+          0.42348411934552455
+        ],
+        "median": 0.42348411934552455
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8361092604930047,
+          0.6703326544467074,
+          0.6119326874043856
+        ],
+        "median": 0.6703326544467074
+      },
+      "B/op": {
+        "values": [
+          0.4238921001926782,
+          0.4238921001926782,
+          0.4238921001926782
+        ],
+        "median": 0.4238921001926782
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.2473669228579563,
+          1.9353010936882329,
+          2.1254711055276383
+        ],
+        "median": 2.1254711055276383
+      },
+      "B/op": {
+        "values": [
+          20.90470723306544,
+          20.90470723306544,
+          20.90470723306544
+        ],
+        "median": 20.90470723306544
+      },
+      "allocs/op": {
+        "values": [
+          1.4444444444444444,
+          1.4444444444444444,
+          1.4444444444444444
+        ],
+        "median": 1.4444444444444444
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          2.757596926301083,
+          2.5694541637508745,
+          1.8697333885895842
+        ],
+        "median": 2.5694541637508745
+      },
+      "B/op": {
+        "values": [
+          19.734104046242773,
+          19.734104046242773,
+          19.35648476257973
+        ],
+        "median": 19.734104046242773
+      },
+      "allocs/op": {
+        "values": [
+          1.1818181818181819,
+          1.1818181818181819,
+          1.1818181818181819
+        ],
+        "median": 1.1818181818181819
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          15.000000000000002,
+          9.75436328377505,
+          13.661317567567568
+        ],
+        "median": 13.661317567567568
+      },
+      "B/op": {
+        "values": [
+          20.49171270718232,
+          20.48987108655617,
+          20.48987108655617
+        ],
+        "median": 20.48987108655617
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          4.257202723939235,
+          2.440168175937904,
+          2.097471363734601
+        ],
+        "median": 2.440168175937904
+      },
+      "B/op": {
+        "values": [
+          0.67913818359375,
+          0.6790771484375,
+          0.6790771484375
+        ],
+        "median": 0.6790771484375
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.180752485175081,
+          1.1666320582564502,
+          1.0963450662197198
+        ],
+        "median": 1.1666320582564502
+      },
+      "B/op": {
+        "values": [
+          0.17390925733669568,
+          0.180688570064249,
+          0.17069585280889202
+        ],
+        "median": 0.17390925733669568
+      },
+      "allocs/op": {
+        "values": [
+          1.272108843537415,
+          1.276360544217687,
+          1.268251273344652
+        ],
+        "median": 1.272108843537415
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.2161415796134012,
+          1.1869362090001685,
+          1.201089466001522
+        ],
+        "median": 1.201089466001522
+      },
+      "B/op": {
+        "values": [
+          1.3996356505245562,
+          1.420405674540523,
+          1.4051502446377142
+        ],
+        "median": 1.4051502446377142
+      },
+      "allocs/op": {
+        "values": [
+          1.2677966101694915,
+          1.270956816257409,
+          1.2704081632653061
+        ],
+        "median": 1.2704081632653061
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.5317076009368369,
+          1.5049361044430707,
+          1.484999679635613
+        ],
+        "median": 1.5049361044430707
+      },
+      "B/op": {
+        "values": [
+          0.11552400039530003,
+          0.11568441680619407,
+          0.11459483652457053
+        ],
+        "median": 0.11552400039530003
+      },
+      "allocs/op": {
+        "values": [
+          1.449163449163449,
+          1.4458762886597938,
+          1.4464516129032259
+        ],
+        "median": 1.4464516129032259
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Inline64",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.6378512364157352,
+          1.6189923791769394,
+          1.6061088221584654
+        ],
+        "median": 1.6189923791769394
+      },
+      "B/op": {
+        "values": [
+          0.5935102806393568,
+          0.5976486311248727,
+          0.5878540001157853
+        ],
+        "median": 0.5935102806393568
+      },
+      "allocs/op": {
+        "values": [
+          1.4623376623376623,
+          1.457142857142857,
+          1.457737321196359
+        ],
+        "median": 1.457737321196359
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.010095123890109001,
+          0.007880025096217776,
+          0.009654594116498386
+        ],
+        "median": 0.009654594116498386
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.002395057010000637,
+          0.0025240997824977846
+        ],
+        "median": 0.0025240997824977846
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.006896551724137931,
+          0.010526315789473684
+        ],
+        "median": 0.010526315789473684
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.17980561555075594,
+          0.21307843261378742,
+          0.2162057877813505
+        ],
+        "median": 0.21307843261378742
+      },
+      "B/op": {
+        "values": [
+          0.08734030197444832,
+          0.06709493219129194,
+          0.042437923250564336
+        ],
+        "median": 0.06709493219129194
+      },
+      "allocs/op": {
+        "values": [
+          0.05,
+          0.03508771929824561,
+          0.08333333333333333
+        ],
+        "median": 0.05
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.792883760067316,
+          3.9347799585517493,
+          3.7650734145579507
+        ],
+        "median": 3.792883760067316
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          5.575720091889027,
+          5.336805555555555,
+          6.224134962988466
+        ],
+        "median": 5.575720091889027
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.662239089184061,
+          5.662239089184061
+        ],
+        "median": 5.662239089184061
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0010647977852205,
+          1.0050895206884958,
+          1.0118806462524277
+        ],
+        "median": 1.0050895206884958
+      },
+      "B/op": {
+        "values": [
+          0.9774980459911967,
+          0.9780412010454611,
+          0.9780412010454611
+        ],
+        "median": 0.9780412010454611
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0257692078795453,
+          1.046535677352637,
+          1.0902840341365132
+        ],
+        "median": 1.046535677352637
+      },
+      "B/op": {
+        "values": [
+          0.9753814894250208,
+          0.9759323147691802,
+          0.9747113235022663
+        ],
+        "median": 0.9753814894250208
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          38.85797779076563,
+          38.596450392784405,
+          35.6438001553197
+        ],
+        "median": 38.596450392784405
+      },
+      "B/op": {
+        "values": [
+          9.253179625336758,
+          8.972093575584847,
+          7.7256834569694455
+        ],
+        "median": 8.972093575584847
+      },
+      "allocs/op": {
+        "values": [
+          159.0,
+          161.0,
+          80.0
+        ],
+        "median": 159.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          38.74475524475525,
+          35.959880726484144,
+          37.91079295154185
+        ],
+        "median": 37.91079295154185
+      },
+      "B/op": {
+        "values": [
+          3.69733383402178,
+          3.676504221308484,
+          3.6597940677757848
+        ],
+        "median": 3.676504221308484
+      },
+      "allocs/op": {
+        "values": [
+          39.75,
+          32.2,
+          40.0
+        ],
+        "median": 39.75
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1470303147061194,
+          1.1930163357771704,
+          1.1120814735364524
+        ],
+        "median": 1.1470303147061194
+      },
+      "B/op": {
+        "values": [
+          0.13912420213772908,
+          0.10734799546033787,
+          0.1326629822221012
+        ],
+        "median": 0.1326629822221012
+      },
+      "allocs/op": {
+        "values": [
+          1.1262745098039215,
+          0.8406819517930629,
+          0.19225136466515777
+        ],
+        "median": 0.8406819517930629
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1175277916156903,
+          1.04198225856236,
+          1.1680507804717501
+        ],
+        "median": 1.1175277916156903
+      },
+      "B/op": {
+        "values": [
+          0.40437853552209513,
+          0.3903252379115154,
+          1.029137802858784
+        ],
+        "median": 0.40437853552209513
+      },
+      "allocs/op": {
+        "values": [
+          0.1887983171180647,
+          0.18907840803913792,
+          1.1352201257861636
+        ],
+        "median": 0.18907840803913792
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.3779584663367326,
+          1.5835257020613864,
+          1.4005246441593788
+        ],
+        "median": 1.4005246441593788
+      },
+      "B/op": {
+        "values": [
+          0.21194602795792603,
+          0.21365556722318757,
+          0.2115508156497213
+        ],
+        "median": 0.21194602795792603
+      },
+      "allocs/op": {
+        "values": [
+          1.38128078817734,
+          1.3796844181459567,
+          1.37426326129666
+        ],
+        "median": 1.3796844181459567
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 1024,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.5114781934728283,
+          1.6317320811740252,
+          1.450063669056212
+        ],
+        "median": 1.5114781934728283
+      },
+      "B/op": {
+        "values": [
+          0.7272070929989873,
+          0.7197674312713342,
+          0.7156409906438516
+        ],
+        "median": 0.7197674312713342
+      },
+      "allocs/op": {
+        "values": [
+          1.388118811881188,
+          1.3783251231527094,
+          1.3769685039370079
+        ],
+        "median": 1.3783251231527094
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.01521158923856419,
+          0.009207328727848619,
+          0.00977981781409624
+        ],
+        "median": 0.00977981781409624
+      },
+      "B/op": {
+        "values": [
+          0.0028190133453291346,
+          0.0028190133453291346,
+          0.0028190133453291346
+        ],
+        "median": 0.0028190133453291346
+      },
+      "allocs/op": {
+        "values": [
+          0.10526315789473684,
+          0.10526315789473684,
+          0.10526315789473684
+        ],
+        "median": 0.10526315789473684
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "FreshCapture",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.3404676718630207,
+          0.1902397743300423,
+          0.20809650852569309
+        ],
+        "median": 0.20809650852569309
+      },
+      "B/op": {
+        "values": [
+          0.13319164009918527,
+          0.13333333333333333,
+          0.13333333333333333
+        ],
+        "median": 0.13333333333333333
+      },
+      "allocs/op": {
+        "values": [
+          0.08333333333333333,
+          0.08695652173913043,
+          0.08695652173913043
+        ],
+        "median": 0.08695652173913043
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          3.978359096313912,
+          2.724963539134662,
+          2.7463884430176564
+        ],
+        "median": 2.7463884430176564
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "CaptureReadRelease",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          5.130808158257936,
+          3.622717724995961,
+          3.87846556233653
+        ],
+        "median": 3.87846556233653
+      },
+      "B/op": {
+        "values": [
+          5.644201095072175,
+          5.644201095072175,
+          5.644201095072175
+        ],
+        "median": 5.644201095072175
+      },
+      "allocs/op": {
+        "values": [
+          7.0,
+          7.0,
+          7.0
+        ],
+        "median": 7.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0023028432748446,
+          0.9805863312394762,
+          1.0047623645738784
+        ],
+        "median": 1.0023028432748446
+      },
+      "B/op": {
+        "values": [
+          0.9780412010454611,
+          0.9774980459911967,
+          0.9780412010454611
+        ],
+        "median": 0.9780412010454611
+      },
+      "allocs/op": {
+        "values": [
+          0.6029411764705882,
+          0.6029411764705882,
+          0.6029411764705882
+        ],
+        "median": 0.6029411764705882
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "Forward16",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.043051661186533,
+          1.032387058128334,
+          1.040468762499
+        ],
+        "median": 1.040468762499
+      },
+      "B/op": {
+        "values": [
+          0.9753914988814317,
+          0.9753914988814317,
+          0.9747113235022663
+        ],
+        "median": 0.9753914988814317
+      },
+      "allocs/op": {
+        "values": [
+          0.5694444444444444,
+          0.5694444444444444,
+          0.5694444444444444
+        ],
+        "median": 0.5694444444444444
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          35.51013787510138,
+          36.78611332801277,
+          40.70423805229937
+        ],
+        "median": 36.78611332801277
+      },
+      "B/op": {
+        "values": [
+          9.061762391817467,
+          10.181818181818182,
+          10.44323823393129
+        ],
+        "median": 10.181818181818182
+      },
+      "allocs/op": {
+        "values": [
+          162.0,
+          null,
+          54.0
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWrite",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          33.4059003051882,
+          32.82977207977208,
+          23.105783995905135
+        ],
+        "median": 32.82977207977208
+      },
+      "B/op": {
+        "values": [
+          3.7027809033917376,
+          3.2176344260302283,
+          3.8448565788511684
+        ],
+        "median": 3.7027809033917376
+      },
+      "allocs/op": {
+        "values": [
+          27.0,
+          20.25,
+          32.4
+        ],
+        "median": 27.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0521322075102144,
+          1.066773274764507,
+          1.14401476673619
+        ],
+        "median": 1.066773274764507
+      },
+      "B/op": {
+        "values": [
+          0.16304860452908226,
+          0.1613529058887472,
+          0.1627735520997089
+        ],
+        "median": 0.1627735520997089
+      },
+      "allocs/op": {
+        "values": [
+          1.3547854785478548,
+          1.3583815028901733,
+          1.3611570247933884
+        ],
+        "median": 1.3583815028901733
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "DirtyCheckpoint",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1329421011611214,
+          1.1436203719759777,
+          1.0367658703673248
+        ],
+        "median": 1.1329421011611214
+      },
+      "B/op": {
+        "values": [
+          1.4348707726147925,
+          1.33161549335094,
+          1.3696034475104917
+        ],
+        "median": 1.3696034475104917
+      },
+      "allocs/op": {
+        "values": [
+          1.3536685902720527,
+          1.352796052631579,
+          1.3544407894736843
+        ],
+        "median": 1.3536685902720527
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "append_only",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.5064132302052424,
+          1.5393757740007539,
+          1.6912603935283785
+        ],
+        "median": 1.5393757740007539
+      },
+      "B/op": {
+        "values": [
+          0.22615885278806014,
+          0.22952465300572597,
+          0.22635085363542146
+        ],
+        "median": 0.22635085363542146
+      },
+      "allocs/op": {
+        "values": [
+          1.483839373163565,
+          1.485798237022527,
+          1.4752186588921283
+        ],
+        "median": 1.483839373163565
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "layout": "Pointer4096",
+    "records": 2048,
+    "operation": "IncrementalWriteSync",
+    "numerator": "cow_btree",
+    "denominator": "btree",
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.5735340051662459,
+          1.631151858032128,
+          1.7456117199064973
+        ],
+        "median": 1.631151858032128
+      },
+      "B/op": {
+        "values": [
+          0.755338181823642,
+          0.7707364584523935,
+          0.7691107531811405
+        ],
+        "median": 0.7691107531811405
+      },
+      "allocs/op": {
+        "values": [
+          1.4809384164222874,
+          1.484344422700587,
+          1.4838709677419355
+        ],
+        "median": 1.4838709677419355
+      }
+    }
+  }
+]

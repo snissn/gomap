@@ -1,0 +1,22 @@
+{
+  "initial": {
+    "test_pass": 10,
+    "package_pass": 3,
+    "failures": 0
+  },
+  "full-normal": {
+    "test_pass": 565,
+    "package_pass": 7,
+    "failures": 0
+  },
+  "full-race": {
+    "test_pass": 564,
+    "package_pass": 7,
+    "failures": 0
+  },
+  "full-safe": {
+    "test_pass": 565,
+    "package_pass": 7,
+    "failures": 0
+  }
+}

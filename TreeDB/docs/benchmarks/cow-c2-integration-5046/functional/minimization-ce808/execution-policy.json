@@ -1,0 +1,17 @@
+{
+  "candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "source": "Git archive HEAD streamed to isolated owned Linux185 directory; no .git",
+  "runner_commands": [
+    "bash /mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/minimization-ce808/run-initial.sh",
+    "bash /mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/minimization-ce808/run-gates.sh"
+  ],
+  "scripts": {
+    "run-initial.sh": "59390df7c10558cb6507a8fa509c9a0e99e5034bbbff5bac1009681f01c6215a",
+    "run-gates.sh": "8be394dbf3e7c387f3ec742e639b5d62ccbdb96667ad2962ce0616f3f5d7399d",
+    "verify.py": "6d0522f7744f5731a56de6d73b925d2d95c3b3978f711a9ec0ab27f56e99e31c"
+  },
+  "go_binary": "/home/mikers/.gvm/gos/go1.26.3/bin/go",
+  "timing_claim": false,
+  "other_go_jobs_observed_before_start": false,
+  "proof": "verify.py compares all relative paths and hashes including extras before first run and after final gate; exit TSV receipts retained"
+}

@@ -87,7 +87,7 @@ coverage boundary.
 
 `cow_btree` adds process-local immutable cache cuts, not a WAL format or a
 different durable-root selection rule. Recovery still validates the selected
-profile's dependency-complete command prefix or sealed no-WAL root and consumes
+profile's dependency-complete command prefix or sealed `no_wal_fast` root and consumes
 recorded point RID/revision metadata with WAL suppression. It cannot infer
 durability from visible COW roots or an in-memory flush receipt.
 

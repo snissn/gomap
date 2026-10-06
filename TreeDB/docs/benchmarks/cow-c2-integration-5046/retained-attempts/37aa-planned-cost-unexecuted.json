@@ -1,0 +1,9 @@
+{
+  "candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "state": "UNEXECUTED; superseded before any collection by source-reviewed successor setup removal",
+  "planned_driver_sha256": "b94d9df8385f7ccc200616999f196a7c40b194abc33691c339cd76e378335781",
+  "actual_commands": [],
+  "actual_cost_runs": 0,
+  "reason": "Full merge cursor construction for every COW successor was verified avoidable on exact retained empty backend cuts. New freeze receives the unchanged full27raw+18MVCC collection. All ce808 actual timings remain historical ce808.",
+  "recorded_utc": "2026-10-06T05:51:26.045017+00:00"
+}

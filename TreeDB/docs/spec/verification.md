@@ -50,7 +50,7 @@ Additional integration gates are:
 
 - Deterministic preparation/preappend/preswap barriers across two shards, final
   staged/live/frame/replayed RID/revision identity and concurrent accepted writers.
-- Reader progress during private preparation and durability pauses; no-WAL sync
+- Reader progress during private preparation and durability pauses; `no_wal_fast` sync
   and checkpoint/admitted-writer/flush lock progression.
 - Captured-prefix chunking, one final backend publication, late history/same-ts
   writes and physical tombstones; accepted-plus-error and handoff-admission

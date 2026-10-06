@@ -76,7 +76,7 @@ one already-prepared cut installs after append. Snapshots pin that cut without
 rotating buffered writes. COW callback/conditional mutations, range deletion,
 reverse traversal and backend/manual-root bypass refuse before effects.
 
-No-WAL explicit sync releases writer/admission locks before Checkpoint. Flush
+`no_wal_fast` explicit sync releases writer/admission locks before Checkpoint. Flush
 keeps exact captured-prefix precedence until one backend publication and safe
 basis handoff; an accepted-plus-error receipt prevents stale reapplication.
 See the [COW publication contract](../TreeDB/docs/spec/cow-cache-publication.md).

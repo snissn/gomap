@@ -1,0 +1,24 @@
+{
+  "recorded_utc": "2026-10-06T06:02:16.438321+00:00",
+  "current_candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "current_source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "measured_candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "guard_disposition": "reuse applicable for the three original measured default public-read cases",
+  "new_timing_claim": false,
+  "root_accepts_applicability": true,
+  "reason": "Since37aa, only COW successor selection and the COW-owned batch arena normalization change library runtime. The measured default guard invokes inline cached Get, checkpointed backend pointer Get and pointer GetAppend, whose selectors/non-COW dispatch/callees and fixtures are unchanged. No new timing is claimed; original limited b9 three-case measurements retain their original binary/source labels.",
+  "limits": [
+    "Source applicability only; no new default-path timing or promise for compiler/layout effects.",
+    "Three original read cases only; no default-writer/all-profile/sustained, durability or drain claim.",
+    "Measured about7ns inline lifecycle-selector delta remains disclosed.",
+    "C2 wholecost held until actual final45 and explicit residual disposition."
+  ],
+  "bindings": {
+    "default-read-guard-b9e5587/root-limited-disposition.json": "23b39b7f91229f457e1ee47072da8f4c7a4f0af303466e61e401d58d64826e47",
+    "default-read-guard-37aa-applicability.json": "73ea778acee7e8ce17bac5203c1be75f20e11117620aaf4d5ca8425e46133f19",
+    "candidate-4add47-root-root-source-check.json": "8841bf85712cded8154a13e99af35a0200757dcb62053c2fa165c6e8a620e92a",
+    "candidate-11474-independent-review/8d743-successor-source-review.md": "a30f68db59af64dc0843110d8a5720bc9d3fbab2570e4e5b706316b55c2ce178",
+    "candidate-11474-independent-review/4add47-empty-staging-source-review.md": "fe25a7fde30aea750c915a5df426770aaf8e7702ccc010f7ba08cae0596b3e58"
+  },
+  "preceding_applicability_candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c"
+}

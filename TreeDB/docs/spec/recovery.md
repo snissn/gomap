@@ -52,7 +52,7 @@ or retry an ambiguous command through a different cache mode.
 
 A COW flush's accepted-prefix receipt is process-local handoff authority. On
 reopen, durable roots and Applied-LSN coverage determine replay/cleanup; an
-in-memory receipt or visible cut does not prove durability. No-WAL recovery
+in-memory receipt or visible cut does not prove durability. `no_wal_fast` recovery
 continues to select a complete sealed root, and recent relaxed writes can be
 absent. Value-log and dictionary assets referenced by the selected recovery
 state remain persistent dependencies.
