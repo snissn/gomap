@@ -9,33 +9,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// rewriteLeafResourceCapture is private to one COW Apply. Stable append APIs
+// applyLeafResourceCapture is private to one COW Apply chain. Stable append APIs
 // supply raw identity/frontier and dictionary/template authority; reading bytes
 // or scanning the candidate cannot replace those producer proofs. Lane wrappers
 // share this builder. Aborted/conflicting applies abandon it; successful applies
 // transfer the frozen set through the existing finalize ownership boundary.
-type rewriteLeafResourceCapture struct {
+type applyLeafResourceCapture struct {
 	mu      sync.Mutex
 	builder *rootpublication.StableResourceSetBuilder
 }
 
-type rewriteLeafResourceLog struct {
+type applyLeafResourceLog struct {
 	inner   LeafPageLog
-	capture *rewriteLeafResourceCapture
+	capture *applyLeafResourceCapture
 }
 
-func newRewriteLeafResourceLog(appender bulk.LeafPageAppender) (*rewriteLeafResourceLog, error) {
+func newApplyLeafResourceLog(appender bulk.LeafPageAppender) (*applyLeafResourceLog, error) {
 	log, ok := appender.(LeafPageLog)
 	if !ok {
-		return nil, fmt.Errorf("%w: rewrite outer-leaf producer lacks flush authority", rootpublication.ErrUnresolvedResource)
+		return nil, fmt.Errorf("%w: outer-leaf producer lacks flush authority", rootpublication.ErrUnresolvedResource)
 	}
 	if _, ok := log.(LeafPageStableLog); !ok {
-		return nil, fmt.Errorf("%w: rewrite outer-leaf producer lacks stable append authority", rootpublication.ErrUnresolvedResource)
+		return nil, fmt.Errorf("%w: outer-leaf producer lacks stable append authority", rootpublication.ErrUnresolvedResource)
 	}
-	return &rewriteLeafResourceLog{inner: log, capture: &rewriteLeafResourceCapture{builder: rootpublication.NewStableResourceSetBuilder()}}, nil
+	return &applyLeafResourceLog{inner: log, capture: &applyLeafResourceCapture{builder: rootpublication.NewStableResourceSetBuilder()}}, nil
 }
 
-func (l *rewriteLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet, err error) error {
+func (l *applyLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet, err error) error {
 	if err == nil {
 		err = validateLeafPageStableResources(ptrs, resources)
 	}
@@ -55,13 +55,13 @@ func (l *rewriteLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootp
 	return nil
 }
 
-func (l *rewriteLeafResourceLog) AppendLeafPage(data []byte) (page.LeafLogPtr, error) {
+func (l *applyLeafResourceLog) AppendLeafPage(data []byte) (page.LeafLogPtr, error) {
 	ptr, resources, err := l.inner.(LeafPageStableLog).AppendLeafPageWithStableResources(data)
 	err = l.accept([]page.LeafLogPtr{ptr}, resources, err)
 	return ptr, err
 }
 
-func (l *rewriteLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogPtr, error) {
+func (l *applyLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogPtr, error) {
 	if stable, ok := l.inner.(LeafPageStableBatchLog); ok {
 		ptrs, resources, err := stable.AppendLeafPagesWithStableResources(data)
 		err = l.accept(ptrs, resources, err)
@@ -78,18 +78,18 @@ func (l *rewriteLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogP
 	return ptrs, nil
 }
 
-func (l *rewriteLeafResourceLog) PreparedLeafPageAppends() bool {
+func (l *applyLeafResourceLog) PreparedLeafPageAppends() bool {
 	_, ok := l.inner.(LeafPagePreparedStableLog)
 	return ok
 }
 
-func (l *rewriteLeafResourceLog) PreparedLeafPageBatchAppends() bool {
+func (l *applyLeafResourceLog) PreparedLeafPageBatchAppends() bool {
 	_, batch := l.inner.(LeafPagePreparedStableBatchLog)
 	_, refs := l.inner.(LeafPagePreparedChildRefStableBatchLog)
 	return batch || refs
 }
 
-func (l *rewriteLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (page.LeafLogPtr, error) {
+func (l *applyLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (page.LeafLogPtr, error) {
 	if stable, ok := l.inner.(LeafPagePreparedStableLog); ok {
 		ptr, resources, err := stable.AppendPreparedLeafPageWithStableResources(data, payload)
 		err = l.accept([]page.LeafLogPtr{ptr}, resources, err)
@@ -98,7 +98,7 @@ func (l *rewriteLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (p
 	return l.AppendLeafPage(data)
 }
 
-func (l *rewriteLeafResourceLog) AppendPreparedLeafPages(data, payloads [][]byte) ([]page.LeafLogPtr, error) {
+func (l *applyLeafResourceLog) AppendPreparedLeafPages(data, payloads [][]byte) ([]page.LeafLogPtr, error) {
 	if stable, ok := l.inner.(LeafPagePreparedStableBatchLog); ok {
 		ptrs, resources, err := stable.AppendPreparedLeafPagesWithStableResources(data, payloads)
 		err = l.accept(ptrs, resources, err)
@@ -107,7 +107,7 @@ func (l *rewriteLeafResourceLog) AppendPreparedLeafPages(data, payloads [][]byte
 	return l.AppendLeafPages(data)
 }
 
-func (l *rewriteLeafResourceLog) AppendPreparedLeafPageChildRefs(data, payloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+func (l *applyLeafResourceLog) AppendPreparedLeafPageChildRefs(data, payloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
 	if stable, ok := l.inner.(LeafPagePreparedChildRefStableBatchLog); ok {
 		out, resources, err := stable.AppendPreparedLeafPageChildRefsWithStableResources(data, payloads, refs)
 		ptrs := make([]page.LeafLogPtr, len(out))
@@ -132,12 +132,12 @@ func (l *rewriteLeafResourceLog) AppendPreparedLeafPageChildRefs(data, payloads 
 	return refs, nil
 }
 
-func (l *rewriteLeafResourceLog) ConcurrentLeafPageAppends() bool {
+func (l *applyLeafResourceLog) ConcurrentLeafPageAppends() bool {
 	p, ok := l.inner.(LeafPageConcurrentAppendLog)
 	return ok && p.ConcurrentLeafPageAppends()
 }
 
-func (l *rewriteLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool) {
+func (l *applyLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool) {
 	provider, ok := l.inner.(LeafPageLogLaneProvider)
 	if !ok {
 		return nil, false
@@ -149,20 +149,20 @@ func (l *rewriteLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool)
 	if _, stable := lane.(LeafPageStableLog); !stable {
 		return nil, false
 	}
-	return &rewriteLeafResourceLog{inner: lane, capture: l.capture}, true
+	return &applyLeafResourceLog{inner: lane, capture: l.capture}, true
 }
 
-func (l *rewriteLeafResourceLog) Flush() error { return l.inner.Flush() }
-func (l *rewriteLeafResourceLog) Sync() error  { return l.inner.Sync() }
+func (l *applyLeafResourceLog) Flush() error { return l.inner.Flush() }
+func (l *applyLeafResourceLog) Sync() error  { return l.inner.Sync() }
 
-func (l *rewriteLeafResourceLog) abandon() {
+func (l *applyLeafResourceLog) abandon() {
 	if l != nil && l.capture.builder != nil {
 		l.capture.builder.Abandon()
 		l.capture.builder = nil
 	}
 }
 
-func (l *rewriteLeafResourceLog) freeze() (*rootpublication.StableResourceSet, error) {
+func (l *applyLeafResourceLog) freeze() (*rootpublication.StableResourceSet, error) {
 	if l == nil {
 		return nil, nil
 	}

@@ -283,6 +283,54 @@ rules, so this admission does not grant an independent indefinite-retention
 or reclamation authority. No directory enumeration or new on-disk format is
 part of this capture.
 
+### 3.4 Ordinary destructive publication
+
+Ordinary user-root overwrite, point-delete, and range-delete publication can use
+successful COW Apply's exact removed-pointer counts instead of decoding values
+from every compressed outer leaf in the candidate. This certificate is private
+and process-local: it names one index, predecessor sequence/user root, final user
+root, and unchanged system root. Optimistic and serialized writers construct it
+only after successful Apply; publication still validates the expected predecessor.
+Cached checkpoint's real physical chunk group fixes that basis and ANDs complete
+Apply evidence across every chunk, including net-zero contributions. Generic,
+ordered-root, and descriptor-changing callers cannot acquire this certificate
+from a delta flag. No certificate is replayed or persisted.
+
+The exact logical-count projection requires a valid tracker at that predecessor
+sequence and checked subtraction/addition. Candidate capture checks a pinned live
+predecessor, registers producer-owned segments, and rejects user-root aliases
+with the system root or any descriptor-selected root. It then uses the existing
+CRC-checking pager topology collector for exact raw membership, without decoding
+ordinary outer-leaf value bodies. Unchanged nonaliased collection/system roots
+remain included. Missing Apply evidence, stale/unknown/underflowing/overflowing
+counts, mismatched bases, aliases, unsupported topology, and recovery before a
+live snapshot use the unchanged full scanner. Fallback count repair remains
+candidate-private until activation; rejected candidates cannot repair the tracker.
+Chunk-delta arithmetic overflow rejects the private group before publication.
+
+The shared COW stable producer capture forwards ordinary, prepared, batch,
+ChildRef, and concurrent lane append APIs. It retains dictionary/template authority
+and exact raw handles/frontiers across each private Apply chain, then transfers
+ownership through finalize. Abort/conflict/partial failure abandons or releases
+those resources through the existing ownership boundary. Known forwarding adapters
+check their actual producers before choosing stable appends. Legacy producers
+retain their existing publication path; missing required dictionary/template authority still
+fails closed. Produced raw segments used only by discarded private intermediate
+roots are filtered from final membership; inherited dictionary/template and packed
+manifest authority keep their existing closure rules. Additive publication keeps
+its existing predecessor-reuse plan, recapturing registered raw handles before
+filtering mutable producer tokens.
+
+This removes repeated compressed outer value-body projection; it still performs
+pager topology and descriptor work per publication. Temporary allocation depends
+on visited pager pages, segment/count membership, and stable producer identities
+for the private Apply chain, rather than retaining decoded outer pages. It adds
+no persistent cache, raw reference tracker, cap, scheduler, format, or batch-size
+change. `treedb.durable_root.candidate.*` counters witness the mechanism; matched
+native workloads and relevant process memory remain performance acceptance gates.
+Exact candidate membership leaves both recoverable slots, queued publication,
+snapshot/replay pins, and GC's deletion authority intact.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:
@@ -339,14 +387,14 @@ rather than using the ordinary additive publication superset. Shared logical
 pointers remain counted until their last matching reference disappears. An
 unmatched swap contributes no count change.
 
-Unknown, stale, or underflowing reference counts use the original full candidate
+Unknown, stale, underflowing, or overflowing reference counts use the original full candidate
 scanner. Replacing collection descriptor aliases can remove pointer-backed
 system descriptor references outside the collection's local delta, so the whole
 publication currently uses that full scanner. A system descriptor rewrite also
 uses it. Exact fallback counts remain private until successful activation;
 aborts and publication conflicts cannot repair the live tracker.
 
-Ordinary COW Apply uses the installed producer's stable append APIs. Its private
+Rewrite and certified ordinary COW Apply use the installed producer's stable append APIs. Its private
 resource builder retains the exact raw handle/frontier and dictionary/template
 closure while candidate projection captures fresh registered raw membership.
 Producer dictionary/template authority then passes through the existing finalize

@@ -18,17 +18,23 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-// Exercise the ordinary public COW rewrite, rather than only calling the
+// Exercise the ordinary public COW publication, rather than only calling the
 // stable append API directly. Byte lookup alone cannot authorize publication.
+func TestOrdinaryExactClosureDictionarySwitchProducerAuthority(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) { testRewriteExactClosureDictionarySwitchProducerAuthority(t, replay, true) })
+	}
+}
+
 func TestRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T) {
 	for _, replay := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
-			testRewriteExactClosureDictionarySwitchProducerAuthority(t, replay)
+			testRewriteExactClosureDictionarySwitchProducerAuthority(t, replay, false)
 		})
 	}
 }
 
-func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, replay bool) {
+func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, replay, ordinary bool) {
 	for _, fallback := range []bool{false, true} {
 		for _, authority := range []bool{false, true} {
 			t.Run(fmt.Sprintf("fallback=%v/authority=%v", fallback, authority), func(t *testing.T) {
@@ -72,7 +78,7 @@ func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, repl
 				beforeSeq := db.currentCommitSeq()
 				if authority {
 					db.testFailFinalizeCommit.Store(true)
-					err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+					err := applyExactClosureFixtureReplacement(db, old, fresh, ordinary)
 					db.testFailFinalizeCommit.Store(false)
 					if !errors.Is(err, errTestFinalizeCommitFailpoint) || db.currentCommitSeq() != beforeSeq {
 						t.Fatalf("producer abort err=%v sequence=%d want %d", err, db.currentCommitSeq(), beforeSeq)
@@ -83,7 +89,7 @@ func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, repl
 				}
 				scans := 0
 				db.testScanCandidateExternalReferencesHook = func() { scans++ }
-				err = db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+				err = applyExactClosureFixtureReplacement(db, old, fresh, ordinary)
 				db.testScanCandidateExternalReferencesHook = nil
 				if !authority {
 					if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
@@ -133,14 +139,20 @@ func testRewriteExactClosureDictionarySwitchProducerAuthority(t *testing.T, repl
 }
 
 func TestRewriteExactClosureTemplateProducerAuthority(t *testing.T) {
+	testExactClosureTemplateProducerAuthority(t, false)
+}
+func TestOrdinaryExactClosureTemplateProducerAuthority(t *testing.T) {
+	testExactClosureTemplateProducerAuthority(t, true)
+}
+func testExactClosureTemplateProducerAuthority(t *testing.T, ordinary bool) {
 	for _, replay := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
-			testRewriteExactClosureTemplateProducerAuthority(t, replay)
+			testRewriteExactClosureTemplateProducerAuthority(t, replay, ordinary)
 		})
 	}
 }
 
-func testRewriteExactClosureTemplateProducerAuthority(t *testing.T, replay bool) {
+func testRewriteExactClosureTemplateProducerAuthority(t *testing.T, replay, ordinary bool) {
 	db, writer, old, fresh := setupExactRewritePairWithValueLogOptions(t, ValueLogOptions{})
 	if replay {
 		writer = installExactRewriteReplayLeafProducer(t, db)
@@ -219,7 +231,7 @@ func testRewriteExactClosureTemplateProducerAuthority(t *testing.T, replay bool)
 	db.valueLogManager.SetTemplateLookup(func(id uint64) ([]byte, error) {
 		return provider.GetTemplateDef(context.Background(), id)
 	}, templ.DecodeOptions{})
-	if err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true); err != nil {
+	if err := applyExactClosureFixtureReplacement(db, old, fresh, ordinary); err != nil {
 		t.Fatal(err)
 	}
 	found := false

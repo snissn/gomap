@@ -399,6 +399,11 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
+	leafCapture := b.db.ordinaryLeafResourceCapture()
+	defer leafCapture.abandon()
+	if leafCapture != nil {
+		z.SetLeafPageLog(leafCapture)
+	}
 	applyOpts := b.flushApplyOptions()
 	applyOpts.CollectOldPointerRefs = b.db.shouldCollectValueLogRefDelta(baseSeq)
 	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
@@ -442,6 +447,14 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	if hook := b.db.testAfterOptimisticApplyHook; hook != nil {
 		hook()
 	}
+	producerResources, err := leafCapture.freeze()
+	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		return false, errors.Join(err, freeErr)
+	}
+	defer producerResources.Release()
 	entries, ranges := b.batch.ApplyPlan()
 	negativeCoverage := b.db.prepareNegativeCoverage(idx, baseSeq, rootID, newRoot, entries)
 	recordVacuumMutation := func() {
@@ -570,6 +583,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 	}
 
+	certifyOrdinaryApplyProjection(vlogRefDelta, idx, baseSeq, rootID, newRoot, sysRoot, applyResult.OldPointerRefsCollected, leafCapture)
+
 	rootLocksReleased := false
 	releaseRootSerialization := func() {
 		b.db.commitMu.Unlock()
@@ -578,7 +593,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{durableResources: producerResources, skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -594,6 +609,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 			return false, err
 		}
 		opts := commandWALFinalizeOptions(intent)
+		opts.durableResources = producerResources
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
@@ -718,6 +734,13 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		}
 	}
 
+	z := idx.zipper
+	leafCapture := b.db.ordinaryLeafResourceCapture()
+	defer leafCapture.abandon()
+	if leafCapture != nil {
+		z = idx.zipper.CloneWithAllocator(idx.allocator)
+		z.SetLeafPageLog(leafCapture)
+	}
 	applyOpts := b.flushApplyOptions()
 	applyOpts.CollectOldPointerRefs = b.db.shouldCollectValueLogRefDelta(baseSeq)
 	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
@@ -731,7 +754,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	var spanNativePublishSnapshot flushApplySpanNativePublishSnapshot
 	applyWithOptions := flushApplyUseOptions(applyOpts)
 	if applyWithOptions {
-		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
+		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
 		applyResult = result
 		spanNativePublishSnapshot = newFlushApplySpanNativePublishSnapshot(result)
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
@@ -742,7 +765,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		metrics = result.Metrics
 		err = applyErr
 	} else {
-		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
+		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
 		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions, applyOpts.SpanNativeApply)
 	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
@@ -752,6 +775,12 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
+	producerResources, err := leafCapture.freeze()
+	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+		return err
+	}
+	defer producerResources.Release()
 	entries, ranges := b.batch.ApplyPlan()
 	negativeCoverage := b.db.prepareNegativeCoverage(idx, baseSeq, rootID, newRoot, entries)
 	recordVacuumMutation := func() {
@@ -786,6 +815,8 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	certifyOrdinaryApplyProjection(vlogRefDelta, idx, baseSeq, rootID, newRoot, sysRoot, applyResult.OldPointerRefsCollected, leafCapture)
+
 	b.db.writeMu.Unlock()
 	rootLocksReleased = true
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
@@ -800,7 +831,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{durableResources: producerResources, skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -812,6 +843,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 			return err
 		}
 		opts := commandWALFinalizeOptions(intent)
+		opts.durableResources = producerResources
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
