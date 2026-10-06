@@ -20,7 +20,7 @@ and [lifecycle contract](../../spec/r1-row-lifecycle.md). The
 | Baseline harness and complete-row/current/historical oracles | Accepted [#5057 baseline](https://github.com/snissn/gomap/issues/5057#issuecomment-6009386341); tooling merged in [#5064](https://github.com/snissn/gomap/pull/5064) |
 | Read/mutation behavior and integration | Focused normal/race and selected mutation/recovery checks pass; [#5065](https://github.com/snissn/gomap/pull/5065) has [clean hosted review](https://github.com/snissn/gomap/pull/5065#issuecomment-6011771195), required CI/merge pending |
 | Affected final typed-read costs | Original `00d2c370` packet validated; three stable matched groups, twelve inconclusive groups, one newly enabled range; no stable matched group loses more than 15% throughput |
-| Maintenance prerequisite and supported lifecycle tooling | Independently reviewed integration [#5071](https://github.com/snissn/gomap/pull/5071), `f79616f2`; hosted review, required CI and landing pending |
+| Maintenance prerequisite and supported lifecycle tooling | Independently reviewed integration [#5071](https://github.com/snissn/gomap/pull/5071), `f79616f2`; [clean hosted review](https://github.com/snissn/gomap/pull/5071#issuecomment-6011838541), required CI and landing pending |
 | Retained lifecycle / physical and memory interpretation | Pending reviewed landed source and accepted five-process packet; targeted reclamation diagnostics are supporting evidence only |
 | Immutable public artifacts and fresh download/restore/replay | Pending; private staging and successful frozen-binary replay are not public publication |
 | Final E / parent decision | Pending coordinator disposition of remaining gates |
@@ -28,10 +28,25 @@ and [lifecycle contract](../../spec/r1-row-lifecycle.md). The
 ## Frozen provenance and publication status
 
 Original packet, source, executable and raw bytes retain their measured identity.
-The final read runtime inventory and A harness match the reviewed read implementation in
-`c8c54ccc6c9ded2020366571349820ae28cbc87d`; this applicability check does not
-relabel the measured `00d2c370` packet as a later integration. Maintenance has
-separate runtime/harness inputs and needs its own retained freeze.
+Independent review permits scoped reuse of the five durable, flushed read routes
+from measured `00d2c370` at reviewed `f79616f2`. The complete runtime inventories
+**differ**. The A comparator harness, collection `api.go`, `document_materializer.go`
+and `column_asset_manager.go`, mapped-resource scalar statistics, and caching/backend
+snapshot acquisition, read and release implementation files are byte-identical:
+`caching/{db,snapshot,snapshot_iterator_lifetime,snapshot_read_lifetime}.go` and
+`db/{api,db,root_snapshot,snapshot_pins,snapshot_read_lifetime,snapshot_iterator_lifetime}.go`
+(all under `TreeDB/`). The scalar accessor is in `internal/mappedresource/manager.go`.
+The harness finishes its flush before these reads, has no pending mutations, and
+exercises neither zombie deletion nor native append paths.
+
+Changed production paths are `db/durable_root_runtime.go`, `db/leaf_generation_gc.go`,
+`db/leaf_manifest_revision_gc.go`, `db/vacuum_online.go`, `db/wal_recovery.go`,
+`internal/rootpublication/resource_selector.go`, `internal/valuelog/manager.go` and
+`internal/valuelog/stable_resource.go` (all under `TreeDB/`). These changes concern
+maintenance, native append metadata and shutdown. Read reuse does not cover
+mutation, maintenance, reclamation or concurrent performance. The original
+`00d2c370` measurements, packet, executable and runtime hash below remain unchanged;
+maintenance needs its own retained freeze.
 
 | Evidence | Measured source | Packet SHA256 | Publication / validation |
 | --- | --- | --- | --- |
