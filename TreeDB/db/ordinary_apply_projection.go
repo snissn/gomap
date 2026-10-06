@@ -59,8 +59,13 @@ func supportsOrdinaryStableLeafCapture(log LeafPageLog) bool {
 		}
 		return hasProducer
 	default:
-		_, ok := log.(LeafPageStableLog)
-		return ok
+		if _, ok := log.(LeafPageStableLog); !ok {
+			return false
+		}
+		if mode, ok := log.(LeafPageStableAppendLog); ok {
+			return mode.StableLeafPageAppends()
+		}
+		return true
 	}
 }
 

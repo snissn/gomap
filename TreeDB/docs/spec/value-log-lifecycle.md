@@ -348,7 +348,12 @@ ChildRef, and concurrent lane append APIs. It retains dictionary/template author
 and exact raw handles/frontiers across each private Apply chain, then transfers
 ownership through finalize. Abort/conflict/partial failure abandons or releases
 those resources through the existing ownership boundary. Known forwarding adapters
-check their actual producers before choosing stable appends. Legacy producers
+check their actual producers before choosing stable appends. Dual-mode producers
+can declare that their configured legacy mode lacks raw stable append capability;
+replay forwarding preserves this mode selection. This check precedes Apply and
+ignores registry/dictionary/template readiness: an authority failure after selecting
+stable append still aborts, without retrying legacy append. Strict rewrite capture
+retains its original authority requirements. Legacy producers
 retain their existing publication path; missing required dictionary/template authority still
 fails closed. Produced raw segments used only by discarded private intermediate
 roots are filtered from final membership; inherited dictionary/template and packed

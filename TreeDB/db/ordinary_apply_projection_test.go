@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -256,4 +257,63 @@ func TestOrdinaryGroupFinalFailureRejectsReuseAndFreshGroupRetries(t *testing.T)
 		t.Fatal(err)
 	}
 	assertCandidateTrackerMatchesFullScan(t, db)
+}
+
+// A dual-mode producer's stable API is optional for legacy value_vlog leaves.
+// Exercise the installed hint/lane adapters and replay forwarding through all
+// ordinary callers; the same producer must still fail strict rewrite capture.
+func TestOrdinaryOptionalStableProducerLegacyMode(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		for _, route := range []string{"optimistic", "serialized", "group"} {
+			t.Run(fmt.Sprintf("replay=%v/route=%s", replay, route), func(t *testing.T) {
+				db, _, old, fresh := setupExactRewritePair(t)
+				legacy := newRewriteWriter(ValueLogDirPath(db.dir), 31, 0, 0)
+				t.Cleanup(func() { _ = legacy.Close() })
+				var producer LeafPageLog = legacy
+				if replay {
+					producer = replayInlineLeafPageLog{appender: &replayInlineAppender{db: db, writer: legacy, nextRID: 90_000}}
+				}
+				db.SetLeafPageLog(producer)
+				beforeSeq := db.currentCommitSeq()
+				err := db.applyRewriteSwapBatchSerialized([]rewriteSwap{{key: []byte("a"), oldPtr: old, newPtr: fresh}}, true)
+				if !errors.Is(err, rootpublication.ErrUnresolvedResource) || db.currentCommitSeq() != beforeSeq {
+					t.Fatalf("strict rewrite capture downgraded: err=%v seq=%d", err, db.currentCommitSeq())
+				}
+				var b *Batch
+				if route == "group" {
+					group, err := db.BeginRootPublicationBuildGroup()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer group.Close()
+					b = db.NewPhysicalBatch().(*Batch)
+					if err := b.SetRootPublicationBuildGroup(group, true); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					b = db.NewBatch().(*Batch)
+				}
+				defer b.Close()
+				if err := b.SetPointer([]byte("a"), fresh); err != nil {
+					t.Fatal(err)
+				}
+				beforeScans := db.durableRootCandidateFullScans.Load()
+				if route == "serialized" {
+					err = b.writeSerialized(true, nil, 0, nil)
+				} else {
+					err = b.WriteSync()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if db.durableRootCandidateFullScans.Load() != beforeScans+1 {
+					t.Fatal("legacy destructive producer skipped full candidate projection")
+				}
+				if got, err := db.Get([]byte("a")); err != nil || !bytes.Equal(got, []byte("new")) {
+					t.Fatalf("ordinary legacy read=%q err=%v", got, err)
+				}
+				assertCandidateTrackerMatchesFullScan(t, db)
+			})
+		}
+	}
 }
