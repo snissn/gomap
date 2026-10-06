@@ -274,7 +274,17 @@ introduced and the root external policy remains unchanged.
 `campaign`, `status` (`complete`, `failed`, `incomplete`) and `pins`. Each pin is
 an exact absolute regular-file `path` plus `sha256`. Complete rows require
 `stdout` (the actual two JSONL events), `read_audit`, `resources`,
-`artifact_review` and `costs`. Costs contain only campaign/setup_seconds/
+`artifact_review`, `costs`, `manifest`, `native_oracle`, `promoted_oracle` and
+`sources`. The read/audit input is the complete outer
+`TRIAL24_READ_AUDIT_ACCOUNTING_ONLY` receipt, with nested read and audit proofs,
+population observations, source identity/pins, derivation and limitations.
+Its raw stdout/manifest/oracle hashes, nested raw planned/result report hashes
+and four audit attachment hashes must join the retained bytes. The manifest
+and oracle identities must agree with the campaign, source head/tree and raw
+admission. `sources` pins a JSON mapping from the accounting proofs' original
+absolute source identities to regular-file path/SHA256 references; checked
+byte-identical staged copies are allowed. Every named source is authenticated,
+and missing, conflicting or extra mappings are refused. Costs contain only campaign/setup_seconds/
 oracle_seconds/retained_bytes. Read/resource proof hashes must join actual raw
 stdout/report bytes. Artifact-review bytes are retained for separate independent
 acceptance; this descriptive command does not interpret them as authority.
@@ -283,9 +293,14 @@ Use a fresh `--out` file outside the packet and every consumed input.
 
 The report retains per-window throughput, recall histogram/minimum, nearest-rank
 latency, writer latency, duration, overlap, populations, memory and costs. It
-reports arm median/minimum/maximum across per-window values and quantiles,
+reports arm median/minimum/maximum across per-window values and quantiles
 without pooling attempt tails, adding significance intervals, or claiming
-capacity/speedup. Source controls use explicitly synthetic receipts, full actual
+capacity/speedup. It includes separate role summaries for the client and each
+of the four voters.
+Memory peak and process HWM remain the exact five-role maps emitted by resource
+accounting. These observations include setup/warmup/drain/history; peaks from
+different instants are never added into a purported cluster memory total.
+Source controls use explicitly synthetic receipts, full actual
 read-consumer fixtures, and generated C1/C4 source packets; they qualify neither
 ranking nor runtime artifacts. Collection still requires #5021 actual checkpoint,
 #5068 source landing/freeze, final generated-source review, separate admissions,

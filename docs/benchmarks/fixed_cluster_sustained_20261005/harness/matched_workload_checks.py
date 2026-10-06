@@ -5,6 +5,12 @@ def matched_controls():
  from source_paths import workload_source
  root=fixtures/'matched-source-controls';root.mkdir()
  receipts=[]
+ def producer_return(module,function,values):
+  # Evaluate the actual final emission expression, without running acquisition.
+  source=Path(module.__file__).read_bytes();tree=ast.parse(source)
+  node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==function)
+  expression=node.body[-1];assert isinstance(expression,ast.Return)
+  return eval(compile(ast.Expression(expression.value),str(module.__file__)+'::actual-return','eval'),dict(module.__dict__,**values))
  for filename in ('matched_report.py',m['roles']['guard']['output']['path']):
   folder=root/(Path(filename).stem+'-ordinary-import');folder.mkdir()
   for name in (filename,'source_paths.py','workload_profile.py'):(folder/name).write_bytes((R/name).read_bytes())
@@ -88,10 +94,27 @@ def matched_controls():
    ns['ptext']=ns['encode'](p);r['PlannedEventBytes']=len(('{"Event":"planned","Report":'+ns['ptext']+'}\n').encode())
    proof=run();checks.append('matched_actual_complete_read_consumer_w%02d_c%d'%(window,concurrency))
    folder=root/('actual-consumer-w%02d-c%d'%(window,concurrency));folder.mkdir()
-   for name,value in [('planned',p),('result',r),('proof',proof)]:(folder/(name+'.json')).write_text(ns['encode'](value))
+   # Add producer-shaped raw audit members; these synthetic attachments are
+   # emission characterization, not an execution of the acquisition verifier.
+   r['AuditPlan']={'synthetic_only':True};r['Audits']=[{'synthetic_only':True,'node':role} for role in rs.HOSTS]
+   proof=run()
    stdout='{"Event":"planned","Report":'+ns['ptext']+'}\n{"Event":"result","Report":'+ns['encode'](r)+'}\n'
+   head,tree='1'*40,'2'*40
+   native=dict(state='NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION',RunID=ra.rd.c.QUERY_RUN,source_head=head,source_tree=tree)
+   promoted=dict(native,state='INDEPENDENT_CANONICAL_PREFIX_ORACLES_VERIFIED')
+   native_raw=json.dumps(native).encode();promoted_raw=json.dumps(promoted).encode()
+   approved=dict(RunID=campaign,source_head=head,source_tree=tree,driver_sha256=r['Admission']['BinarySHA256'],config_sha256=r['Admission']['ConfigSHA256'],bootstrap_sha256=r['Admission']['BootstrapSHA256'],receipts={'prefix_oracles':'/synthetic/promoted'},local_pins={'/synthetic/promoted':sha(promoted_raw)})
+   approved_raw=json.dumps(approved).encode()
+   auditpairs=ra.core.pieces(ns['encode'](r),'Audits');planraw=ra.core.field(ns['encode'](r),'AuditPlan')[1]
+   attachment=producer_return(ra.au,'verify_payload',dict(planraw=planraw,logical=[('synthetic-chain',0)],auditpairs=auditpairs))
+   outer=producer_return(ra,'verify',dict(population={'synthetic_only':True},manifest_sha=sha(approved_raw),stdout_sha=sha(stdout.encode()),native_sha=sha(native_raw),a=approved,HEAD=head,TREE=tree,read=proof,audit=attachment))
+   peaks={role:1000+window*10+i for i,role in enumerate(rs.HOSTS)};peaks['client']=2000+window
+   hwm={role:value//2 for role,value in peaks.items()}
+   resource=producer_return(rs,'verifier',dict(stdout_sha256=sha(stdout.encode()),permission={'synthetic_only':True},gp={'synthetic_only':True},peaks=peaks,hwm=hwm))
+   sources={path:dict(path=str(ra.core.source_path(path)),sha256=digest) for proof_row in (outer,resource) for path,digest in proof_row['source_pins'].items()}
+   for name,value in [('planned',p),('result',r),('proof',proof)]:(folder/(name+'.json')).write_text(ns['encode'](value))
    pins={}
-   for name,value in [('stdout',stdout.encode()),('read_audit',json.dumps(proof).encode()),('resources',json.dumps(dict(disposition='RESOURCE_GATE_OWNERSHIP_ACCOUNTING_ONLY',campaign_acceptance=False,stdout_sha256=sha(stdout.encode()),observed_memory_peak_bytes=123,observed_process_hwm_bytes=100)).encode()),('artifact_review',b'{"synthetic_only":true,"decision":"NOT_ACTUAL_ACCEPTANCE"}'),('costs',json.dumps(dict(campaign=campaign,setup_seconds=1,oracle_seconds=2,retained_bytes=len(stdout))).encode())]:
+   for name,value in [('stdout',stdout.encode()),('read_audit',json.dumps(outer).encode()),('resources',json.dumps(resource).encode()),('manifest',approved_raw),('native_oracle',native_raw),('promoted_oracle',promoted_raw),('sources',json.dumps(sources).encode()),('artifact_review',b'{"synthetic_only":true,"decision":"NOT_ACTUAL_ACCEPTANCE"}'),('costs',json.dumps(dict(campaign=campaign,setup_seconds=1,oracle_seconds=2,retained_bytes=len(stdout))).encode())]:
     target=folder/(name+'.raw');target.write_bytes(value);pins[name]=dict(path=str(target),sha256=sha(value))
    report_windows.append(dict(campaign=campaign,status='complete',pins=pins))
    negative=[]
@@ -115,6 +138,31 @@ def matched_controls():
  checks.append('matched_report_retains_failed_incomplete_order_without_replacements')
  z=copy.deepcopy(manifest);z['windows'][0],z['windows'][1]=z['windows'][1],z['windows'][0];bad('matched_report_rejects_reordered_arms',lambda:report.build(z))
  z=copy.deepcopy(manifest);z['windows'][0]['pins']['stdout']['sha256']='0'*64;bad('matched_report_rejects_substituted_raw_result',lambda:report.build(z))
+ # Existing 659 labels retain their order; append discriminating real-shape joins.
+ for w in summary['windows']:
+  original=json.loads(Path(w['raw_refs']['resources']['path']).read_bytes())
+  assert w['metrics']['memory_peak_bytes']==original['observed_memory_peak_bytes'] and w['metrics']['process_hwm_bytes']==original['observed_process_hwm_bytes']
+ checks.append('matched_report_actual_producer_return_shapes_outer_provenance_and_five_role_maps')
+ assert summary['per_arm']['C1']['observed_role_bytes']['memory_peak_bytes']['client']==dict(median=2004,minimum=2001,maximum=2005)
+ checks.append('matched_report_per_role_arm_summary_without_noncontemporaneous_sum')
+ def changed_ref(name,label,edit):
+  z=copy.deepcopy(manifest);ref=z['windows'][0]['pins'][name];value=json.loads(Path(ref['path']).read_bytes());value=edit(value)
+  raw=json.dumps(value).encode();target=root/('report-negative-'+label+'.json');target.write_bytes(raw);z['windows'][0]['pins'][name]=dict(path=str(target),sha256=sha(raw));return z
+ negatives=[('naked_read','read_audit',lambda v:v['read']),('lost_provenance','read_audit',lambda v:{k:x for k,x in v.items() if k!='source_pins'}),('outer_stdout','read_audit',lambda v:dict(v,stdout_sha256='0'*64)),('outer_manifest','read_audit',lambda v:dict(v,manifest_sha256='0'*64)),('outer_native','read_audit',lambda v:dict(v,native_oracle_sha256='0'*64)),('outer_promoted','read_audit',lambda v:dict(v,promoted_oracle_sha256='0'*64)),('outer_source','read_audit',lambda v:dict(v,source_head='3'*40)),('read_result','read_audit',lambda v:dict(v,read=dict(v['read'],raw_result_report_sha256='0'*64))),('read_planned','read_audit',lambda v:dict(v,read=dict(v['read'],raw_planned_report_sha256='0'*64))),('audit_plan','read_audit',lambda v:dict(v,audit=dict(v['audit'],plan_sha256='0'*64))),('audit_attachments','read_audit',lambda v:dict(v,audit=dict(v['audit'],audits_sha256=['0'*64]*4))),('resource_stdout','resources',lambda v:dict(v,stdout_sha256='0'*64)),('source_mapping','sources',lambda v:{k:x for i,(k,x) in enumerate(v.items()) if i})]
+ for key in ('observed_memory_peak_bytes','observed_process_hwm_bytes'):
+  for label,value in [('scalar',123),('missing_role',{'client':1}),('extra_role',dict.fromkeys((*report.ROLES,'foreign'),1)),('bool',dict.fromkeys(report.ROLES,True)),('float',dict.fromkeys(report.ROLES,1.0)),('negative',dict.fromkeys(report.ROLES,-1))]:
+   negatives.append((key+'_'+label,'resources',lambda v,key=key,value=value:dict(v,**{key:value})))
+ for label,name,edit in negatives:
+  z=changed_ref(name,label,edit);bad('matched_report_actual_shape_rejects_'+label,lambda z=z:report.build(z))
+ for label,name,edit in [('resource_lost_sources','resources',lambda v:dict(v,source_pins={})),('conflicting_sources','resources',lambda v:dict(v,source_pins={k:'0'*64 for k in v['source_pins']})),('extra_source_mapping','sources',lambda v:dict(v,**{'/synthetic/extra-source':next(iter(v.values()))})),('substituted_source_bytes','sources',lambda v:{k:dict(ref,sha256='0'*64) for k,ref in v.items()}),('native_source_identity','native_oracle',lambda v:dict(v,source_tree='3'*40)),('promoted_source_identity','promoted_oracle',lambda v:dict(v,source_head='3'*40)),('manifest_admission','manifest',lambda v:dict(v,driver_sha256='0'*64))]:
+  z=changed_ref(name,label,edit);bad('matched_report_actual_shape_rejects_'+label,lambda z=z:report.build(z))
+ staged=root/'report-staged-sources';staged.mkdir();mapping={}
+ original=json.loads(Path(manifest['windows'][0]['pins']['sources']['path']).read_bytes())
+ for i,(identity,ref) in enumerate(original.items()):
+  target=staged/('%02d-source.py'%i);target.write_bytes(Path(ref['path']).read_bytes());mapping[identity]=dict(path=str(target),sha256=ref['sha256'])
+ z=changed_ref('sources','byte_identical_staged_sources',lambda v:mapping)
+ assert report.build(z)['windows'][0]['metrics']==summary['windows'][0]['metrics']
+ checks.append('matched_report_checked_byte_identical_staged_source_mapping')
  (root/'descriptive-report.json').write_text(json.dumps(summary,indent=2)+'\n')
  (root/'integration.json').write_text(json.dumps({'state':'SYNTHETIC_SOURCE_AND_ACTUAL_READ_CONSUMER_ONLY','receipts':receipts,'runtime_started':False,'network_calls':0,'limitations':['Synthetic native-table rows exercise accounting, not actual ranking or campaign acceptance.','Real collection and independent final source/artifact acceptance are outstanding.']},indent=2)+'\n')
 
