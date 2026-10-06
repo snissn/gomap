@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import unittest
 
-from r1_lifecycle_validate import decode, manifest_hash, validate
+from r1_lifecycle_validate import decode, manifest_hash, summarize, validate
 
 
 @unittest.skipUnless(os.environ.get('R1_LIFECYCLE_TEST_PACKET'), 'set R1_LIFECYCLE_TEST_PACKET to a real rehearsal packet')
@@ -25,7 +25,10 @@ class RealPacketTests(unittest.TestCase):
         self.packet = copy.deepcopy(self.original)
         raw = (source.parent / self.original['runs'][0]['log']).read_text()
         result_line = next(line for line in raw.splitlines() if 'R1_LIFECYCLE_RESULT ' in line)
-        self.actual_vacuum = decode(result_line.split('R1_LIFECYCLE_RESULT ', 1)[1])['maintenance'][0]['vacuum']
+        self.actual_result = decode(result_line.split('R1_LIFECYCLE_RESULT ', 1)[1])
+        final_line = [line for line in raw.splitlines() if 'R1_LIFECYCLE_RESULT ' in line][-1]
+        self.final_actual_result = decode(final_line.split('R1_LIFECYCLE_RESULT ', 1)[1])
+        self.actual_vacuum = self.actual_result['maintenance'][0]['vacuum']
         self.original_source = source
 
     def save(self):
@@ -224,6 +227,81 @@ class RealPacketTests(unittest.TestCase):
     def test_missing_exhaustive_phase(self):
         self.edit_results(lambda result: result['maintenance'][0]['full']['work']['phases'].pop(0))
         self.reject()
+
+    def test_full_actual_required_reports_with_rebound_raw_hash(self):
+        for stage in ('plan', 'work'):
+            for field in ('before', 'after', 'remaining_debt', 'audit', 'value_log_rewrite_plan',
+                          'value_log_rewrite', 'value_log_gc', 'leaf_generation_plan',
+                          'leaf_generation_gc', 'index_vacuum'):
+                with self.subTest(stage=stage, field=field):
+                    self.reset_raw_packet()
+                    self.edit_results(lambda result: result['maintenance'][0]['full'][stage].pop(field))
+                    self.reject()
+
+    def test_full_empty_debt_and_usage_with_rebound_raw_hash(self):
+        for stage in ('plan', 'work'):
+            for field, empty in (('remaining_debt', {}), ('before', []), ('after', [])):
+                with self.subTest(stage=stage, field=field):
+                    self.reset_raw_packet()
+                    self.edit_results(lambda result: result['maintenance'][0]['full'][stage].update({field: empty}))
+                    self.reject()
+
+    def test_full_actual_nested_scalar_types_with_rebound_raw_hash(self):
+        # Enumerate actual Go report scalars, independently of validator inventory.
+        def scalars(value, path=()):
+            if type(value) is dict:
+                for key, child in value.items():
+                    yield from scalars(child, path + (key,))
+            elif type(value) is list:
+                for index, child in enumerate(value):
+                    yield from scalars(child, path + (index,))
+            elif type(value) in (int, float, bool, str):
+                yield path, value
+        for stage in ('plan', 'work'):
+            actual = self.actual_result['maintenance'][0]['full'][stage]
+            for path, value in scalars(actual):
+                with self.subTest(stage=stage, path=path):
+                    self.reset_raw_packet()
+                    def change(result):
+                        target = result['maintenance'][0]['full'][stage]
+                        for key in path[:-1]:
+                            target = target[key]
+                        target[path[-1]] = False if type(value) in (int, float, str) else 0
+                    self.edit_results(change)
+                    self.reject()
+
+    def test_full_unknown_audit_field_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['work']['audit'].update(unclassified=0))
+        self.reject()
+
+    def test_full_negative_gc_counter_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['work']['value_log_gc'].update(BytesDeleted=-1))
+        self.reject()
+
+    def test_full_missing_leaf_pack_attribution_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['work'].pop('leaf_generation_packs'))
+        self.reject()
+
+    def test_summary_component_headers_and_final_typed_deletion(self):
+        self.save()
+        actual_rows = validate(self.path)
+        # Deliberately perturb a copy for summary accounting, even when actual
+        # final-GC deletion is zero. This copy is never accepted or published.
+        row = copy.deepcopy(actual_rows[0])
+        result = row['result']
+        result['maintenance'][0]['final']['typed_gc']['BytesDeleted'] += 17
+        summary = summarize(self.packet, [row])
+        lines = summary.splitlines()
+        header = next(line for line in lines if line.startswith('| Phase |'))
+        self.assertIn('| dictionary store | template store | immutable manifest metadata |', header)
+        first = next(line for line in lines if line.startswith('| ingest |'))
+        self.assertEqual(len(header.split('|')), len(first.split('|')))
+        maintenance = next(line for line in lines if line.startswith('| 0 |'))
+        item = result['maintenance'][0]
+        expected = sum(item[key]['BytesDeleted'] for key in ('before_fold_gc',))
+        expected += item['reclaim']['plan_gc']['BytesDeleted'] + item['reclaim']['typed_gc']['BytesDeleted']
+        expected += item['final']['typed_gc']['BytesDeleted']
+        self.assertEqual(maintenance.split('|')[8].strip(), f'{expected:.6g}')
 
     def test_fallback_coverage_change(self):
         self.edit_results(lambda result: result['maintenance'][0]['final']['after'].update(applied_lsn=result['maintenance'][0]['final']['after']['applied_lsn'] + 1))

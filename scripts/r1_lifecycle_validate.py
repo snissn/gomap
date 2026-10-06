@@ -246,6 +246,200 @@ def final_valid(row):
     require(leaf['ManifestRevisionsDeleted'] <= leaf['ManifestRevisionsEligible']
             and leaf['ManifestRevisionBytesDeleted'] <= leaf['ManifestRevisionBytesEligible'], 'revision deletion exceeds eligibility')
 
+# Frozen exported Go JSON field inventory; runtime additions require explicit
+# classification before capture can qualify. Arrays/maps preserve Go nil values.
+COMPACT_SCHEMAS = {
+    'CompactStorageStats': (
+        'mode:str dry_run:bool before:[]CompactStorageUsage after:[]CompactStorageUsage '
+        'phases?:[]CompactStoragePhaseStats audit:CompactStorageAuditStats value_log_rewrite_plan:ValueLogRewritePlan '
+        'value_log_rewrite:ValueLogRewriteStats value_log_gc:ValueLogGCStats leaf_generation_plan:LeafGenerationPlan '
+        'leaf_generation_packs?:[]LeafGenerationPackRunOnceStats leaf_generation_gc:LeafGenerationGCStats '
+        'index_vacuum:VacuumOnlineStats zero_byte_value_log_files_deleted?:int remaining_debt:CompactStorageDebt '
+        'fully_compacted:bool policy_fully_compacted:bool byte_minimized:bool'
+    ),
+    'CompactStorageUsage': (
+        'name:str path:str bytes:int files:int zero_byte_files:int'
+    ),
+    'CompactStorageDebt': (
+        'value_log_rewrite_segments:int value_log_rewrite_bytes:int value_log_gc_segments:int value_log_gc_bytes:int '
+        'leaf_pack_generations:int leaf_pack_bytes:int leaf_gc_generations:int leaf_gc_bytes:int '
+        'zero_byte_value_log_files:int index_vacuum_required:bool index_vacuum_reason:str index_vacuum_total_pages:int '
+        'index_vacuum_user_pages:int index_vacuum_user_span:int index_vacuum_user_span_ratio_ppm:int '
+        'index_vacuum_freelist_reclaimable_pages:int index_vacuum_freelist_reclaimable_ratio_ppm:int '
+        'index_vacuum_collection_root_pages:int index_vacuum_collection_root_span:int '
+        'index_vacuum_collection_root_span_ratio_ppm:int'
+    ),
+    'CompactStoragePhaseStats': (
+        'name:str status?:str required?:bool reason?:str skipped?:bool skip_reason?:str wall_time_nanos:int'
+    ),
+    'CompactStorageAuditStats': (
+        'shared_scans:int structural_reuse_hits:int structural_reuse_misses:int revalidation_retries:int root_sets:int '
+        'pages_visited:int memo_hits:int pointer_projections:int grouped_record_dedupe_hits:int physical_bytes_read:int '
+        'last_structural_reuse_miss_reason?:str'
+    ),
+    'ValueLogRewritePlan': (
+        'SourceFileIDs:[]int SelectedSegments:[]ValueLogRewritePlanSegment SegmentsTotal:int SegmentsSelected:int '
+        'BytesTotal:int BytesLive:int BytesStale:int SelectedBytesTotal:int SelectedBytesLive:int '
+        'SelectedBytesStale:int AgeBlockedSegments:int AgeBlockedBytesTotal:int AgeBlockedBytesLive:int '
+        'AgeBlockedBytesStale:int AgeBlockedMinRemainingAge:int'
+    ),
+    'ValueLogRewritePlanSegment': (
+        'FileID:int BytesTotal:int BytesLive:int BytesStale:int StaleRatio:number'
+    ),
+    'ValueLogRewriteStats': (
+        'SegmentsBefore:int SegmentsAfter:int BytesBefore:int BytesAfter:int RecordsCopied:int ValueRecordsCopied:int '
+        'ValueBytesCopied:int SourceSegmentsRequested:int SourceChunksRequested:int SourceSegmentsStillReferenced:int '
+        'SourceSegmentsUnreferenced:int SourceBytesRequested:int SourceBytesStillReferenced:int '
+        'SourceBytesUnreferenced:int SourceBytesProcessed:int SourceFileIDsStillReferenced:[]int '
+        'SourceFileIDsUnreferenced:[]int SourceSegmentsReclaimed:int SourceBytesReclaimed:int '
+        'SourceSegmentsRetainedRecoverableRootStale:int SourceBytesRetainedRecoverableRootStale:int '
+        'LeafGenerationCleanupRetainedRecoverableRootStale:bool TemplateRecordsAttempted:int TemplateRecordsKept:int '
+        'TemplateInputBytes:int TemplateOutputBytes:int TemplatePointerRecordsAttempted:int '
+        'TemplatePointerRecordsKept:int TemplatePointerInputBytes:int TemplatePointerOutputBytes:int '
+        'TemplatePointerReasons:mapint TemplateOuterLeafRecordsAttempted:int TemplateOuterLeafRecordsKept:int '
+        'TemplateOuterLeafInputBytes:int TemplateOuterLeafOutputBytes:int TemplateOuterLeafReasons:mapint'
+    ),
+    'ValueLogGCStats': (
+        'SegmentsTotal:int SegmentsReferenced:int SegmentsActive:int SegmentsProtected:int SegmentsProtectedInUse:int '
+        'SegmentsProtectedRetained:int SegmentsProtectedOverlap:int SegmentsProtectedOther:int SegmentsEligible:int '
+        'SegmentsDeleted:int SegmentsPending:int BytesTotal:int BytesReferenced:int BytesActive:int BytesProtected:int '
+        'BytesProtectedInUse:int BytesProtectedRetained:int BytesProtectedOverlap:int BytesProtectedOther:int '
+        'BytesEligible:int BytesDeleted:int BytesPending:int ObservedSourceSegments:int '
+        'ObservedSourceSegmentsReferenced:int ObservedSourceSegmentsActive:int ObservedSourceSegmentsProtected:int '
+        'ObservedSourceSegmentsProtectedInUse:int ObservedSourceSegmentsProtectedRetained:int '
+        'ObservedSourceSegmentsProtectedOverlap:int ObservedSourceSegmentsProtectedOther:int '
+        'ObservedSourceSegmentsEligible:int ObservedSourceSegmentsDeleted:int ObservedSourceSegmentsPending:int '
+        'ObservedSourceBytes:int ObservedSourceBytesReferenced:int ObservedSourceBytesActive:int '
+        'ObservedSourceBytesProtected:int ObservedSourceBytesProtectedInUse:int '
+        'ObservedSourceBytesProtectedRetained:int ObservedSourceBytesProtectedOverlap:int '
+        'ObservedSourceBytesProtectedOther:int ObservedSourceBytesEligible:int ObservedSourceBytesDeleted:int '
+        'ObservedSourceBytesPending:int'
+    ),
+    'LeafGenerationPlan': (
+        'CurrentCommitSeq:int CurrentGenerationID:int Generations:[]LeafGenerationPlanGeneration '
+        'Candidates:[]LeafGenerationPlanGeneration CandidateGenerationIDs:[]int CandidateBytesTotal:int '
+        'CandidateBytesLive:int CandidateBytesDead:int CandidateBytesToCopy:int CandidateLivePages:int '
+        'ExpectedReclaimBytes:int ExpectedReclaimRatioPPM:int ExpectedReclaimPerByteCopiedPPM:int Admission:str'
+    ),
+    'LeafGenerationPlanGeneration': (
+        'GenerationID:int State:str FileIDs:[]int FileCount:int BytesTotal:int BytesLive:int BytesDead:int '
+        'BytesToCopy:int LivePages:int AgeCommits:int PinnedCount:int DeadRatioPPM:int LiveRatioPPM:int '
+        'WholeGenerationGCEligible:bool Eligible:bool SkipReason:str'
+    ),
+    'LeafGenerationPackRunOnceStats': (
+        'Plan:LeafGenerationPlan Selection:LeafGenerationPackSelection Pack:LeafGenerationPackStats Ran:bool '
+        'SkipReason:str'
+    ),
+    'LeafGenerationPackSelection': (
+        'GenerationIDs:[]int Generations:[]LeafGenerationPlanGeneration BytesTotal:int BytesLive:int BytesDead:int '
+        'BytesToCopy:int LivePages:int ExpectedReclaimBytes:int ExpectedReclaimRatioPPM:int '
+        'ExpectedReclaimPerByteCopiedPPM:int'
+    ),
+    'LeafGenerationPackStats': (
+        'GenerationsRequested:int GenerationsMatched:int SourceGenerationIDs:[]int SourceFilesRequested:int '
+        'SourceFileIDs:[]int SourceBytesTotal:int SourceBytesLive:int SourceBytesDead:int SourceBytesToCopy:int '
+        'ExpectedReclaimBytes:int ExpectedReclaimRatioPPM:int ExpectedReclaimPerByteCopiedPPM:int LeafPagesCopied:int '
+        'BytesCopied:int LeafFramesWritten:int MaxLeafFrameK:int InternalPagesVisited:int SubtreesPruned:int '
+        'CreatedFileIDs:[]int CopyAttempts:int CopyAborts:int RetryCopyTimeNanos:int CopyTimeNanos:int '
+        'PublishWaitNanos:int PublishHoldNanos:int PrivatePagesAllocated:int PrivatePagesDiscarded:int '
+        'ApplyStages:LeafGenerationPackApplyStageStats RetryApplyStages:LeafGenerationPackApplyStageStats '
+        'WallTimeNanos:int'
+    ),
+    'LeafGenerationPackApplyStageStats': (
+        'SetupTimeNanos:int TreeRewriteTimeNanos:int LeafSyncTimeNanos:int CopyCloseTimeNanos:int '
+        'RevalidateTimeNanos:int PromotionTimeNanos:int RelocationTimeNanos:int PageSyncTimeNanos:int '
+        'DirectorySyncTimeNanos:int DirectorySyncWaitTimeNanos:int RegistrationTimeNanos:int '
+        'CollectionPublishTimeNanos:int FinalizeTimeNanos:int PostWorkTimeNanos:int CleanupTimeNanos:int'
+    ),
+    'LeafGenerationGCStats': (
+        'GenerationsTotal:int GenerationsWritable:int GenerationsLive:int GenerationsRetiring:int '
+        'GenerationsEligible:int GenerationsDeleted:int FilesDeleted:int BytesEligible:int BytesDeleted:int '
+        'ManifestRevisionsTotal:int ManifestRevisionsProtected:int ManifestRevisionsEligible:int '
+        'ManifestRevisionsDeleted:int ManifestRevisionBytesEligible:int ManifestRevisionBytesDeleted:int '
+        'ManifestRevisionGCUnsupported:bool'
+    ),
+    'VacuumOnlineStats': (
+        'AttemptID:int Phase:str TotalDuration:int UserTreeDuration:int SystemReserveDuration:int '
+        'CollectionBasisDuration:int PreflushDuration:int CutoverDuration:int SystemTreeDuration:int '
+        'FinalPagerSyncDuration:int SwapPublishDuration:int MaxWriterPause:int PrecloneTraversalPages:int '
+        'RecloneTraversalPages:int CutoverCloneTraversalPages:int DirtyDescriptors:int UserTailMutations:int '
+        'UserTailPointMutations:int UserTailRangeMutations:int DeferredCutovers:int ConcurrentMutationAborts:int '
+        'RecoverableSetCaptureDuration:int RecoverableSetCaptureAttempts:int RecoverableSetCaptures:int '
+        'RecoverableSetRecaptureAttempts:int RecoverableSetRecaptures:int RecoverableRoots:int '
+        'OlderRootRebuildDuration:int OlderRootRebuilds:int OlderRootDurableResourceCaptureDuration:int '
+        'OlderRootDurableResourceCaptures:int OlderRootDurableResourceDescriptors:int OlderRootDurableResourceBytes:int '
+        'OlderRootExactCandidateScans:int OlderRootProjections:int OlderRootProjectionFallbacks:int '
+        'OlderRootProjectionFallbackReason:str OlderRootReusedNonValueLogDescriptors:int '
+        'OlderRootUniqueExternalSegments:int DurableResourceCaptureDuration:int DurableResourceCaptures:int '
+        'DurableResourceDescriptors:int DurableResourceBytes:int DurableResourceExactCandidateScans:int '
+        'DurableResourceProjections:int DurableResourceProjectionFallbacks:int '
+        'DurableResourceProjectionFallbackReason:str OlderRootRebuiltPages:int ReplacementPagerPages:int '
+        'ExactCandidateScan:bool ReusedNonValueLogDescriptors:int UniqueExternalSegments:int WorkCompleted:bool '
+        'Canceled:bool'
+    ),
+}
+
+
+def compact_json_valid(value, kind, path):
+    if kind == 'int':
+        require(integer(value), f'malformed compact counter {path}')
+    elif kind == 'number':
+        require(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1,
+                f'malformed compact ratio {path}')
+    elif kind == 'str':
+        require(type(value) is str, f'malformed compact string {path}')
+    elif kind == 'bool':
+        require(type(value) is bool, f'malformed compact flag {path}')
+    elif kind.startswith('[]'):
+        require(value is None or type(value) is list, f'malformed compact list {path}')
+        for index, child in enumerate(value or []):
+            compact_json_valid(child, kind[2:], f'{path}[{index}]')
+    elif kind == 'mapint':
+        require(value is None or type(value) is dict, f'malformed compact map {path}')
+        for key, child in (value or {}).items():
+            require(type(key) is str, f'malformed compact reason {path}')
+            compact_json_valid(child, 'int', f'{path}.{key}')
+    else:
+        fields = {name.rstrip('?'): (field_kind, name.endswith('?'))
+                  for name, field_kind in (entry.split(':') for entry in COMPACT_SCHEMAS[kind].split())}
+        require(type(value) is dict and set(value) <= fields.keys()
+                and {name for name, (_, optional) in fields.items() if not optional} <= value.keys(),
+                f'missing/unclassified compact fields {path}')
+        for name, child in value.items():
+            compact_json_valid(child, fields[name][0], f'{path}.{name}')
+
+
+def compact_report_valid(stats, dry_run):
+    compact_json_valid(stats, 'CompactStorageStats', 'compact')
+    require(stats['mode'] == 'exhaustive' and stats['dry_run'] is dry_run, 'mislabeled exhaustive plan/work')
+    for stage in ('before', 'after'):
+        usages = stats[stage]
+        require(type(usages) is list and len(usages) == 5
+                and {entry['name'] for entry in usages} == {'index', 'wal', 'value_vlog', 'leaf_vlog', 'total'},
+                'missing/duplicate compact storage usage')
+        for entry in usages:
+            require(entry['path'] and entry['zero_byte_files'] <= entry['files'], 'invalid compact usage path/files')
+    require(type(stats.get('phases')) is list and stats['phases'], 'missing compact plan/work phases')
+    leaf = stats['leaf_generation_gc']
+    require(leaf['ManifestRevisionGCUnsupported'] is False, 'compact manifest revision reclamation unavailable')
+    require(leaf['GenerationsDeleted'] <= leaf['GenerationsEligible']
+            and leaf['BytesDeleted'] <= leaf['BytesEligible']
+            and leaf['ManifestRevisionsDeleted'] <= leaf['ManifestRevisionsEligible']
+            and leaf['ManifestRevisionBytesDeleted'] <= leaf['ManifestRevisionBytesEligible'], 'compact GC deletion exceeds eligibility')
+    vlog_gc_valid(stats['value_log_gc'])
+    rewrite = stats['value_log_rewrite_plan']
+    require(rewrite['SegmentsSelected'] <= rewrite['SegmentsTotal']
+            and rewrite['SelectedBytesLive'] <= rewrite['SelectedBytesTotal'], 'compact rewrite selection exceeds population')
+    if not dry_run:
+        require(type(stats.get('leaf_generation_packs')) is list and stats['leaf_generation_packs'],
+                'missing actual compact leaf-pack attribution')
+        for pack in stats['leaf_generation_packs']:
+            require(pack['Ran'] or pack['SkipReason'], 'missing compact pack work/skip decision')
+        vacuum = stats['index_vacuum']
+        require(vacuum['Canceled'] is False, 'canceled compact index vacuum')
+        if any(phase['name'] == 'index-vacuum' and phase.get('status') == 'succeeded' for phase in stats['phases']):
+            require(vacuum['WorkCompleted'] is True, 'compact vacuum phase/result disagree')
+
 
 def full_valid(row):
     require(integer(row['plan_ns'], 1) and integer(row['work_ns'], 1), 'missing exhaustive compact timers')
@@ -258,10 +452,7 @@ def full_valid(row):
             'unsafe_value_log_reclaim_fenced_unreferenced': False}, 'unsupported exhaustive maintenance options')
     for name, dry_run in (('plan', True), ('work', False)):
         stats = row[name]
-        require(stats['mode'] == 'exhaustive' and stats['dry_run'] is dry_run, 'mislabeled exhaustive plan/work')
-        require(type(stats['remaining_debt']) is dict and type(stats['byte_minimized']) is bool
-                and type(stats['fully_compacted']) is bool and type(stats['policy_fully_compacted']) is bool, 'missing exhaustive debt/completion')
-        require(type(stats['before']) is list and type(stats['after']) is list, 'missing exhaustive component report')
+        compact_report_valid(stats, dry_run)
     phases = row['work']['phases']
     require(type(phases) is list and phases, 'missing actual exhaustive phases')
     names = [phase['name'] for phase in phases]
@@ -509,8 +700,8 @@ def summarize(packet, results):
         values = [row['go_metrics'][key] for row in results]
         text.append(f'| {key} | {statistics.median(values):.6g} | {min(values):.6g} | {max(values):.6g} | {max(values)/min(values) if min(values) else 0:.4g} |')
     text += ['', 'Logical storage medians across final process results:', '',
-             '| Phase | index | vlog | leaf log | typed assets | redo WAL | other | all bytes | regular files | growth from ingest |',
-             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+             '| Phase | index | vlog | leaf log | typed assets | redo WAL | dictionary store | template store | immutable manifest metadata | other | all bytes | regular files | growth from ingest |',
+             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     components = ['index', 'persistent_vlog', 'persistent_leaf_log', 'typed_assets', 'redo_wal', 'dictionary_store', 'template_store', 'immutable_manifest_metadata', 'other']
     for index, phase in enumerate(results[0]['result']['census']):
         rows = [row['result']['census'][index] for row in results]
@@ -531,7 +722,7 @@ def summarize(packet, results):
                  med(lambda r: r['fold']['stats']['MutationPartsBefore'])+'/'+med(lambda r: r['fold']['stats']['MutationPartsAfter']),
                  med(lambda r: r['before_fold_gc']['Plan']['Sources']['ActiveManifestRefs'])+'/'+med(lambda r: r['reclaim']['plan_gc']['Plan']['Sources']['ActiveManifestRefs']),
                  ','.join(sorted({r['reclaim']['decision'] for r in rows})),
-                 med(lambda r: r['before_fold_gc']['BytesDeleted']+r['reclaim']['plan_gc']['BytesDeleted']+r['reclaim']['typed_gc']['BytesDeleted']),
+                 med(lambda r: r['before_fold_gc']['BytesDeleted']+r['reclaim']['plan_gc']['BytesDeleted']+r['reclaim']['typed_gc']['BytesDeleted']+r['final']['typed_gc']['BytesDeleted']),
                  med(lambda r: r['vacuum_ns']), str(all(r['vacuum']['WorkCompleted'] for r in rows))]
         text.append('| '+' | '.join(cells)+' |')
     released = [row['result']['after_view_release_gc'] for row in results]
