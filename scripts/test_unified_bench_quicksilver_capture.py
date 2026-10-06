@@ -62,6 +62,7 @@ print('accepted forged environment')
         for flags, setting in [(['-O'], None), (['-OO'], None), ([], '1'), ([], '2')]:
             env = dict(os.environ)
             env.pop('PYTHONOPTIMIZE', None)
+            env['PYTHONPATH'] = str(pathlib.Path(capture.__file__).resolve().parent)
             if setting is not None:
                 env['PYTHONOPTIMIZE'] = setting
             with self.subTest(flags=flags, setting=setting):
