@@ -1,6 +1,6 @@
 {
   "runtime_commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
-  "scope": "Every file under this publication directory except publication-manifest.json itself; includes final literal independent review append. Final committed descendant is separately bound by coordinator receipt.",
+  "scope": "Measured runtime remains974d. Current-main integration has separately listed source/applicability and bounded independent acceptance. Every publication file except this manifest is bound; final-head hosted gates and guarded merge remain separate.",
   "files": {
     "build-cost-report.py": "d83342073064f2e67107d9aff8d8f4e93e3d2fa286c92c25d3102b76c848bf2b",
     "ci-contracts/receipts.json": "568258377317028f7b08629e6394b9934a5908a18db3e538d22634e9fae8edd7",
@@ -380,6 +380,21 @@
     "independent/windows-v4-frozen-source-review.md": "d35fbcf0ed3c2b3b21217b968b06336d53e9aa020463ff4f496c66aa0cfc4a6f",
     "integrated-lane-handoff.json": "cf927ae716bc4dc6cd9d9fc0ac1a9c118dde1b331ed8bbdb143f5efb5f9aec83",
     "integrated-source.json": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+    "main-edbd-integration/applicability.md": "916d3f251e44e4a4bf14421b515184800d46c72dccb4e3002dda6b07f334721d",
+    "main-edbd-integration/documentation-and-whitespace-check.json": "13ac55287a8d563dd4ed68b56c00aeab3933572dbdb077337d69d02f2c91767d",
+    "main-edbd-integration/hosted-014-raw-path/baseline.txt": "65b7ce843a05430cf360aad0ce177dae2179fb8c341ab529fde09f34f16c2069",
+    "main-edbd-integration/hosted-014-raw-path/binary-sha256.txt": "151a822db8eecb9e71de6c1893473dc1a2bdc15d07e8c7001fb954d373eecc62",
+    "main-edbd-integration/hosted-014-raw-path/candidate.txt": "11dedf0f683c1945c73a9869c8cae21c880d12f8d083f0bf5b8cfe6d2be505d6",
+    "main-edbd-integration/hosted-014-raw-path/environment.txt": "235aebc9df76e2a137b3e51ecfda4d4b2ffaa9b298dfcb9211a193570ddce92e",
+    "main-edbd-integration/hosted-014-raw-path/summary.json": "822b39af4bd25c402f16e6842b56f621f2bd84fe06e0f4c223f4d82ec202359d",
+    "main-edbd-integration/hosted-014-raw-path/summary.md": "0fbb2016095b4b7e5d4653589b10557d43ee79384d7a892a2d1980a7e5648375",
+    "main-edbd-integration/hosted-014-root-reanalysis.json": "44893cf36da92d88919a0c0f89bb11b2128f76453b5911b00bb3d4677109223e",
+    "main-edbd-integration/independent/edbd-main-composition-bindings.json": "6dbcc7510645c6f13c2ad7035770167a71ddebe169d50994706a2a79bba6ea2c",
+    "main-edbd-integration/independent/edbd-main-composition-review.json": "e5efc07fa5e5f637b5ae845b55878665fb273086a6dbf8eb8dac559f413cfdb1",
+    "main-edbd-integration/independent/edbd-main-composition-review.md": "b80e58bd88f9da5624b46b35f955e54568700a1ed948916a59684609ed1c8781",
+    "main-edbd-integration/independent/staged-metadata-acceptance.json": "9b7cabc88d74539eaa3758f4fcac5713d04fd4a322542fc5cb16abbbdce7c6ff",
+    "main-edbd-integration/independent/staged-metadata-acceptance.md": "69e213032f8429f914cd5fcc21a77e5e0542d86219d34c577b9024187d5f493a",
+    "main-edbd-integration/source-applicability.json": "26695df8cdc7fc7b367eeb14ab4ec69fb4129b47a17c6e2c5cbd96fb2ac556de",
     "mvcc/analysis-validation.json": "6a9c39a1768268f60df8b3e4b16236682208dfe2c92211a5760a90b1ff746df2",
     "mvcc/binary-buildinfo.txt": "34ebde0a866495264b9d0f090d99ea10176c8401f5f94bad8bfd1c8b60f0f8f9",
     "mvcc/binary.json": "3503f93068b94b4aa0763b3e2305ecb22b09bbdf2850d3aa564a276093432332",
@@ -527,7 +542,7 @@
     "platform/validation-v4-admission/source-drift.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "platform/validation-v4-admission/source-identity-after.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
     "platform/validation-v4-admission/source-identity-before.json": "dee09f6d838f994fd1d8495c2cab2d968604e39cdb9bdf98e8fc5e432d89fdc8",
-    "publication-provenance.json": "789c114038de53dc0b411447c4451b0851b0f936a34bdf8beb5b73215fb0a1d0",
+    "publication-provenance.json": "46db2b71969fc943905aaaf4c46cca770299e88dbff5bfebe09d809254840a35",
     "qualification/collection-handoff.json": "d54d193f3975e9f975ecacd861d199a38876292fd12765603c04ccee2df71c26",
     "qualification/collection-handoff.md": "c56795c805a7511215da56997eca599b24ebef1a0473e567da6940c68a3456ae",
     "qualification/collection-packet-manifest.json": "b7b71b95ac6de226f614c705e1f7c15b6c8470d72b5e306384780135fd1a2312",
@@ -647,7 +662,7 @@
     "rawkv/source-identity.json": "85e8fada4a8b5931a4c4b9bd61696903f8c2014e0add62af191af25721d1c98e",
     "rawkv/toolchain.txt": "a572a754ac698660cc4263135bc00e73432066c52f282981f147d4f9ae7fda39",
     "rawkv/transfer-manifest.json": "0af29eb544a9e6807c2e9046150d69d07c9bdee66a34734874ac69a8291b85a8",
-    "report.md": "c366108355a05f8fcaa6b0a3b3eb4bdd953c5fbb2cc5ccbd69d8fe7a900d198d",
+    "report.md": "7e126fb9c08f0ff19cd1aff127b7c2f624b31acdca5a15453d2fc34d52cbeefc",
     "root-cost-verification.json": "50f919476b224d2faf8315e59f75e2c0c4a2c15ea15af594e61e3a35358426c9"
   }
 }

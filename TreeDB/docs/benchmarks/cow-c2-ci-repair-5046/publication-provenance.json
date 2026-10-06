@@ -3188,5 +3188,60 @@
     "original_private_path": "candidate-11474-independent-review/974-final-publication-claims-check.json",
     "sha256": "e7cfa74fe8c03c57627d4e924bf9965ca4f0fee8553d1986fa669ffaa2783d4d",
     "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/baseline.txt": {
+    "original_private_path": "pr5069-014-ci-raw-path/baseline.txt",
+    "sha256": "65b7ce843a05430cf360aad0ce177dae2179fb8c341ab529fde09f34f16c2069",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/candidate.txt": {
+    "original_private_path": "pr5069-014-ci-raw-path/candidate.txt",
+    "sha256": "11dedf0f683c1945c73a9869c8cae21c880d12f8d083f0bf5b8cfe6d2be505d6",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/summary.json": {
+    "original_private_path": "pr5069-014-ci-raw-path/summary.json",
+    "sha256": "822b39af4bd25c402f16e6842b56f621f2bd84fe06e0f4c223f4d82ec202359d",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/summary.md": {
+    "original_private_path": "pr5069-014-ci-raw-path/summary.md",
+    "sha256": "0fbb2016095b4b7e5d4653589b10557d43ee79384d7a892a2d1980a7e5648375",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/binary-sha256.txt": {
+    "original_private_path": "pr5069-014-ci-raw-path/binary-sha256.txt",
+    "sha256": "151a822db8eecb9e71de6c1893473dc1a2bdc15d07e8c7001fb954d373eecc62",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/hosted-014-raw-path/environment.txt": {
+    "original_private_path": "pr5069-014-ci-raw-path/environment.txt",
+    "sha256": "235aebc9df76e2a137b3e51ecfda4d4b2ffaa9b298dfcb9211a193570ddce92e",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/independent/edbd-main-composition-review.md": {
+    "original_private_path": "candidate-11474-independent-review/edbd-main-composition-review.md",
+    "sha256": "b80e58bd88f9da5624b46b35f955e54568700a1ed948916a59684609ed1c8781",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/independent/edbd-main-composition-review.json": {
+    "original_private_path": "candidate-11474-independent-review/edbd-main-composition-review.json",
+    "sha256": "e5efc07fa5e5f637b5ae845b55878665fb273086a6dbf8eb8dac559f413cfdb1",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/independent/edbd-main-composition-bindings.json": {
+    "original_private_path": "candidate-11474-independent-review/edbd-main-composition-bindings.json",
+    "sha256": "6dbcc7510645c6f13c2ad7035770167a71ddebe169d50994706a2a79bba6ea2c",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/independent/staged-metadata-acceptance.md": {
+    "original_private_path": "candidate-11474-independent-review/staged-metadata-acceptance.md",
+    "sha256": "69e213032f8429f914cd5fcc21a77e5e0542d86219d34c577b9024187d5f493a",
+    "byte_preserved": true
+  },
+  "main-edbd-integration/independent/staged-metadata-acceptance.json": {
+    "original_private_path": "candidate-11474-independent-review/staged-metadata-acceptance.json",
+    "sha256": "9b7cabc88d74539eaa3758f4fcac5713d04fd4a322542fc5cb16abbbdce7c6ff",
+    "byte_preserved": true
   }
 }

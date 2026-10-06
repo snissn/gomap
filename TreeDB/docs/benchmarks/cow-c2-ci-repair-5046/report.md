@@ -12,10 +12,14 @@ The measured runtime and fixtures are frozen at
 [The full source manifest](integrated-source.json) binds 7,330 paths.
 The normalized collector identity is
 `1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077`.
-The final publication may add literal artifacts, four owning-document link updates
-and the reviewed CI discovery fingerprint. Runtime, modules and benchmark fixtures
-must remain byte-identical to this freeze. The merged main update added 42
-sustained-harness documents and changed no runtime or fixture.
+Publication `0142519b2` added literal artifacts, four owning-document links
+and the reviewed CI discovery fingerprint; its runtime, modules and fixtures
+match this freeze. The earlier main update added 42 sustained-harness documents.
+[The later current-main composition](main-edbd-integration/applicability.md) lists
+unrelated landed R1 collections/resource-statistics source changes explicitly.
+C2 execution paths and fixtures remain unchanged, but compiled dependency bytes
+and final full-tree/binary identities differ; the measured costs keep their
+original source identity and scoped applicability.
 
 ## Default paths and active Drain
 
