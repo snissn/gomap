@@ -69,7 +69,7 @@ func r1RangeHistoryOptions5065(limit int) IndexRangeOptions {
 
 func TestR1TypedRowBoundedRangeHistory5065(t *testing.T) {
 	col, ids, want, _ := r1RangeHistoryFixture5065(t)
-	for _, limit := range []int{1, 32, 0} {
+	for _, limit := range []int{1, 32} {
 		got, cut, err := col.FindDocumentsByIndexRange("user", r1RangeHistoryOptions5065(limit))
 		n := len(ids)
 		if limit > 0 && limit < n {
@@ -84,6 +84,9 @@ func TestR1TypedRowBoundedRangeHistory5065(t *testing.T) {
 			}
 			r1RequireCompleteRow(t, got[i].Document, want[i])
 		}
+	}
+	if _, _, err := col.FindDocumentsByIndexRange("user", r1RangeHistoryOptions5065(0)); err == nil {
+		t.Fatal("document range accepted the invalid zero limit")
 	}
 	missing, cut, err := col.FindDocumentsByIndexRange("absent", r1RangeHistoryOptions5065(1))
 	if err != nil || cut || missing != nil {
@@ -101,8 +104,6 @@ func BenchmarkR1TypedRowBoundedRangeHistory5065(b *testing.B) {
 		b.Run(fmt.Sprintf("limit%d", limit), func(b *testing.B) {
 			opts := r1RangeHistoryOptions5065(limit)
 			b.ReportAllocs()
-			b.ReportMetric(float64(parts), "retained-parts")
-			b.ReportMetric(float64(limit), "rows/op")
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				got, cut, err := col.FindDocumentsByIndexRange("user", opts)
@@ -111,6 +112,8 @@ func BenchmarkR1TypedRowBoundedRangeHistory5065(b *testing.B) {
 				}
 			}
 			b.StopTimer()
+			b.ReportMetric(float64(parts), "retained-parts")
+			b.ReportMetric(float64(limit), "rows/op")
 			got, _, err := col.FindDocumentsByIndexRange("user", opts)
 			if err != nil {
 				b.Fatal(err)
