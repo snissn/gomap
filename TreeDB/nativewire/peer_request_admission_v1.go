@@ -128,7 +128,7 @@ func preflightPeerRequestBytesV1(body fixedPeerRequestV1) (int64, error) {
 		// Each bounded write includes fixed request/response fields, numbers,
 		// deadlines and JSON punctuation; final states have their own envelope.
 		populationOnly := p.Population != nil && len(p.Writes) == 0 && len(p.Final) == 0 && p.HighestNewCommitIndex == 0 && p.RequiredAppliedIndex > 0
-		if !populationOnly && (len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6) || !charge(len(p.RunID), 6) || !charge(len(p.Writes), 2048) || !charge(len(p.Final), 256) {
+		if !populationOnly && (len(p.Writes) < 6 || len(p.Writes) > 63 || len(p.Final) < 1 || len(p.Final) > len(p.Writes)) || !charge(len(p.RunID), 6) || !charge(len(p.Writes), 2048) || !charge(len(p.Final), 256) {
 			return 0, raftcluster.ErrRouteTargetUnsupported
 		}
 		// All new numeric fields and punctuation fit in this fixed allowance;

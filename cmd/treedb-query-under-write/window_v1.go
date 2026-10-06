@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -59,11 +60,15 @@ type windowReport struct {
 }
 
 func windowValidate(o windowOptions) error {
+	return windowValidateDuration(o, time.Minute)
+}
+
+func windowValidateDuration(o windowOptions, maximum time.Duration) error {
 	if o.Concurrency != 1 && o.Concurrency != 4 {
 		return errors.New("read-window requires explicit -read-concurrency 1 or 4")
 	}
-	if o.Warmup < 0 || o.Warmup > 1024 || o.MaxAttempts < 1 || o.MaxAttempts > 65536 || o.OutputBytes < 1<<20 || o.OutputBytes > 256<<20 || o.Duration < time.Second || o.Duration > time.Minute {
-		return errors.New("read-window bounds: warmup0..1024, attempts1..65536, output1MiB..256MiB, duration1s..60s")
+	if o.Warmup < 0 || o.Warmup > 1024 || o.MaxAttempts < 1 || o.MaxAttempts > 65536 || o.OutputBytes < 1<<20 || o.OutputBytes > 256<<20 || o.Duration < time.Second || o.Duration > maximum {
+		return fmt.Errorf("read-window bounds: warmup0..1024, attempts1..65536, output1MiB..256MiB, duration1s..%ds", maximum/time.Second)
 	}
 	if err := validateProbeTimeouts(o.Admission.Timeout, o.Admission.RPCTimeout); err != nil {
 		return err
