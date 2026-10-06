@@ -401,6 +401,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 73, occurrences: 79},
 	// Complete-row read fixtures use the retained public schema configuration.
 	{path: "TreeDB/collections/r1_reads_5058_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// Bounded range history inspects the retained public schema option.
+	{path: "TreeDB/collections/r1_range_history_5065_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Buffered retained-document reconstruction tests exercise the public
 	// compatibility configuration and typed-column value vocabulary.
 	{path: "TreeDB/collections/api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
