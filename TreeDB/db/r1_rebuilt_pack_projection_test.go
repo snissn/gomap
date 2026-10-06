@@ -27,14 +27,9 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 			closeNoErr(t, database)
 		}
 	}()
-	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
-	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
-	database.SetLeafPageLog(leafLog)
-	defer closeNoErr(t, leafLog)
-	candidate := prepareLeafGenerationPackTestCandidate(t, database, leafLog, 512)
-	if _, err := database.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
-		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true, Sync: true,
-	}); err != nil {
+	writeLeafGenerationKeys(t, database, "pack-concurrent", 512, 'a')
+	writeLeafGenerationKeys(t, database, "pack-tail", 32, 'b')
+	if _, err := database.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive}); err != nil {
 		t.Fatal(err)
 	}
 	selected := database.durableRoot.slotResources[database.durableRoot.slot]
