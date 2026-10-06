@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"reflect"
 	"testing"
@@ -28,6 +29,10 @@ func TestQuicksilverChurn(t *testing.T) {
 	for i, round := range r.Churn.Rounds {
 		if round.Round != i+1 || round.RestoredKeys != c.Keys || round.MutationTargets != c.Updates || round.VerifiedKeys != r.VerifiedKeys || round.VerifiedMisses != r.VerifiedMisses || round.PauseSeconds < c.ChurnPause.Seconds() || round.Seconds < round.PauseSeconds {
 			t.Fatalf("round: %+v", round)
+		}
+		wallPause := float64(round.PauseFinishedUnixNano-round.PauseStartedUnixNano) / 1e9
+		if round.Before.CapturedAtUnixNano > round.PauseStartedUnixNano || round.PauseStartedUnixNano <= 0 || round.PauseFinishedUnixNano < round.PauseStartedUnixNano || round.PauseFinishedUnixNano > round.After.CapturedAtUnixNano || math.Abs(wallPause-round.PauseSeconds) > 0.001 {
+			t.Fatalf("invalid pause boundaries: start=%d end=%d duration=%g", round.PauseStartedUnixNano, round.PauseFinishedUnixNano, round.PauseSeconds)
 		}
 		if !reflect.DeepEqual(round.Mutations, r.Mutations) || round.MutationCommitBatches != r.MutationCommitBatches || len(round.Before.Stats) == 0 || len(round.After.Stats) == 0 || round.After.HeapAlloc == 0 {
 			t.Fatalf("round accounting/stats: %+v", round)
