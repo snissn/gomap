@@ -963,6 +963,13 @@ and pauses to positive durations up to 1m, checked before loading. The additive
 engine stats, Go heap, supported RSS and exact final files after clean close.
 It labels the shape and repeated insert semantics, counts restored keys/commits,
 and timestamps existing memory snapshots with `captured_at_unix_nano`.
+Each round also records `pause_started_unix_nano` and `pause_finished_unix_nano`
+at the actual pause boundaries; `pause_seconds` retains the monotonic elapsed
+duration. The collector rejects unordered/out-of-round boundaries or a wall
+versus monotonic duration difference above 1 millisecond. These stamps identify
+the quiet interval for co-timed RSS observations; apply the frozen boundary
+exclusion and require actual interior samples before claiming quiet residency.
+They add no maintenance work and do not change phase/profile names.
 Ordinary `final_files` remains the census before the ordinary final reopen;
 timed reads, report fields and phase artifact names keep their existing meaning.
 Whole-process HWM, block/mutex and trace include enabled rounds. This is a
