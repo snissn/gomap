@@ -74,6 +74,7 @@ type r1Cell struct {
 	StorageBoundary string            `json:"storage_boundary"`
 	PersistentBytes int64             `json:"persistent_bytes"`
 	WALBytes        int64             `json:"wal_bytes"`
+	TransientBytes  int64             `json:"transient_bytes"`
 	Stats           map[string]string `json:"stats,omitempty"`
 	OracleVerified  bool              `json:"oracle_verified"`
 	Capabilities    map[string]string `json:"capabilities"`
@@ -250,7 +251,7 @@ type r1Backend interface {
 	openReader() (r1Reader, error)
 	rangeIDs(string, int) ([][]byte, error)
 	transition(string) error
-	storage() (int64, int64, error)
+	storage() (int64, int64, int64, error)
 	stats() map[string]string
 	close() error
 }
@@ -521,7 +522,7 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 			}); err != nil {
 				return cell, err
 			}
-			cell.PersistentBytes, cell.WALBytes, err = b.storage()
+			cell.PersistentBytes, cell.WALBytes, cell.TransientBytes, err = b.storage()
 			if err != nil {
 				return cell, err
 			}
@@ -835,8 +836,8 @@ func (t *r1Tree) transition(state string) error {
 	}
 	return nil
 }
-func (t *r1Tree) storage() (int64, int64, error) { return r1Storage(t.dir) }
-func (t *r1Tree) stats() map[string]string       { return t.db.Stats() }
+func (t *r1Tree) storage() (int64, int64, int64, error) { return r1Storage(t.dir) }
+func (t *r1Tree) stats() map[string]string              { return t.db.Stats() }
 func (t *r1Tree) close() error {
 	var e error
 	if t.cleanup != nil {
@@ -893,13 +894,16 @@ func (r *r1TreeReader) fetch(ids [][]byte) ([][]byte, collections.DocumentMateri
 	return out, resp.Stats, nil
 }
 func (r *r1TreeReader) close() error { return errors.Join(r.materializer.Close(), r.view.Close()) }
-func r1Storage(dir string) (persistent, wal int64, err error) {
+func r1Storage(dir string) (persistent, wal, transient int64, err error) {
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, e error) error {
 		if e != nil {
 			return e
 		}
 		if info.Mode().IsRegular() {
-			if strings.Contains(path, string(filepath.Separator)+"wal"+string(filepath.Separator)) || strings.HasSuffix(path, "-wal") {
+			if strings.HasSuffix(path, "-shm") {
+				// SQLite's WAL index is transient shared memory, not durable payload.
+				transient += info.Size()
+			} else if strings.Contains(path, string(filepath.Separator)+"wal"+string(filepath.Separator)) || strings.HasSuffix(path, "-wal") {
 				wal += info.Size()
 			} else {
 				persistent += info.Size()
@@ -963,7 +967,7 @@ func validateR1Packet(p r1Packet) error {
 		if c.Durability == "relaxed" {
 			ack = "process_visible_no_fsync"
 		}
-		if cell.Ack != ack || !cell.OracleVerified || cell.PersistentBytes <= 0 || cell.WALBytes < 0 || cell.StorageBoundary != "common_checkpoint_before_upsert" {
+		if cell.Ack != ack || !cell.OracleVerified || cell.PersistentBytes <= 0 || cell.WALBytes < 0 || cell.TransientBytes < 0 || cell.StorageBoundary != "common_checkpoint_before_upsert" {
 			return errors.New("mismatched acknowledgement/oracle/storage")
 		}
 		if cell.Capabilities["range_decomposition"] != "quiescent_ids_then_prepared_full_fetch" || cell.Capabilities["ordinary_point"] == "" || cell.Capabilities["ordinary_range"] == "" {

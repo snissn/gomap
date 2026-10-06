@@ -108,6 +108,8 @@ The producer preserves `source.json`, `source-after.json`, `host.json`, `args.js
 `go-env.txt`, `cc-version.txt`, `buildinfo.txt`, `binary.sha256`, `build.stderr`, `run.stderr`,
 `packet.json`, `validation.txt`, and `summary.json`. `R1_GO` selects the Go binary;
 normal `GOROOT`, `GOCACHE`, `GOMODCACHE`, and `GOTOOLCHAIN` overrides apply.
+The packet separates persistent payload, redo WAL, and transient SQLite `-shm`
+WAL-index bytes; transient bytes are excluded from durable payload size.
 The capture uses persistent files on the selected host and removes its own fresh
 benchmark databases only after each cell closes; it never resets a caller DB.
 
