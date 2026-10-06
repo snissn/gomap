@@ -72,16 +72,18 @@ func TestStableOuterLeafProducerFamilyFrontierIdentityAndLifetime(t *testing.T) 
 func TestStableOuterLeafProducerFamilyRejectsNamespaceDriftAndCallerLease(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leaf.vlog")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	parent, err := os.Open(dir)
+	parent, err := OpenStableParent(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer parent.Close()
+	// Stable child handles permit namespace replacement while retained,
+	// including the delete-sharing required for this fixture on Windows.
+	file, err := OpenStableChildFile(parent, "leaf.vlog", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{Parent: parent, LinkedResource: file, ParentGeneration: 1, Operation: NamespaceCreate, NewName: "leaf.vlog", DiagnosticPath: "leaf"})
 	if err != nil {
 		t.Fatal(err)
