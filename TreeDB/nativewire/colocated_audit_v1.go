@@ -89,8 +89,8 @@ func ValidateColocatedAuditPlanV1(ctx context.Context, p ColocatedAuditPlanV1) e
 		return err
 	}
 	populationOnly := p.Population != nil && len(p.Writes) == 0 && len(p.Final) == 0 && p.HighestNewCommitIndex == 0 && p.RequiredAppliedIndex > 0
-	if p.Version != 1 || len(p.RunID) == 0 || len(p.RunID) > 64 || strings.Trim(p.RunID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || !populationOnly && (len(p.Writes) != 6 || len(p.Final) < 1 || len(p.Final) > 6 || p.HighestNewCommitIndex == 0 || p.RequiredAppliedIndex < p.HighestNewCommitIndex) {
-		return errors.New("audit requires version1, bounded run ID, six original outcomes and final known IDs")
+	if p.Version != 1 || len(p.RunID) == 0 || len(p.RunID) > 64 || strings.Trim(p.RunID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || !populationOnly && (len(p.Writes) < 6 || len(p.Writes) > 63 || len(p.Final) < 1 || len(p.Final) > len(p.Writes) || p.HighestNewCommitIndex == 0 || p.RequiredAppliedIndex < p.HighestNewCommitIndex) {
+		return errors.New("audit requires version1, bounded run ID, 6..63 original outcomes and final known IDs")
 	}
 	if p.Population != nil {
 		if err := collections.ValidateVectorSourcePopulationExpectationV1(*p.Population); err != nil {
@@ -107,7 +107,7 @@ func ValidateColocatedAuditPlanV1(ctx context.Context, p ColocatedAuditPlanV1) e
 	if populationOnly {
 		return ctx.Err()
 	}
-	keys := make(map[string]bool, 6)
+	keys := make(map[string]bool, len(p.Writes))
 	last := make(map[string]ColocatedAuditStateV1, 6)
 	var scope commitlog.ColocatedVectorMutationScopeV1
 	var previous uint64
@@ -241,9 +241,13 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 	if err != nil {
 		return out, err
 	}
-	for _, w := range p.Writes {
-		// Route only the fresh token/quorum proof. The audit below still reads
-		// this voter's own current FSM, covered witnesses and source/live roots.
+	if len(p.Writes) > 0 {
+		// Validation binds every original to one scope and strictly ascending
+		// commits. Fresh authority at the highest commit covers that prefix;
+		// the audit below still verifies EVERY original against this voter's
+		// current FSM witnesses and source/live roots. Keep network proof cost
+		// independent of ledger length within the existing request deadline.
+		w := p.Writes[len(p.Writes)-1]
 		if e := r.requireColocatedVectorVisibilityV1(ctx, public.SearchRequestV1{Version: 1, Generation: w.Response.Generation, VisibilityToken: w.Response.VisibilityToken}); e != nil {
 			return out, e
 		}
@@ -293,10 +297,17 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 	raw, _ := json.Marshal(p)
 	digest := sha256.Sum256(raw)
 	out = ColocatedAuditReceiptV1{Version: 1, RunID: p.RunID, PlanSHA256: hex.EncodeToString(digest[:]), NodeID: string(r.config.NodeID), OwnerGroup: string(owner), Scope: "six retained original outcomes and known-ID canonical source/absence plus exact live membership only; no entire population proof", AppliedTerm: term, AppliedIndex: index, PhysicalState: before, CommandWALNextLSN: nextLSN}
+	if len(p.Writes) != 6 {
+		out.Scope = "all declared retained original outcomes and known-ID canonical source/absence plus exact live membership only; no entire population proof"
+	}
 	if p.Population != nil {
 		out.Scope = "complete current canonical source vector population at this voter's current FSM applied position, at or above requested floor; no full-document or reverse live-graph equality"
 		if len(p.Writes) > 0 {
-			out.Scope += "; six retained original outcomes and known-ID canonical source/absence plus exact live membership"
+			if len(p.Writes) == 6 {
+				out.Scope += "; six retained original outcomes and known-ID canonical source/absence plus exact live membership"
+			} else {
+				out.Scope += "; all declared retained original outcomes and known-ID canonical source/absence plus exact live membership"
+			}
 		}
 	}
 	// Raft apply holds the FSM lock before acquiring shared collection admission.
@@ -320,8 +331,8 @@ func (r *FixedPeerTCPRuntimeV1) colocatedAuditV1(ctx context.Context, p Colocate
 			out.RetainedBytes = binary.LittleEndian.Uint64(logical[1][16:])
 			out.RetainedChain = hex.EncodeToString(logical[1][24:])
 		}
-		if len(p.Writes) > 0 && out.RetainedCount != 6 {
-			return errors.New("audit requires exactly six retained outcomes in this fresh collection checkpoint")
+		if len(p.Writes) > 0 && out.RetainedCount != uint64(len(p.Writes)) {
+			return errors.New("audit requires exactly the declared retained outcomes in this fresh collection checkpoint")
 		}
 		for _, w := range p.Writes {
 			token, _ := decodeColocatedVectorVisibilityV1(w.Response.VisibilityToken)
