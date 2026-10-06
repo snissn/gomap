@@ -822,6 +822,9 @@ diagnostic until that gate and the paired correctness checks pass.
 For the selected local indexed row workload, supported string carriers plus
 residual JSON, complete owned output, SQLite acknowledgement matching, and
 prepared-versus-public timing boundaries, see the
-[R1 indexed row contract](../spec/r1-indexed-row-contract.md). A typed-row name
-does not imply nullable/numeric typed batch carriers or complete ordinary indexed
-range materialization; use the capability matrix and measured public paths.
+[R1 indexed row contract](../spec/r1-indexed-row-contract.md). Ordinary points and
+bounded document ranges return complete rows; see
+[R1 complete-row reads](../spec/r1-row-reads.md). Measure the full public call,
+including locator acquisition, reconstruction and owned output. Opening a
+prepared view drains pending writes; distinguish setup and first fetch from
+warmed view reuse. Nullable/numeric typed batch carriers remain unsupported here.
