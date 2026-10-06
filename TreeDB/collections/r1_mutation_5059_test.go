@@ -290,9 +290,7 @@ func TestR1MutationMatrix5059(t *testing.T) {
 			}
 			want["row-008"] = resurrect
 			r1MutationAssert5059(t, col, want, known)
-			if indexed {
-				r1MutationRejected5059(t, col, dir, want, known)
-			}
+			r1MutationRejected5059(t, col, dir, want, known, indexed)
 			if err := col.Flush(); err != nil {
 				t.Fatal(err)
 			}
@@ -310,13 +308,13 @@ func TestR1MutationMatrix5059(t *testing.T) {
 	}
 }
 
-func r1MutationRejected5059(t *testing.T, col *Collection, dir string, want map[string]map[string]any, known map[string]map[string]bool) {
+func r1MutationRejected5059(t *testing.T, col *Collection, dir string, want map[string]map[string]any, known map[string]map[string]bool, indexed bool) {
 	t.Helper()
 	a, b := r1MutationCopy5059(want["row-004"]), r1MutationCopy5059(want["row-005"])
 	a["bio"], b["email"] = "must not publish", a["email"]
 	for _, operation := range []string{"insert", "replace", "upsert", "source", "update", "delete"} {
 		for _, duplicate := range []bool{false, true} {
-			if operation == "delete" && !duplicate {
+			if !duplicate && (!indexed || operation == "delete") {
 				continue
 			}
 			t.Run(operation+fmt.Sprintf("/duplicate=%t", duplicate), func(t *testing.T) {
