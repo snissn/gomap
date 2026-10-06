@@ -81,16 +81,37 @@ instead of silently resolving a different invocation. Offline analysis validates
 the spelling without requiring original paths to exist. The frozen fixture must
 name `TreeDB/mvcc/cow_c3_public_bench_test.go` with a SHA256 digest matching both
 retained source manifests and actual inputs; unrelated files cannot replace it.
+C3 matched admission requires distinct production commits, Git trees, exported
+source digests and binary digests. The two variants must have disjoint source,
+binary, manifest and build-receipt paths, with separate build directories.
+This matched-product rule does not apply to candidate-only construction smokes.
 Build and benchmark processes inherit no ambient environment variables.
 One shared derivation passes exactly those nine controls plus PATH=os.defpath,
 GOENV=off, GOTOOLCHAIN=local, LC_ALL=C and GOPATH equal to GOMODCACHE's
-parent's parent. Thus persisted Go settings, ambient compiler/build flags and
+parent's parent, and fixed CGO_ENABLED=0. These fifteen fields are identical for
+build and collection. Thus persisted Go settings, ambient compiler/build flags and
 runtime GODEBUG settings cannot enter either variant. The full effective
 process environment is retained in both build receipts and the collection
 packet and checked during collection and offline analysis. Actual full
 `go env -json` remains retained, including the toolchain's default settings.
 Go reports disabled `GOENV=off` as an empty configuration-file name; validation
 checks that actual empty value while retaining `off` in the process environment.
+The builder hashes the Go launcher and every regular executable below
+`GOROOT/pkg/tool` before and after all build/provenance commands, refusing drift,
+symlinks and an incomplete compiler/linker/assembler inventory. It retains one
+`toolchain.json` artifact with relative paths, file sizes, executable modes and
+SHA256 hashes. Freeze its canonical `toolchain_identity` digest alongside
+`go_version` and `go_binary_sha256`; both build receipts, live collection and
+offline analysis require the same identity. Collection checks the actual
+inventory before and after capture. Offline analysis needs only retained bytes.
+Actual Goenv must report CGO_ENABLED=0, and build, collection and offline
+analysis refuse any compiled CgoFiles. The public MVCC fixture uses no CGO or
+network-specific behavior. Earlier CGO-enabled construction evidence is retained
+under its original profile; both matched binaries need fresh disabled-CGO
+builds and ordinary fixture smokes. The inventory binds Go tool executables;
+the compiled input closure separately binds actual Go/assembly/header inputs.
+It does not claim an immutable copy of every GOROOT file or external system
+libraries that this disabled-CGO measurement does not compile against.
 Each profile also requires exact ordinary WAL counts in both variant rules
 and comparable metrics: durable append/sync 1/1, relaxed 1/0, NoWAL 0/0.
 The builder requires a Git repository containing the declared commit/tree.
@@ -137,8 +158,8 @@ bounded grace; Go's benchmark timeout alone is insufficient. Child elapsed,
 CPU and maximum RSS exclude collector postchecks and hashing. RSS is Linux
 wait4 ru_maxrss in KiB and covers setup/Close, separately from Go timed B/op.
 
-The offline analyzer binds accepted build receipts, all ten provenance
-artifacts (including Git-object source authority), source manifests, scripts,
+The offline analyzer binds accepted build receipts, all eleven provenance
+artifacts (including Git-object source authority and Go tool inventory), source manifests, scripts,
 raw streams, exact schedule and equal
 declared logical work. It retains all six measured samples per variant and
 three cycle means and makes a descriptive comparison, with no statistical
@@ -163,7 +184,10 @@ controls as C3, finite epochs (1..8), noise policy and coordinator acceptance.
 Set `result_class` to `construction` for one fresh candidate process per leaf,
 or `matched-supported-evidence` for separate baseline/candidate warmups and
 three ABBA cycles (504 processes). Both classes require both frozen build
-closures. Native requirements are typed `PENDING`, with whole public maintenance
+closures, the 15-key CGO-disabled environment, all 11 build artifacts and the
+retained live Go version and executable inventory. Construction may reuse one
+product for both labels; matched evidence requires distinct products and
+independent non-nested variant paths. Native requirements are typed `PENDING`, with whole public maintenance
 caps of 32 records and 1 MiB. Every packet retains the literal
 `pending_native_observations`; no successful packet promotes a product/native
 qualification.

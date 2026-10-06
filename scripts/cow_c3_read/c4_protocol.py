@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import re
 
-from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids
+from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products
 
 SCHEMA = "gomap-cow-sustained-public-v1"
 PROFILES = ("command_wal_durable", "command_wal_relaxed", "no_wal_fast")
@@ -51,7 +51,7 @@ def workload(keys, epochs):
 def validate_config(c):
     exact(c, ("schema","suite","status","coordinator_acceptance","result_class","qualification",
               "native_requirements","cycles","order","timeout_seconds","go_binary","go_binary_sha256",
-              "go_version","environment","host","noise_policy","fixtures","variants","cases",
+              "go_version","toolchain_identity","environment","host","noise_policy","fixtures","variants","cases",
               "comparison_metrics"), "configuration")
     need(c["schema"] == SCHEMA and c["suite"] == "c4-sustained", "wrong sustained schema/suite")
     need(c["status"] == "frozen-approved" and type(c["coordinator_acceptance"]) is str and c["coordinator_acceptance"], "missing coordinator freeze")
@@ -64,7 +64,8 @@ def validate_config(c):
     need(set(c["environment"]) == CONTROLS and all(type(v) is str for v in c["environment"].values()), "explicit environment controls")
     need(c["environment"]["GOWORK"] == "off" and c["environment"]["GOMAXPROCS"] == "4" and c["environment"]["GOFLAGS"] == "", "runtime controls mismatch")
     need(c["go_version"].startswith("go version go1.26.3 "), "pinned Go 1.26.3 required")
-    need(re.fullmatch(r"[0-9a-f]{64}",c["go_binary_sha256"] or ""), "toolchain hash required")
+    for key in ("go_binary_sha256","toolchain_identity"):
+        need(re.fullmatch(r"[0-9a-f]{64}",c[key] or ""), "toolchain hash required")
     for name in ("GOROOT","GOCACHE","GOMODCACHE","TMPDIR"):
         p=Path(c["environment"][name]);need(p.is_absolute() and str(p)==c["environment"][name] and ".." not in p.parts, "resolved environment path " + name)
     h=c["host"];exact(h,("system","node","machine","release","cpu_count","max_load1","max_load5","min_free_bytes","tmpdir","tmpdir_device"),"host")
@@ -81,6 +82,7 @@ def validate_config(c):
         exact(v,("production_commit","production_git_tree","source","manifest","manifest_sha256","source_tree_sha256","binary","binary_sha256","build_receipt","build_receipt_sha256"),"variant")
         variant_paths(v,live=False);variant_git_ids(v)
         for k in ("manifest_sha256","source_tree_sha256","binary_sha256","build_receipt_sha256"):need(re.fullmatch(r"[0-9a-f]{64}",v[k] or ""),"exact artifact identity")
+    if c["result_class"]=="matched-supported-evidence":matched_products(c["variants"])
     expected=set(itertools.product(PROFILES,MODES,LAYOUTS,SIZES));cells=[]
     for x in c["cases"]:
         exact(x,("id","profile","mode","layout","keys","benchmark","package","iterations","warmup_iterations","workload_contract","comparable_metrics","comparison_metrics","timed_scope","ack_contract","rules","latency_groups"),"case")

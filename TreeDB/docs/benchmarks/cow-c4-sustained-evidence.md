@@ -79,8 +79,10 @@ source/build authority, compiled module audit, hermetic environment, host and
 TMPDIR admission, watchdog and offline provenance checks. A closed C4 schema
 adds exact raw work, options, resolved ACK, finite counters, lifecycle phase and
 oracle validation. Configuration must be explicitly frozen before collection;
-construction runs 36 candidate leaves and matched evidence runs separate
-warmups plus three ABBA cycles. Raw distributions and matched comparisons are
+construction runs 36 candidate leaves and may bind both variant labels to the
+same product; matched evidence requires distinct source commits, trees,
+manifest digests, binaries and independent non-nested build/source locations,
+then runs separate warmups plus three ABBA cycles. Raw distributions and matched comparisons are
 descriptive, with no retained-tail or native qualification claim. Successful
 collection and analysis remain separate from current-head review, race tests,
 actual runtime evidence and coordinator acceptance.
@@ -101,3 +103,11 @@ stages. Configuration uses the shared canonical variant-path and Git-identity
 validators. Copied-positive smoke cases include zero observed WAL appends, zero
 durable ordinary syncs, unexplained relaxed syncs, premature checkpoints, and
 Close before seed; updating artifact hashes cannot make these acceptable.
+
+Both classes use the shared 15-key fixed process environment with
+`CGO_ENABLED=0`. The 11-artifact build closure includes Go launcher and compiler
+executable inventories. Offline analysis requires the retained live Go version
+and inventory to match both build receipts and the frozen toolchain identity.
+Copied-positive cases cover missing toolchain identity and an invalid matched
+same-product configuration; source-manifest corruption is a corruption refusal,
+not a claim to have exercised a valid semantic source-mode mutation.

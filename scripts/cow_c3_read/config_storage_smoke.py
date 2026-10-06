@@ -2,16 +2,18 @@
 import argparse
 import copy
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 from collect import host_gate, host_snapshot
 from prepare_config import draft
-from protocol import config, process_environment, sha, write, variant_paths
+from protocol import config, process_environment, sha, write, variant_paths, toolchain_inventory, validate_toolchain, build_toolchain
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--protocol-only", action="store_true", help="skip Linux host/filesystem observations")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -22,9 +24,12 @@ def main():
     value["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(out))
     value["host"].update(node="synthetic", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(out), tmpdir_device=out.stat().st_dev)
     value["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
-    for variant in value["variants"].values():
-        variant.update(production_commit="1" * 40, production_git_tree="2" * 40)
-        variant.update({key: "/synthetic/absent/" + key for key in ("source", "binary", "manifest", "build_receipt")})
+    value.update(go_binary="/synthetic/go/bin/go", go_binary_sha256="4" * 64,
+                 go_version="synthetic Go version", toolchain_identity="5" * 64)
+    for index, (name, variant) in enumerate(value["variants"].items(), 1):
+        variant.update(production_commit=str(index) * 40, production_git_tree=str(index + 2) * 40)
+        variant.update(binary_sha256=str(index) * 64, source_tree_sha256=str(index + 2) * 64)
+        variant.update({key: "/synthetic/absent/" + name + "/" + key for key in ("source", "binary", "manifest", "build_receipt")})
     value["fixtures"][0]["sha256"] = "3" * 64
     path = out / "config.json"
     write(path, value)
@@ -57,6 +62,15 @@ def main():
     refuse("unbound-tmpdir", lambda c: c["host"].update(tmpdir="/other"), "unbound temporary database filesystem")
     refuse("extra-control", lambda c: c["environment"].update(EXTRA="1"), "missing/extra explicit environment controls")
     refuse("missing-tree", lambda c: c["variants"]["baseline"].update(production_git_tree="0"), "missing exact Git revision/tree")
+    refuse("same-product", lambda c: c["variants"].update(candidate=copy.deepcopy(c["variants"]["baseline"])), "distinct production_commit")
+    for key in ("production_commit", "production_git_tree", "source_tree_sha256", "binary_sha256"):
+        refuse("same-" + key, lambda c, k=key: c["variants"]["candidate"].update({k: c["variants"]["baseline"][k]}), "distinct " + key)
+    for key in ("source", "binary", "manifest", "build_receipt"):
+        refuse("shared-" + key, lambda c, k=key: c["variants"]["candidate"].update({k: c["variants"]["baseline"][k]}), "independent custody")
+    refuse("nested-source", lambda c: c["variants"]["candidate"].update(source=c["variants"]["baseline"]["source"] + "/nested"), "independent custody")
+    refuse("shared-build-directory", lambda c: c["variants"]["candidate"].update(build_receipt="/synthetic/absent/baseline/other-receipt"), "independent build custody")
+    for key in ("go_binary_sha256", "toolchain_identity"):
+        refuse("missing-" + key, lambda c, k=key: c.update({k: None}), "missing frozen " + key)
     for label, fixtures in (("wrong-fixture", [{"path": "go.mod", "sha256": "3" * 64}]),
                             ("external-fixture", [{"path": "/external/fixture.go", "sha256": "3" * 64}]),
                             ("duplicate-fixture", value["fixtures"] * 2),
@@ -72,8 +86,8 @@ def main():
     # Offline validation keeps canonical absent paths; collection additionally
     # refuses leaf and ancestor symlinks for all four actual custody paths.
     valid256 = copy.deepcopy(value)
-    for variant in valid256["variants"].values():
-        variant.update(production_commit="1" * 64, production_git_tree="2" * 64)
+    for index, variant in enumerate(valid256["variants"].values(), 1):
+        variant.update(production_commit=str(index) * 64, production_git_tree=str(index + 2) * 64)
     write(path, valid256)
     assert len(config(path)["cases"]) == 54
     live_dir = out / "live-custody"
@@ -95,6 +109,42 @@ def main():
                 results.append({"label": key + "-symlink-" + label, "refused": str(error)})
             else:
                 raise AssertionError("live symlink accepted")
+    # Actual tiny executable files exercise inventory mutation and custody
+    # without executing Go or pretending these files compile a product.
+    goroot = out / "tiny-toolchain"
+    go = goroot / "bin/go"
+    go.parent.mkdir(parents=True)
+    go.write_text("synthetic launcher\n"); go.chmod(0o755)
+    tools = goroot / "pkg/tool/linux_amd64"
+    tools.mkdir(parents=True)
+    for name in ("compile", "link", "asm", "cgo"):
+        path_value = tools / name
+        path_value.write_text("synthetic " + name + "\n"); path_value.chmod(0o755)
+    inventory = toolchain_inventory(goroot)
+    frozen = {"go_version": "synthetic", "go_binary_sha256": sha(go), "toolchain_identity": validate_toolchain(inventory)}
+    build_toolchain(frozen, frozen, inventory)
+    for label, mutate in (("compiler-bytes", lambda: (tools / "compile").write_text("changed\n")),
+                          ("extra-tool", lambda: shutil.copyfile(tools / "asm", tools / "new-tool"))):
+        (tools / "compile").write_text("synthetic compile\n")
+        mutate()
+        if label == "extra-tool":
+            (tools / "new-tool").chmod(0o755)
+        try:
+            build_toolchain(frozen, frozen, toolchain_inventory(goroot))
+        except ValueError as error:
+            assert "Go toolchain inventory mismatch" in str(error)
+            results.append({"label": label, "refused": str(error)})
+        else:
+            raise AssertionError("changed toolchain accepted")
+    link = tools / "linked-tool"
+    link.symlink_to(tools / "asm")
+    try:
+        toolchain_inventory(goroot)
+    except ValueError as error:
+        assert "symlink in Go tool directory" in str(error)
+        results.append({"label": "tool-symlink", "refused": str(error)})
+    else:
+        raise AssertionError("tool symlink accepted")
     # ACK authority is mandatory in the frozen protocol, even if someone edits
     # the non-runnable draft before freezing it. Exercise both binary variants.
     for variant_name in ("baseline", "candidate"):
@@ -110,6 +160,11 @@ def main():
                 cell["rules"][variant][unit] = rule
             refuse(label + "-" + variant_name, damage, "profile WAL")
     refuse("missing-wal-comparability", lambda c: c["cases"][0]["comparable_metrics"].remove("wal_syncs/op"), "WAL comparability")
+    if args.protocol_only:
+        write(out / "result.json", {"scope": "portable config/toolchain protocol refusals only; no Linux host or timing acceptance",
+                                   "valid_cases": 54, "refusals": results, "script_sha256": sha(Path(__file__))})
+        print(json.dumps({"valid_cases": 54, "refusals": len(results), "protocol_only": True}))
+        return
     # Distinct actual directories, with deliberately different free-space
     # readings, prove the gate consumes the TMPDIR observation, not source.
     storage, source = out / "database-temp", out / "source"

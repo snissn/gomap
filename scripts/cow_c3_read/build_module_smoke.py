@@ -20,15 +20,15 @@ def environment_smoke(out):
                 "GOMAXPROCS": "4", "GOGC": "100", "GOMEMLIMIT": "off",
                 "GOFLAGS": "", "TMPDIR": str(out / "temporary")}
     persisted = out / "poisoned-goenv"
-    persisted.write_text("GOAMD64=v4\nGOEXPERIMENT=arenas\nCGO_ENABLED=0\nGOFLAGS=-race\n")
-    poison = {"GOAMD64": "v4", "GOEXPERIMENT": "arenas", "CGO_ENABLED": "0",
+    persisted.write_text("GOAMD64=v4\nGOEXPERIMENT=arenas\nCGO_ENABLED=1\nGOFLAGS=-race\n")
+    poison = {"GOAMD64": "v4", "GOEXPERIMENT": "arenas", "CGO_ENABLED": "1",
               "GOENV": str(persisted), "GOTOOLCHAIN": "auto", "GOFLAGS": "-race",
               "GODEBUG": "asyncpreemptoff=1", "GOPATH": "/ambient/gopath",
               "CC": "/ambient/compiler", "CGO_CFLAGS": "-march=native",
               "PATH": "/ambient/bin", "HOME": "/ambient/home",
               "LD_PRELOAD": "/ambient/injection", "UNDECLARED_SENTINEL": "ambient"}
     expected = dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
-                    GOPATH=str(out / "gopath"), LC_ALL="C")
+                    GOPATH=str(out / "gopath"), LC_ALL="C", CGO_ENABLED="0")
     argv = ["/usr/bin/env"]
     with patch.dict(os.environ, poison, clear=True):
         env = process_environment(controls)
@@ -41,6 +41,7 @@ def environment_smoke(out):
     checks = [{"label": "ambient-poison-and-persisted-goenv-child", "passed": True,
                "scope": "actual helper and env executable child; actual Go defaults require ordinary runtime smoke"}]
     for label, key, value in (("undeclared-goamd64", "GOAMD64", "v4"),
+                              ("declared-cgo-override", "CGO_ENABLED", "1"),
                               ("declared-goenv-override", "GOENV", str(persisted)),
                               ("non-string-control", "GOGC", 100),
                               ("relative-module-cache", "GOMODCACHE", "gopath/pkg/mod"),

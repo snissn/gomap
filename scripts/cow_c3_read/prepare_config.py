@@ -66,7 +66,7 @@ def draft():
     return {"schema": SCHEMA, "status": "draft-unfrozen", "coordinator_acceptance": None,
         "scope": "C3-read milestone only; no M7/C4/parent qualification", "cycles": 3,
         "order": ["baseline", "candidate", "candidate", "baseline"], "timeout_seconds": 300,
-        "go_binary": None, "go_binary_sha256": None, "go_version": None,
+        "go_binary": None, "go_binary_sha256": None, "go_version": None, "toolchain_identity": None,
         "environment": {"GOMAXPROCS": "4", "GOWORK": "off", "GOROOT": None,
             "GOGC": "100", "GOMEMLIMIT": "off", "GOFLAGS": "", "GOCACHE": None, "GOMODCACHE": None, "TMPDIR": None},
         "host": {"system": "Linux", "node": None, "machine": "x86_64", "release": None,

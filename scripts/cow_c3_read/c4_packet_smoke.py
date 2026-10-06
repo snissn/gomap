@@ -82,6 +82,8 @@ def main():
     cases={
         "native-qualification":config_mutation("qualification","qualified"),
         "product-result-class":config_mutation("result_class","product-qualified"),
+        "matched-same-product":config_mutation("result_class","matched-supported-evidence"),
+        "missing-toolchain-identity":config_mutation("toolchain_identity",None),
         "unknown-parameter":mutate_config(lambda c:c.update(unlimited=True)),
         "unfrozen-config":config_mutation("status","draft-unfrozen"),
         "wrong-resolved-mode":raw_mutation(lambda r:r.update(mode="append_only" if r["mode"]=="cow_btree" else "cow_btree")),
@@ -113,7 +115,7 @@ def main():
         "noise-posthoc-exclusions":mutate_config(lambda c:c["noise_policy"].update(exclusions="drop slow rows")),
         "module-artifact-drift":artifact_corruption("candidate-effective_module_graph.raw"),
         "source-object-drift":artifact_corruption("candidate-git_source.raw"),
-        "source-mode-manifest-drift":artifact_corruption("candidate-source-manifest.json"),
+        "source-manifest-corruption":artifact_corruption("candidate-source-manifest.json"),
         "tooling-drift":artifact_corruption("c4_protocol.py"),
     }
     results=[]

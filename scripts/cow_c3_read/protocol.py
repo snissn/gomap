@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import stat
 from pathlib import Path
 
 SCHEMA = "gomap-c3-read-matched-v1"
@@ -45,6 +46,73 @@ def fixture_manifest(fixtures, ident):
         need(files.get(fixture["path"]) == fixture["sha256"],
              "fixture differs from frozen source: " + fixture["path"])
 
+def matched_products(variants):
+    """C3 compares two products; candidate-only construction has no such rule."""
+    baseline, candidate = variants["baseline"], variants["candidate"]
+    for key in ("production_commit", "production_git_tree", "source_tree_sha256", "binary_sha256"):
+        need(baseline[key] != candidate[key], "matched products must have distinct " + key)
+    left, right = variant_paths(baseline), variant_paths(candidate)
+    for a in left.values():
+        for b in right.values():
+            need(not a.is_relative_to(b) and not b.is_relative_to(a), "matched products must have independent custody")
+    a, b = left["build_receipt"].parent, right["build_receipt"].parent
+    need(not a.is_relative_to(b) and not b.is_relative_to(a), "matched products must have independent build custody")
+
+def validate_toolchain(value):
+    need(set(value) == {"go_binary_sha256", "executables"}
+         and isinstance(value["go_binary_sha256"], str)
+         and re.fullmatch(r"[0-9a-f]{64}", value["go_binary_sha256"]), "invalid Go toolchain inventory")
+    records = value["executables"]
+    need(isinstance(records, list) and records, "empty Go toolchain inventory")
+    paths = []
+    for item in records:
+        need(set(item) == {"path", "sha256", "bytes", "mode"}, "invalid Go toolchain executable")
+        path = Path(item["path"])
+        need(not path.is_absolute() and str(path) == item["path"] and ".." not in path.parts
+             and path.parts[:2] == ("pkg", "tool") and len(path.parts) >= 4,
+             "invalid Go toolchain executable path")
+        need(isinstance(item["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+             and type(item["bytes"]) is int and item["bytes"] > 0
+             and type(item["mode"]) is int and 0 < item["mode"] <= 0o777 and item["mode"] & 0o111,
+             "invalid Go toolchain executable identity")
+        paths.append(item["path"])
+    need(paths == sorted(set(paths)) and {"compile", "link", "asm"} <= {Path(p).name for p in paths},
+         "incomplete/duplicate Go toolchain inventory")
+    return digest(value)
+
+def toolchain_inventory(goroot):
+    """Observe every Go tool executable without executing or trusting the launcher."""
+    root = Path(goroot)
+    need(root.is_absolute() and not root.is_symlink() and root.resolve() == root, "noncanonical GOROOT")
+    go, directory = root / "bin/go", root / "pkg/tool"
+    need(go.is_file() and not go.is_symlink() and go.resolve() == go and go.stat().st_mode & 0o111,
+         "invalid Go launcher custody")
+    need(directory.is_dir() and not directory.is_symlink() and directory.resolve() == directory,
+         "invalid Go tool directory custody")
+    records = []
+    for path in sorted(directory.rglob("*")):
+        need(not path.is_symlink(), "symlink in Go tool directory")
+        mode = path.stat().st_mode
+        if stat.S_ISDIR(mode):
+            continue
+        need(stat.S_ISREG(mode), "nonregular Go tool input")
+        if mode & 0o111:
+            records.append({"path": path.relative_to(root).as_posix(), "sha256": sha(path),
+                            "bytes": path.stat().st_size, "mode": stat.S_IMODE(mode)})
+    value = {"go_binary_sha256": sha(go), "executables": records}
+    validate_toolchain(value)
+    return value
+
+def build_toolchain(build, frozen, inventory):
+    need(build["go_version"] == frozen["go_version"]
+         and build["go_binary_sha256"] == frozen["go_binary_sha256"], "toolchain mismatch")
+    need(inventory["go_binary_sha256"] == frozen["go_binary_sha256"]
+         and validate_toolchain(inventory) == build["toolchain_identity"] == frozen["toolchain_identity"],
+         "Go toolchain inventory mismatch")
+
+def validate_no_cgo(packages):
+    need(packages and not any(package.get("CgoFiles") for package in packages), "compiled Cgo inputs forbidden")
+
 def case_names(case):
     shape = "forced_pointer" if case["layout"] == "pointer" else "inline"
     leaf = "group_versions" if case["workload"] == "group_all_versions" else case["workload"]
@@ -63,12 +131,12 @@ def process_environment(controls):
     need(cache.is_absolute() and str(cache) == controls["GOMODCACHE"] and ".." not in cache.parts
          and cache.parent.parent != Path("/"), "unresolved GOMODCACHE/GOPATH")
     return dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
-                GOPATH=str(cache.parent.parent), LC_ALL="C")
+                GOPATH=str(cache.parent.parent), LC_ALL="C", CGO_ENABLED="0")
 
 def validate_go_environment(observed, env):
     # Go's cfg.EnvFile reports the disabled GOENV=off setting as an empty
     # filename in `go env -json`; the actual process environment still is off.
-    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
+    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED"):
         expected = "" if key == "GOENV" else env[key]
         need(observed[key] == expected, "actual go env mismatch " + key)
     need(observed["GOOS"] == "linux" and observed["GOARCH"] == "amd64", "actual build platform mismatch")
@@ -127,6 +195,10 @@ def config(path):
     need(all(isinstance(v, str) for v in c["environment"].values()), "unresolved environment controls")
     need(c["environment"]["GOFLAGS"] == "", "GOFLAGS must be empty")
     process_environment(c["environment"])
+    need(isinstance(c["go_version"], str) and c["go_version"], "missing frozen Go version")
+    for key in ("go_binary_sha256", "toolchain_identity"):
+        need(isinstance(c[key], str) and re.fullmatch(r"[0-9a-f]{64}", c[key]), "missing frozen " + key)
+    need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
     need(c["host"]["system"] == "Linux" and c["host"]["cpu_count"] >= 4, "Linux host contract")
     tmpdir = Path(c["environment"]["TMPDIR"])
     need(tmpdir.is_absolute() and str(tmpdir) == c["environment"]["TMPDIR"] and ".." not in tmpdir.parts, "unresolved TMPDIR")
@@ -147,6 +219,10 @@ def config(path):
     for variant in c["variants"].values():
         variant_git_ids(variant)
         variant_paths(variant)
+        for key in ("binary_sha256", "source_tree_sha256"):
+            need(isinstance(variant[key], str) and re.fullmatch(r"[0-9a-f]{64}", variant[key]),
+                 "missing exact product hash " + key)
+    matched_products(c["variants"])
     cases = c["cases"]
     need(len({x["id"] for x in cases}) == len(cases), "duplicate case ids")
     coverage = {(x["profile"], x["layout"], x["workload"], x["mode"]) for x in cases}

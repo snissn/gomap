@@ -10,8 +10,8 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest
-from build import verify_git_receipt
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo
+from build import verify_git_receipt, objects
 import protocol as c3_protocol
 
 def selected_protocol(suite):
@@ -127,11 +127,10 @@ def main():
             need(build["binary_sha256"] == v["binary_sha256"] and build["source_tree_sha256"] == ident["tree_sha256"], "unbound build receipt")
             need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "unmatched build controls")
             need(build.get("effective_process_environment") == env, "build process environment mismatch")
-            need(build["go_version"] == c["go_version"] and build["go_binary_sha256"] == c["go_binary_sha256"], "toolchain mismatch")
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
             need(build["exit_code"] == 0 and build["command"] and build["artifacts"], "missing actual successful build receipt")
-            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
+            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source", "toolchain"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
             for key, artifact in build["artifacts"].items():
@@ -142,6 +141,8 @@ def main():
                 shutil.copyfile(artifact["path"], destination)
                 frozen_artifacts[key] = {"path": destination.name, "sha256": sha(destination)}
             need(build["effective_module_identity"] == frozen_artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
+            build_toolchain(build, c, json.loads((out / (variant + "-toolchain.raw")).read_text()))
+            validate_no_cgo(objects((out / (variant + "-compiled_dependencies.raw")).read_text()))
             verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
             validate_go_environment(go_env, env)
@@ -155,9 +156,10 @@ def main():
             state[variant] = {"source": source, "binary": binary, "identity": ident, "build": build}
         need(state["baseline"]["build"]["effective_module_identity"] == state["candidate"]["build"]["effective_module_identity"], "effective module graph differs")
         go = Path(c["go_binary"])
-        need(sha(go) == c["go_binary_sha256"], "live Go binary drift")
+        live_toolchain = toolchain_inventory(c["environment"]["GOROOT"])
+        build_toolchain(state["baseline"]["build"], c, live_toolchain)
         version = subprocess.check_output([str(go), "version"], env=env).decode().strip()
-        write(out / "live-toolchain.json", {"go_version": version, "go_binary_sha256": sha(go)})
+        write(out / "live-toolchain.json", {"go_version": version, "inventory": live_toolchain})
         need(version == c["go_version"], "live toolchain version mismatch")
         cases = {x["id"]: x for x in c["cases"]}
         for item in selected.schedule(c):
@@ -212,6 +214,7 @@ def main():
                 raise
             write(out / "receipts.json", receipts)
             print(json.dumps({"label": name, "exit_code": r["exit_code"], "elapsed_seconds": r["elapsed_seconds"]}), flush=True)
+        need(toolchain_inventory(c["environment"]["GOROOT"]) == live_toolchain, "Go toolchain drift during collection")
         write(out / "completion.json", {"schema": selected.SCHEMA, "at": now(), "runs": len(receipts),
               "config_sha256": sha(out / "config.json"), "receipts_sha256": sha(out / "receipts.json"),
               "script_identity_sha256": sha(out / "script-identity.json"),
