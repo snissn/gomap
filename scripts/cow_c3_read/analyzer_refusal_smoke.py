@@ -37,7 +37,8 @@ def main():
     # deliberately incomplete packet is a product measurement.
     repository, exported = root / "tiny-git-repository", root / "tiny-export"
     repository.mkdir(); exported.mkdir()
-    git_env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_AUTHOR_NAME="Protocol smoke", GIT_AUTHOR_EMAIL="protocol-smoke@example.invalid",
                    GIT_COMMITTER_NAME="Protocol smoke", GIT_COMMITTER_EMAIL="protocol-smoke@example.invalid")
     def git(*argv):
