@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import subprocess
 import sys
 
 POLICY = '.github/ci/ci_impact.json'
+PLANNER = '.github/scripts/ci_impact.py'
+CONTROL_JOB = ('treedb-tests.yml', 'impact-shadow')
 SCHEMA = 1
 SHA = re.compile(r'^[0-9a-f]{40}$')
 
@@ -24,6 +27,96 @@ class ContractError(ValueError):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def blob_id(data):
+    return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+
+
+def typed_json(value):
+    """JSON comparison preserves bool/int/float distinctions in variants."""
+    try:
+        return json.dumps(value, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise ContractError('malformed-literal-contract') from error
+
+
+def workflow_paths(inventory):
+    # GitHub workflow definitions are direct children of this directory.
+    return {p.rsplit('/', 1)[1]: p for p in inventory
+            if p.startswith('.github/workflows/') and p.count('/') == 2 and p.endswith(('.yml', '.yaml'))}
+
+
+def expected_members(workflows, *, member_limit=None):
+    """Normalize reviewed static descriptors, never choose or schedule shards."""
+    if not isinstance(workflows, dict) or not workflows:
+        raise ContractError('incomplete-workflow-policy')
+    members = []
+    ids = set()
+    for workflow, contract in workflows.items():
+        if (not isinstance(workflow, str) or workflow not in workflow_paths({'.github/workflows/' + workflow: ''}) or
+                not isinstance(contract, dict) or not isinstance(contract.get('jobs'), dict) or not contract['jobs']):
+            raise ContractError('incomplete-workflow-policy')
+        for job, source in contract['jobs'].items():
+            if not isinstance(job, str) or not job or (workflow, job) == CONTROL_JOB or not isinstance(source, dict):
+                raise ContractError('malformed-job-contract')
+            runner = source.get('runs_on')
+            if not (isinstance(runner, str) and runner or
+                    isinstance(runner, list) and runner and all(isinstance(v, str) and v for v in runner)):
+                raise ContractError('malformed-runner-contract')
+            if 'matrix' not in source or type(source.get('race')) is not bool:
+                raise ContractError('missing-matrix-race-contract')
+            matrix = source['matrix']
+            if matrix is None:
+                variants = [{}]
+            else:
+                if not isinstance(matrix, dict) or not matrix or 'exclude' in matrix:
+                    raise ContractError('unsupported-matrix')
+                if 'include' in matrix:
+                    if set(matrix) != {'include'} or not isinstance(matrix['include'], list) or not matrix['include']:
+                        raise ContractError('unsupported-matrix')
+                    variants = matrix['include']
+                else:
+                    if any(not isinstance(k, str) or not k or not isinstance(v, list) or not v for k, v in matrix.items()):
+                        raise ContractError('unsupported-matrix')
+                    variants = (dict(zip(matrix, values)) for values in itertools.product(*matrix.values()))
+            seen = set()
+            for variant in variants:
+                # Runtime cannot expand an inconsistent Cartesian contract past
+                # its claimed inventory. Refresh derives the reviewed source
+                # universe; it does not accept that universe as policy authority.
+                if member_limit is not None and len(members) >= member_limit:
+                    raise ContractError('incomplete-or-altered-matrix-member-policy')
+                if not isinstance(variant, dict) or (matrix is not None and not variant):
+                    raise ContractError('malformed-matrix-variant')
+                if any(not isinstance(k, str) or not k or type(v) not in (str, int, float, bool) or
+                       isinstance(v, str) and '${{' in v for k, v in variant.items()):
+                    raise ContractError('unsupported-matrix-literal')
+                key = typed_json(variant)
+                if key in seen:
+                    raise ContractError('duplicate-matrix-variant')
+                seen.add(key)
+                label = variant.get('name') or variant.get('shard') or variant.get('os') or variant.get('profile') or 'single'
+                if type(label) not in (str, int, float):
+                    raise ContractError('malformed-member-label')
+                member_id = f'{Path(workflow).stem}/{job}/{label}'
+                if member_id in ids:
+                    raise ContractError('member-label-collision')
+                ids.add(member_id)
+                members.append({'id': member_id, 'workflow': workflow, 'job': job,
+                                'variant': {'matrix': variant, 'runs_on': runner, 'race': source['race'],
+                                            'cgo': 'setup-go platform default; explicit command overrides retained',
+                                            'tags': 'entry command defaults/flags retained'}})
+    return members
+
+
+def check_harness_bindings(bindings):
+    if not isinstance(bindings, dict) or PLANNER not in bindings:
+        raise ContractError('missing-reviewed-planner-binding')
+    for path, oid in bindings.items():
+        if not isinstance(path, str) or path_text(path.encode()) != path or not isinstance(oid, str) or not SHA.fullmatch(oid):
+            raise ContractError('malformed-harness-binding')
+    return bindings
 
 
 def git(repo, *args):
@@ -97,27 +190,34 @@ def tree_inventory(repo, commit):
 
 
 def check_policy(policy, *, allow_unreviewed=False):
-    if policy.get('schema_version') != SCHEMA or policy.get('mode') != 'advisory':
+    if not isinstance(policy, dict) or type(policy.get('schema_version')) is not int or policy['schema_version'] != SCHEMA or policy.get('mode') != 'advisory':
         raise ContractError('unsupported-policy')
     workflows = policy.get('workflows', {})
     members = policy.get('members', [])
+    if not isinstance(members, list) or any(not isinstance(m, dict) or not isinstance(m.get('id'), str) for m in members):
+        raise ContractError('incomplete-member-policy')
     ids = [m['id'] for m in members]
     if not workflows or not ids or len(ids) != len(set(ids)):
         raise ContractError('incomplete-member-policy')
+    expected = {m['id']: typed_json(m) for m in expected_members(workflows, member_limit=len(members))}
     for member in members:
-        if (member['workflow'] not in workflows or not member.get('variant') or
-                not member.get('job') or not member.get('owner') or
+        if (not isinstance(member.get('workflow'), str) or member['workflow'] not in workflows or
+                not isinstance(member.get('variant'), dict) or not member['variant'] or
+                not isinstance(member.get('job'), str) or not member['job'] or
+                not isinstance(member.get('owner'), str) or not member['owner'] or
                 member['job'] not in workflows[member['workflow']]['jobs']):
             raise ContractError('incomplete-member-policy')
         if not allow_unreviewed and member['owner'].startswith('UNREVIEWED'):
             raise ContractError('unreviewed-member-owner')
     if {m['workflow'] for m in members} != set(workflows):
         raise ContractError('incomplete-workflow-policy')
-    declared_jobs = {(workflow, job) for workflow, contract in workflows.items()
-                     for job in contract['jobs']}
-    represented_jobs = {(m['workflow'], m['job']) for m in members}
-    if represented_jobs != declared_jobs:
-        raise ContractError('incomplete-job-member-policy')
+    actual = {m['id']: typed_json({key: m.get(key) for key in ('id', 'workflow', 'job', 'variant')}) for m in members}
+    if actual != expected:
+        raise ContractError('incomplete-or-altered-matrix-member-policy')
+    for contract in workflows.values():
+        if not isinstance(contract.get('git_blob'), str) or not SHA.fullmatch(contract['git_blob']):
+            raise ContractError('malformed-workflow-binding')
+    check_harness_bindings(policy.get('harness_inputs'))
     selectors = set(workflows) | {m['workflow'] + '/' + m['job'] for m in members}
     for rule in policy['rules']:
         if not rule.get('glob') or not rule.get('reason') or not rule.get('consumers'):
@@ -130,8 +230,8 @@ def check_policy(policy, *, allow_unreviewed=False):
 
 
 def is_discovery_source(path):
-    return (path.endswith(('.go', '.py', '.sh', '.s', '.S', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.m', '.mm', '.syso')) or
-            path.endswith(('go.mod', 'go.sum')) or path == 'Makefile')
+    return (path.endswith(('.go', '.py', '.sh', '.s', '.S', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.m', '.mm', '.syso', '.mk')) or
+            path.endswith(('go.mod', 'go.sum')) or path.rsplit('/', 1)[-1].startswith('go.work') or path == 'Makefile')
 
 
 def discovery_digest(inventory):
@@ -180,6 +280,7 @@ def plan(repo, event, environment):
     Reports are deterministic for the same event, objects, and environment.
     """
     repo = Path(repo)
+    runtime_raw = Path(__file__).read_bytes()
     fallback = set()
     accepted_commit = None
     try:
@@ -198,7 +299,7 @@ def plan(repo, event, environment):
                 'accepted_policy_commit': accepted_commit, 'accepted_policy_sha256': policy_digest,
                 'reporting_policy_sha256': policy_digest or digest(reporting_raw),
                 'candidate_tree': None, 'harness': {}, 'parents': [],
-                'planner_runtime_sha256': digest(Path(__file__).read_bytes()),
+                'planner_runtime_sha256': digest(runtime_raw),
                 'workflow_ref': event.get('workflow_ref', ''),
                 'member_inventory_sha256': digest(json.dumps(policy['members'], sort_keys=True).encode())}
     changes = []
@@ -219,19 +320,20 @@ def plan(repo, event, environment):
             fallback.add('consumer-discovery-drift')
         inventories['discovery_source_sha256'] = candidate_discovery
         inventories['modules'] = [p for p in candidate_files if p == 'go.mod' or p.endswith('/go.mod')]
-        actual_workflows = {p.removeprefix('.github/workflows/') for p in candidate_files
-                            if p.startswith('.github/workflows/') and p.endswith(('.yml', '.yaml'))}
-        if actual_workflows != set(policy['workflows']):
-            fallback.add('workflow-discovery-drift')
-        for name, contract in policy['workflows'].items():
-            path = '.github/workflows/' + name
-            if path not in candidate_files or candidate_files[path] != contract['git_blob']:
-                fallback.add('workflow-contract-drift')
-        for path in policy['harness_inputs']:
-            if path not in candidate_files:
-                fallback.add('missing-harness-input')
-            else:
-                identity['harness'][path] = candidate_files[path]
+        for files in (base_files, candidate_files):
+            if set(workflow_paths(files)) != set(policy['workflows']):
+                fallback.add('workflow-discovery-drift')
+            for name, contract in policy['workflows'].items():
+                if files.get('.github/workflows/' + name) != contract['git_blob']:
+                    fallback.add('workflow-contract-drift')
+            for path, expected_blob in policy['harness_inputs'].items():
+                if files.get(path) != expected_blob:
+                    fallback.add('harness-contract-drift')
+                if path not in files:
+                    fallback.add('missing-harness-input')
+        identity['harness'] = {p: candidate_files[p] for p in policy['harness_inputs'] if p in candidate_files}
+        if blob_id(runtime_raw) != policy['harness_inputs'][PLANNER]:
+            fallback.add('planner-runtime-drift')
         raw = git(repo, 'diff', '--name-status', '-z', '--find-renames', '--no-ext-diff',
                   '--no-textconv', event['base'], event['candidate'], '--')
         changes = parse_diff(raw)

@@ -35,6 +35,8 @@ class ImpactContract(unittest.TestCase):
         manifest = self.repo / '.github/ci/ci_impact.json'
         policy = json.loads(manifest.read_text())
         policy['discovery_source_sha256'] = ci_impact.discovery_digest(files)
+        if isinstance(policy['harness_inputs'], dict):
+            policy['harness_inputs'] = {p: files[p] for p in policy['harness_inputs']}
         manifest.write_text(json.dumps(policy))
         self.base = self.commit()
 
@@ -170,6 +172,108 @@ class ImpactContract(unittest.TestCase):
         with self.assertRaises(ci_impact.ContractError):
             ci_impact.check_policy(policy)
 
+    def test_every_matrix_member_and_full_typed_descriptor_are_required(self):
+        original = json.loads((self.repo / ci_impact.POLICY).read_text())
+        target = next(i for i, m in enumerate(original['members']) if m['id'] == 'treedb-tests/test/windows-core-8')
+        mutations = [lambda p: p['members'].pop(target),
+                     lambda p: p['members'][target].update(id='forged'),
+                     lambda p: p['members'][target]['variant']['matrix'].update(package_shard_index=0),
+                     lambda p: p['members'][target]['variant']['matrix'].update(package_shard_count=7),
+                     lambda p: p['members'][target]['variant']['matrix'].update(package_shard_index=True),
+                     lambda p: p['members'][target]['variant']['matrix'].update(os='ubuntu-latest'),
+                     lambda p: p['members'][target]['variant'].update(runs_on='ubuntu-latest'),
+                     lambda p: p['members'][target]['variant'].update(race=True),
+                     lambda p: p['members'][target]['variant'].update(race=0)]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                policy = copy.deepcopy(original)
+                mutate(policy)
+                with self.assertRaises(ci_impact.ContractError):
+                    ci_impact.check_policy(policy)
+        # Accepted-base corruption is a full reporting receipt, never 55 members.
+        policy = copy.deepcopy(original)
+        policy['members'].pop(target)
+        self.write(ci_impact.POLICY, json.dumps(policy))
+        self.base = self.commit()
+        receipt = self.plan(self.event())
+        self.assertFull(receipt, 'bootstrap-no-accepted-policy')
+        self.assertEqual(len(receipt['members']), 56)
+
+    def test_matrix_invalid_forms_and_label_collisions_fail_closed(self):
+        original = json.loads((self.repo / ci_impact.POLICY).read_text())
+        invalid = [{}, {'include': []}, {'include': [{}]}, {'include': [{'name': 'x'}, {'name': 'x'}]},
+                   {'include': [{'name': 1}, {'name': '1'}]}, {'include': [{'name': 'x'}], 'os': ['linux']},
+                   {'os': []}, {'os': ['linux'], 'exclude': []}, '${{ fromJSON(needs.plan.outputs.matrix) }}',
+                   {'os': ['${{ inputs.os }}']}, {'os': ['linux', 'linux']}, {'os': 'linux'}]
+        for matrix in invalid:
+            with self.subTest(matrix=matrix):
+                policy = copy.deepcopy(original)
+                policy['workflows']['treedb-tests.yml']['jobs']['test']['matrix'] = matrix
+                with self.assertRaises(ci_impact.ContractError):
+                    ci_impact.check_policy(policy)
+
+    def test_reviewed_harness_blobs_bind_both_trees_and_loaded_runtime(self):
+        original_base = self.base
+        for path in ('.github/ci/treedb_unix_weighted_shards.tsv',
+                     '.github/ci/treedb_windows_caching_heavy_tests.txt'):
+            with self.subTest(accepted_base_drift=path):
+                self.git('checkout', '-q', original_base)
+                self.write(path, 'accepted but unreviewed allocator input\n')
+                self.base = self.commit()
+                self.assertFull(self.plan(self.event()), 'harness-contract-drift')
+        self.base = original_base
+        for action in ('edit', 'delete'):
+            with self.subTest(candidate=action):
+                self.git('checkout', '-q', original_base)
+                path = '.github/ci/treedb_race_weighted_shards.tsv'
+                if action == 'edit':
+                    self.write(path, 'candidate edit\n')
+                else:
+                    self.git('rm', path)
+                self.assertFull(self.plan(self.event()), 'harness-contract-drift')
+        self.git('checkout', '-q', original_base)
+        runtime = '.github/scripts/ci_impact.py'
+        self.write(runtime, (self.repo / runtime).read_text() + '\n# different reviewed runtime\n')
+        self.git('add', runtime)
+        files, _ = ci_impact.tree_inventory(self.repo, self.git('write-tree'))
+        policy = json.loads((self.repo / ci_impact.POLICY).read_text())
+        policy['harness_inputs'] = {p: files[p] for p in policy['harness_inputs']}
+        policy['discovery_source_sha256'] = ci_impact.discovery_digest(files)
+        self.write(ci_impact.POLICY, json.dumps(policy))
+        self.base = self.commit()
+        self.assertFull(self.plan(self.event()), 'planner-runtime-drift')
+
+    def test_invalid_harness_map_and_missing_planner_binding_are_rejected(self):
+        original = json.loads((self.repo / ci_impact.POLICY).read_text())
+        for bindings in ([], {}, {'../escape': 'a' * 40}, {'.github/scripts/ci_impact.py': 'invalid'},
+                         {'.github/scripts/ci_impact.py': True}, {'go.mod': 'a' * 40}):
+            with self.subTest(bindings=bindings):
+                policy = copy.deepcopy(original)
+                policy['harness_inputs'] = bindings
+                with self.assertRaises(ci_impact.ContractError):
+                    ci_impact.check_policy(policy)
+        # Nonplanner bindings remain an explicit accepted-policy review choice.
+        ci_impact.check_policy(dict(original, harness_inputs={ci_impact.PLANNER: original['harness_inputs'][ci_impact.PLANNER]}))
+        self.write(ci_impact.POLICY, json.dumps(dict(original, harness_inputs={})))
+        self.base = self.commit()
+        self.assertFull(self.plan(self.event()), 'bootstrap-no-accepted-policy')
+
+    def test_workflow_bindings_cover_base_even_when_candidate_restores_blob(self):
+        workflow = '.github/workflows/hashdb-tests.yml'
+        before = (self.repo / workflow).read_text()
+        self.write(workflow, before + '\n# accepted source drift\n')
+        self.base = self.commit()
+        self.write(workflow, before)
+        self.assertFull(self.plan(self.event()), 'workflow-contract-drift')
+
+    def test_workspace_and_make_include_discovery_drift_stays_full_on_later_docs(self):
+        base = self.base
+        for path in ('build/go.work', 'build/go.work.sum', 'build/inputs.mk'):
+            with self.subTest(path=path):
+                self.git('checkout', '-q', base)
+                self.write(path, 'new dynamic inputs\n')
+                self.base = self.commit()
+                self.assertFull(self.plan(self.event()), 'consumer-discovery-drift')
     def test_missing_duplicate_unknown_member_or_forged_binding_fails_validation(self):
         event = self.event()
         receipt = self.plan(event)

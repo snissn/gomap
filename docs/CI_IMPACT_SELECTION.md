@@ -119,7 +119,7 @@ retention bound its lifetime.
 ## Refresh and qualification
 
 After reviewing changed consumers, workflow commands, contexts, or membership,
-stage only the intended source and workflow paths with `git add -- <paths>`,
+stage only the intended source, workflow and reviewed harness paths with `git add -- <paths>`,
 including intended additions/deletions and edits to the maintenance scripts.
 Review `git diff --cached` before refreshing. Use an isolated worktree when the
 primary checkout contains unrelated work; the command never stages or resets it.
@@ -128,6 +128,7 @@ Then refresh and check the intended change:
 
 ```sh
 uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py
+uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py --check
 uv run --with pyyaml python .github/scripts/test_refresh_ci_impact_inventory.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_ci_impact.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py
@@ -148,12 +149,42 @@ owners and selectors that name no inventoried workflow/job. Both `.yml` and
 `.yaml` workflows are discovered. Review the changed footprint rules,
 dynamic-reader inventory, variants, owners, source fingerprint, and known gaps
 alongside the staged diff; resolve owners/rules and rerun before committing the
-reviewed manifest in the same PR. If any intended source/workflow bytes are staged
+reviewed manifest in the same PR. If any intended source/workflow/harness bytes are staged
 after refresh, rerun it before staging the final manifest. A commit containing
 the refreshed index and manifest then has the matching discovery fingerprint.
 Run checks from a checkout of the intended tree when unrelated unstaged workflow
 edits would affect existing worktree-based contract tests. PyYAML is only a
 maintenance dependency; the runtime planner uses the Python standard library.
+
+Each job contract carries its source matrix, runner expression and literal race
+summary. One standard-library normalizer derives the complete expected member
+IDs and full typed variants for both refresh and runtime policy validation; it
+does not assign tests or choose shards. No matrix, include-only literal rows,
+and literal Cartesian axes are supported. Dynamic/mixed/exclude matrices,
+empty or malformed rows/axes, duplicate variants and label collisions reject
+qualification. Matrix values must be literal strings, numbers or booleans;
+comparison preserves boolean/integer/float distinctions. Only the exact
+`treedb-tests.yml/impact-shadow` control job is excluded from original membership.
+The maintenance `--check` reads the staged workflow blobs independently and
+rejects coordinated edits to job metadata and members that contradict the YAML.
+
+`harness_inputs` is the reviewed path-to-Git-blob map, refreshed from the same
+staged tree; missing inputs fail before writing. Both event-base and candidate
+trees must match every reviewed harness and workflow binding and the complete
+workflow set. The planner binding is mandatory, and the actual loaded planner
+bytes must match its accepted-base blob, beyond recording a runtime digest.
+Missing/stale bindings choose full or reject a malformed reporting inventory.
+Removal of another harness binding remains an explicit policy review decision;
+refresh never invents a second mandatory harness list. Discovery freshness also
+covers `go.work*` and `.mk` inputs so future workspace or Make includes cannot
+silently introduce consumers on later docs-only PRs.
+
+Source extraction, `--check`, and review establish the trust boundary for this
+manifest. The runtime corroborates reviewed hashes and exact descriptor
+consistency without parsing YAML or independently inferring command footprints.
+Review the generated source metadata, ownership and harness paths together;
+internal metadata/member consistency alone cannot establish source truth. Older
+policies lacking these contracts remain full/unqualified during bootstrap.
 
 The [parent tracker](https://github.com/snissn/gomap/issues/5049) requires the
 [P1 qualification packet](https://github.com/snissn/gomap/issues/5051) to collect

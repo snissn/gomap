@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Maintenance snapshot contracts; run with uv run --with pyyaml python <file>."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -29,6 +31,8 @@ class RefreshSnapshotContract(unittest.TestCase):
                         ignore=shutil.ignore_patterns('__pycache__'))
         self.write('source.go', 'package original\n')
         self.write('old.py', '# old source\n')
+        self.write('go.mod', 'module fixture\n')
+        self.write('go.sum', '')
         self.git('init', '-q')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.git('config', 'user.name', 'Fixture')
@@ -139,6 +143,66 @@ class RefreshSnapshotContract(unittest.TestCase):
         with self.assertRaises(ci_impact.ContractError):
             self.refresh()
         self.assertEqual(self.manifest.read_bytes(), before)
+
+    def test_partially_staged_harness_bindings_use_same_snapshot(self):
+        path = '.github/ci/treedb_unix_weighted_shards.tsv'
+        self.write(path, '# intended staged weights\n')
+        self.git('add', path)
+        expected = self.git('rev-parse', ':' + path)
+        self.write(path, '# unrelated unstaged weights\n')
+        policy = self.refresh()
+        self.assertIsInstance(policy['harness_inputs'], dict)
+        self.assertEqual(policy['harness_inputs'][path], expected)
+        self.assertCommittedSnapshot(policy)
+        self.assertEqual(self.git('rev-parse', 'HEAD:' + path), expected)
+        self.assertEqual((self.repo / path).read_text(), '# unrelated unstaged weights\n')
+
+    def test_missing_staged_harness_rejects_before_manifest_write(self):
+        before = self.manifest.read_bytes()
+        self.git('rm', '--cached', '.github/ci/treedb_race_weighted_shards.tsv')
+        with self.assertRaises(ci_impact.ContractError):
+            self.refresh()
+        self.assertEqual(self.manifest.read_bytes(), before)
+
+    def test_coordinated_matrix_metadata_and_members_cannot_pass_source_check(self):
+        original = self.refresh()
+        target = 'treedb-tests/test/windows-core-8'
+        for field in ('matrix', 'runs_on', 'race'):
+            with self.subTest(coordinated_field=field):
+                policy = copy.deepcopy(original)
+                contract = policy['workflows']['treedb-tests.yml']['jobs']['test']
+                for member in policy['members']:
+                    if member['workflow'] == 'treedb-tests.yml' and member['job'] == 'test':
+                        if field == 'matrix' and member['id'] == target:
+                            member['variant']['matrix']['package_shard_index'] = 0
+                        elif field != 'matrix':
+                            member['variant'][field] = 'ubuntu-latest' if field == 'runs_on' else True
+                if field == 'matrix':
+                    for variant in contract['matrix']['include']:
+                        if variant['name'] == 'windows-core-8':
+                            variant['package_shard_index'] = 0
+                else:
+                    contract[field] = 'ubuntu-latest' if field == 'runs_on' else True
+                # Internal consistency alone must not corroborate source truth.
+                ci_impact.check_policy(policy)
+                self.manifest.write_text(json.dumps(policy))
+                before = self.manifest.read_bytes()
+                result = subprocess.run([sys.executable, str(self.repo / '.github/scripts/refresh_ci_impact_inventory.py'), '--check'],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'workflow-source-contract-mismatch', result.stderr)
+                self.assertEqual(self.manifest.read_bytes(), before)
+
+    def test_impact_shadow_is_excluded_only_from_treedb_control_workflow(self):
+        path = '.github/workflows/hashdb-tests.yml'
+        source = (self.repo / path).read_text()
+        source += '\n  impact-shadow:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo original execution\n'
+        self.write(path, source)
+        self.git('add', path)
+        policy = self.refresh()
+        self.assertIn('hashdb-tests/impact-shadow/single', {m['id'] for m in policy['members']})
+        self.assertNotIn('treedb-tests/impact-shadow/single', {m['id'] for m in policy['members']})
+        self.assertCommittedSnapshot(policy)
 
 
 if __name__ == '__main__':

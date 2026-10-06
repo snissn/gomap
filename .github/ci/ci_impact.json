@@ -9,7 +9,7 @@
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
   ],
-  "discovery_source_sha256": "ad444c6239ca8c0965ba6fd3a279d2f24d182caa956c06a3d2f8d9305c3692ee",
+  "discovery_source_sha256": "3d02b322d2d7646da5fb5b31663b9a97f5382c3e5c16f653798a0398835914f6",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -102,19 +102,19 @@
     "AGENTS.md",
     "**/AGENTS.md"
   ],
-  "harness_inputs": [
-    ".github/scripts/ci_impact.py",
-    ".github/scripts/test_ci_impact.py",
-    ".github/scripts/test_treedb_ci_contract.py",
-    ".github/scripts/test_treedb_windows_core_headroom.py",
-    ".github/ci/treedb_unix_weighted_shards.tsv",
-    ".github/ci/treedb_race_weighted_shards.tsv",
-    ".github/ci/treedb_windows_core_weighted_shards.tsv",
-    ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt",
-    ".github/ci/treedb_windows_caching_heavy_tests.txt",
-    "go.mod",
-    "go.sum"
-  ],
+  "harness_inputs": {
+    ".github/ci/treedb_race_weighted_shards.tsv": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+    ".github/ci/treedb_unix_weighted_shards.tsv": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+    ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": "4ff4384449ae2679fe9ceb893cd5f9420e277f6f",
+    ".github/ci/treedb_windows_caching_heavy_tests.txt": "1e0f9db92bad7db7a47400cf6134240944f6e017",
+    ".github/ci/treedb_windows_core_weighted_shards.tsv": "7fed595f028cc2ecdd3f97946a3c3698de7d219f",
+    ".github/scripts/ci_impact.py": "632182ce18bf2cb4bc903fc4bd87a7c091ccba5f",
+    ".github/scripts/test_ci_impact.py": "2522e16597c3d6374098015dd0935acdc1f922b9",
+    ".github/scripts/test_treedb_ci_contract.py": "a5b1deea04dbc3f190678431c3078e808b94c5a8",
+    ".github/scripts/test_treedb_windows_core_headroom.py": "13b475679f2258435cd0d6407ff9eea2f7b1ac92",
+    "go.mod": "9c50190970e42029aebab51af84002c17341053e",
+    "go.sum": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a"
+  },
   "members": [
     {
       "id": "format/gofmt/single",
@@ -1304,7 +1304,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1338,7 +1340,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "windows-latest"
         }
       },
@@ -1420,7 +1424,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1540,7 +1546,9 @@
             "GOMEMLIMIT": "4GiB",
             "GOWORK": "off"
           },
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
           "runs_on": "ubuntu-24.04"
         }
       },
@@ -1583,7 +1591,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "qualify": {
@@ -1647,7 +1657,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1679,7 +1691,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1705,7 +1719,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1745,7 +1761,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -1803,7 +1821,44 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu-latest-1",
+                "os": "ubuntu-latest",
+                "run_docs_check": true,
+                "run_vet": true,
+                "test_shard_count": 2,
+                "test_shard_index": 0
+              },
+              {
+                "name": "ubuntu-latest-2",
+                "os": "ubuntu-latest",
+                "run_docs_check": false,
+                "run_vet": false,
+                "test_shard_count": 2,
+                "test_shard_index": 1
+              },
+              {
+                "name": "macos-latest-1",
+                "os": "macos-latest",
+                "run_docs_check": true,
+                "run_vet": true,
+                "test_shard_count": 2,
+                "test_shard_index": 0
+              },
+              {
+                "name": "macos-latest-2",
+                "os": "macos-latest",
+                "run_docs_check": false,
+                "run_vet": false,
+                "test_shard_count": 2,
+                "test_shard_index": 1
+              }
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "${{ matrix.os }}"
         }
       },
@@ -1854,7 +1909,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-24.04"
         },
         "qualify": {
@@ -1891,7 +1948,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
           "runs_on": "ubuntu-24.04"
         }
       },
@@ -1985,7 +2044,9 @@
           "environment": {
             "MVCC_GATE_PATH_RE": "^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\\.sh$|\\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\\.py$|\\.github/workflows/treedb-tests\\.yml$)"
           },
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-24.04"
         },
         "perf": {
@@ -2022,7 +2083,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "race": {
@@ -2047,7 +2110,36 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "shard": 1,
+                "shard_count": 3,
+                "shard_index": 0,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 2,
+                "shard_count": 3,
+                "shard_index": 1,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 3,
+                "shard_count": 3,
+                "shard_index": 2,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 4,
+                "shard_count": 1,
+                "shard_index": 0,
+                "shard_kind": "collections"
+              }
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
           "runs_on": "ubuntu-latest"
         },
         "required": {
@@ -2069,7 +2161,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "snapshot-iterator-perf": {
@@ -2116,7 +2210,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "test": {
@@ -2145,7 +2241,182 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu-latest-1",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 0,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "ubuntu-latest-2",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 1,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "ubuntu-latest-3",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 2,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "macos-latest-1",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 0,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "macos-latest-2",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 1,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "macos-latest-3",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 2,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "windows-mongo-gateway",
+                "os": "windows-latest",
+                "shard_kind": "windows-mongo",
+                "timeout": 40
+              },
+              {
+                "name": "windows-nativewire",
+                "os": "windows-latest",
+                "shard_kind": "windows-nativewire",
+                "timeout": 40
+              },
+              {
+                "name": "windows-powerloss-oracle",
+                "os": "windows-latest",
+                "shard_kind": "windows-powerloss-oracle",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-1",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 0,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-2",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 1,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-3",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 2,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-4",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 3,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-5",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 4,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-6",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 5,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-7",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 6,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-8",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 7,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "heavy_shard_count": 2,
+                "heavy_shard_index": 0,
+                "name": "windows-caching-heavy-1",
+                "os": "windows-latest",
+                "shard_kind": "windows-caching-heavy",
+                "timeout": 25
+              },
+              {
+                "heavy_shard_count": 2,
+                "heavy_shard_index": 1,
+                "name": "windows-caching-heavy-2",
+                "os": "windows-latest",
+                "shard_kind": "windows-caching-heavy",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-1",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 0,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-2",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 1,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-3",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 2,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              }
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "${{ matrix.os }}"
         },
         "vet": {
@@ -2172,7 +2443,24 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu",
+                "os": "ubuntu-latest"
+              },
+              {
+                "name": "macos",
+                "os": "macos-latest"
+              },
+              {
+                "name": "windows",
+                "os": "windows-latest"
+              }
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "${{ matrix.os }}"
         }
       },
@@ -2219,7 +2507,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-24.04"
         }
       },
@@ -2262,7 +2552,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "profiles": {
@@ -2284,7 +2576,15 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "profile": [
+              "balanced",
+              "fast",
+              "durable"
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         },
         "suites": {
@@ -2321,7 +2621,9 @@
             }
           ],
           "environment": {},
+          "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "ubuntu-latest"
         }
       },
@@ -2355,7 +2657,14 @@
             }
           ],
           "environment": {},
+          "matrix": {
+            "os": [
+              "ubuntu-latest",
+              "macos-latest"
+            ]
+          },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
           "runs_on": "${{ matrix.os }}"
         }
       },
