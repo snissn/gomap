@@ -22684,7 +22684,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	var reconstructed []byte
 	if catalog.rootID(collectionColumnRowLocatorRootName(catalog.meta.Name)) != 0 && catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
 		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
-		view.singleDocument = true
+		view.orderedPointRowRefs = true
 		reconstructed, err = view.materializeRetainedTypedDocument(documentID, value)
 		err = errors.Join(err, view.Close())
 	} else {
@@ -23510,6 +23510,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 				// Bind reconstruction to the exact index/primary catalog. Opening
 				// a public read view here would flush and acquire a different cut.
 				materializer = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+				materializer.orderedPointRowRefs = opts.Limit > 0
 			}
 			value, err = materializer.materializeRetainedTypedDocument(id, value)
 			if err != nil {
