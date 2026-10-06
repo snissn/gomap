@@ -114,8 +114,8 @@ func r1LifecycleReclaim5060(t testing.TB, db *backenddb.DB, col *Collection, can
 				return err
 			})
 			*candidates = append(*candidates, rewrite.SupersededRefs...)
-			aggregate = r1LifecycleAggregateRewrite5060(rewrite)
-			result.Rewrite = &aggregate
+			completed := r1LifecycleAggregateRewrite5060(rewrite)
+			result.Rewrite = &completed
 			result.CheckpointNS = r1LifecycleTime5060(t, db.Checkpoint)
 		}
 	}
@@ -126,6 +126,12 @@ func r1LifecycleReclaim5060(t testing.TB, db *backenddb.DB, col *Collection, can
 	})
 	result.TypedGC = r1LifecycleAggregateGC5060(gc)
 	r1LifecycleRetireCandidates5060(t, gc, candidates)
+	if result.Probe != nil && (!result.Probe.DryRun || result.Probe.SegmentsRewritten != 0 || result.Probe.RefsRemapped != 0) {
+		t.Fatal("rewrite probe attribution includes completed work")
+	}
+	if result.Rewrite != nil && result.Rewrite.DryRun {
+		t.Fatal("completed rewrite attribution is a dry run")
+	}
 	result.CandidateRefs = len(*candidates)
 	return result
 }
