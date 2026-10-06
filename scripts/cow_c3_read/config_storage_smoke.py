@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from collect import host_gate, host_snapshot
 from prepare_config import draft
-from protocol import config, sha, write
+from protocol import config, process_environment, sha, write
 
 def main():
     parser = argparse.ArgumentParser()
@@ -15,9 +15,11 @@ def main():
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    value = draft()
+    # Match the actual serialized configuration: draft shares the two rule
+    # maps, but each variant must be independently damaged in these checks.
+    value = json.loads(json.dumps(draft()))
     value.update(status="frozen-approved", coordinator_acceptance="configuration/storage smoke only")
-    value["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/mod", TMPDIR=str(out))
+    value["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(out))
     value["host"].update(node="synthetic", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(out), tmpdir_device=out.stat().st_dev)
     value["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     for variant in value["variants"].values():
@@ -53,11 +55,27 @@ def main():
     refuse("unbound-tmpdir", lambda c: c["host"].update(tmpdir="/other"), "unbound temporary database filesystem")
     refuse("extra-control", lambda c: c["environment"].update(EXTRA="1"), "missing/extra explicit environment controls")
     refuse("missing-tree", lambda c: c["variants"]["baseline"].update(production_git_tree="0"), "missing exact Git revision/tree")
+    # ACK authority is mandatory in the frozen protocol, even if someone edits
+    # the non-runnable draft before freezing it. Exercise both binary variants.
+    for variant_name in ("baseline", "candidate"):
+        for label, profile, unit, damaged_rule in (
+                ("durable-no-sync", "command_wal_durable", "wal_syncs/op", {"eq": 0}),
+                ("relaxed-extra-sync", "command_wal_relaxed", "wal_syncs/op", {"eq": 1}),
+                ("nowal-extra-append", "no_wal_fast", "wal_appends/op", {"eq": 1}),
+                ("durable-extra-append", "command_wal_durable", "wal_appends/op", {"eq": 2}),
+                ("durable-permissive-sync", "command_wal_durable", "wal_syncs/op", {"min": 0}),
+                ("durable-bool-sync", "command_wal_durable", "wal_syncs/op", {"eq": True})):
+            def damage(c, profile=profile, unit=unit, rule=damaged_rule, variant=variant_name):
+                cell = next(case for case in c["cases"] if case["profile"] == profile)
+                cell["rules"][variant][unit] = rule
+            refuse(label + "-" + variant_name, damage, "profile WAL")
+    refuse("missing-wal-comparability", lambda c: c["cases"][0]["comparable_metrics"].remove("wal_syncs/op"), "WAL comparability")
     # Distinct actual directories, with deliberately different free-space
     # readings, prove the gate consumes the TMPDIR observation, not source.
     storage, source = out / "database-temp", out / "source"
     storage.mkdir(); source.mkdir()
-    real_snapshot = host_snapshot(out, "actual", storage, source)
+    child_env = process_environment(value["environment"])
+    real_snapshot = host_snapshot(out, "actual", storage, source, child_env)
     policy = dict(real_snapshot["uname"], cpu_count=real_snapshot["cpu_count"], max_load1=1000000, max_load5=1000000,
                   min_free_bytes=100, tmpdir=str(storage), tmpdir_device=storage.stat().st_dev)
     host_gate(real_snapshot, dict(policy, min_free_bytes=1))
@@ -68,7 +86,7 @@ def main():
         requested.append(str(path))
         return Usage(1000, 990, 10) if Path(path) == storage else Usage(1000, 1, 999)
     with patch("collect.shutil.disk_usage", side_effect=usage):
-        low = host_snapshot(out, "low-temp-space", storage, source)
+        low = host_snapshot(out, "low-temp-space", storage, source, child_env)
     assert requested == [str(storage), str(source)] and low["free_bytes"] == 10 and low["source_free_bytes"] == 999
     def host_refuse(label, snapshot, expected):
         try:
@@ -81,7 +99,7 @@ def main():
     host_refuse("full-database-temp-filesystem", low, "storage admission refused")
     host_refuse("wrong-database-temp-device", dict(real_snapshot, storage_device=storage.stat().st_dev + 1), "filesystem changed")
     host_refuse("wrong-database-temp-path", dict(real_snapshot, storage_path=str(source)), "filesystem changed")
-    write(out / "result.json", {"scope": "case-dimension and temp-filesystem protocol smoke; no timing acceptance", "valid_cases": 54,
+    write(out / "result.json", {"scope": "case-dimension, exact-profile ACK and temp-filesystem protocol smoke; no timing acceptance", "valid_cases": 54,
         "refusals": results, "actual_snapshot": real_snapshot, "script_sha256": sha(Path(__file__))})
     print(json.dumps({"valid_cases": 54, "refusals": len(results)}))
 
