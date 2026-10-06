@@ -448,6 +448,10 @@ sources or compete inside the private group. Selection releases `db.mu` before
 backend acquisition. Existing value-log lane locks and barriers remain inside
 the stream. Checkpoint mode/frontier and background preemption are rechecked
 under the claim; active checkpoint work retains cooperative pass ownership.
+Stop-backpressure's blocking assist takes its selected lane mutex before source
+collection, while holding `flushMu`. A shared checkpoint releases its lane
+claims before reacquiring `flushMu`; the assist therefore waits without a lock
+cycle and recollects from the remaining queue after the private prefix retires.
 
 One existing stable heap merge selects the newest queued entry for each key,
 including its revision, pointer or tombstone and actual source lane. The sorted

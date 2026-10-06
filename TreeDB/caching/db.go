@@ -26359,7 +26359,13 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 		if !ok {
 			return flushed
 		}
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Lock()
+		}
 		okFlush := db.flushLaneOnceWithCollectionMode(sync, laneID, nil, flushCollectionStop)
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Unlock()
+		}
 		if !okFlush {
 			return flushed
 		}
