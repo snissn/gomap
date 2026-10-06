@@ -185,6 +185,7 @@ def validate(x, n, mode, algorithm):
             need(x['WriterDurationNS'] >= 120_000_000, 'observation duration shape')
     if mode == 'burst':
         need(x['Writes'] == 16 and x['WriterStopReason'] == 'finite-burst', 'burst shape')
+    need(x['PartialPrivateOutput'] == (algorithm == 'bounded'), 'algorithm private-output witness')
     if algorithm == 'bounded':
         need(x['MaxRecords'] <= 32 and x['MaxBytes'] <= 1 << 20 and x['PartialPrivateOutput'] is True, 'bounded actual private output')
     for name, count in [('ReadLatency', x['Reads']), ('WriteLatency', x['Writes']), ('QuantumLatency', x['Calls'])]:
@@ -354,6 +355,31 @@ def contract_self_test(out, r):
                 else:
                     raise ValueError(label + ': coupled corrupted packet accepted')
                 count += 1
+        for case in r['cases']:
+            shutil.copyfile(out / case['result'], archive / case['result'])
+        for index, case in enumerate(r['cases']):
+            target = archive / case['result']
+            original = target.read_bytes()
+            altered = json.loads(original)
+            altered['PartialPrivateOutput'] = not altered['PartialPrivateOutput']
+            try:
+                validate(altered, case['n'], case['mode'], case['algorithm'])
+            except ValueError as error:
+                need(str(error) == 'algorithm private-output witness', 'wrong algorithm case refusal')
+            else:
+                raise ValueError('opposite algorithm output witness accepted')
+            target.write_text(json.dumps(altered, indent=2) + '\n')
+            receipt = copy.deepcopy(r)
+            receipt['cases'][index]['result_sha256'] = sha(target)
+            try:
+                packet(archive, receipt=receipt)
+            except ValueError as error:
+                need(str(error) == 'algorithm private-output witness', 'wrong coupled algorithm refusal')
+            else:
+                raise ValueError('checksum-refreshed algorithm output witness accepted')
+            finally:
+                target.write_bytes(original)
+            count += 1
     print(f'{positive} positive schema/histogram cases and {count} checksum-refreshed contract refusals PASS; original packets unchanged')
 
 def self_test(out, root):
