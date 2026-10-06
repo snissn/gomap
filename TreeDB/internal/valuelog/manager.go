@@ -2951,9 +2951,6 @@ func removeSegmentFileWithRetry(path string) (bool, error) {
 		if !isWindowsSharingViolationError(err) {
 			break
 		}
-		if m.retryWaitHook != nil {
-			m.retryWaitHook()
-		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
 			backoff *= 2
@@ -2984,9 +2981,6 @@ func removeSegmentFileWithRetryStable(path string, identity rootpublication.Stab
 		lastErr = err
 		if runtime.GOOS != "windows" || i >= attempts-1 || !isWindowsSharingViolationError(err) {
 			break
-		}
-		if m.retryWaitHook != nil {
-			m.retryWaitHook()
 		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
