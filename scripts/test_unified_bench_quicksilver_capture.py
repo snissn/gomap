@@ -52,6 +52,25 @@ def report(reads=10000):
 
 
 class CaptureRehearsal(unittest.TestCase):
+    def test_optimized_library_replay_cannot_accept_a_forged_environment(self):
+        code = """import unified_bench_quicksilver_capture as m
+m.validate_environment_receipt(
+    {'environment_policy': 'bogus', 'env': {}, 'command': ['/tmp/root/bin/fake']},
+    {'build_env': {'GOWORK': 'off'}})
+print('accepted forged environment')
+"""
+        for flags, setting in [(['-O'], None), (['-OO'], None), ([], '1'), ([], '2')]:
+            env = dict(os.environ)
+            env.pop('PYTHONOPTIMIZE', None)
+            if setting is not None:
+                env['PYTHONOPTIMIZE'] = setting
+            with self.subTest(flags=flags, setting=setting):
+                result = subprocess.run([sys.executable, '-B', *flags, '-c', code], env=env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('validation requires Python assertions', result.stderr)
+                self.assertEqual(result.stdout, '')
+
     @staticmethod
     def validation_fixture(temp, build_env=None, directory=None):
         root = pathlib.Path(temp).resolve()

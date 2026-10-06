@@ -1,6 +1,9 @@
 import copy
 import json
+import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -49,6 +52,29 @@ def settle_report(mode='exhaustive'):
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_all_cli_subcommands_reject_optimized_python_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            commands = [
+                ['capture', str(root/'manifest.json'), str(root/'plan.json')],
+                ['calibrate', '--metric', 'elapsed_seconds', '--out', str(root/'noise.json'),
+                 *[str(root/f'C{i}.json') for i in (1, 2, 3)]],
+                ['analyze', str(root/'bundle.json'), '--out', str(root/'result.json')],
+            ]
+            for flags, setting in [(['-O'], None), (['-OO'], None), ([], '1'), ([], '2')]:
+                env = dict(os.environ)
+                env.pop('PYTHONOPTIMIZE', None)
+                if setting is not None:
+                    env['PYTHONOPTIMIZE'] = setting
+                for command in commands:
+                    with self.subTest(flags=flags, setting=setting, command=command[0]):
+                        result = subprocess.run([sys.executable, '-B', *flags, m.__file__, *command],
+                                                env=env, capture_output=True, text=True, timeout=10)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('validation requires Python assertions', result.stderr)
+                        self.assertEqual(result.stdout, '')
+                        self.assertEqual(list(root.iterdir()), [])
+
     def test_physical_copy_and_fingerprint(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp); fixture = root/'fixture'; fixture.mkdir()

@@ -48,6 +48,9 @@ import traceback
 import owned_process_rss
 from owned_process_rss import run_with_rss
 
+if not __debug__:
+    raise RuntimeError('capture validation requires Python assertions; do not use -O')
+
 PHASES = ['quicksilver_hits', 'quicksilver_misses', 'quicksilver_mixed', 'quicksilver_concurrent']
 CONTRACTS = {'durable': ('command_wal_durable', 'wal_on_sync', 'durable_wal_prefix'),
              'fast': ('no_wal_fast', 'wal_off_relaxed_sync', 'relaxed'),
@@ -376,8 +379,6 @@ def validate(reports, cell, directory, fixtures, metadata):
 
 
 def main():
-    if not __debug__:
-        raise RuntimeError('capture validation requires Python assertions; do not use -O')
     manifest_path, plan_path = map(pathlib.Path, sys.argv[1:])
     assert manifest_path.is_absolute() and plan_path.is_absolute()
     root = manifest_path.parent
