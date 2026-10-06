@@ -11,7 +11,7 @@ import subprocess
 import time
 
 from r1_collection_source import source_identity as collection_source
-from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize, working_set, SCOPE, SCHEDULE
+from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize, working_set, SCOPE, SCHEDULE, RECIPE
 
 
 def run(args, **kwargs):
@@ -151,7 +151,7 @@ def main():
     write(out / 'toolchain.json', toolchain)
     config = {'qualification': args.qualification, 'repetitions': args.repetitions,
               'epochs': args.epochs, 'documents': args.documents, 'calls_per_epoch': args.calls_per_epoch,
-              'recipe': 'r1MutationRow5059; ascending IDs; load batches 32; deterministic stride 37; eight-call paired mix',
+              'recipe': RECIPE,
               'landed_tooling_commit': args.landed_tooling_commit, 'review_url': args.review_url}
     config['working_set'] = working_set(config)
     config.update(execution_scope=SCOPE, schedule=SCHEDULE, runtime_environment=frozen_environment)

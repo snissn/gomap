@@ -173,7 +173,7 @@ func TestActiveHandlesGaugeDoesNotCopyDiagnosticMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Release()
+	defer func() { _ = h.Release() }()
 	badKey := testKey()
 	badKey.FileID = 0
 	if _, err := mgr.AcquireBytes(badKey, testScope(), SourceHeapCopy, nil, AcquireOptions{}); err == nil {

@@ -89,6 +89,96 @@ class RealPacketTests(unittest.TestCase):
         self.packet['toolchain']['binary_sha256'] = '0' * 64
         self.reject()
 
+    def reject_matching_packet_receipt(self, message):
+        # Deliberately bind this malformed fixture's bytes to reach semantics,
+        # rather than stopping at the already tested external receipt guard.
+        self.save()
+        with self.assertRaisesRegex(ValueError, message):
+            validate(self.path,
+                     expected_binary_sha256=self.original['toolchain']['binary_sha256'],
+                     expected_packet_sha256=hashlib.sha256(self.path.read_bytes()).hexdigest())
+
+    def test_invocation_names_original_capture_executable(self):
+        for executable in ('', 'collections.test', '/other/collections.test',
+                           self.original['invocation'][0] + '.other'):
+            with self.subTest(executable=executable):
+                self.packet['invocation'][0] = executable
+                self.reject_matching_packet_receipt('mislabeled benchmark command')
+
+    def test_build_command_targets_same_capture_executable_and_package(self):
+        original = self.original['build_command']
+        changes = [(0, ''), (1, 'build'), (2, '-race'), (3, '--output'),
+                   (4, '/other/collections.test'), (5, './TreeDB/db')]
+        for index, value in changes:
+            with self.subTest(index=index, value=value):
+                self.packet['build_command'] = original.copy()
+                self.packet['build_command'][index] = value
+                self.reject_matching_packet_receipt('mislabeled build command')
+
+    def test_command_argv_shapes_fail_closed(self):
+        for key in ('invocation', 'build_command'):
+            for value in (None, {}, '', [], [1]):
+                with self.subTest(key=key, value=value):
+                    self.packet[key] = value
+                    self.reject_matching_packet_receipt('mislabeled .* command')
+            self.packet[key] = copy.deepcopy(self.original[key])
+
+    def test_recorded_capture_directory_is_canonical_absolute(self):
+        for directory in ('relative', '/capture/../other', '/capture/./child',
+                          '/capture//child', '/capture/child/', None):
+            with self.subTest(directory=directory):
+                self.packet['toolchain']['capture_directory'] = directory
+                self.reject_matching_packet_receipt('invalid recorded capture directory')
+
+    def test_build_info_names_original_executable(self):
+        _, separator, rest = self.original['toolchain']['binary_buildinfo'].partition('\n')
+        self.packet['toolchain']['binary_buildinfo'] = '/other/collections.test: go1.26.4' + separator + rest
+        self.reject_matching_packet_receipt('build info executable mismatch')
+
+    def test_actual_packet_replays_at_relocated_path(self):
+        self.assertNotEqual(str(self.path.parent), self.original['toolchain']['capture_directory'])
+        receipt = self.trusted_rehearsal_receipt()
+        self.assertEqual(len(validate(self.path, **receipt)), len(self.original['runs']))
+
+    def test_recipe_is_the_recorded_deterministic_fixture(self):
+        self.packet['config']['recipe'] = 'different generator'
+        self.reject_matching_packet_receipt('mislabeled deterministic fixture recipe')
+
+    def test_repetition_numbers_are_strict_integers(self):
+        for value in (True, 1.0):
+            with self.subTest(value=value):
+                self.packet['runs'][0]['repetition'] = value
+                self.reject_matching_packet_receipt('duplicate/wrong raw run')
+
+    def test_affinity_observation_has_valid_cpu_ids(self):
+        for value in ([], [0, 0], [1, 0], [-1], [True], [1.0], '0'):
+            with self.subTest(value=value):
+                self.packet['runs'][0]['before']['affinity'] = value
+                self.reject_matching_packet_receipt('invalid CPU affinity observation')
+
+    def test_unavailable_affinity_remains_replayable(self):
+        for record in self.packet['runs']:
+            record['before']['affinity'] = record['after']['affinity'] = None
+        receipt = self.trusted_rehearsal_receipt()
+        self.assertEqual(len(validate(self.path, **receipt)), len(self.original['runs']))
+
+    def test_utc_observation_is_valid_calendar_time(self):
+        for value in ('not a time', '2026-02-30T01:00:00Z', '2026-13-01T01:00:00Z',
+                      '2026-10-06T24:00:00Z', '2026-10-06T01:00:00+00:00'):
+            with self.subTest(value=value):
+                self.packet['runs'][0]['before']['utc'] = value
+                self.reject_matching_packet_receipt('invalid UTC observation')
+
+    def test_serial_process_intervals_cannot_overlap(self):
+        self.assertGreaterEqual(len(self.packet['runs']), 2)
+        self.packet['runs'][1]['before']['monotonic_ns'] = self.packet['runs'][0]['after']['monotonic_ns'] - 1
+        self.reject_matching_packet_receipt('overlapping serial process intervals')
+
+    def test_process_interval_encloses_actual_final_timers(self):
+        record = self.packet['runs'][0]
+        record['after']['monotonic_ns'] = record['before']['monotonic_ns'] + 1
+        self.reject_matching_packet_receipt('process interval shorter than final timers')
+
     def test_benchmark_tmpdir_metadata_mismatch(self):
         self.packet['toolchain']['process_environment']['TMPDIR'] = '/tmp'
         self.reject()
@@ -393,6 +483,8 @@ class RealPacketTests(unittest.TestCase):
                       landed_tooling_commit=self.original['source_before']['commit'],
                       review_url='https://github.com/snissn/gomap/pull/5065')
         config['working_set'] = working_set(config)
+        for key in ('source_before', 'source_after'):
+            self.packet[key]['clean'] = True
         self.save()
 
     def frozen_bindings(self):

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail closed on standalone lifecycle provenance, raw runs and denominators."""
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import statistics
 
@@ -19,6 +20,7 @@ SCOPE = {'backend': 'direct', 'profile': 'command_wal_durable', 'cached_wrapper'
          'outer': True, 'packed': True, 'prefix': True, 'columnar': True, 'internal_base': False,
          'verified_reads': True, 'current_writable_mmap': False}
 SCHEDULE = 'supported-direct-fold-rewrite-vacuum-exhaustive-fallback-gc-v1'
+RECIPE = 'r1MutationRow5059; ascending IDs; load batches 32; deterministic stride 37; eight-call paired mix'
 # Complete scalar field set of db.VacuumOnlineStats. A source change that adds
 # attribution must update this contract before its capture can qualify.
 VACUUM_NUMBERS = {
@@ -58,6 +60,16 @@ def integer(value, minimum=0):
 
 def hexadecimal(value, length=64):
     return isinstance(value, str) and re.fullmatch('[0-9a-f]{' + str(length) + '}', value) is not None
+
+
+def valid_utc(value):
+    if not isinstance(value, str) or re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', value) is None:
+        return False
+    try:
+        datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ')
+    except ValueError:
+        return False
+    return True
 
 
 def manifest_hash(manifest):
@@ -639,6 +651,7 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     packet = decode(packet_bytes.decode())
     require(packet['schema'] == 'gomap-r1-lifecycle-packet-v3', 'wrong packet schema')
     config = packet['config']
+    require(config['recipe'] == RECIPE, 'mislabeled deterministic fixture recipe')
     require(config['qualification'] in ('rehearsal', 'retained'), 'wrong qualification')
     require(integer(config['repetitions'], 1) and config['repetitions'] <= 100, 'invalid repetitions')
     require(integer(config['epochs'], 1) and config['epochs'] <= 1000, 'invalid epochs')
@@ -672,8 +685,15 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     require(toolchain['go_env']['GOWORK'] == 'off' and toolchain['go_env']['GOTOOLCHAIN'] == 'local', 'unfrozen toolchain/workspace')
     require(toolchain['go_env']['GOVERSION'] == 'go1.26.4' and 'go1.26.4' in toolchain['binary_buildinfo'], 'build toolchain differs from frozen version')
     require(all(toolchain['environment'][key] == value for key, value in config['runtime_environment'].items()), 'caller environment mismatch')
-    capture_directory = Path(toolchain['capture_directory'])
-    require(capture_directory.is_absolute() and toolchain['benchmark_tmpdir'] == str(capture_directory / 'benchmark-tmp'), 'benchmark temporary directory is not capture-owned')
+    original_directory = toolchain['capture_directory']
+    require(isinstance(original_directory, str) and '\0' not in original_directory
+            and original_directory.startswith('/') and not original_directory.startswith('//')
+            and '..' not in PurePosixPath(original_directory).parts
+            and str(PurePosixPath(original_directory)) == original_directory,
+            'invalid recorded capture directory')
+    capture_directory = PurePosixPath(original_directory)
+    original_binary = str(capture_directory / 'collections.test')
+    require(toolchain['benchmark_tmpdir'] == str(capture_directory / 'benchmark-tmp'), 'benchmark temporary directory is not capture-owned')
     require(integer(toolchain['capture_filesystem_device']) and integer(toolchain['benchmark_filesystem_device'])
             and toolchain['benchmark_filesystem_device'] == toolchain['capture_filesystem_device']
             and bool(toolchain['benchmark_filesystem']), 'benchmark/capture filesystem mismatch or missing observation')
@@ -692,23 +712,46 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
             and binary_sha256 == expected_binary_sha256), 'frozen binary hash mismatch')
     require(hashlib.sha256((path.parent / 'build.log').read_bytes()).hexdigest() == packet['build_log_sha256'], 'build log hash mismatch')
     invocation = packet['invocation']
-    require(invocation[1:] == ['-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
+    # Recorded paths name the original capture; neighboring files are read at
+    # the replay location. Historical paths need not exist during offline replay.
+    require(isinstance(invocation, list) and invocation == [original_binary, '-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
             f"-test.benchtime={config['epochs']}x", '-test.count=1', '-test.benchmem', '-test.v'], 'mislabeled benchmark command')
+    build_command = packet['build_command']
+    require(isinstance(build_command, list) and len(build_command) == 6
+            and all(isinstance(argument, str) and argument and '\0' not in argument for argument in build_command)
+            and build_command[1:] == ['test', '-c', '-o', original_binary, './TreeDB/collections'],
+            'mislabeled build command')
+    require(toolchain['binary_buildinfo'].splitlines()[0] == original_binary + ': go1.26.4',
+            'build info executable mismatch')
     require(len(packet['runs']) == config['repetitions'], 'missing fresh process runs')
     require(len({record['pid'] for record in packet['runs']}) == config['repetitions']
             and all(integer(record['pid'], 1) for record in packet['runs']), 'missing/duplicate fresh process IDs')
     results = []
+    previous_process_end = 0
     for repetition, record in enumerate(packet['runs'], 1):
-        require(record['repetition'] == repetition and record['log'] == f'run-{repetition:03d}.log', 'duplicate/wrong raw run')
+        require(integer(record['repetition'], 1) and record['repetition'] == repetition
+                and record['log'] == f'run-{repetition:03d}.log', 'duplicate/wrong raw run')
         require(type(record['exit_code']) is int and record['exit_code'] == 0, 'failed process')
         for event in (record['before'], record['after']):
             require(isinstance(event['utc'], str) and bool(event['utc']) and integer(event['monotonic_ns'], 1)
                     and integer(event['cpu_count'], 1) and len(event['loadavg']) == 3
                     and all(type(n) in (int, float) and math.isfinite(n) and n >= 0 for n in event['loadavg']), 'missing actual load/environment observation')
+            require(valid_utc(event['utc']), 'invalid UTC observation')
+            affinity = event['affinity']
+            require(affinity is None or (isinstance(affinity, list) and bool(affinity)
+                    and all(integer(cpu) for cpu in affinity) and affinity == sorted(set(affinity))),
+                    'invalid CPU affinity observation')
         require(record['after']['monotonic_ns'] > record['before']['monotonic_ns'], 'invalid process interval')
+        require(record['before']['monotonic_ns'] >= previous_process_end, 'overlapping serial process intervals')
+        previous_process_end = record['after']['monotonic_ns']
         raw = (path.parent / record['log']).read_bytes()
         require(hashlib.sha256(raw).hexdigest() == record['log_sha256'], 'raw log hash mismatch')
-        results.append(raw_results(raw.decode(), config, record['pid']))
+        result = raw_results(raw.decode(), config, record['pid'])
+        process_ns = record['after']['monotonic_ns'] - record['before']['monotonic_ns']
+        require(process_ns >= result['result']['call_ns']
+                and process_ns >= (result['go_metrics']['ns/op'] - 0.51) * config['epochs'],
+                'process interval shorter than final timers')
+        results.append(result)
     require(len({row['result']['fixture_sha256'] for row in results}) == 1, 'fixture drift between fresh processes')
     return results
 
