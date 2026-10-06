@@ -31,6 +31,9 @@ undeclared recorded variables and drift from explicit manifest controls.
 The original unified report validator and offline loader both check this
 contract against the captured manifest, including the original executable-root
 `TMPDIR`; replay does not inherit the analyzer's process environment.
+The shared validator rejects optimized Python at import, including `-O`, `-OO`
+and `PYTHONOPTIMIZE`. This protects capture, calibration, analysis, and library
+replay before input dispatch, so required assertion checks cannot be disabled.
 
 Each cell supplies `label`, manifest `source`, absolute `fixture`,
 `fixture_receipt: {path, sha256}`, `mode: full|exhaustive`, `batch_size`, and an
