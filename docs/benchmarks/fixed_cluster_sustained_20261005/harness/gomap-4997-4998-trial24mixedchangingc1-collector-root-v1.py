@@ -897,6 +897,81 @@ def checkpoint_reference(a,pinned,row,expected=None):
     return strict_json(pinned[row['path']])
 
 
+CHECKPOINT_UNUSED_REMOTE = r'''
+if not __debug__: raise RuntimeError('ordinary Python required before unused-window observation')
+import json,pathlib,subprocess,sys
+a=json.loads(sys.argv[1])
+def inspect(value):
+ r=subprocess.run(['docker','inspect',value],capture_output=True,text=True,timeout=20)
+ assert r.returncode==0,(r.returncode,r.stderr)
+ rows=json.loads(r.stdout);assert isinstance(rows,list) and len(rows)==1
+ return rows[0]
+stopped={}
+for n in a['nodes']:
+ x=inspect(n['cid'])
+ assert x['Id']==n['cid'] and x['Image']==n['image']
+ assert x['State']['Running'] is False and x['State']['ExitCode']==0 and x['State']['OOMKilled'] is False
+ stopped[n['node']]=n['cid']
+o=dict(state='FRESH_ORIGINAL_WINDOW_UNUSED',PhaseID=a['phase_id'],host=a['host'],stopped_nodes=stopped,all_stopped_owned=True,runtime_started=False,snapshot_not_lock=True)
+if a['driver_host']:
+ r=subprocess.run(['docker','inspect',a['name']],capture_output=True,text=True,timeout=20)
+ assert r.returncode!=0 and 'no such' in r.stderr.lower()
+ p=pathlib.Path(a['gate']);assert not p.exists() and not p.is_symlink()
+ o.update(name=a['name'],gate=a['gate'],driver_absent=True,gate_absent=True)
+print(json.dumps(o,sort_keys=True))
+'''
+
+
+def checkpoint_unused_argv(a,host):
+    """Canonical bounded read-only proof transport; invoke only under root admission."""
+    assert host in {'mikers@'+v for v in HOSTS.values()}
+    nodes=[{k:n[k] for k in ('node','cid','image')} for n in a['nodes'] if 'mikers@'+n['host']==host]
+    assert len(nodes)==2 and {n['node'] for n in nodes}=={k for k,v in HOSTS.items() if 'mikers@'+v==host}
+    payload=dict(phase_id=CHECKPOINT_PHASE,host=host,nodes=nodes,driver_host=host==HOST,name=NAME,gate=GATE)
+    return ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,
+            shlex.join(['python3','-c',CHECKPOINT_UNUSED_REMOTE,json.dumps(payload,sort_keys=True,separators=(',',':'))])]
+
+
+def validate_checkpoint_unused(a,pinned,unused,latest_unix):
+    """Immutable raw joins; caller separately owns resource freshness and phase admission."""
+    assert type(latest_unix) in (int,float) and math.isfinite(latest_unix)
+    assert unused['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and unused['PhaseID']==CHECKPOINT_PHASE
+    assert unused['original_inactive_sha256']==CHECKPOINT_PINS['original_inactive']
+    assert unused['output']==str(OUTPUT) and unused['name']==NAME and unused['gate']==GATE
+    assert all(unused[k] is True for k in ('output_absent','driver_absent','gate_absent','no_issued_mutations','all_four_stopped_owned'))
+    assert type(unused['observed_unix']) in (int,float) and math.isfinite(unused['observed_unix'])
+    # Fresh proof is operator admission backed by retained raw checks; not a system-wide lock.
+    stopped={n['node']:n['cid'] for n in a['nodes']}
+    assert unused['stopped_nodes']==stopped
+    assert isinstance(unused['raw_evidence'],list) and len(unused['raw_evidence'])==2
+    seen_hosts=set();seen_nodes={}
+    for row in unused['raw_evidence']:
+        record=checkpoint_reference(a,pinned,row)
+        assert record['exit_code']==0 and not record.get('timed_out')
+        argv=record['argv'];assert isinstance(argv,list) and len(argv)==7
+        host=argv[5];assert host in {'mikers@'+v for v in HOSTS.values()} and host not in seen_hosts
+        assert argv==checkpoint_unused_argv(a,host)
+        assert type(record['timeout_seconds']) in (int,float) and math.isfinite(record['timeout_seconds']) and 0<record['timeout_seconds']<=90
+        assert isinstance(record['stdout'],str) and record['stderr']==''
+        assert record['stdout_sha256']==hashlib.sha256(record['stdout'].encode()).hexdigest()
+        assert record['stderr_sha256']==hashlib.sha256(record['stderr'].encode()).hexdigest()
+        seen_hosts.add(host)
+        assert all(type(record[k]) in (int,float) and math.isfinite(record[k]) for k in ('started_unix','finished_unix'))
+        assert record['started_unix']<=record['finished_unix']<=unused['observed_unix']<=latest_unix
+        observed=strict_json(record['stdout'])
+        assert observed['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and observed['PhaseID']==CHECKPOINT_PHASE
+        assert observed['host']==host and observed['all_stopped_owned'] is True
+        assert observed['runtime_started'] is False and observed['snapshot_not_lock'] is True
+        expected={n['node']:n['cid'] for n in a['nodes'] if 'mikers@'+n['host']==host}
+        assert observed['stopped_nodes']==expected
+        seen_nodes.update(expected)
+        if host==HOST:
+            assert observed['name']==NAME and observed['gate']==GATE
+            assert observed['driver_absent'] is True and observed['gate_absent'] is True
+    assert seen_nodes==stopped
+    return unused['raw_evidence']
+
+
 def validate_checkpoint_window(a,pinned,pre):
     # A prospective first window, never a fresh-bootstrap claim or issued replay.
     assert CHECKPOINT_ALLOWED is True and W.issue=='5021' and RUN=='rf4trial24mixedchangingc1'
@@ -941,34 +1016,7 @@ def validate_checkpoint_window(a,pinned,pre):
     start=budget['started_unix'];end=budget['deadline_unix']
     assert type(start) in (int,float) and type(end) in (int,float) and math.isfinite(start) and math.isfinite(end) and end==start+7200
     unused=checkpoint_reference(a,pinned,auth['unused_window_proof'])
-    assert unused['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and unused['PhaseID']==CHECKPOINT_PHASE
-    assert unused['original_inactive_sha256']==CHECKPOINT_PINS['original_inactive']
-    assert unused['output']==str(OUTPUT) and unused['name']==NAME and unused['gate']==GATE
-    assert all(unused[k] is True for k in ('output_absent','driver_absent','gate_absent','no_issued_mutations','all_four_stopped_owned'))
-    assert type(unused['observed_unix']) in (int,float) and math.isfinite(unused['observed_unix'])
-    # Fresh proof is operator admission backed by retained raw checks; not a system-wide lock.
-    stopped={n['node']:n['cid'] for n in a['nodes']}
-    assert unused['stopped_nodes']==stopped
-    assert isinstance(unused['raw_evidence'],list) and len(unused['raw_evidence'])==2
-    seen_hosts=set();seen_nodes={}
-    for row in unused['raw_evidence']:
-        record=checkpoint_reference(a,pinned,row)
-        assert record['exit_code']==0 and not record.get('timed_out')
-        argv=record['argv'];assert argv[:5]==['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10']
-        host=argv[5];assert host in {'mikers@'+v for v in HOSTS.values()} and host not in seen_hosts
-        seen_hosts.add(host)
-        assert all(type(record[k]) in (int,float) and math.isfinite(record[k]) for k in ('started_unix','finished_unix'))
-        assert record['started_unix']<=record['finished_unix']<=unused['observed_unix']<=start
-        observed=strict_json(record['stdout'])
-        assert observed['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and observed['PhaseID']==CHECKPOINT_PHASE
-        assert observed['host']==host and observed['all_stopped_owned'] is True
-        expected={n['node']:n['cid'] for n in a['nodes'] if 'mikers@'+n['host']==host}
-        assert observed['stopped_nodes']==expected
-        seen_nodes.update(expected)
-        if host==HOST:
-            assert observed['name']==NAME and observed['gate']==GATE
-            assert observed['driver_absent'] is True and observed['gate_absent'] is True
-    assert seen_nodes==stopped
+    validate_checkpoint_unused(a,pinned,unused,start)
     landed=strict_json(pinned[a['receipts']['landed_source']])
     assert landed['state']=='LANDED_CHECKPOINT_WINDOW_HARNESS_VERIFIED' and (landed['harness_head'],landed['harness_tree'])==CHECKPOINT_HARNESS
     assert landed['runtime_head']==a['source_head'] and landed['runtime_tree']==a['source_tree'] and landed['collector_sha256']==a['collector_sha256']

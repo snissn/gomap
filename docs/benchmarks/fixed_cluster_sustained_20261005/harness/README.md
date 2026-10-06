@@ -385,3 +385,17 @@ Root must back those bindings with actual independent generated-source review
 and current landed source/CI evidence. Synthetic source controls never provide
 these authorities. All workload, outcome, population, resource, retention and
 unknown-fails-without-replay gates remain unchanged; parent readiness stays open.
+
+The checkpoint unused-window proof uses the pinned collector API
+`checkpoint_unused_argv(manifest, host)` for each approved host and
+`validate_checkpoint_unused(manifest, pinned_bytes, proof, latest_unix)`
+for the immutable join. Each successful raw record retains the entire exact
+seven-element SSH argv, a finite timeout of at most 90 seconds, start/finish
+times, stdout/stderr strings and their SHA-256 digests, exit code, and no timeout.
+The canonical ordinary-Python program performs only bounded `docker inspect`
+calls for the host-owned two CIDs, checking exact images and clean stopped state.
+On the driver host it also checks the original driver name and gate are absent.
+The root proof joins both host records to the exact four-CID union.
+Arbitrary commands with valid-looking JSON are refused. Richer resource/staging
+observations use separate raw records and keep their own freshness/admission
+checks; this immutable unused-proof join supplies neither a lock nor permission.

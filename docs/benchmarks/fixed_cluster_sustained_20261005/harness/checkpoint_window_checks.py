@@ -34,11 +34,29 @@ def checkpoint_controls():
  br=pin('synthetic-phase-budget',budget)
  unused={'synthetic_only':True,'state':'FRESH_ORIGINAL_WINDOW_UNUSED','PhaseID':c.CHECKPOINT_PHASE,'original_inactive_sha256':c.CHECKPOINT_PINS['original_inactive'],'output':str(c.OUTPUT),'name':c.NAME,'gate':c.GATE,'output_absent':True,'driver_absent':True,'gate_absent':True,'no_issued_mutations':True,'all_four_stopped_owned':True,'stopped_nodes':{n['node']:n['cid'] for n in a['nodes']},'observed_unix':now-2}
  records=[]
+ producer_calls=[]
+ def observe(host,case=None):
+  command=c.checkpoint_unused_argv(a,host);args=__import__('shlex').split(command[-1])
+  payload=json.loads(args[-1]);calls=[]
+  def inspect_stub(argv,**kwargs):
+   assert argv[:2]==['docker','inspect'] and len(argv)==3 and kwargs['timeout']==20
+   calls.append(argv)
+   if argv[-1]==c.NAME:
+    return SimpleNamespace(returncode=0 if case=='driver_present' else 1,stdout='[]',stderr='no such container')
+   node=next(v for v in payload['nodes'] if v['cid']==argv[-1])
+   state=dict(Running=case=='running',ExitCode=1 if case=='bad_exit' else 0,OOMKilled=case=='oom')
+   row=dict(Id='f'*64 if case=='foreign_cid' else node['cid'],Image='sha256:'+'f'*64 if case=='foreign_image' else node['image'],State=state)
+   return SimpleNamespace(returncode=0,stdout=json.dumps([row]),stderr='')
+  ns=dict(json=json,sys=SimpleNamespace(argv=['-c',args[-1]]),subprocess=SimpleNamespace(run=inspect_stub),pathlib=SimpleNamespace(Path=lambda v:SimpleNamespace(exists=lambda:case=='gate_present',is_symlink=lambda:case=='gate_symlink')))
+  tree=ast.parse(args[2]);tree.body=[v for v in tree.body if not isinstance(v,(ast.Import,ast.ImportFrom))]
+  output=io.StringIO()
+  with contextlib.redirect_stdout(output):exec(compile(tree,'actual-canonical-unused-observer','exec'),ns)
+  assert len(calls)==(3 if host==c.HOST else 2)
+  producer_calls.append(dict(host=host,argv=command,docker_inspect_calls=calls,stdout=output.getvalue(),actual_network_calls=0))
+  return output.getvalue()
  for host in sorted(set(c.HOSTS.values())):
-  host='mikers@'+host
-  observation={'state':'FRESH_ORIGINAL_WINDOW_UNUSED','PhaseID':c.CHECKPOINT_PHASE,'host':host,'all_stopped_owned':True,'stopped_nodes':{n['node']:n['cid'] for n in a['nodes'] if 'mikers@'+n['host']==host}}
-  if host==c.HOST:observation.update(name=c.NAME,gate=c.GATE,driver_absent=True,gate_absent=True)
-  records.append(pin('synthetic-unused-raw-'+host.split('@')[1],{'synthetic_only':True,'argv':['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,'synthetic-no-execution'],'exit_code':0,'started_unix':now-4,'finished_unix':now-3,'stdout':json.dumps(observation),'stderr':''}))
+  host='mikers@'+host;stdout=observe(host)
+  records.append(pin('synthetic-unused-raw-'+host.split('@')[1],{'synthetic_only':True,'argv':c.checkpoint_unused_argv(a,host),'exit_code':0,'started_unix':now-4,'finished_unix':now-3,'stdout':stdout,'stderr':'','stdout_sha256':sha(stdout.encode()),'stderr_sha256':sha(b''),'timeout_seconds':90}))
  unused['raw_evidence']=records;ur=pin('synthetic-unused-proof',unused)
  auth={'synthetic_only':True,'state':'AUTHORIZED_SINGLE_FIRST_CHECKPOINT_WINDOW','PhaseID':c.CHECKPOINT_PHASE,'RunID':c.RUN,'runtime_head':a['source_head'],'runtime_tree':a['source_tree'],'harness_head':c.CHECKPOINT_HARNESS[0],'harness_tree':c.CHECKPOINT_HARNESS[1],'collector_sha256':a['collector_sha256'],'predeclaration_sha256':pr['sha256'],'all_cleanup_io_stopped':True,'no_other_campaign_or_writer':True,'retained_owned_stores_verified':True,'phase_budget':br,'unused_window_proof':ur}
  ar=pin('synthetic-auth',auth);a['receipts']['run_authorization']=ar['path']
@@ -61,7 +79,7 @@ def checkpoint_controls():
    if label=='foreign_host':rr['argv'][5]='mikers@192.168.0.200'
    elif label=='substituted_cid':obs['stopped_nodes'][next(iter(obs['stopped_nodes']))]='1'*64
    else:obs['driver_absent']=False
-   rr['stdout']=json.dumps(obs);changed[row['path']]=json.dumps(rr).encode();row['sha256']=sha(changed[row['path']]);aa['local_pins'][row['path']]=row['sha256']
+   rr['stdout']=json.dumps(obs);rr['stdout_sha256']=sha(rr['stdout'].encode());changed[row['path']]=json.dumps(rr).encode();row['sha256']=sha(changed[row['path']]);aa['local_pins'][row['path']]=row['sha256']
   changed[ur['path']]=json.dumps(uu).encode();aa['local_pins'][ur['path']]=sha(changed[ur['path']]);zz=copy.deepcopy(auth);zz['unused_window_proof']['sha256']=aa['local_pins'][ur['path']];changed[ar['path']]=json.dumps(zz).encode()
   bad('checkpoint_actual_unused_two_host_reject_'+label,lambda aa=aa,changed=changed:c.validate_checkpoint_window(aa,changed,pre))
  for key in ('source_head','source_tree','input_inventory_sha256','config_sha256','bootstrap_sha256','plan_sha256','driver_sha256','query_image'):
@@ -233,5 +251,33 @@ def checkpoint_controls():
  for suffix,data in [('stdout',result.stdout),('stderr',result.stderr),('exit',str(result.returncode).encode()),('argv.json',json.dumps(command).encode())]:(root/('actual-stale-harness-refusal.'+suffix)).write_bytes(data)
  assert result.returncode!=0 and not Path(stale_decl['output_root']).exists()
  checks.append('checkpoint_actual_instantiator_rejects_repinned_stale_harness_blob_before_output')
+
+ # Appended controls preserve every predecessor label and order.
+ checks.append('checkpoint_actual_canonical_observer_two_host_output_admitted')
+ for case in ('running','bad_exit','oom','foreign_cid','foreign_image','driver_present','gate_present','gate_symlink'):
+  bad('checkpoint_actual_canonical_observer_reject_'+case,lambda case=case:observe(c.HOST,case))
+ for case in ('alternate_command','extra_argument','optimized_command','substituted_cid_payload','substituted_image_payload','stdout_hash','stderr_hash','stderr_nonempty','unbounded_timeout','runtime_claim'):
+  uu=copy.deepcopy(unused);aa=copy.deepcopy(a);changed=dict(raw);row=uu['raw_evidence'][-1];rr=json.loads(changed[row['path']])
+  if case=='alternate_command':rr['argv'][-1]='synthetic-no-execution'
+  elif case=='extra_argument':rr['argv'].append('extra')
+  elif case=='optimized_command':rr['argv'][-1]=rr['argv'][-1].replace('python3 -c','python3 -O -c',1)
+  elif case in ('substituted_cid_payload','substituted_image_payload'):
+   values=__import__('shlex').split(rr['argv'][-1]);payload=json.loads(values[-1]);key='cid' if case=='substituted_cid_payload' else 'image';payload['nodes'][0][key]='f'*64;values[-1]=json.dumps(payload);rr['argv'][-1]=__import__('shlex').join(values)
+  elif case=='stdout_hash':rr['stdout_sha256']='1'*64
+  elif case=='stderr_hash':rr['stderr_sha256']='1'*64
+  elif case=='stderr_nonempty':rr['stderr']='unexpected';rr['stderr_sha256']=sha(rr['stderr'].encode())
+  elif case=='unbounded_timeout':rr['timeout_seconds']=91
+  else:
+   obs=json.loads(rr['stdout']);obs['runtime_started']=True;rr['stdout']=json.dumps(obs);rr['stdout_sha256']=sha(rr['stdout'].encode())
+  changed[row['path']]=json.dumps(rr).encode();row['sha256']=sha(changed[row['path']]);aa['local_pins'][row['path']]=row['sha256']
+  changed[ur['path']]=json.dumps(uu).encode();aa['local_pins'][ur['path']]=sha(changed[ur['path']]);zz=copy.deepcopy(auth);zz['unused_window_proof']['sha256']=aa['local_pins'][ur['path']];changed[ar['path']]=json.dumps(zz).encode()
+  bad('checkpoint_actual_unused_raw_command_reject_'+case,lambda aa=aa,changed=changed:c.validate_checkpoint_window(aa,changed,pre))
+ for flag in ('-O','-OO'):
+  argv=[sys.executable,flag,'-c',c.CHECKPOINT_UNUSED_REMOTE]
+  result=subprocess.run(argv,capture_output=True,timeout=10)
+  for suffix,data in [('stdout',result.stdout),('stderr',result.stderr),('exit',str(result.returncode).encode()),('argv.json',json.dumps(argv).encode())]:(root/('canonical-observer-'+flag[1:]+'.'+suffix)).write_bytes(data)
+  assert result.returncode!=0 and b'ordinary Python required' in result.stderr
+  checks.append('checkpoint_actual_canonical_observer_optimized_'+flag+'_refusal_before_inspect')
+ (root/'canonical-unused-producer-controls.json').write_text(json.dumps(dict(state='SOURCE_ONLY_STUBBED_DOCKER_NOT_ADMISSION',producer_calls=producer_calls,network_calls=0),indent=2)+'\n')
 
 checkpoint_controls()
