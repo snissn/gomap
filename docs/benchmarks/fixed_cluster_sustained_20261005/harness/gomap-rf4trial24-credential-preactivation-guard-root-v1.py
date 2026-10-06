@@ -4,6 +4,7 @@ shared bootstrap context, after collecting four config dicts and before m.plan.
 All plan/preflight/lifecycle callers then share the guard before any SSH/runtime.
 No TLS disable/fallback; private key bytes are never returned or printed.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse, hashlib, ipaddress, json, pathlib, ssl, subprocess, time
 
 NODES = ("node-a", "node-b", "node-c", "node-d")

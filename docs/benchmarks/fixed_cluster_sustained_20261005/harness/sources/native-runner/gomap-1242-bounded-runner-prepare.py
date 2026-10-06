@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import hashlib
 import json
 import pathlib

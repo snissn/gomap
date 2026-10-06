@@ -1,4 +1,5 @@
 """Read retained artifacts and recompute canonical FP32 truth; never runs runtime."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import base64,copy,hashlib,json,math,struct
 from pathlib import Path
 I=Path('/tmp/gomap-4975-rf4trial13c1-post-inputs-root-v1')

@@ -1,4 +1,5 @@
 """Complete actual adapted read-consumer fixtures; synthetic and source-only."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 def visibility_fixture(consumer,originals):
  source=(R/'shared_read.py').read_text()
  node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='self_check')

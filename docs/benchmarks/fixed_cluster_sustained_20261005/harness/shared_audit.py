@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path
 """Pure four-voter audit attachment accounting; NEVER campaign acceptance.
 Exact Report JSON text, authenticated config and seven reconstructed populations
@@ -7,8 +8,7 @@ import argparse, base64, copy, hashlib, importlib.util, json, struct, sys
 from pathlib import Path
 sys.dont_write_bytecode=True
 CORE=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
-CORE_SHA='0182750a8662e3beed1748527f1c24549470bfa275852877f7408233883412a6'
-if not __debug__: raise RuntimeError('ordinary Python required')
+CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
 if hashlib.sha256(Path(CORE).read_bytes()).hexdigest()!=CORE_SHA: raise ValueError('frozen core pin')
 spec=importlib.util.spec_from_file_location('audit_frozen_core',CORE)
 c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)

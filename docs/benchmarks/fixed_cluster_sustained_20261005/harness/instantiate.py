@@ -1,4 +1,5 @@
-from source_paths import isolate_paths
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+from source_paths import isolate_paths, reviewer_identity
 """Explicit final-pin source instantiation ONLY. Never admits or runs a campaign.
 Uses a frozen, reviewed provisional packet and root's exact final source evidence;
 writes only a fresh declared source-output directory using exclusive creation.
@@ -6,7 +7,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='99bba98ba9a43cabe2c225a5faa9fa063733c2d0e403895815ab2b8372331526'
+PACKET_SHA='ad892199b0c30de3a5dbe4f2e41c54d0bad796fe170674db8833d0af12b286c1'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -25,7 +26,7 @@ def product_acceptance(review,head,tree,inventory):
  need(review.get('outcome')=='ACCEPT' and review.get('candidate_head')==head and review.get('candidate_tree')==tree,'bootstrap-compatible final product acceptance')
  need(review.get('landed_source_verified') is True and review.get('required_ci_passed') is True,'actual landed source and required CI')
  refs=review.get('underlying_reviews');need(isinstance(refs,list) and len(refs)>=2,'two independent raw source reviews')
- protected=[];seen=set()
+ protected=[];seen=set();reviewers=set()
  def referenced(row):
   need(isinstance(row,dict) and set(row)=={'path','sha256'} and digest(row['sha256']),'raw evidence reference')
   raw=read(row['path']);need(sha(raw)==row['sha256'],'actual referenced evidence bytes');protected.append(row['path']);return strict(raw)
@@ -37,6 +38,7 @@ def product_acceptance(review,head,tree,inventory):
   need(isinstance(equality['reviewed_blobs'],dict) and equality['reviewed_blobs'] and all(blobs.get(p)==h for p,h in equality['reviewed_blobs'].items()),'reviewed source blobs equal final inventory')
  for row in refs:
   need(row['sha256'] not in seen,'distinct independent review receipts');seen.add(row['sha256']);obj=referenced(row)
+  identity=reviewer_identity(obj);need(identity not in reviewers,'distinct independent reviewer authorities');reviewers.add(identity)
   need(obj.get('decision',obj.get('outcome',obj.get('disposition')))=='ACCEPT','actual independent source review outcome')
   findings=obj.get('findings');need(isinstance(findings,list) and all(isinstance(f,dict) and f.get('blocking') is False for f in findings) and obj.get('material_findings',[])==[],'no unresolved material source review findings')
   rh=obj.get('candidate_head',obj.get('source_head',obj.get('head')));rt=obj.get('candidate_tree',obj.get('source_tree',obj.get('tree')))

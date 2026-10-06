@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Validate the fresh raw bootstrap and freeze recall inputs; never starts voters."""
 import base64,hashlib,importlib.util,json,pathlib,shlex,shutil,struct,subprocess,tarfile,time
@@ -32,7 +33,7 @@ def byte_list(raw):
  assert pos==len(raw);return out
 
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403'
+PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
 def plan_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('frozen_trial24_product',PLAN_MODULE)
@@ -65,10 +66,11 @@ def bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,buildraw,imagesr
 
 def main():
  assert __debug__ and not O.exists() and not R.exists()
+ pm=plan_module()
  planroot=P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1'
  frozenraw=(planroot/'plan-preparation.json').read_bytes();frozen=json.loads(frozenraw)
  proofraw=(L/'precollection-proof.json').read_bytes();planraw=(B/'plan.json').read_bytes()
- isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt'],frozen['image_receipt'],frozen['source_acceptance']])
+ isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt'],frozen['image_receipt'],frozen['source_acceptance']]+pm.product_review_paths(pm.preparation_paths(frozen)))
  server,qualification=bootstrap_provenance(planraw,frozenraw,(planroot/'manifest.json').read_bytes(),proofraw,pathlib.Path(frozen['build_receipt']).read_bytes(),pathlib.Path(frozen['image_receipt']).read_bytes(),pathlib.Path(frozen['source_acceptance']).read_bytes())
  final=load(L/'result.json');assert final['precollection_proof_sha256']==sha(proofraw)
  assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and len(final['stopped'])==4 and not final['errors']
@@ -103,7 +105,7 @@ def main():
   assert x['Ready'] and x['Live'] and not x['Draining'] and x['VectorPhase']=='active' and len(x['Groups'])==1
   g=x['Groups'][0];assert g['GroupID']=='group-a' and g['Ready'] and g['LocalAppliedIndex']>=g['RequiredAppliedIndex']>=prefix
  plan=json.loads(planraw)
- launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert sha(launcher.read_bytes())=='21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616'
+ launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert sha(launcher.read_bytes())=='f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605'
  spec=importlib.util.spec_from_file_location('fixed_cluster',launcher);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
  actual=m.plan(load(P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1/manifest.json'),RUN,m.admit_dataset(str(dataset)))
  O.mkdir();shutil.copytree(dataset,O/'dataset');shutil.copytree(B,O/'historical-chain');shutil.copytree(L,O/'bootstrap-close')

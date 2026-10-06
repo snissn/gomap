@@ -1,8 +1,9 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Inert source-only derivation. Root reviews/pins generated sources before any run."""
 import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATES = {'admission': '/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py', 'query': '/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py', 'lifecycle': '/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py', 'exact-validate': '/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py', 'artifact-verify': '/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py'}
-TEMPLATE_SHA256 = {'admission': '9fde2650d5b2336c51fb1cf89828f49ee4a3e39b0f024b15e13093b04fce3af2', 'query': '9cf5cfd4012da653780c32ec8eacde075a6979ffd14b31c6f8df4db4590717f4', 'lifecycle': '36deaea97ae5f61a01709cb05c43c99bceded843cda23cb3adb1e50a6cb84440', 'exact-validate': 'd9cd3dfbbbc76badf18e77740fb7d0763d66be03b1324402b56f24c4ea136af6', 'artifact-verify': '41a011660d88d8809b80ead55102ffbcf45f34dc570f9188562f960d0bc366e3'}
+TEMPLATE_SHA256 = {'admission': 'd6d109b3125dc5075151b05276992502e85c512cb5710ee2b2b3549169e45032', 'query': 'fd6025b6a46f9cb64d150f4a239bd5ba6c101361a1bbce31c0464810c588d0ed', 'lifecycle': '51309dd305a2bf817215c7a83219f74d36d9ebbe150e7e06425c3b05aeda0286', 'exact-validate': 'f9df841baf352b2fdab599297f199db5cf5ece632748a4009ee546c3e1cb2bb0', 'artifact-verify': 'c11ca2ef5788ef40d7dfc400cad6ae3ba8922af81c8f5dc5724908a14aa27a56'}
 CAMPAIGN = 'rf4trial24mixedchangingc1'
 PREFIX = 'gomap-4997-4998-trial24-growth-'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
@@ -26,7 +27,7 @@ def validate_path_bindings(texts,bindings):
         assert isinstance(new,str) and pathlib.Path(new).is_absolute() and new!=old, 'fresh absolute reviewed path'
         no_historical_paths(new)
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403'
+PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
 def product_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)
@@ -139,14 +140,14 @@ def main():
             # No approval/pre-review is known when constructing this packet.
             # Separate actual root admission/source review pins are supplied at
             # execution; all prior admit() semantic assertions are retained.
-            text='import os\n'+text
+            text="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport os\n"+text
             for key,env in [('ADMISSION_PATH','GOMAP_TRIAL24_GROWTH_ADMISSION'),('ADMISSION_SHA256','GOMAP_TRIAL24_GROWTH_ADMISSION_SHA256'),('SOURCE_PREREVIEW_PATH','GOMAP_TRIAL24_GROWTH_REVIEW'),('SOURCE_PREREVIEW_SHA256','GOMAP_TRIAL24_GROWTH_REVIEW_SHA256')]:
                 text=re.sub(r'^'+key+r' = .*$',key+" = os.environ.get("+repr(env)+")",text,flags=re.M)
         assert 'rf4trial14mixedc1' not in text and 'landed[\'pr\']==4995' not in text
         no_historical_paths(text)
         ast.parse(text,str(destinations[role]));sources[role]=text;generated_hashes[role]=sha(text.encode())
     assert not out.exists() and not out.is_symlink()
-    isolate_paths([out],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,a.pins,pins['artifact_root']]+list(pins['reviewed_path_bindings'].values())+list(pm.PRODUCT_PATHS.values())+list(product_paths.values()))
+    isolate_paths([out],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,a.pins,pins['artifact_root']]+list(pins['reviewed_path_bindings'].values())+list(pm.PRODUCT_PATHS.values())+pm.product_review_paths()+list(product_paths.values()))
     out.mkdir()
     for role,text in sources.items(): destinations[role].write_text(text)
     receipt=dict(state='PREPARED_UNEXECUTED_REQUIRES_INDEPENDENT_SOURCE_REVIEW_AND_ACTUAL_ADMISSION',campaign=CAMPAIGN,source_head=pins['source_head'],source_tree=pins['source_tree'],pins_sha256=sha(pathlib.Path(a.pins).read_bytes()),sources={str(destinations[k]):v for k,v in generated_hashes.items()},templates=TEMPLATE_SHA256,workload=dict(operations=70,mutation_attempts=2,searches=68,fresh_ids=1,post_rows=10005),limits=['Source AST checks only; not executed or accepted runtime evidence','Root must verify each supplied literal/path binding against retained actual raw provenance','Derived growth-landed receipt remains separate from collector final landed receipt; both raw provenance must be retained','No automatic replay, store deletion or lifecycle change'])

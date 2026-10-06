@@ -1,4 +1,5 @@
 """Exact retained48/49/6s campaign controls; every authority-shaped input is synthetic."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 assert len(checks)==347
 # Reconstruct the actual collector fixture independently of later proof fixtures.
 campaign_ns={'c':c,'base64':base64}

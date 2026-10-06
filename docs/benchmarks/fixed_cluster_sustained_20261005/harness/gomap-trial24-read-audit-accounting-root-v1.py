@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path
 """Pure LOCAL Trial24 C1 read/audit accounting. No runtime or campaign acceptance.
 Native Go prefix tables determine rank; scalar FP32 recomputation checks returned
@@ -7,13 +8,12 @@ wire/retention accounting. All imported sources are inert and hash-pinned.
 import argparse, ast, hashlib, importlib.util, json, math, struct, sys
 from pathlib import Path
 sys.dont_write_bytecode=True
-if not __debug__: raise RuntimeError('ordinary Python required')
 READ=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_read.py')
-READ_SHA='6390d6573d9f0e1681f4ef95f812e21477f7fd739e1f84ccc1f5ae6b1a8726f9'
+READ_SHA='1c530020f63f302e0fdec26ce2486e7951b61853d30aa00d60f5cfd8b21d0b9b'
 AUDIT=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_audit.py')
-AUDIT_SHA='1ccb25b1a18df928135f6fdcabead753353ff3d9ca700f4aa5ec88a8fc2db7c4'
+AUDIT_SHA='688356e80a8724f41c628b3a7007a74cc381910f6cd643f87114100699e85fab'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
+COLLECTOR_SHA='359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c'
 HEAD='__ROOT_FROZEN_HEAD__'
 TREE='__ROOT_FROZEN_TREE__'
 RUN='rf4trial24mixedchangingc1'

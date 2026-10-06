@@ -1,6 +1,7 @@
 """Additional source-only receipt joins, executed after the retained 291 controls.
 All acceptance-shaped bytes below are owned synthetic fixtures, never authority.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import contextlib,io,types
 assert len(checks)==291
 head,tree=d['source_head'],d['source_tree']
@@ -16,7 +17,7 @@ for key in ('underlying_reviews','landing_evidence','ci_evidence'):
 obj=copy.deepcopy(objects['source_prereview']);obj['underlying_reviews']=[reviews[0],reviews[0]]
 row=copy.deepcopy(d);row['source_prereview']=fixture('closure-duplicate-reviews',obj)
 bad('closure_declaration_duplicate_independent_receipt',lambda:x.declaration(row,m))
-prior=fixture('closure-prior-scoped-review',{'synthetic_only':True,'decision':'ACCEPT','candidate_head':'a'*40,'candidate_tree':'b'*40,'findings':[]})
+prior=fixture('closure-prior-scoped-review',{'synthetic_only':True,'decision':'ACCEPT','candidate_head':'a'*40,'candidate_tree':'b'*40,'findings':[],'reviewer':'synthetic-prior-scoped'})
 obj=copy.deepcopy(objects['source_prereview']);obj['underlying_reviews']=[reviews[0],prior]
 row=copy.deepcopy(d);row['source_prereview']=fixture('closure-unjoined-prior-review',obj)
 bad('closure_declaration_prior_review_requires_scoped_equality',lambda:x.declaration(row,m))
@@ -28,7 +29,7 @@ equality['reviewed_blobs']['synthetic.go']='c'*40
 obj['review_source_equality']=fixture('closure-wrong-scoped-equality',equality);row['source_prereview']=fixture('closure-wrong-applicability-review',obj)
 bad('closure_declaration_scoped_equality_wrong_final_blob',lambda:x.declaration(row,m))
 
-head_only=fixture('closure-head-only-review',{'synthetic_only':True,'disposition':'ACCEPT','head':'a'*40,'material_findings':[],'findings':[{'severity':'LOW','blocking':False,'finding':'Synthetic nonblocking note'}]})
+head_only=fixture('closure-head-only-review',{'synthetic_only':True,'disposition':'ACCEPT','head':'a'*40,'reviewer':'synthetic-head-only','material_findings':[],'findings':[{'severity':'LOW','blocking':False,'finding':'Synthetic nonblocking note'}]})
 obj=copy.deepcopy(objects['source_prereview']);obj['underlying_reviews']=[reviews[0],head_only]
 row=copy.deepcopy(d);row['source_prereview']=fixture('closure-head-only-unjoined',obj)
 bad('closure_declaration_head_only_review_requires_tree_applicability_proof',lambda:x.declaration(row,m))

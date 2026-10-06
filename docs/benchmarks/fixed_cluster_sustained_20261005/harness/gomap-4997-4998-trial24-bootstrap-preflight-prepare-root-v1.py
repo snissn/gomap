@@ -1,8 +1,9 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403'
+PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()
@@ -29,7 +30,8 @@ def main():
  p=pathlib.Path(args.out);assert p.is_absolute() and p.name.startswith(pm.PREFIX+'-bootstrap-precollection-root-v') and not p.exists()
  isolate_paths([p,volume/'bootstrap-root-v1'],pm.protected_inputs(a,args.pins)+[planroot]+list(pm.preparation_paths(frozen).values()))
  p.mkdir()
- remote=r'''
+ remote=r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import json,pathlib,subprocess,sys,time,os
 host=sys.argv[1];image=sys.argv[2];earliest=float(sys.argv[3]);latest=float(sys.argv[4]);assert earliest<=time.time()<latest-86400;root='/home/mikers/gomap-4250-twohost-rf4trial24mixedchangingc1'
 assert not pathlib.Path(root).exists()

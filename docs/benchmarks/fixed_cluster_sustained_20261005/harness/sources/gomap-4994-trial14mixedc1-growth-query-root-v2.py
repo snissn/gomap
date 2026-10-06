@@ -3,6 +3,7 @@
 Derived from gomap-4956-rf4trial08-query-root-v1.py. No workload retry,
 no voter/store cleanup, no throughput/latency/capacity or whole-lifetime peak claim.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import collections
 import hashlib
 import json
@@ -78,7 +79,7 @@ check = call("hash-create", ["docker", "create", "--pull=never", "--name", hash_
              "--memory=2g", "--memory-swap=2g", "--cpus=2", "--entrypoint", "/treedb-query-under-write", image]).strip()
 assert re.fullmatch(r"[0-9a-f]{64}", check)
 hash_path = "/home/mikers/gomap-4994-rf4trial14mixedc1-growth-driver-hash-root-v1"
-call("hash-path-exclusive", ["python3", "-c", "import pathlib; assert not pathlib.Path(" + repr(hash_path) + ").exists()"])
+call("hash-path-exclusive", ["python3", "-c", "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport pathlib; assert not pathlib.Path(" + repr(hash_path) + ").exists()"])
 call("hash-copy", ["docker", "cp", check + ":/treedb-query-under-write", hash_path])
 assert call("driver-hash", ["sha256sum", hash_path]).split()[0] == APPROVED["driver_sha256"]
 x = json.loads(call("hash-inspect", ["docker", "inspect", check]))[0]
@@ -86,7 +87,8 @@ assert x["Id"] == check and x["Image"] == image and x["Name"] == "/" + hash_name
 # Retain the stopped image-hash container and copied ELF; no cleanup/deletion.
 
 # One SSH call returns inspect plus raw driver cgroup evidence, with missing markers.
-SAMPLER = r'''
+SAMPLER = r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import json,pathlib,subprocess,sys,time
 x=json.loads(subprocess.check_output(['docker','inspect',sys.argv[1]],text=True))[0]
 previous=sys.argv[2]; path=None; discovery_error=None
@@ -118,7 +120,7 @@ def owned(x, cid=None):
     assert h["RestartPolicy"]["Name"] == "no" and h["NetworkMode"] == "host"
     assert set(h["Binds"]) == {root+"/node-c/config.json:/config.json:ro", root+"/node-c/credentials:/credentials:ro", root+"/bootstrap-qualify.json:/bootstrap.json:ro"}
 
-call("query-name-exclusive", ["python3", "-c", "import subprocess; r=subprocess.run(['docker','inspect'," + repr(NAME) + "],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(), (r.returncode,r.stderr)"])
+call("query-name-exclusive", ["python3", "-c", "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect'," + repr(NAME) + "],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(), (r.returncode,r.stderr)"])
 
 args = ["docker", "run", "--pull=never", "-d", "--restart=no", "--name", NAME,
         "--label", "treedb.fixed-cluster.run=" + RUN, "--network=host", "--memory=2g",

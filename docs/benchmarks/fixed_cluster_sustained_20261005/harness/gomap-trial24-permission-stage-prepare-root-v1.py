@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path
 """Unexecuted Trial24 inactive-input staging and isolated permission observation.
 Root must review this source and supply exact final manifest/archive pins.
@@ -5,12 +6,11 @@ No campaign activation, voter start, DB mount, gate, mutations, or replay.
 """
 import argparse, ast, copy, hashlib, importlib.util, io, json, math
 import pathlib, re, secrets, shlex, subprocess, sys, tarfile, time, types
-if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode = True
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA = "37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
+COLLECTOR_SHA = "359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
 RESOURCE = source_path('/tmp/gomap-4994-mixed-window-resource-accounting-root-v5.py')
-RESOURCE_SHA = "f2f776103435f40fcc83cceb5e34b51bf1337e00f77b848cdddef1ebef6e296d"
+RESOURCE_SHA = "fe917502c45aa2f4619bd6d5cb294243d343c5cd93f3c6974ccff71b01eb5f96"
 RUN = "rf4trial24mixedchangingc1"
 HEAD = "__ROOT_FROZEN_HEAD__"
 TREE = "__ROOT_FROZEN_TREE__"
@@ -94,7 +94,8 @@ def archive_check(c,a,inv,archive):
             digest=a["input_inventory_sha256"] if m.name=="input-inventory.json" else inv[m.name]
             need(sha(raw)==digest,"archive member digest "+m.name)
 
-STAGE = r"""import os,sys,io,tarfile,pathlib,hashlib,json
+STAGE = r"""if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import os,sys,io,tarfile,pathlib,hashlib,json
 p=pathlib.Path(sys.argv[1]);raw=sys.stdin.buffer.read((64<<20)+1)
 assert len(raw)<64<<20 and hashlib.sha256(raw).hexdigest()==sys.argv[2]
 assert not p.exists() and not p.is_symlink() and os.getuid()==os.getgid()==1000
@@ -165,7 +166,7 @@ def main(opts):
     call("exclusive-stage",["python3","-c",STAGE,c.INPUT_ROOT,sha(archive),a["input_inventory_sha256"]],stdin=archive,timeout=60)
     (out/"command.json").write_bytes(encode(argv))
     name=argv[argv.index("--name")+1]
-    check="import subprocess; r=subprocess.run(['docker','inspect',"+repr(name)+"],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(); print('PASS_EXCLUSIVE_PERMISSION_NAME')"
+    check="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(name)+"],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(); print('PASS_EXCLUSIVE_PERMISSION_NAME')"
     call("exclusive-name",["python3","-c",check])
     launched,launch_path,_=call("launch",argv);cid=launched.decode().strip()
     need(c.digest_valid(cid),"actual launch CID")

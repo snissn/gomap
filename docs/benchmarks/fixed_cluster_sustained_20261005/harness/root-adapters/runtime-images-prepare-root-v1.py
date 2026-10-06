@@ -14,6 +14,7 @@ CLI execution performs bounded sequential packaging on 111 then 185. It does
 not build Go, start a cluster, mount stores or claim runtime qualification.
 Preserve failed roots/raw results; there is no automatic replay or cleanup.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse, hashlib, json, pathlib, re, shlex, subprocess, time
 
 def main(argv=None):
@@ -79,7 +80,7 @@ def main(argv=None):
         r.check_returncode();return r.stdout
 
     for host in ('111','185'):
-        p='import hashlib,json,os,pathlib,shutil,subprocess,sys,tarfile,time\nROOT='+repr(REMOTE)+'\nELFS='+repr(ELFS)+'\nPARENT='+repr(PARENTS[host])+'\nHOST='+repr(host)+'\nFOREIGN='+repr(FOREIGN[host])+'\nTAG='+repr(TAG)+'\nPARENT_TAG='+repr(PARENT_TAG)+'\n'
+        p='if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,shutil,subprocess,sys,tarfile,time\nROOT='+repr(REMOTE)+'\nELFS='+repr(ELFS)+'\nPARENT='+repr(PARENTS[host])+'\nHOST='+repr(host)+'\nFOREIGN='+repr(FOREIGN[host])+'\nTAG='+repr(TAG)+'\nPARENT_TAG='+repr(PARENT_TAG)+'\n'
         call(host,'prepare',p+'''
 root=pathlib.Path(ROOT);assert not root.exists()
 disk=os.statvfs('/home/mikers');assert disk.f_bavail*disk.f_frsize>=50*1024**3
@@ -106,7 +107,7 @@ for name,meta in ELFS.items():
 print('VERIFIED_LOCAL_CONTEXT_ELFS')
 ''')
         else:
-            sender='import hashlib,pathlib,sys,tarfile\nELFS='+repr(ELFS)+'\nBUILD='+repr(BUILD)+'\n'+'''
+            sender='if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,pathlib,sys,tarfile\nELFS='+repr(ELFS)+'\nBUILD='+repr(BUILD)+'\n'+'''
 with tarfile.open(fileobj=sys.stdout.buffer,mode='w|') as tar:
  for name,meta in ELFS.items():
   src=pathlib.Path(BUILD)/name;assert src.is_file() and not src.is_symlink() and src.stat().st_mode&0o7777 in (0o755,0o775)

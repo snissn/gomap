@@ -3,6 +3,7 @@ Never launches a process. Writes a new input bundle/archive and an INACTIVE mani
 Root alone supplies actual proof/review pins, reviews this source, and later activates
 five flags using separate real permission and product/harness-mode evidence.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import base64
 import hashlib
 import importlib.util
@@ -12,8 +13,6 @@ import re
 import struct
 import tarfile
 
-if not __debug__:
-    raise RuntimeError('ordinary Python assertion checks required; not -O')
 V = Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1')
 PRE = V/'pre-inputs-root-v1'
 OUT = V/'inputs-root-v1'

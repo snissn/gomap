@@ -1,12 +1,12 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Inert local constructor for an offline test-only oracle overlay.
 Does not invoke Go/Git/subprocess/network. Root supplies frozen final pins and
 runs the proposed command separately. Native output is pending root acceptance.
 """
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
-if not __debug__:raise RuntimeError('ordinary Python required')
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
+COLLECTOR_SHA='359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c'
 GO_SOURCE=r'''package main
 
 import (

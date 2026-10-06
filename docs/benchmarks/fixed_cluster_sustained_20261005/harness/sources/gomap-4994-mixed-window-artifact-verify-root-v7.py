@@ -3,18 +3,18 @@ Pinned AST function extraction executes no old campaign/module top-level.
 This bounded packet deliberately fails closed on outstanding independent
 transport/WAL/audit/resource/lifecycle verification. Root owns completion.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse, ast, base64, calendar, copy, datetime, hashlib, json, math, re, struct
 from pathlib import Path
 from source_paths import source_path
-if not __debug__: raise RuntimeError('ordinary Python required')
 RUN='rf4trial14mixedc1'
 QUERY_RUN=RUN+'mixedc1v1'
 COLLECTION=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/mixed-window-root-v1')
 INPUT=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/inputs-root-v1')
 NODES={'node-a','node-b','node-c','node-d'}
 PINS={
- '/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py':'fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d',
- '/tmp/gomap-4975-trial13c1-paired-artifact-verify-root-v1.py':'1d4dcb61e8bbd08bc668ebe78c732433bdb05856051ffdde6bb142d8435191b0'}
+ '/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py':'60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9',
+ '/tmp/gomap-4975-trial13c1-paired-artifact-verify-root-v1.py':'13116decf94494eab68139735d96b4eecb3255ff732c8e52fa75a7301e6e65dd'}
 HELPERS={}
 def parse_json_int(x):return -0.0 if x=='-0' else int(x)
 def extract_pure():

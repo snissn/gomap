@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import hashlib,json,pathlib,subprocess,shlex,time,sys
 import runpy
 _gate=runpy.run_path('/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py')
@@ -46,7 +47,7 @@ finally:
  try:
   n=next(x for x in nodes if x['node']=='node-c')
   name='treedb-4250-rf4trial14mixedc1-query-write'
-  probe="import subprocess,json; r=subprocess.run(['docker','inspect',"+repr(name)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
+  probe="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess,json; r=subprocess.run(['docker','inspect',"+repr(name)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
   xs=json.loads(call(n,'driver-fallback-inspect',['python3','-c',probe]))
   if xs is not None:
    x=xs[0];assert x['Name']=='/'+name and x['Image']=='sha256:718a79a455321acc6409436db4de44414ed8c4dd42e5ca684e9abf0a664889f8' and x['Config']['Labels']['treedb.fixed-cluster.run']=='rf4trial14mixedc1'

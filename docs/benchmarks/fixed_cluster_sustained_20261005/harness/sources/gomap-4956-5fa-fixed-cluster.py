@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Plan or run a bounded, fresh RF3/RF4 fixture on two existing Docker/SSH hosts."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse
 import collections
 import json

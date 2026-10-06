@@ -1,10 +1,11 @@
-from source_paths import source_path, isolate_paths
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+from source_paths import source_path, isolate_paths, reviewer_identity
 """Inert Trial24 bootstrap constructor. Root supplies final accepted pins; no network here."""
 import argparse,hashlib,importlib.util,json,pathlib,re,subprocess,ssl
 CAMPAIGN='rf4trial24mixedchangingc1'
 PREFIX='gomap-4997-4998-rf4trial24mixedchangingc1'
 LAUNCHER=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'))
-LAUNCHER_SHA='21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616'
+LAUNCHER_SHA='f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605'
 def read(path,digest=None):
  p=pathlib.Path(path);assert p.is_absolute() and p.is_file() and not p.is_symlink() and p.stat().st_size<=8*1024*1024
  raw=p.read_bytes();assert digest is None or hashlib.sha256(raw).hexdigest()==digest
@@ -23,6 +24,19 @@ def elf_identity(records):
   assert type(size) is int and size>0
   identity[name]={'sha256':digest,'bytes':size}
  return identity
+def review_paths(accept):
+ refs=accept['underlying_reviews'];assert isinstance(refs,list) and len(refs)>=2
+ identities=set();digests=set();paths=[]
+ for row in refs:
+  assert isinstance(row,dict) and set(row)=={'path','sha256'} and re.fullmatch('[0-9a-f]{64}',row['sha256'])
+  raw=read(row['path'],row['sha256']);identity=reviewer_identity(json.loads(raw))
+  assert identity not in identities and row['sha256'] not in digests
+  identities.add(identity);digests.add(row['sha256']);paths.append(row['path'])
+ return paths
+def product_review_paths(paths=None):
+ paths=PRODUCT_PATHS if paths is None else paths
+ return review_paths(json.loads(read(paths['source_acceptance'],PRODUCT_SHA['source_acceptance'])))
+
 def product_tuple(buildraw,imagesraw,acceptanceraw):
  assert hashlib.sha256(buildraw).hexdigest()==PRODUCT_SHA['build']
  assert hashlib.sha256(imagesraw).hexdigest()==PRODUCT_SHA['images']
@@ -34,6 +48,7 @@ def product_tuple(buildraw,imagesraw,acceptanceraw):
  assert build['source_inventory_sha256']==images['source_inventory_sha256']==accept['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
  assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME' and images['build_proof_sha256']==PRODUCT_SHA['build']
  assert accept['outcome']=='ACCEPT' and accept['landed_source_verified'] is True and accept['required_ci_passed'] is True and len(accept['underlying_reviews'])>=2
+ review_paths(accept)
  identity=elf_identity(build['ELFs'])
  server=identity['treedb-fixed-peer']['sha256'];driver=identity['treedb-query-under-write']['sha256']
  assert server=='__ROOT_FROZEN_SERVER_SHA__' and driver=='__ROOT_FROZEN_DRIVER_SHA__'
@@ -75,7 +90,7 @@ def preflight_tuple(proof,frozen,a):
  assert proof['server_images']==frozen['product']['server_images'] and proof['driver_image']==frozen['product']['driver_image']
 
 def protected_inputs(a,pinfile):
- return [a['source_worktree'],pathlib.Path(__file__).resolve().parent,pinfile,a['dataset'],a['build'],a['images'],a['source_acceptance'],a['credential_provenance']]+[v['path'] for v in a['configs'].values()]
+ return [a['source_worktree'],pathlib.Path(__file__).resolve().parent,pinfile,a['dataset'],a['build'],a['images'],a['source_acceptance'],a['credential_provenance']]+[v['path'] for v in a['configs'].values()]+product_review_paths({k:a[k] for k in PRODUCT_PATHS})
 
 def context(pinfile):
  assert __debug__
@@ -115,7 +130,7 @@ def context(pinfile):
   assert {n['ID']:n['Address'] for n in x['Groups'][0]['Peers']}=={n:h+':'+str(19301+j) for j,(n,h) in enumerate(hosts.items())}
   config_sha[str(p)]=meta['sha256'];nodes.append({'host':m.HOSTS[0 if i<2 else 1],'config':str(p)})
  guard_path=pathlib.Path(source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-rf4trial24-credential-preactivation-guard-root-v1.py'))
- assert hashlib.sha256(read(guard_path)).hexdigest()=='c88fa475e670912fe15e86509ac79a15b852b91bbbc17474ae735086e45408ba'
+ assert hashlib.sha256(read(guard_path)).hexdigest()=='bbca8e84b31b0c80506586dbba511168075bfc6fc9af1b1ec70b43d942ca8e9a'
  gs=importlib.util.spec_from_file_location('fresh_credential_guard',guard_path);g=importlib.util.module_from_spec(gs);gs.loader.exec_module(g)
  assert a['credential_minimum_remaining_seconds']==86400
  proof=g.validate_configs(credential_configs,minimum_remaining_seconds=86400)

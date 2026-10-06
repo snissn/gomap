@@ -26,7 +26,7 @@
       },
       "output": {
         "path": "shared_read.py",
-        "sha256": "6390d6573d9f0e1681f4ef95f812e21477f7fd739e1f84ccc1f5ae6b1a8726f9"
+        "sha256": "1c530020f63f302e0fdec26ce2486e7951b61853d30aa00d60f5cfd8b21d0b9b"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -40,7 +40,7 @@
       },
       "output": {
         "path": "shared_audit.py",
-        "sha256": "1ccb25b1a18df928135f6fdcabead753353ff3d9ca700f4aa5ec88a8fc2db7c4"
+        "sha256": "688356e80a8724f41c628b3a7007a74cc381910f6cd643f87114100699e85fab"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -54,7 +54,7 @@
       },
       "output": {
         "path": "gomap-rf4trial24-credential-preactivation-guard-root-v1.py",
-        "sha256": "c88fa475e670912fe15e86509ac79a15b852b91bbbc17474ae735086e45408ba"
+        "sha256": "bbca8e84b31b0c80506586dbba511168075bfc6fc9af1b1ec70b43d942ca8e9a"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -67,7 +67,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py",
-        "sha256": "37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
+        "sha256": "359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
       },
       "changes": [
         [
@@ -127,7 +127,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py",
-        "sha256": "d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403"
+        "sha256": "75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -141,7 +141,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-preflight-prepare-root-v1.py",
-        "sha256": "67d7f719fbe8ad9ab7f97a995b52795680bbde40de2f1af949e9fb1d37926679"
+        "sha256": "1e3f92fb7d889bc6e701c24fb88ea4ddeeb2d9a4c4859af3251b2d12623114f6"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -154,7 +154,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "6a9c4f996fb805494a4359b0e6d6fbc40ef8c588f92da839e74ccb799834dee7"
+        "sha256": "3579815b5401bc2bc262ed5fa7fe28e2a1b84da6d4dc748e78b884ac7c237b6e"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -167,7 +167,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "4de4b8de24be1e995618fbb01d18b7bd3d35c01dd002ffea2c855b766e13a73e"
+        "sha256": "5e043fa3a7279e1370529e676a64a759826421b171b275ab3fd7c89a8846927f"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -181,7 +181,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "d2a7a95af94e719eb3f1d10c6d1ca457fae65be30b7261905fa02fe1d0138c19"
+        "sha256": "d1fcd52d9f6a4b488b3f105e23964fffacd9fee8242cee6af34a7ea1ba803c37"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -195,7 +195,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "6dd95a068e3434f4477d6a2c1a842c3bd9b1a26ab14a4a1c7dbc49718577017c"
+        "sha256": "52825c278b19651f4f725f9351fddb73ff767b549df1f379d39e09fffb568992"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -209,7 +209,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "46051f60b8097e4767c79f9b4400e82f7117780e5162c3fc2a540d712f923b39"
+        "sha256": "74e151616159c41b566c8322490e9e02e9054dd2f0789dea66ae51c69603b940"
       },
       "changes": [
         [
@@ -241,7 +241,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "ed45269aabb9689833bca3c044a63b133c46cf778534fc6bd14d06ff793a2cf8"
+        "sha256": "2615897065e1573208f471a26bfdfb2ffe5edf58a5492c7ad6fd3b5f3ef90b7e"
       },
       "changes": [
         [
@@ -269,7 +269,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "5345c9a27a7f6cd318d26617db26dffe8d2cae687dca6f023ea8dc764539baa0"
+        "sha256": "99b1fb4ddf326f09630b1f9834e7c6ce9c54d9b99ff2865456952c5d9aa3b77f"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "cbfe800e95e91194668c72e62247d72a5d04ca28b5fddc598bfb8dd9e038fc20"
+        "sha256": "43154710e19664b7663b1e5edef511366485f98c1e20e61b7dd4db61ae899fa3"
       },
       "changes": [
         [
@@ -315,7 +315,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "313d0015c9b91c1fa0076e436c982e6dfed0fd8b6d07fea8b8003b9c575a5d0f"
+        "sha256": "90423a7eb2a5e4e2517e01dbee898f53c8e95f7c2b8b584190080c963851ac44"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -331,80 +331,80 @@
     "/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py": {
       "path": "sources/gomap-4994-mixed-window-artifact-verify-root-v7.py",
       "original_sha256": "8bcc9e05c31a962aa395d5913290288e6bc320ed8c82b6d228f0f55c65295326",
-      "sha256": "0182750a8662e3beed1748527f1c24549470bfa275852877f7408233883412a6",
+      "sha256": "dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769",
       "use": "source template or AST-extracted helper; historical campaign main is not executed",
       "change": "only imported core source-read seam resolves immutable baseline copies; AST-extracted functions unchanged"
     },
     "/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py": {
       "path": "sources/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py",
       "original_sha256": "fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d",
-      "sha256": "fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d",
+      "sha256": "60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4975-trial13c1-paired-artifact-verify-root-v1.py": {
       "path": "sources/gomap-4975-trial13c1-paired-artifact-verify-root-v1.py",
       "original_sha256": "1d4dcb61e8bbd08bc668ebe78c732433bdb05856051ffdde6bb142d8435191b0",
-      "sha256": "1d4dcb61e8bbd08bc668ebe78c732433bdb05856051ffdde6bb142d8435191b0",
+      "sha256": "13116decf94494eab68139735d96b4eecb3255ff732c8e52fa75a7301e6e65dd",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-mixed-window-resource-accounting-root-v5.py": {
       "path": "sources/gomap-4994-mixed-window-resource-accounting-root-v5.py",
       "original_sha256": "f2f776103435f40fcc83cceb5e34b51bf1337e00f77b848cdddef1ebef6e296d",
-      "sha256": "f2f776103435f40fcc83cceb5e34b51bf1337e00f77b848cdddef1ebef6e296d",
+      "sha256": "fe917502c45aa2f4619bd6d5cb294243d343c5cd93f3c6974ccff71b01eb5f96",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4956-5fa-fixed-cluster.py": {
       "path": "sources/gomap-4956-5fa-fixed-cluster.py",
       "original_sha256": "21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616",
-      "sha256": "21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616",
+      "sha256": "f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py": {
       "path": "sources/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py",
       "original_sha256": "e486d6ef8059e75958ae85be621784904c8a0bd949693f90452cf13e55a3bdcc",
-      "sha256": "e486d6ef8059e75958ae85be621784904c8a0bd949693f90452cf13e55a3bdcc",
+      "sha256": "8586f38a885357a1e042d3507a57396c64ac88d08e626188e74a33c46f18e7b5",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py": {
       "path": "sources/gomap-4994-trial14mixedc1-growth-admission-root-v2.py",
       "original_sha256": "9fde2650d5b2336c51fb1cf89828f49ee4a3e39b0f024b15e13093b04fce3af2",
-      "sha256": "9fde2650d5b2336c51fb1cf89828f49ee4a3e39b0f024b15e13093b04fce3af2",
+      "sha256": "d6d109b3125dc5075151b05276992502e85c512cb5710ee2b2b3549169e45032",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py": {
       "path": "sources/gomap-4994-trial14mixedc1-growth-query-root-v2.py",
       "original_sha256": "9cf5cfd4012da653780c32ec8eacde075a6979ffd14b31c6f8df4db4590717f4",
-      "sha256": "9cf5cfd4012da653780c32ec8eacde075a6979ffd14b31c6f8df4db4590717f4",
+      "sha256": "fd6025b6a46f9cb64d150f4a239bd5ba6c101361a1bbce31c0464810c588d0ed",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py": {
       "path": "sources/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py",
       "original_sha256": "36deaea97ae5f61a01709cb05c43c99bceded843cda23cb3adb1e50a6cb84440",
-      "sha256": "36deaea97ae5f61a01709cb05c43c99bceded843cda23cb3adb1e50a6cb84440",
+      "sha256": "51309dd305a2bf817215c7a83219f74d36d9ebbe150e7e06425c3b05aeda0286",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py": {
       "path": "sources/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py",
       "original_sha256": "d9cd3dfbbbc76badf18e77740fb7d0763d66be03b1324402b56f24c4ea136af6",
-      "sha256": "d9cd3dfbbbc76badf18e77740fb7d0763d66be03b1324402b56f24c4ea136af6",
+      "sha256": "f9df841baf352b2fdab599297f199db5cf5ece632748a4009ee546c3e1cb2bb0",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py": {
       "path": "sources/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py",
       "original_sha256": "41a011660d88d8809b80ead55102ffbcf45f34dc570f9188562f960d0bc366e3",
-      "sha256": "41a011660d88d8809b80ead55102ffbcf45f34dc570f9188562f960d0bc366e3",
+      "sha256": "c11ca2ef5788ef40d7dfc400cad6ae3ba8922af81c8f5dc5724908a14aa27a56",
       "use": "source template or AST-extracted helper; historical campaign main is not executed"
     },
     "/tmp/gomap-trial17-native-runner-source-context-root-v1/gomap-1242-bounded-runner-prepare.py": {
       "path": "sources/native-runner/gomap-1242-bounded-runner-prepare.py",
       "original_sha256": "e09a70a724a98292398cc3333c0d20359afd5c195520710feba4ec8f76d428f5",
-      "sha256": "e09a70a724a98292398cc3333c0d20359afd5c195520710feba4ec8f76d428f5",
+      "sha256": "0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf",
       "use": "pinned native runner template; retrieval/runtime evidence is separate and not copied"
     },
     "/tmp/gomap-trial17-native-runner-source-context-root-v1/run.sh": {
       "path": "sources/native-runner/run.sh",
       "original_sha256": "049de2818f6e4140c02936703c2b929e1f94d226e9ba818b3bb95c9e3d31b8c7",
-      "sha256": "049de2818f6e4140c02936703c2b929e1f94d226e9ba818b3bb95c9e3d31b8c7",
+      "sha256": "e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a",
       "use": "pinned native runner template; retrieval/runtime evidence is separate and not copied"
     },
     "/tmp/gomap-trial17-native-runner-source-context-root-v1/inner.sh": {
@@ -416,7 +416,7 @@
   },
   "source_path_resolver": {
     "path": "source_paths.py",
-    "sha256": "a795d5ad162dbf5c4ee4c9c33750ce1cf49b702d223171ea1241d0699a147130"
+    "sha256": "d0eb79bd5fe3816b5f62b77d4872033ad55bafb6cee035347e1825f5dc20c4c1"
   },
   "repair_disposition": {
     "H1": "shared final frozen inventory row count, propagated remote/prepare/capture",
@@ -427,13 +427,13 @@
   "root_owned_adapters": {
     "runtime-build-prepare-root-v1.py": {
       "path": "root-adapters/runtime-build-prepare-root-v1.py",
-      "sha256": "a11401f8defe0316a5f70a74406b062544f13ad318c37b9a277209ea248ba19f",
+      "sha256": "5db680eda5e973bb007a33e7715ba724d6e2d4d3177743aa25c4783922e81e79",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     },
     "runtime-images-prepare-root-v1.py": {
       "path": "root-adapters/runtime-images-prepare-root-v1.py",
-      "sha256": "003517995c2b1cca6a005487b557f0c4b4c0e77debf1f0630f8b1a5c5b212a73",
+      "sha256": "b23ddfb657ca26db70615f871a58da327d260551ba3b33c87483b151ebbbb927",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     }

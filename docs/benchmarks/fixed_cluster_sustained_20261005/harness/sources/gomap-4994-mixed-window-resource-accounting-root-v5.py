@@ -3,14 +3,14 @@ No subprocess/network calls. Historical top-level is never imported/executed.
 verifier(..., permission_path=..., permission_sha256=..., collector_exit_path=..., collector_exit_sha256=...)
 requires retained raw evidence, not a collector status as authority.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import ast, base64, copy, datetime, hashlib, importlib.util, json, math, re, shlex, sys
 from pathlib import Path
 sys.dont_write_bytecode=True
-if not __debug__: raise RuntimeError('ordinary Python required')
 CORE='/tmp/gomap-4994-mixed-window-artifact-verify-root-v6.py'
 CORE_SHA='1dfb0743bc5f3f0f6c7ac5163f003d47211c85761d116bc509febbe6fa2a1a3a'
 OLD='/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py'
-OLD_SHA='fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d'
+OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR='/tmp/gomap-4994-mixed-window-collector-root-v5.py'
 COLLECTOR_SHA='c5ca596190ed59977f097e6f8e183462d31de27b408a04c133e3726587fa11e8'
 RUN='rf4trial14mixedc1'; QUERY_RUN=RUN+'mixedc1v1'
@@ -274,7 +274,7 @@ def verifier(a,p,r,ptext,text,states,*,permission_path,permission_sha256,collect
      v=t['fields'][field];lo,hi=(0,0) if s['host']=='192.168.0.185' else (dlo-s['clock_offset_high'],dhi-s['clock_offset_low'])
      entries.append((v['started_unix']+lo,v['finished_unix']+hi,i))
    expected=enclosing(entries,start,end);need(all(z['fields'][field][k]==v for k,v in expected.items()),'independent enclosing bracket '+role+'/'+field)
- create_gate="import pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
+ create_gate="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
  _,created=one('gate-create-exclusive',['python3','-c',create_gate],host='192.168.0.185')
  identity=strict(created['stdout'])['directory_identity'];need(len(identity)==2 and all(type(v)is int and v>0 for v in identity),'actual created gate device/inode')
  gp=gate(C,r,samples,ssh,driver,a)

@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import base64,collections,copy,hashlib,json
 from pathlib import Path
 p=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/growth-query-root-v2')

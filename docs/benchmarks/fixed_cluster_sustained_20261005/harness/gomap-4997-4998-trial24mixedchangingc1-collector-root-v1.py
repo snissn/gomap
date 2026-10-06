@@ -4,6 +4,7 @@ Observations only: independent artifact acceptance remains root-owned.
 The manifest pins fresh receipts and exact owned CIDs; no prior population/image pins apply.
 Import is inert. Root alone may execute --approved after exact-source prereview.
 """
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse
 import base64
 import datetime
@@ -22,8 +23,6 @@ import subprocess
 import sys
 import time
 
-if not __debug__:
-    raise RuntimeError('assertion checks require ordinary Python, not -O')
 RUN = 'rf4trial24mixedchangingc1'
 QUERY_RUN = RUN + 'mixedc1v1'
 NAME = 'treedb-4250-' + RUN + '-mixed-window-c1-v1'
@@ -293,7 +292,8 @@ def call(label, args, timeout=30, host=HOST, input_bytes=None):
     return v.stdout
 
 
-SAMPLER = r'''
+SAMPLER = r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import json,pathlib,subprocess,sys,time
 started=time.time(); result=[]
 for target in json.loads(sys.argv[1]):
@@ -351,7 +351,8 @@ def validate_gate_receipt(raw, phase, run_id, nonce=None):
     return v
 
 
-GATE_PROBE = r"""
+GATE_PROBE = r"""if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import base64,json,os,pathlib,stat,subprocess,sys,time
 p=pathlib.Path(sys.argv[1]);before=os.lstat(p);assert stat.S_ISDIR(before.st_mode)
 entries=[]
@@ -380,7 +381,8 @@ print(json.dumps({'files':files,'directory_identity':[before.st_dev,before.st_in
 """
 
 
-GATE_SNAPSHOT = r"""
+GATE_SNAPSHOT = r"""if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import base64,json,os,pathlib,stat,sys,time
 p=pathlib.Path(sys.argv[1]);result={'path':str(p),'time':time.time(),'tokens':{}}
 try:
@@ -407,7 +409,8 @@ print(json.dumps(result))
 """
 
 
-GATE_ACK = r"""
+GATE_ACK = r"""if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import base64,json,os,pathlib,stat,sys,time
 p=pathlib.Path(sys.argv[1]);phase=sys.argv[2];raw=base64.b64decode(sys.argv[3],validate=True);identity=json.loads(sys.argv[4]);assert phase in ('ready','done') and 0<len(raw)<=2048 and raw.endswith(b'\n')
 st=os.lstat(p);assert stat.S_ISDIR(st.st_mode) and [st.st_dev,st.st_ino]==identity
@@ -1191,7 +1194,7 @@ def main():
             assert x['State']['Running']==baseline['State']['Running']
             assert x['State']['StartedAt']==baseline['State']['StartedAt']
             assert x['State']['Running'] or x['State']['ExitCode']==0
-        verify="import pathlib,json,hashlib; p=pathlib.Path("+repr(INPUT_ROOT)+"); b=(p/'input-inventory.json').read_bytes(); assert hashlib.sha256(b).hexdigest()=="+repr(APPROVED['input_inventory_sha256'])+"; i=json.loads(b); assert i=="+repr(inv)+"; assert all(hashlib.sha256((p/f).read_bytes()).hexdigest()==h for f,h in i.items()); print('PASS_EXACT_FRESH_INPUT_BUNDLE')"
+        verify="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport pathlib,json,hashlib; p=pathlib.Path("+repr(INPUT_ROOT)+"); b=(p/'input-inventory.json').read_bytes(); assert hashlib.sha256(b).hexdigest()=="+repr(APPROVED['input_inventory_sha256'])+"; i=json.loads(b); assert i=="+repr(inv)+"; assert all(hashlib.sha256((p/f).read_bytes()).hexdigest()==h for f,h in i.items()); print('PASS_EXACT_FRESH_INPUT_BUNDLE')"
         call('verify-input-bundle',['python3','-c',verify])
         for filename,key in (('bootstrap-qualify.json','bootstrap_sha256'),('node-c/config.json','config_sha256'),('plan.json','plan_sha256')):
             raw=call('snapshot-'+key,['cat',root+'/'+filename]).encode('utf-8',errors='surrogateescape')
@@ -1217,15 +1220,15 @@ def main():
             '--memory=2g','--memory-swap=2g','--cpus=2','--entrypoint','/treedb-query-under-write',image]).strip()
         assert digest_valid(hash_cid)
         hash_path=GATE+'-driver-elf'
-        call('hash-path-exclusive',['python3','-c','import pathlib; assert not pathlib.Path('+repr(hash_path)+').exists()'])
+        call('hash-path-exclusive',['python3','-c','if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport pathlib; assert not pathlib.Path('+repr(hash_path)+').exists()'])
         call('hash-copy',['docker','cp',hash_cid+':/treedb-query-under-write',hash_path])
         assert call('driver-hash',['sha256sum',hash_path]).split()[0]==APPROVED['driver_sha256']
         x=json.loads(call('hash-inspect',['docker','inspect',hash_cid]))[0]
         assert x['Id']==hash_cid and x['Image']==image and x['Name']=='/'+hash_name and not x['State']['Running']
-        call('query-name-exclusive',['python3','-c',"import subprocess; r=subprocess.run(['docker','inspect',"+repr(NAME)+"],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(), (r.returncode,r.stderr)"])
-        account=call('gate-account',['python3','-c',"import os; print('%d:%d'%(os.getuid(),os.getgid()))"]).strip()
+        call('query-name-exclusive',['python3','-c',"if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(NAME)+"],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(), (r.returncode,r.stderr)"])
+        account=call('gate-account',['python3','-c',"if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport os; print('%d:%d'%(os.getuid(),os.getgid()))"]).strip()
         assert account==APPROVED['driver_uid_gid']
-        create_gate="import pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
+        create_gate="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
         gate_creation=json.loads(call('gate-create-exclusive',['python3','-c',create_gate]))
         gate_identity=gate_creation['directory_identity']
         for n in NODES:
@@ -1267,7 +1270,7 @@ def main():
         try:
             target=driver_probe_target(cid,launch_attempted)
             if target is not None:
-                probe="import subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
+                probe="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
                 inspected=json.loads(call('driver-final-inspect',['python3','-c',probe]))
                 if inspected is not None:
                     assert isinstance(inspected,list) and len(inspected)==1

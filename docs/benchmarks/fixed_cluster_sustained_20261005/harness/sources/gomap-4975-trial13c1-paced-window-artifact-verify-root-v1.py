@@ -1,11 +1,11 @@
 """Artifact-only stdlib validator. Run only after root confirms collection and stop."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse, ast, base64, shlex, copy, datetime, calendar, hashlib, json, math, re, struct
 from pathlib import Path
 T=Path('/tmp')
 RUN='rf4trial13c1pacedc1v1'
 COLLECTOR=T/'gomap-4975-trial13c1-paced-window-collector-root-v1.py'
 PIN_PLAN=Path('/tmp/gomap-4975-trial13c1-paced-window-preparation-v1.json')
-if not __debug__:raise RuntimeError('ordinary Python required; transitive assertions must run')
 def sha(x):return hashlib.sha256(x).hexdigest()
 def load(p):return json.loads(p.read_bytes())
 def need(v,msg):
@@ -27,7 +27,7 @@ prep={};exec(compile(PREPARATION_HELPER.read_text(),str(PREPARATION_HELPER),'exe
 
 def oracle():
  p=T/'gomap-4975-trial13c1-paired-artifact-verify-root-v1.py'
- need(sha(p.read_bytes())=='1d4dcb61e8bbd08bc668ebe78c732433bdb05856051ffdde6bb142d8435191b0','accepted oracle helper pin')
+ need(sha(p.read_bytes())=='13116decf94494eab68139735d96b4eecb3255ff732c8e52fa75a7301e6e65dd','accepted oracle helper pin')
  need(sha((T/'gomap-4975-trial13c1-artifact-verify-root-v1.py').read_bytes())=='f09b92fd76bd9ca66c7b2ed4397b92d39d7b5d85e28dee604c2653c779c592c1','accepted write verifier pin')
  need(sha((T/'gomap-4975-trial13c1-exact-validate-root-v1.py').read_bytes())=='d370d16a86f199e4ef0722afb64bada80c50e48cc8b914697db614035bdf4f1e','accepted transitive executable exact verifier pin')
  code=p.read_text().split('# SSH/log/CID/mount/resource evidence')[0].replace('assert not O.exists()\n','')

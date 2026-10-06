@@ -1,4 +1,5 @@
 """Root-owned, source-verified Linux builds in the existing bounded envelope."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import hashlib, json, pathlib, shlex, subprocess, time
 
 import sys,re
@@ -54,10 +55,10 @@ def verify_source(source,inventory):
   assert blob==item['git_blob'],item['path']
   assert p.stat().st_mode&0o777==(0o755 if item['mode']=='100755' else 0o644),item['path']
 '''
-    prefix = 'import hashlib,json,os,pathlib,subprocess,sys\nROOT='+repr(REMOTE)+'\nSOURCE='+repr(SOURCE)+'\nHEAD='+repr(HEAD)+'\nTREE='+repr(TREE)+'\nBINDING_SHA='+repr(hashlib.sha256(REVIEW.read_bytes()).hexdigest())+'\n'+verify
+    prefix = 'if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,subprocess,sys\nROOT='+repr(REMOTE)+'\nSOURCE='+repr(SOURCE)+'\nHEAD='+repr(HEAD)+'\nTREE='+repr(TREE)+'\nBINDING_SHA='+repr(hashlib.sha256(REVIEW.read_bytes()).hexdigest())+'\n'+verify
     prepare = prefix+'''
 root=pathlib.Path(ROOT);assert not root.exists()
-for name,pin in {'/home/mikers/gomap-1242-bounded-runner-prepare.py':'e09a70a724a98292398cc3333c0d20359afd5c195520710feba4ec8f76d428f5','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/run.sh':'049de2818f6e4140c02936703c2b929e1f94d226e9ba818b3bb95c9e3d31b8c7','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/inner.sh':'0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98'}.items():
+for name,pin in {'/home/mikers/gomap-1242-bounded-runner-prepare.py':'0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/run.sh':'e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/inner.sh':'0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98'}.items():
  p=pathlib.Path(name);assert p.is_file() and not p.is_symlink() and p.stat().st_size<=256*1024
  assert hashlib.sha256(p.read_bytes()).hexdigest()==pin,name
 disk=os.statvfs('/home/mikers');assert disk.f_bavail*disk.f_frsize>=50*1024**3

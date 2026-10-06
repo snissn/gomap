@@ -1,4 +1,5 @@
 """Actual producer-schema compatibility controls; all receipts/tool outputs are synthetic."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 assert len(checks)==369
 build_raw=Path(d['build']['path']).read_bytes()
 images_raw=Path(d['images']['path']).read_bytes()

@@ -1,25 +1,25 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Inert Trial24 native-prefix transport constructor. No automatic execution/retry.
 --prepare writes a local packet and proposed ROOT-ONLY commands.
 --capture-file validates a root-retained capture; never promotes oracle authority.
 """
 import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
-if not __debug__: raise RuntimeError("ordinary Python required")
 sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="46051f60b8097e4767c79f9b4400e82f7117780e5162c3fc2a540d712f923b39"
+HELPER_SHA="74e151616159c41b566c8322490e9e02e9054dd2f0789dea66ae51c69603b940"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c"
+COLLECTOR_SHA="359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
 RUNNER="/home/mikers/gomap-1242-bounded-runner-prepare.py"
 TEMPLATE="/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1"
-RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"e09a70a724a98292398cc3333c0d20359afd5c195520710feba4ec8f76d428f5","run.sh":"049de2818f6e4140c02936703c2b929e1f94d226e9ba818b3bb95c9e3d31b8c7","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
+RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
 REMOTE="/home/mikers/gomap-4997-4998-trial24-oracle-root-v1"
 SOURCE="__ROOT_FROZEN_SOURCE_ROOT__"
 INVENTORY="__ROOT_FROZEN_INVENTORY_PATH__"
 INVENTORY_SHA="__ROOT_FROZEN_INVENTORY_SHA__"
 INVENTORY_ROWS="__ROOT_FROZEN_INVENTORY_ROWS__"
-RESOLVER_SHA='a795d5ad162dbf5c4ee4c9c33750ce1cf49b702d223171ea1241d0699a147130'
+RESOLVER_SHA='d0eb79bd5fe3816b5f62b77d4872033ad55bafb6cee035347e1825f5dc20c4c1'
 HEAD="__ROOT_FROZEN_HEAD__";TREE="__ROOT_FROZEN_TREE__"
 INPUT="/tmp/gomap-4997-4998-rf4trial24mixedchangingc1-inputs-root-v1"
 ARCHIVE=INPUT+".tar.gz"
@@ -76,7 +76,8 @@ def parse_go_json(raw):
     return len(events)
 
 # Executed only by root's separately retained SSH commands.
-REMOTE_COMMON=r'''import base64,gzip,hashlib,importlib.util,io,json,os,pathlib,re,subprocess,sys,tarfile
+REMOTE_COMMON=r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import base64,gzip,hashlib,importlib.util,io,json,os,pathlib,re,subprocess,sys,tarfile
 def need(ok,why):
  if not ok:raise ValueError(why)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -202,7 +203,7 @@ print(json.dumps(out))
 '''
 def remote_program(body,input_sha):
     constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
-    return "\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+inspect.getsource(isolate_paths)+"\n"+body
+    return "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\n"+"\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+inspect.getsource(isolate_paths)+"\n"+body
 def inventory_identity(inv):
     need(type(INVENTORY_ROWS) is int and INVENTORY_ROWS>0 and inv["head"]==HEAD and inv["tree"]==TREE and isinstance(inv["rows"],list) and len(inv["rows"])==INVENTORY_ROWS and inv["overlays"]=={},"exact source inventory")
 def transport_argv(program):return SSH+[shlex.join(["python3","-B","-c",program])]

@@ -1,4 +1,5 @@
 """Bounded synthetic source construction checks. No transport or ranking."""
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse,ast,base64,copy,difflib,hashlib,importlib.util,json,math,re,struct,subprocess,sys,tarfile,uuid
 from pathlib import Path
 sys.dont_write_bytecode=True
@@ -161,7 +162,7 @@ f=next(v for v in a.body if isinstance(v,ast.FunctionDef) and v.name=='main')
 assign={v.targets[0].id:v.value for v in f.body if isinstance(v,ast.Assign) and isinstance(v.targets[0],ast.Name)}
 verify=ast.literal_eval(assign['verify'])
 for name in ('prepare','run','finish','capture'):
- ast.parse('import hashlib,json,os,pathlib,subprocess,sys\n'+verify+ast.literal_eval(assign[name].right))
+ ast.parse('if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,subprocess,sys\n'+verify+ast.literal_eval(assign[name].right))
 checks.append('actual_all4_assembled_build_remote_programs_AST_before_transport')
 
 # Existing receipt schema, using synthetic-only bytes and the real validator.
@@ -226,7 +227,8 @@ assert sha((out/receipt['source_path_resolver']['path']).read_bytes())==receipt[
 checks.append('actual_source_only_instantiation_exit0_all15_AST_bound_rows_and_transitive_pins')
 # Fresh interpreter imports every emitted role with external process execution
 # prohibited and every historical source path refused before file access.
-import_program=r"""
+import_program=r"""if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+
 import importlib.util,json,pathlib,subprocess,sys
 sys.dont_write_bytecode=True
 out=pathlib.Path(sys.argv[1]);sys.path.insert(0,str(out))
@@ -431,7 +433,7 @@ sites['native_remote']=next(n for n in remote_ast.body if isinstance(n,ast.Expr)
 sites['post_sealer']=guard_statement(post_source,'main')
 artifact=fixtures/'trial24-isolated-artifacts';artifact.mkdir()
 pin_fixture=fixture('writer-owned-pin',{'synthetic_only':True})
-context={'source_worktree':str(protected),'dataset':str(inputs),'build':pin_fixture['path'],'images':pin_fixture['path'],'source_acceptance':pin_fixture['path'],'credential_provenance':pin_fixture['path'],'configs':{}}
+context={'source_worktree':str(protected),'dataset':str(inputs),'build':pin_fixture['path'],'images':pin_fixture['path'],'source_acceptance':d['source_prereview']['path'],'credential_provenance':pin_fixture['path'],'configs':{}}
 writer_receipts=[]
 writes={}
 for site in sites:
@@ -458,7 +460,7 @@ for site,node in sites.items():
   # Native remote protects SOURCE and retained runner/template sources. Frozen
   # inputs are only created under its new root, so no external input root exists.
   if site=='native_remote' and kind in ('input_pollution','packet_descendant'):continue
-  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path'],'image_receipt':pin_fixture['path'],'source_acceptance':pin_fixture['path']},'product_paths':{'build':pin_fixture['path'],'product':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
+  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path'],'image_receipt':pin_fixture['path'],'source_acceptance':d['source_prereview']['path']},'product_paths':{'build':pin_fixture['path'],'product':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
   # Prefix accepts its intentional source symlink as a read root.
   if site=='oracle_helper':
    ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path']);ns['COLLECTOR']=portable_sources['collector']
@@ -566,5 +568,33 @@ exec(compile((R/'elf_schema_checks.py').read_bytes(),str(R/'elf_schema_checks.py
 assert len(checks)==442
 exec(compile((R/'visibility48_checks.py').read_bytes(),str(R/'visibility48_checks.py'),'exec'))
 visibility_controls()
+
+assert len(checks)==447
+identity_cases=[]
+def identity_acceptance(label,left,right):
+ refs=[]
+ for i,identity in enumerate((left,right)):
+  obj={'synthetic_only':True,'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree,'findings':[],'timestamp':'synthetic-'+str(i)}
+  if identity!='MISSING':obj['reviewer']=identity
+  path=fixtures/('identity-'+label+'-'+str(i)+'.json')
+  raw=json.dumps(obj,indent=(2 if i else None)).encode();path.write_bytes(raw)
+  refs.append({'path':str(path),'sha256':sha(raw)})
+ obj=copy.deepcopy(objects['source_prereview']);obj['underlying_reviews']=refs
+ return obj
+for label,identity in [('missing','MISSING'),('null',None),('empty',''),('space',' '),('leading',' reviewer'),('trailing','reviewer '),('internal','review er'),('bool',True),('integer',1),('list',[]),('object',{}),('overlong','a'*161),('malformed','../reviewer')]:
+ obj=identity_acceptance(label,'synthetic-independent-0',identity)
+ bad('identity_actual_acceptance_rejects_'+label,lambda obj=obj:x.product_acceptance(obj,head,tree,objects['source_inventory']))
+ bad('identity_actual_bootstrap_rejects_'+label,lambda obj=obj:bp.review_paths(obj))
+ identity_cases.append({'case':label,'both_actual_validators_rejected':True})
+for label,left,right in [('same_format_timestamp','same-reviewer','same-reviewer'),('same_case','SAME-REVIEWER','same-reviewer'),('verified_bot_alias','chatgpt-codex-connector','chatgpt-codex-connector[bot]')]:
+ obj=identity_acceptance(label,left,right)
+ assert obj['underlying_reviews'][0]['sha256']!=obj['underlying_reviews'][1]['sha256']
+ bad('identity_actual_acceptance_rejects_'+label,lambda obj=obj:x.product_acceptance(obj,head,tree,objects['source_inventory']))
+ bad('identity_actual_bootstrap_rejects_'+label,lambda obj=obj:bp.review_paths(obj))
+ identity_cases.append({'case':label,'distinct_raw_SHA':True,'both_actual_validators_rejected':True})
+obj=identity_acceptance('real_identity_shape_synthetic_only','chatgpt-codex-connector[bot]','/root/sustained_receipt_closure_review')
+x.product_acceptance(obj,head,tree,objects['source_inventory']);bp.review_paths(obj)
+checks.append('identity_two_actual_distinct_author_spellings_synthetic_receipts_positive')
+(fixtures/'reviewer-identity-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_VALIDATOR_CHECKS_ONLY','cases':identity_cases,'runtime_started':False,'acceptance_granted':False},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

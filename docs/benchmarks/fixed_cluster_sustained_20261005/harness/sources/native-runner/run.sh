@@ -12,6 +12,7 @@ test "$available" -ge 16777216
 test "$free" -ge 53687091200
 printf '%s  %s\n' 61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57 /home/mikers/gomap-q5-evidence/toolchains/go1.26.0-linux-amd64/bin/go | sha256sum -c - > receipts/toolchain-check.log
 python3 - <<'PROCS'
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import pathlib
 bad=[]
 for p in pathlib.Path('/proc').iterdir():

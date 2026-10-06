@@ -1,4 +1,5 @@
 # Fail closed before any subprocess, SSH, or artifact-directory creation.
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import hashlib,json,pathlib
 ADMISSION_PATH = '/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/growth-admission-root-v2.json'
 ADMISSION_SHA256 = '3f3202dc7260b4d4676f020e1d1066c238128fab16585174d6d3c2a760cd7872'

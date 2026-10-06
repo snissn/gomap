@@ -1,3 +1,4 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path
 """Pure bounded resource/gate/ownership accounting; never whole-campaign acceptance.
 No subprocess/network calls. Historical top-level is never imported/executed.
@@ -7,13 +8,12 @@ requires retained raw evidence, not a collector status as authority.
 import ast, base64, copy, datetime, hashlib, importlib.util, json, math, re, shlex, sys
 from pathlib import Path
 sys.dont_write_bytecode=True
-if not __debug__: raise RuntimeError('ordinary Python required')
 CORE=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
-CORE_SHA='0182750a8662e3beed1748527f1c24549470bfa275852877f7408233883412a6'
+CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
-OLD_SHA='fac3df4155d560cf8e1ae283195f84b58c6f479b984fb7777302a97c4c8fee9d'
+OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='37b115cf4c07e00a56453d55938fc0dfcf98200b2858b427d2b5e09af601b90c'
+COLLECTOR_SHA='359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c'
 RUN='rf4trial24mixedchangingc1'; QUERY_RUN=RUN+'mixedc1v1'
 C=Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN
@@ -287,7 +287,7 @@ def verifier(a,p,r,ptext,text,states,*,permission_path,permission_sha256,collect
      v=t['fields'][field];lo,hi=(0,0) if s['host']=='192.168.0.185' else (dlo-s['clock_offset_high'],dhi-s['clock_offset_low'])
      entries.append((v['started_unix']+lo,v['finished_unix']+hi,i))
    expected=enclosing(entries,start,end);need(all(z['fields'][field][k]==v for k,v in expected.items()),'independent enclosing bracket '+role+'/'+field)
- create_gate="import pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
+ create_gate="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport pathlib,json,os; p=pathlib.Path("+repr(GATE)+"); p.mkdir(mode=0o700); q=p/'gate'; q.mkdir(mode=0o700); st=os.lstat(q); assert not list(q.iterdir()); print(json.dumps({'path':str(q),'directory_identity':[st.st_dev,st.st_ino]}))"
  _,created=one('gate-create-exclusive',['python3','-c',create_gate],host='192.168.0.185')
  identity=strict(created['stdout'])['directory_identity'];need(len(identity)==2 and all(type(v)is int and v>0 for v in identity),'actual created gate device/inode')
  gp=gate(C,r,samples,ssh,driver,a)

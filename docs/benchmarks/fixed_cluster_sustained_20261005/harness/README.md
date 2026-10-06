@@ -210,3 +210,7 @@ The checker requires --fixtures-root with an absolute destination outside the
 source packet. Missing arguments and resolved path overlap (including parent
 aliases) fail before fixture creation. Use a fresh owned external directory;
 the checker has no in-tree fixture fallback.
+
+Every owned Python module and emitted Python transport program refuses optimized Python with an explicit non-assert guard before imports or input processing. Use ordinary Python; -O, -OO and PYTHONOPTIMIZE are inadmissible. Assertion-based ordinary-mode validation remains required.
+
+Underlying raw reviews require a bounded nonempty canonical reviewer string, distinct case-insensitive reviewer authorities as well as distinct receipt hashes. Whitespace and malformed identities are rejected. The verified GitHub user 199175422 has REST spelling chatgpt-codex-connector[bot] and GraphQL spelling chatgpt-codex-connector; these are one authority. Other bot suffixes are preserved. Agent paths identify the retained reviewer within this execution tree. Strings alone do not authenticate authors: root must retain actual author provenance and reviewed-source applicability. Original review bytes, identities and hashes remain immutable. Bootstrap applies the same identity rule and protects newly read underlying receipts before output creation.

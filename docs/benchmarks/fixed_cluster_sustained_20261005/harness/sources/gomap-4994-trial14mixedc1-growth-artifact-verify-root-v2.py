@@ -1,10 +1,11 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import base64,collections,copy,hashlib,json,math,struct,tarfile
 from pathlib import Path
 V=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1');T=Path('/tmp');P=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/growth-query-root-v2');L=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/growth-lifecycle-root-v2');B=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/bootstrap-root-v1');I=Path('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1/pre-inputs-root-v1')
 def sha(x):return hashlib.sha256(x).hexdigest()
 def load(p):return json.loads(p.read_bytes())
 # Reuse the already reviewed exact-plan assertions without its output mutation.
-assert sha((T/'gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py').read_bytes())=='d9cd3dfbbbc76badf18e77740fb7d0763d66be03b1324402b56f24c4ea136af6'
+assert sha((T/'gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py').read_bytes())=='f9df841baf352b2fdab599297f199db5cf5ece632748a4009ee546c3e1cb2bb0'
 code=(T/'gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py').read_text().split("proof={'status'")[0].replace("gomap-4994-rf4trial14mixedc1-growth-query-root-v2","gomap-4994-rf4trial14mixedc1-growth-query-root-v2")
 exec(compile(code,'retained-exact-plan-assertions','exec'))
 assert r['RunID']==plan['RunID']=='rf4trial14mixedc1query01'
@@ -34,8 +35,8 @@ for k in ['plan','bootstrap-qualify','node-c-config']:
  key={'plan':'plan_sha256','bootstrap-qualify':'bootstrap_sha256','node-c-config':'config_sha256'}[k]
  assert sha((P/(k+'.json')).read_bytes())==a[key]
 assert (P/'plan.json').read_bytes()==(B/'plan.json').read_bytes()
-assert sha((T/'gomap-4994-trial14mixedc1-growth-query-root-v2.py').read_bytes())=='9cf5cfd4012da653780c32ec8eacde075a6979ffd14b31c6f8df4db4590717f4'
-assert sha((T/'gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py').read_bytes())=='36deaea97ae5f61a01709cb05c43c99bceded843cda23cb3adb1e50a6cb84440'
+assert sha((T/'gomap-4994-trial14mixedc1-growth-query-root-v2.py').read_bytes())=='fd6025b6a46f9cb64d150f4a239bd5ba6c101361a1bbce31c0464810c588d0ed'
+assert sha((T/'gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py').read_bytes())=='51309dd305a2bf817215c7a83219f74d36d9ebbe150e7e06425c3b05aeda0286'
 import runpy
 _gate=runpy.run_path('/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py')
 APPROVED=_gate['admit']()

@@ -1,9 +1,10 @@
+if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """One fresh canonical-score C1 bootstrap; close only its recorded voter CIDs, never retry writes."""
 import hashlib,json,pathlib,re,shlex,subprocess,time
 CAMPAIGN='rf4trial24mixedchangingc1'
 IMAGES=None
-PLAN_SHA='d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403'
+PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
 
 def owned(x,node,cid):
  assert x['Id']==cid and x['Name']=='/treedb-4250-'+CAMPAIGN+'-'+node
@@ -35,7 +36,7 @@ def main():
  ROOT=pathlib.Path(args.out);OUTPUT=pathlib.Path(a['artifact_volume'])/'bootstrap-root-v1'
  assert ROOT.is_absolute() and ROOT.name.startswith(pm.PREFIX+'-bootstrap-lifecycle-root-v') and not ROOT.exists() and not OUTPUT.exists()
  isolate_paths([ROOT,OUTPUT],pm.protected_inputs(a,args.pins)+[args.plan,args.preflight])
- launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert hashlib.sha256(launcher.read_bytes()).hexdigest()=='21c3f9204489ae7179341772b4b856de2b9280acacfbe5ad4deea52da9750616'
+ launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert hashlib.sha256(launcher.read_bytes()).hexdigest()=='f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605'
  pre=pathlib.Path(args.preflight)/'proof.json';proofraw=pm.read(pre,args.preflight_sha256);proof=json.loads(proofraw);assert proof['state']=='FRESH_BOOTSTRAP_PRECOLLECTION_SOURCE_AND_INFRASTRUCTURE_ACCEPTED'
  manifest=pathlib.Path(args.plan)/'manifest.json';assert hashlib.sha256(manifest.read_bytes()).hexdigest()==proof['manifest_sha256']
  plan=pathlib.Path(args.plan)/'plan-preparation.json';assert hashlib.sha256(plan.read_bytes()).hexdigest()==proof['plan_preparation_sha256']
