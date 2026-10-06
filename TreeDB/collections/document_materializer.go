@@ -593,7 +593,7 @@ func (v *CollectionReadView) assetCounters() documentMaterializerAssetCounters {
 		out.servingBorrows += stats.ServingBorrows
 	}
 	if v.assetManager != nil {
-		out.activeHandles = v.assetManager.Stats().ActiveHandles
+		out.activeHandles = v.assetManager.ActiveHandles()
 	}
 	return out
 }

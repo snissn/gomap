@@ -2813,7 +2813,7 @@ func (c *columnPhysicalAssetReadCache) lifecycleStats() columnPhysicalAssetReadC
 		ServingBorrows:  c.servingBorrows,
 	}
 	if c.resourceManager != nil {
-		stats.ActiveHandles = c.resourceManager.Stats().ActiveHandles
+		stats.ActiveHandles = c.resourceManager.ActiveHandles()
 	}
 	return stats
 }

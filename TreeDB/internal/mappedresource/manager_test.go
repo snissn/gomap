@@ -160,6 +160,81 @@ func TestMappedResourceStatsSnapshotIsDeepCopy(t *testing.T) {
 	}
 }
 
+func TestActiveHandlesGaugeDoesNotCopyDiagnosticMaps(t *testing.T) {
+	var absent *Manager
+	if absent.ActiveHandles() != 0 {
+		t.Fatal("nil manager has active handles")
+	}
+	mgr := NewManager()
+	h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{
+		ValidationMode: ValidationCachedVerify,
+		FallbackReason: FallbackReadAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Release()
+	badKey := testKey()
+	badKey.FileID = 0
+	if _, err := mgr.AcquireBytes(badKey, testScope(), SourceHeapCopy, nil, AcquireOptions{}); err == nil {
+		t.Fatal("invalid acquisition succeeded")
+	}
+	if got := mgr.ActiveHandles(); got != 1 || got != mgr.Stats().ActiveHandles {
+		t.Fatalf("active handles=%d want one and agreement with full snapshot", got)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _ = mgr.ActiveHandles() }); allocs != 0 {
+		t.Fatalf("scalar gauge copied diagnostic maps: allocs=%v", allocs)
+	}
+	if err := h.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.ActiveHandles(); got != 0 || got != mgr.Stats().ActiveHandles {
+		t.Fatalf("released active handles=%d want zero", got)
+	}
+}
+
+func TestActiveHandlesConcurrentAcquisitionAndRelease(t *testing.T) {
+	mgr := NewManager()
+	const workers, iterations = 4, 100
+	start, done := make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := h.Release(); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	go func() { wg.Wait(); close(done) }()
+	close(start)
+	for {
+		if got := mgr.ActiveHandles(); got < 0 || got > workers {
+			t.Errorf("active handles=%d outside concurrent live-handle bound", got)
+		}
+		select {
+		case <-done:
+			stats := mgr.Stats()
+			if mgr.ActiveHandles() != 0 || stats.ActiveHandles != 0 || stats.TotalAcquires != workers*iterations || stats.TotalReleases != workers*iterations {
+				t.Fatalf("final accounting mismatch: %+v", stats)
+			}
+			return
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
 func TestReleaseMismatchDoesNotCorruptActiveAccounting(t *testing.T) {
 	mgr := NewManager()
 	h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{Reason: "unit"})
