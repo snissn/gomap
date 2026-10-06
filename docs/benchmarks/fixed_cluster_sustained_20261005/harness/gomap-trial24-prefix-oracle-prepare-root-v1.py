@@ -8,7 +8,7 @@ runs the proposed command separately. Native output is pending root acceptance.
 """
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='39f7025a63db628a3e6c3420b3685258ad68e8695afdae02ab1d1d614680ada2'
+COLLECTOR_SHA='7ba177dd3b64ee37ecbaf6f92f80d76efe4c931ac8cf9b5123dbbb3910d361df'
 GO_SOURCE=r'''package main
 
 import (

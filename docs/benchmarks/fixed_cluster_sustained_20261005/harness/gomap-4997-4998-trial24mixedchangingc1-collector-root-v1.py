@@ -260,10 +260,42 @@ def validate_mixed_report(planned, report):
     return c
 
 
-def call(label, args, timeout=30, host=HOST, input_bytes=None):
+def driver_final_probe(target):
+    assert target==NAME or digest_valid(target)
+    return "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
+
+
+def closure_command(label,args,host,probe_target=None):
+    # Only the existing ownership/stop/evidence transports may outlive the
+    # phase. In particular docker exec and resource sampling never qualify.
+    if label=='gate-final-snapshot':
+        return host==HOST and args==['python3','-c',GATE_SNAPSHOT,GATE_DIR] and probe_target is None
+    if label=='driver-final-inspect':
+        return host==HOST and probe_target is not None and args==['python3','-c',driver_final_probe(probe_target)]
+    if probe_target is not None:return False
+    if host==HOST and len(args)>=3 and digest_valid(args[-1]):
+        expected={'driver-failstop':['docker','stop','--time','10',args[-1]],
+                  'driver-stopped':['docker','inspect',args[-1]],
+                  'driver-logs':['docker','logs',args[-1]]}
+        if label in expected:return args==expected[label]
+    for n in NODES:
+        if host!='mikers@'+n['host']:continue
+        if label in ('stop-inspect-'+n['node'],'final-'+n['node']):
+            return args==['docker','inspect',n['cid']]
+        if label=='stop-'+n['node']:
+            return args==['docker','stop','--time','30',n['cid']]
+    return False
+
+
+def call(label, args, timeout=30, host=HOST, input_bytes=None, *, closure=False, probe_target=None):
     global serial, last_record
     serial += 1
-    if not phase_cleanup:timeout=phase_timeout(phase_budget,timeout)
+    assert type(closure) is bool
+    if closure:
+        assert input_bytes is None and closure_command(label,args,host,probe_target), 'not a bounded ownership/stop/evidence command'
+    else:
+        assert probe_target is None
+        timeout=phase_timeout(phase_budget,timeout)
     if deadline is not None:
         remaining=deadline-time.monotonic()
         if remaining<=0:raise TimeoutError("collector deadline; no retry")
@@ -608,8 +640,8 @@ def prepare_local(a):
     return pinned,inv,nodes,vectors
 
 
-def inspect_voter(n,label):
-    x=json.loads(call(label,['docker','inspect',n['cid']],host='mikers@'+n['host']))
+def inspect_voter(n,label,*,closure=False):
+    x=json.loads(call(label,['docker','inspect',n['cid']],host='mikers@'+n['host'],closure=closure))
     assert isinstance(x,list) and len(x)==1
     return validate_voter(x[0],n)
 
@@ -1048,7 +1080,6 @@ def phase_timeout(budget,timeout,first_permission=False):
 
 
 phase_budget=None  # Fresh campaigns retain their original admission contract.
-phase_cleanup=False
 
 
 def validate_bootstrap_prefix(bootstrap, highest):
@@ -1337,7 +1368,7 @@ def self_check():
 
 def main():
     global APPROVED,root,image,NODES,serial,last_record,deadline,paths
-    global phase_budget,phase_cleanup
+    global phase_budget
     global gate_expected,gate_identity,gate_nonce,boundary_evidence,samples,launch_nonce,initial_vectors,prefix_oracles
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--approved')
@@ -1354,7 +1385,6 @@ def main():
     APPROVED=validate_manifest(strict_json(approved_bytes),hashlib.sha256(source).hexdigest())
     pinned,inv,NODES,initial_vectors=prepare_local(APPROVED)  # ALL local pins before any SSH/process
     phase_budget=checkpoint_budget(APPROVED,pinned)
-    phase_cleanup=False
     prefix_oracles=strict_json(pinned[APPROVED['receipts']['prefix_oracles']])
     assert not OUTPUT.exists(), 'consumed campaign output must never be reused'
     isolate_paths([OUTPUT],[LOCAL_INPUT_ROOT,pathlib.Path(__file__).resolve().parent,cli.approved]+list(pinned))
@@ -1454,9 +1484,8 @@ def main():
         errors.append(repr(e))
     finally:
         deadline=None  # independent bounded cleanup, no workload retry
-        phase_cleanup=True  # Phase exhaustion never blocks owned stop/inspect/retention.
         try:
-            snapshot=json.loads(call('gate-final-snapshot',['python3','-c',GATE_SNAPSHOT,GATE_DIR]))
+            snapshot=json.loads(call('gate-final-snapshot',['python3','-c',GATE_SNAPSHOT,GATE_DIR],closure=True))
             json_file('gate-final-snapshot.json',snapshot)
             for name,value in snapshot.get('tokens',{}).items():
                 if 'raw_b64' in value:
@@ -1466,17 +1495,16 @@ def main():
         try:
             target=driver_probe_target(cid,launch_attempted)
             if target is not None:
-                probe="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
-                inspected=json.loads(call('driver-final-inspect',['python3','-c',probe]))
+                inspected=json.loads(call('driver-final-inspect',['python3','-c',driver_final_probe(target)],closure=True,probe_target=target))
                 if inspected is not None:
                     assert isinstance(inspected,list) and len(inspected)==1
                     final=inspected[0];owned(final,cid)
                     cid=final['Id']  # pin recovered exact CID only after full nonce/ownership proof
                     if final['State']['Running']:
-                        call('driver-failstop',['docker','stop','--time','10',final['Id']])
-                    final=json.loads(call('driver-stopped',['docker','inspect',final['Id']]))[0];owned(final,cid)
+                        call('driver-failstop',['docker','stop','--time','10',final['Id']],closure=True)
+                    final=json.loads(call('driver-stopped',['docker','inspect',final['Id']],closure=True))[0];owned(final,cid)
                     assert not final['State']['Running']
-                    stdout=call('driver-logs',['docker','logs',final['Id']])
+                    stdout=call('driver-logs',['docker','logs',final['Id']],closure=True)
                     (OUTPUT/'stdout.jsonl').write_bytes(stdout.encode('utf-8',errors='surrogateescape'))
                     (OUTPUT/'stderr.log').write_bytes(last_record['stderr'].encode('utf-8',errors='surrogateescape'))
                     batch=sample_all(final['Id']);samples.extend(batch)
@@ -1521,10 +1549,10 @@ def main():
         stop_receipts=[]
         for n in NODES:
             try:
-                x=inspect_voter(n,'stop-inspect-'+n['node'])
+                x=inspect_voter(n,'stop-inspect-'+n['node'],closure=True)
                 if x['State']['Running']:
-                    call('stop-'+n['node'],['docker','stop','--time','30',n['cid']],host='mikers@'+n['host'],timeout=45)
-                x=inspect_voter(n,'final-'+n['node'])
+                    call('stop-'+n['node'],['docker','stop','--time','30',n['cid']],host='mikers@'+n['host'],timeout=45,closure=True)
+                x=inspect_voter(n,'final-'+n['node'],closure=True)
                 assert not x['State']['Running'] and x['State']['ExitCode']==0
                 stop_receipts.append({'node':n['node'],'cid':n['cid'],'observed_unix':time.time(),'inspect':x})
             except BaseException as e:

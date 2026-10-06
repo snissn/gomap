@@ -362,8 +362,12 @@ an existing local collector output before creating outputs. Remote path checks
 do not claim to observe the local evidence filesystem. These are root operator observations, not a global
 lock. Fresh resources, TLS, ownership and exclusivity remain root admission.
 Already-owned permission wait/inspect/logs and bounded final stop/inspect bypass
-phase exhaustion, as does the collector's existing finally closure. No new
-launch may bypass the budget. The collector still inspects the same four CIDs and performs its full live
+phase exhaustion. The collector explicitly admits only its exact gate snapshot,
+driver ownership inspection, owned stop/inspection/log retrieval, and manifest
+voter stop/inspection commands after exhaustion. Final resource sampling and
+population diagnostics still require remaining phase time; refusal is retained
+as a failed consumed window and still reaches every bounded owned voter stop.
+No new launch may bypass the budget. The collector still inspects the same four CIDs and performs its full live
 initial population audit before the sole window launch.
 
 New inactive manifest locator ends

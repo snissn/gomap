@@ -106,14 +106,16 @@ def checkpoint_controls():
  try:c.phase_timeout(expired,45)
  except AssertionError:checks.append('checkpoint_expired_budget_refuses_new_dispatch')
  else:raise AssertionError('expired phase admitted')
- # Actual finally cannot apply phase admission to bounded cleanup commands.
+ # Actual finally opts in only the bounded ownership/stop/evidence calls.
  main=next(n for n in ast.parse(Path(c.__file__).read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
- final=next(n for n in ast.walk(main) if isinstance(n,ast.Try) and any(isinstance(v,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='phase_cleanup' for t in v.targets) for v in n.finalbody))
- assert ast.literal_eval(next(v.value for v in final.finalbody if isinstance(v,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='phase_cleanup' for t in v.targets))) is True
+ final=next(n for n in main.body if isinstance(n,ast.Try) and n.finalbody)
+ assert 'phase_cleanup' not in Path(c.__file__).read_text()
+ final_calls=[v for v in ast.walk(ast.Module(body=final.finalbody,type_ignores=[])) if isinstance(v,ast.Call) and isinstance(v.func,ast.Name) and v.func.id=='call']
+ assert final_calls and all(any(k.arg=='closure' and isinstance(k.value,ast.Constant) and k.value.value is True for k in v.keywords) for v in final_calls)
  checks.append('checkpoint_actual_finally_preserves_bounded_cleanup')
  saved_run=subprocess.run
  calls=[];cleanup=root/'synthetic-cleanup-ledger';cleanup.mkdir()
- c.OUTPUT=cleanup;c.serial=0;c.deadline=None;c.phase_budget=expired;c.phase_cleanup=False
+ c.OUTPUT=cleanup;c.serial=0;c.deadline=None;c.phase_budget=expired
  def no_transport(argv,**kwargs):calls.append(argv);return SimpleNamespace(returncode=0,stdout=b'synthetic-cleanup-only',stderr=b'')
  subprocess.run=no_transport
  try:
@@ -121,10 +123,10 @@ def checkpoint_controls():
   except AssertionError:pass
   else:raise AssertionError('expired dispatch did not refuse')
   assert calls==[] and list(cleanup.iterdir())==[];checks.append('checkpoint_actual_expired_call_refuses_before_transport_or_writes')
-  c.phase_cleanup=True;assert c.call('cleanup-inspect',['synthetic-no-execution'])=='synthetic-cleanup-only'
+  assert c.call('driver-stopped',['docker','inspect','a'*64],closure=True)=='synthetic-cleanup-only'
   assert len(calls)==1 and len(list(cleanup.iterdir()))==3;checks.append('checkpoint_actual_exhausted_cleanup_retains_bounded_inspect')
  finally:
-  subprocess.run=saved_run;c.phase_budget=None;c.phase_cleanup=False;c.OUTPUT=Path(c.W.output)
+  subprocess.run=saved_run;c.phase_budget=None;c.OUTPUT=Path(c.W.output)
  argv=p.isolated_arguments(c,a,'a'*32);name=c.NAME+'-'+c.CHECKPOINT_PHASE+'-isolated-permission'
  assert argv[argv.index('--name')+1]==name and len([v for v in argv if v=='-v'])==4
  assert argv[argv.index('-run-id')+1]==c.QUERY_RUN and argv[argv.index('-read-window')+1]=='60s'
@@ -279,5 +281,68 @@ def checkpoint_controls():
   assert result.returncode!=0 and b'ordinary Python required' in result.stderr
   checks.append('checkpoint_actual_canonical_observer_optimized_'+flag+'_refusal_before_inspect')
  (root/'canonical-unused-producer-controls.json').write_text(json.dumps(dict(state='SOURCE_ONLY_STUBBED_DOCKER_NOT_ADMISSION',producer_calls=producer_calls,network_calls=0),indent=2)+'\n')
+
+ # Execute the actual main finally with only the external transport stubbed.
+ # Expired diagnostics must not prevent bounded ownership, stops or raw logs.
+ for case in ('resource_expired','audit_expired','foreign_driver'):
+  cc=load(R/m['roles']['collector']['output']['path'],'checkpoint_finally_'+case)
+  folder=root/('actual-finally-'+case);folder.mkdir()
+  cc.OUTPUT=folder;cc.serial=0;cc.last_record=None;cc.deadline=None
+  cc.phase_budget=expired;cc.NODES=[dict(n,name='synthetic-owned-'+n['node']) for n in a['nodes']]
+  cc.APPROVED=a;cc.root=cc.ROOT;cc.image=a['query_image'];cc.launch_nonce='b'*32
+  driver='e'*64;running={n['cid']:True for n in cc.NODES};running[driver]=True
+  commands=[]
+  def inspection(cid):
+   is_driver=cid==driver
+   n=None if is_driver else next(v for v in cc.NODES if v['cid']==cid)
+   binds={cc.root+'/node-c/config.json:/config.json:ro',cc.root+'/node-c/credentials:/credentials:ro',cc.root+'/bootstrap-qualify.json:/bootstrap.json:ro',cc.INPUT_ROOT+':/recall:ro',cc.GATE_DIR+':'+cc.MOUNT_GATE+':rw'} if is_driver else cc.expected_binds(n)
+   return dict(Id=('f'*64 if case=='foreign_driver' and is_driver else cid),Image=cc.image if is_driver else n['image'],Name='/'+(cc.NAME if is_driver else n['name']),Config={'User':a['driver_uid_gid'],'Labels':{'treedb.fixed-cluster.run':cc.RUN,'treedb.fixed-cluster.invocation':cc.launch_nonce}},HostConfig={'Memory':2147483648,'MemorySwap':2147483648,'NanoCpus':2000000000,'RestartPolicy':{'Name':'no'},'NetworkMode':'host','Binds':sorted(binds)},State={'Running':running[cid],'ExitCode':0,'OOMKilled':False})
+  report=dict(Writes=[],Prefixes=[dict(PopulationRows=10002,PopulationSHA256='a'*64)],RequiredAppliedIndex=10,AuditPlan={})
+  logs='\n'.join(json.dumps(dict(Event=e,Report=report)) for e in ('planned','result'))+'\n'
+  def closure_transport(command,**kwargs):
+   args=__import__('shlex').split(command[-1]);commands.append(dict(argv=command,timeout=kwargs['timeout']))
+   assert kwargs['timeout']<=45
+   if args[:2]==['docker','stop']:running[args[-1]]=False;stdout=args[-1]
+   elif args[:2]==['docker','inspect']:stdout=json.dumps([inspection(args[-1])])
+   elif args[:2]==['docker','logs']:stdout=logs
+   elif args==['python3','-c',cc.GATE_SNAPSHOT,cc.GATE_DIR]:stdout=json.dumps({'tokens':{}})
+   elif args==['python3','-c',cc.driver_final_probe(driver)]:stdout=json.dumps([inspection(driver)])
+   else:raise AssertionError('unexpected final diagnostic/resource transport: '+repr(args))
+   return SimpleNamespace(returncode=0,stdout=stdout.encode(),stderr=b'')
+  cc.subprocess=SimpleNamespace(run=closure_transport,TimeoutExpired=subprocess.TimeoutExpired)
+  cc.__dict__.update(cid=driver,launch_attempted=True,final=None,stdout='',errors=[],outcomes=None,samples=[],initial_vectors={},workload_passed=False,resource_complete=False,audits_before_stop=False,final_population_passed=False)
+  if case=='audit_expired':
+   # This represents expiry after the final resource sample, before its audit.
+   def sampled_then_expired(*args,**kwargs):cc.phase_budget=expired;return []
+   cc.sample_all=sampled_then_expired;cc.validate_mixed_report=lambda *args:{}
+   cc.apply_originals=lambda *args:{};cc.audit_originals=lambda *args:[]
+   cc.population_identity=lambda *args:{'Rows':10002,'SHA256':'a'*64}
+   cc.population_plan=lambda *args:{'Writes':[]}
+  body=ast.Module(body=copy.deepcopy(final.finalbody),type_ignores=[])
+  exec(compile(ast.fix_missing_locations(body),'actual-collector-finally','exec'),cc.__dict__)
+  dispatched=[__import__('shlex').split(v['argv'][-1]) for v in commands]
+  assert not any(v[:2]==['docker','exec'] or len(v)>2 and v[2]==cc.SAMPLER for v in dispatched)
+  assert all(not running[n['cid']] for n in cc.NODES)
+  assert len(json.loads((folder/'voter-stop-receipts.json').read_bytes()))==4
+  assert cc.errors and not cc.final_population_passed and not cc.audits_before_stop and not cc.workload_passed
+  if case=='foreign_driver':assert running[driver] and not (folder/'stdout.jsonl').exists()
+  else:assert not running[driver] and (folder/'stdout.jsonl').read_text()==logs
+  (folder/'control-result.json').write_text(json.dumps(dict(state='ACTUAL_FINALLY_TRANSPORT_STUB_NOT_ACCEPTANCE',case=case,commands=commands,errors=cc.errors,all_four_owned_stopped=True,network_calls=0),indent=2)+'\n')
+  checks.append('checkpoint_actual_finally_expiry_preserves_closure_'+case)
+ c.OUTPUT=root/'actual-transport-boundary';c.OUTPUT.mkdir();c.serial=0;c.deadline=None;c.NODES=a['nodes'];c.phase_budget=expired
+ commands=[]
+ def bounded_transport(command,**kwargs):commands.append(dict(argv=command,timeout=kwargs['timeout']));return SimpleNamespace(returncode=0,stdout=b'synthetic-only',stderr=b'')
+ saved=c.subprocess.run;c.subprocess.run=bounded_transport
+ try:
+  for label,args,kwargs in [('final-population-node-a',['docker','exec','-i',a['nodes'][0]['cid'],'/server','-mode','diagnostics'],{}),('samples-192.168.0.111',['python3','-c',c.SAMPLER,'[]','[]'],{}),('driver-logs',['docker','exec','-i','a'*64,'/server'],{'closure':True}),('driver-final-inspect',['python3','-c','synthetic-no-execution'],{'closure':True,'probe_target':'a'*64}),('stop-node-a',['docker','stop','--time','30','f'*64],{'closure':True,'host':'mikers@192.168.0.111'})]:
+   before=len(commands);bad('checkpoint_actual_phase_boundary_refuses_'+label,lambda label=label,args=args,kwargs=kwargs:c.call(label,args,**kwargs));assert len(commands)==before
+  assert not list(c.OUTPUT.iterdir())
+  c.phase_budget={'deadline_unix':time.time()+.5}
+  c.call('final-population-node-a',['docker','exec','-i',a['nodes'][0]['cid'],'/server','-mode','diagnostics'],timeout=120)
+  assert 0<commands[-1]['timeout']<=.5;checks.append('checkpoint_actual_phase_boundary_final_diagnostic_remaining_budget')
+  c.phase_budget=None
+  c.call('default-dispatch',['synthetic-no-execution'],timeout=120)
+  assert commands[-1]['timeout']==120;checks.append('checkpoint_actual_phase_boundary_fresh_campaign_default_unchanged')
+ finally:c.subprocess.run=saved;c.phase_budget=None;c.OUTPUT=Path(c.W.output)
 
 checkpoint_controls()
