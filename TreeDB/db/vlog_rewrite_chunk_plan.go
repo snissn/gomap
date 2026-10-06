@@ -197,7 +197,8 @@ func (db *DB) collectValueLogLiveBytesByChunk(ctx context.Context, it iterator.U
 			if err != nil {
 				return err
 			}
-			liveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen)
+			// Chunk/file byte budgets include the CRC preceding ptr.Offset.
+			liveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen) + 4
 			return nil
 		}); err != nil {
 			return err
