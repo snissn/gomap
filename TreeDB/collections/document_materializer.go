@@ -1494,6 +1494,57 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, documentRowRefResolved)
 }
 
+// materializeRetainedTypedDocument reuses this view's locator and point decoder
+// when the caller has already read the primary payload on the same snapshot.
+// The result owns its bytes; the input ID and payload are borrowed for this call.
+func (v *CollectionReadView) materializeRetainedTypedDocument(id, retained []byte) (document []byte, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	var response DocumentFetchResponse
+	defer func() {
+		w := documentMaterializationWork(response.Stats)
+		w.Requested = 1
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
+	if err := v.validateOpen(); err != nil {
+		return nil, err
+	}
+	if v.catalog.rootID(collectionColumnRowLocatorRootName(v.catalog.meta.Name)) == 0 || v.catalog.meta.Options.ColumnStore.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+		var diag columnDocumentReconstructionDiagnostics
+		document, diag, err = v.collection.reconstructColumnDocumentAtSnapshotWithDiagnostics(v.snapshot, v.catalog, id, retained)
+		response.Stats.DocumentsRequested = 1
+		response.Stats.VisibilityRows = uint64(diag.VisibilityRows)
+		response.Stats.VisibilityPhysicalBytes = diag.PhysicalBytesScanned
+		response.Stats.JSONReconstructionRows = uint64(diag.ReconstructionRows)
+		if v.catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
+			response.Stats.RowRefFallbackScans = 1
+			response.Stats.VisibilityScans = 1
+		}
+		if err == nil {
+			response.Stats.DocumentsFetched = 1
+			response.Stats.DocumentBytes = uint64(len(document))
+			response.Stats.OutputBytes = uint64(len(document))
+		}
+		return document, err
+	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(v.catalog.meta.Options.ColumnStore) {
+		retained, err = resolveColumnRetainedPayloadAtSnapshot(v.snapshot, v.catalog, *v.catalog.meta.Options.ColumnStore, retained)
+		if err != nil {
+			return nil, err
+		}
+	}
+	results := [1]DocumentFetchResult{{ID: id, Found: true}}
+	ids := [1][]byte{id}
+	payloads := [1][]byte{retained}
+	response.Results = results[:]
+	response.Stats.DocumentsRequested = 1
+	response, err = v.fetchColumnStoreDocumentsByID(response, ids[:], payloads[:], nil, DocumentFetchOptions{}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return response.Results[0].Document, nil
+}
+
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {
 	if result == nil {
 		return arena
