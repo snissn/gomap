@@ -66,7 +66,7 @@ type c4Record struct {
 	RecorderCapacity                 int                      `json:"recorder_capacity"`
 	Options                          treedb.COWMemtableLimits `json:"limits"`
 	Shards                           int                      `json:"shards"`
-	FlushThreshold                   int                      `json:"flush_threshold"`
+	FlushThreshold                   int64                    `json:"flush_threshold"`
 	BackgroundCheckpointInterval     int64                    `json:"background_checkpoint_interval"`
 	BackgroundCheckpointIdleDuration int64                    `json:"background_checkpoint_idle_duration"`
 	MaxWALBytes                      int64                    `json:"max_wal_bytes"`
