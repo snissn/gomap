@@ -55,6 +55,16 @@ TreeDB's value log is the only value storage path for values.
 - Applies batches via zipper merge into new page generations.
 - Maintains active value-log segment set for reads.
 
+### 2.6 Immutable memtable foundation
+
+`internal/memtable` also supplies a separately owned COW writer/read-header
+capability around installed tidwall/btree. It owns immutable string payloads,
+private preparation and finite source-generation reservations. It is not wired
+into public DB dispatch at this foundation stage. See
+[immutable memtable ownership](cow-memtable-ownership.md) for the precise
+pre-frame preparation, lease and retirement contract; mutable `BTree.Freeze`
+does not provide this capability.
+
 ## 3. Directory Layout
 
 Public `treedb.Open(opts)` treats `opts.Dir` as a root.
