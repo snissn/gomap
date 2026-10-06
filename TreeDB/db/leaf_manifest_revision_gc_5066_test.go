@@ -321,6 +321,28 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
 	if err != nil || len(got) != 32 || got[0] != 'd' {
 		t.Fatalf("current row=%q err=%v", got, err)
 	}
+	if err := database.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	newestSlot := database.metaPageID
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	corruptIndexPageByte(t, dirRoot, newestSlot)
+	database, err = Open(Options{Dir: dirRoot, CommandWAL: true, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("fallback reopen after revision deletion: %v", err)
+	}
+	got, err = database.Get([]byte("revision-0000"))
+	if err != nil || len(got) != 32 || got[0] != 'd' {
+		t.Fatalf("fallback row=%q err=%v", got, err)
+	}
 }
 
 func TestLeafManifestRevisionGCReadOnly5066(t *testing.T) {

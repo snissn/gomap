@@ -86,9 +86,14 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		}
 		if !stale {
 			if err := db.gcLeafManifestRevisions(ctx, opts, &stats); err != nil {
-				return stats, err
+				// Inspection has the same bounded stale-authority retry contract
+				// in both phases. Apply failures remain errors, never deletion permission.
+				if !opts.DryRun || !errors.Is(err, ErrRecoverableRootSetStale) {
+					return stats, err
+				}
+			} else {
+				return stats, nil
 			}
-			return stats, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return LeafGenerationGCStats{}, err
