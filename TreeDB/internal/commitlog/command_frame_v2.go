@@ -61,6 +61,14 @@ func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return encodePreparedCommandFrameV2To(dst, env, preconditions)
+}
+
+// encodePreparedCommandFrameV2To encodes a normalized envelope immediately after
+// prepareCommandFrameV2ForEncode succeeded in the same synchronous call. The
+// caller must not mutate the borrowed payload, refs, or extensions between the
+// two steps. This is not a reusable admission proof or a public trusted path.
+func encodePreparedCommandFrameV2To(dst []byte, env CommandEnvelope, preconditions []CommandExtension) ([]byte, error) {
 	extRefs, err := encodeExternalRefs(env.ExternalRefs)
 	if err != nil {
 		return nil, err
@@ -154,6 +162,13 @@ func commandFrameV2EncodedSize(env CommandEnvelope) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return preparedCommandFrameV2EncodedSize(env, preconditions)
+}
+
+// preparedCommandFrameV2EncodedSize keeps length/overflow validation separate
+// from the full payload scan. Only use it immediately after successful
+// prepareCommandFrameV2ForEncode, while the borrowed inputs remain unchanged.
+func preparedCommandFrameV2EncodedSize(env CommandEnvelope, preconditions []CommandExtension) (int, error) {
 	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
 	if err != nil {
 		return 0, err

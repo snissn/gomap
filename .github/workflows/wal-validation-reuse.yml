@@ -1,0 +1,65 @@
+name: WAL validation reuse
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/internal/commitlog/**'
+      - '.github/workflows/wal-validation-reuse.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wal-validation-reuse-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record identity
+        run: |
+          mkdir -p wal-validation-evidence
+          {
+            git rev-parse HEAD
+            go version
+            uname -a
+            sha256sum TreeDB/internal/commitlog/{writer.go,command_frame_v2.go,command_frame_v2_prepared_test.go}
+          } | tee wal-validation-evidence/identity.txt
+      - name: Test commitlog
+        env:
+          GOWORK: 'off'
+        run: |
+          set -o pipefail
+          go test ./TreeDB/internal/commitlog -count=1 -timeout=10m 2>&1 | tee wal-validation-evidence/tests.txt
+      - name: Race regression tests
+        env:
+          GOWORK: 'off'
+        run: |
+          set -o pipefail
+          go test -race ./TreeDB/internal/commitlog -run '^TestWriterV2ValidationReuse' -count=3 -timeout=5m 2>&1 | tee wal-validation-evidence/race.txt
+      - name: Synthetic durable WAL diagnostic (not a load gate)
+        env:
+          GOWORK: 'off'
+        run: |
+          set -o pipefail
+          go test ./TreeDB/internal/commitlog -run '^$' -bench '^BenchmarkWriterV2ValidationReuse$' -benchtime=5x -benchmem -count=5 2>&1 | tee wal-validation-evidence/benchmark.txt
+      - name: Retain all evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wal-validation-reuse-${{ github.event.pull_request.head.sha }}
+          path: wal-validation-evidence/
+          retention-days: 14
+          if-no-files-found: error
