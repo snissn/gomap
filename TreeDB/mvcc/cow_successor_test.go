@@ -44,3 +44,42 @@ func TestCOWSuccessorLogicalTombstoneAndEmptyValue(t *testing.T) {
 		})
 	}
 }
+
+func TestCOWSuccessorPublicEmptyKeyValue(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := treedb.OptionsFor(profile, t.TempDir())
+			opts.MemtableMode = "cow_btree"
+			opts.DisableSideStores = true
+			opts.BackgroundCheckpointInterval = -1
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err := db.Set(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, disk := range []bool{false, true} {
+				if disk {
+					if err := db.Checkpoint(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				key, value, found, err := db.SeekGE(nil, nil)
+				if err != nil || !found || len(key) != 0 || len(value) != 0 {
+					t.Fatalf("empty successor=%#v/%#v found%t err%v", key, value, found, err)
+				}
+				if found, err := db.Has(nil); err != nil || !found {
+					t.Fatalf("empty point Has=%t err%v", found, err)
+				}
+			}
+			if err := db.Delete(nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, found, err := db.SeekGE(nil, nil); err != nil || found {
+				t.Fatalf("deleted empty successor found%t err%v", found, err)
+			}
+		})
+	}
+}
